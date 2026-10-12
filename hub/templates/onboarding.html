@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="{{ current_language }}" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ t('onboarding.wizard.title') }} - FleetHub</title>
+<link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
+{# Standalone rather than {% extends "base.html" %}, exactly like invite.html: this page is
+   opened on a PC that is not enrolled, by somebody who is not signed in. It says nothing
+   about the hub beyond its name -- see onboarding_web.py. #}
+<meta name="robots" content="noindex, nofollow">
+<script>
+(function () {
+    try {
+        var saved = localStorage.getItem('tempmonitor:theme');
+        var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) { /* localStorage unavailable, default dark stays */ }
+})();
+</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/fonts/inter.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/onboarding.css') }}">
+</head>
+<body class="login-body">
+    <div class="login-card onboarding-card">
+        <div class="login-card__brand">
+            <img src="{{ url_for('static', filename='thermometer.png') }}" alt="">
+            <h1>FleetHub</h1>
+        </div>
+
+        <ol class="onboarding-steps" aria-label="{{ t('onboarding.wizard.steps_label') }}">
+            <li id="step-dot-1" class="onboarding-steps__item onboarding-steps__item--active">{{ t('onboarding.wizard.step_code') }}</li>
+            <li id="step-dot-2" class="onboarding-steps__item">{{ t('onboarding.wizard.step_install') }}</li>
+            <li id="step-dot-3" class="onboarding-steps__item">{{ t('onboarding.wizard.step_done') }}</li>
+        </ol>
+
+        {# Step 1: the code. #}
+        <section id="step-1">
+            <p>{{ t('onboarding.wizard.code_intro') }}</p>
+            <form id="code-form" autocomplete="off">
+                <label class="onboarding-label" for="code-input">{{ t('onboarding.wizard.code_label') }}</label>
+                <input class="onboarding-code-input" id="code-input" maxlength="9" inputmode="text"
+                       autocapitalize="characters" spellcheck="false" placeholder="ABC234">
+                <p class="login-error" id="code-error" hidden></p>
+                <button class="google-btn onboarding-btn" type="submit" id="code-submit">{{ t('onboarding.wizard.continue') }}</button>
+            </form>
+        </section>
+
+        {# Step 2: run the installer. #}
+        <section id="step-2" hidden>
+            <p id="install-for"></p>
+            <p class="invite-meta">{{ t('onboarding.wizard.install_intro') }}</p>
+            <a class="google-btn onboarding-btn" id="download-cmd" href="#">{{ t('onboarding.wizard.download') }}</a>
+            <p class="invite-meta">{{ t('onboarding.wizard.download_hint') }}</p>
+            <details class="onboarding-alt">
+                <summary>{{ t('onboarding.wizard.alt_summary') }}</summary>
+                <p class="invite-meta">{{ t('onboarding.wizard.alt_intro') }}</p>
+                <textarea class="onboarding-command" id="ps-command" readonly rows="4"></textarea>
+                <button class="btn" type="button" id="copy-command">{{ t('onboarding.wizard.copy') }}</button>
+                <span class="invite-meta" id="copy-status"></span>
+            </details>
+            <p class="invite-meta" id="waiting-line">{{ t('onboarding.wizard.waiting') }}</p>
+        </section>
+
+        {# Step 3: the PC reported in. #}
+        <section id="step-3" hidden>
+            <p class="onboarding-done" id="done-line"></p>
+            <p class="invite-meta">{{ t('onboarding.wizard.done_hint') }}</p>
+        </section>
+
+        <p class="login-error" id="fatal-error" hidden></p>
+    </div>
+<script type="application/json" id="i18n-catalog">{{ i18n_catalog_json | safe }}</script>
+<script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
+<script src="{{ url_for('static', filename='js/onboarding.js') }}"></script>
+</body>
+</html>

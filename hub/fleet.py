@@ -591,6 +591,14 @@ ACTION_LEVELS = {
     # or changes who can do any of that.
     "enroll": LEVEL_SECURITY,
     "revoke_agent": LEVEL_SECURITY,
+    # An enrolled agent reporting under a new hostname (roadmap #29). The credential's
+    # identity moved, which is the same class of event as minting it.
+    "agent.rename": LEVEL_SECURITY,
+    # Onboarding codes (roadmap #29). A code is a one-time right to mint an agent
+    # credential, so creating, spending and revoking one sit with `enroll` itself.
+    "onboarding.create": LEVEL_SECURITY,
+    "onboarding.redeem": LEVEL_SECURITY,
+    "onboarding.revoke": LEVEL_SECURITY,
     "issue_command": LEVEL_SECURITY,
     # Saving a script IS writing code that runs as SYSTEM on every machine a rule targets,
     # so it belongs with issue_command rather than with the rule edits it enables. Note that
@@ -851,6 +859,13 @@ def init_fleet_db(db_path):
                 "UPDATE agents SET last_auth = last_seen "
                 "WHERE last_seen IS NOT NULL AND last_seen > enrolled_at"
             )
+        # `last_report_auth`: when this row's token last signed a /api/report. Separate from
+        # last_auth on purpose -- a heartbeat proves the agent holds its token, but NOT that it
+        # is a build which signs its telemetry. The latch in `report_latched` asks the second
+        # question: once a machine has proven it signs, an unsigned report under its name can
+        # only be somebody else. No backfill: before this column existed nothing signed.
+        if "last_report_auth" not in agent_columns:
+            conn.execute("ALTER TABLE agents ADD COLUMN last_report_auth INTEGER")
         # NOTE: databases created before command signing was removed also carry
         # `requires_signature INTEGER NOT NULL DEFAULT 0` and `signature TEXT`
         # here. They are deliberately left in place rather than migrated away:
@@ -1165,7 +1180,22 @@ def enroll_agent(db_path, machine, provided_secret, expected_secret):
         raise PermissionError("enrollment is not configured on this hub")
     if not hmac.compare_digest(str(provided_secret or ""), str(expected_secret)):
         raise PermissionError("invalid enrollment secret")
+    return issue_agent_identity(db_path, machine, actor=f"agent:{machine}")
 
+
+def issue_agent_identity(db_path, machine, actor, detail=None):
+    """Mint an agent credential for `machine` and return (agent_id, token).
+
+    **The one place an agent row is created.** Split out of `enroll_agent` so onboarding
+    codes (roadmap #29) mint exactly the credential the shared secret mints -- same token
+    strength, same hash-only storage, same security-level `enroll` row -- rather than a
+    second, slightly different shape of identity that every reader of `agents` would have
+    to know about. Whoever calls this has already decided the caller is entitled to one;
+    this function checks nothing but the machine name.
+    """
+    machine = str(machine or "").strip()
+    if not machine:
+        raise ValueError("machine is required to enroll")
     agent_id = uuid.uuid4().hex
     token = secrets.token_urlsafe(32)
     now = int(time.time())
@@ -1175,9 +1205,9 @@ def enroll_agent(db_path, machine, provided_secret, expected_secret):
             "VALUES (?, ?, ?, ?, ?, 0)",
             (agent_id, machine, _hash_token(token), now, now),
         )
-    audit(db_path, actor=f"agent:{machine}", action="enroll",
+    audit(db_path, actor=actor, action="enroll",
           level=LEVEL_SECURITY, target=machine,
-          detail={"agent_id": agent_id})
+          detail=dict(detail or {}, agent_id=agent_id))
     return agent_id, token
 
 
@@ -1244,6 +1274,95 @@ def auth_failure_reason(db_path, agent_id, token):
     if not hmac.compare_digest(row["token_hash"], _hash_token(token)):
         return AUTH_UNKNOWN
     return AUTH_REVOKED if row["revoked"] else AUTH_UNKNOWN
+
+
+#: Outcomes of `authorize_report`. SIGNED and UNSIGNED are accepted (UNSIGNED only when
+#: the caller allows anonymous telemetry); the other three are refusals.
+REPORT_SIGNED = "signed"
+REPORT_UNSIGNED = "unsigned"
+REPORT_BAD_TOKEN = "bad_token"
+REPORT_NAME_TAKEN = "name_taken"
+REPORT_LATCHED = "latched"
+
+
+def authorize_report(db_path, agent_id, token, machine):
+    """Decide who a /api/report is from (roadmap #29). Returns (outcome, reason).
+
+    /api/report was the one agent route with no credential: anyone who could reach the hub
+    could post telemetry under any machine name, and the console rendered it as that
+    machine. Agents now sign it with the same `<agent_id>:<token>` bearer the fleet channel
+    uses, and this is the decision the route makes with it:
+
+      * **A token that does not authenticate is refused** (REPORT_BAD_TOKEN), with the same
+        `reason` agent_auth gives, so the agent hears "revoked" or "unknown" exactly as it
+        does on its heartbeat. A bad token is never downgraded to an anonymous report --
+        that would make revoking an agent a no-op for its telemetry.
+      * **A valid token reporting under its own name** is REPORT_SIGNED, and marks the row
+        with `last_report_auth`: this machine now signs.
+      * **A valid token under a DIFFERENT name is a rename**, not a refusal. A hostname
+        changes (a re-image, an operator renaming the PC, Windows re-casing it), the agent
+        reads the new one at startup, and the credential has to follow it or the machine
+        drops off the fleet channel until somebody re-enrols it -- which, for a PC onboarded
+        with a code, means a new code. The row is re-pointed and audited as `agent.rename`,
+        **unless another live agent already holds the new name** (REPORT_NAME_TAKEN): an
+        enrolled PC must not be able to take over another enrolled PC's identity. The
+        duplicate-serial merge in app.py then folds the old hostname's history in, and its
+        `delete_machine` no longer finds this agent under the old name to delete.
+      * **No token at all** is REPORT_UNSIGNED, unless the name is latched (see
+        `report_latched`), which is REPORT_LATCHED. Whether REPORT_UNSIGNED is then
+        accepted is the caller's policy (`security.require_enrolled_telemetry`), not this
+        function's.
+    """
+    machine = str(machine or "").strip()
+    if not agent_id and not token:
+        if report_latched(db_path, machine):
+            return REPORT_LATCHED, None
+        return REPORT_UNSIGNED, None
+
+    enrolled_as = authenticate_agent(db_path, agent_id, token)
+    if enrolled_as is None:
+        return REPORT_BAD_TOKEN, auth_failure_reason(db_path, agent_id, token)
+
+    now = int(time.time())
+    with get_conn(db_path) as conn:
+        if enrolled_as != machine:
+            taken = conn.execute(
+                "SELECT 1 FROM agents WHERE machine = ? COLLATE NOCASE AND agent_id != ? "
+                "AND revoked = 0 AND machine != ? LIMIT 1",
+                (machine, str(agent_id), enrolled_as),
+            ).fetchone()
+            if taken is not None:
+                return REPORT_NAME_TAKEN, None
+            conn.execute("UPDATE agents SET machine = ? WHERE agent_id = ?",
+                         (machine, str(agent_id)))
+        conn.execute("UPDATE agents SET last_report_auth = ? WHERE agent_id = ?",
+                     (now, str(agent_id)))
+    if enrolled_as != machine:
+        audit(db_path, actor=f"agent:{machine}", action="agent.rename",
+              level=LEVEL_SECURITY, target=machine,
+              detail={"agent_id": str(agent_id), "previous": enrolled_as})
+    return REPORT_SIGNED, None
+
+
+def report_latched(db_path, machine):
+    """Has `machine` an enrolled agent that has proven it signs its telemetry?
+
+    **The latch is what protects a machine on a hub that still accepts anonymous reports.**
+    Once a machine's agent has sent one signed report, an unsigned report under that name
+    cannot be that agent -- an updated agent never goes back to unsigned -- so it is
+    somebody else, and is refused whatever `security.require_enrolled_telemetry` says.
+    Case-insensitive, because Windows hostnames are, and `pc-12` posting as `PC-12` would
+    otherwise walk straight past it.
+    """
+    machine = str(machine or "").strip()
+    if not machine:
+        return False
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM agents WHERE machine = ? COLLATE NOCASE AND revoked = 0 "
+            "AND last_report_auth IS NOT NULL LIMIT 1", (machine,)
+        ).fetchone()
+    return row is not None
 
 
 def revoke_agent(db_path, agent_id, actor="system"):
@@ -1352,10 +1471,11 @@ def is_enrolled(db_path, machine):
     """Does this hostname have a live (non-revoked) agent enrollment?
 
     The corroboration test for anything that acts on an identity claim made over the OPEN
-    telemetry ingress. `/api/report` is unauthenticated by design, so the hostname and the
-    BIOS serial in a report are attacker-controlled: anyone who can reach the hub can
-    invent a machine, or claim another one's serial. Enrollment is the one thing they
-    cannot forge without AGENT_ENROLLMENT_SECRET, so a destructive, irreversible action
+    telemetry ingress. `/api/report` took unsigned reports by design until roadmap #29, and
+    still does on a hub that switched `security.require_enrolled_telemetry` off, so the
+    hostname and the BIOS serial in a report can be attacker-controlled: anyone who can
+    reach such a hub can invent a machine, or claim another one's serial. Enrollment is the
+    one thing they cannot forge without AGENT_ENROLLMENT_SECRET or a live onboarding code, so a destructive, irreversible action
     driven by a report -- today that means the duplicate-serial merge in
     app.resolve_serial_group -- must require it.
 

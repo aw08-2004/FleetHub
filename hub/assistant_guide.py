@@ -59,6 +59,8 @@ PAGES = (
      "hub settings, including the AI provider (/settings#tab-ai)"),
     ("provisioning", "/provisioning", "nav.provisioning", permissions.MANAGE_SETTINGS,
      "enrolling new Android devices by QR code"),
+    ("onboarding", "/onboarding-codes", "nav.onboarding", permissions.MANAGE_ONBOARDING,
+     "one-time codes that let a Windows PC enrol itself at /onboarding"),
     ("permissions", "/permissions", "nav.permission_groups",
      permissions.MANAGE_PERMISSION_GROUPS, "permission groups: who may do what, on which machines"),
     ("invites", "/invites", "nav.invites", permissions.MANAGE_PERMISSION_GROUPS,

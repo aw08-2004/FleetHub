@@ -51,7 +51,8 @@
     "reports": "Reports",
     "assistant": "Assistant",
     "label": "Main",
-    "skip_to_content": "Skip to content"
+    "skip_to_content": "Skip to content",
+    "onboarding": "Onboarding"
   },
   "hub_update": {
     "_note": [
@@ -761,6 +762,10 @@
       "read_recovery_keys": {
         "label": "Read recovery keys",
         "description": "Be shown an escrowed BitLocker recovery password for these machines. Every read is written to the audit log. Seeing whether a machine is encrypted needs only View."
+      },
+      "manage_onboarding": {
+        "label": "Manage onboarding codes",
+        "description": "Create and revoke one-time codes that let a PC enrol itself through the public onboarding page. Revoking a spent code also revokes the agent it enrolled."
       }
     }
   },
@@ -1418,6 +1423,10 @@
       "security.posture_admin_allowlist": {
         "label": "Also allowed as local administrators",
         "help": "Accounts or groups that may be members of a PC's local Administrators group without the check failing (CIS 5.4). Give a SID, DOMAIN\\name or a bare name. The built-in Administrator, Domain Admins and Entra role groups are always allowed."
+      },
+      "security.require_enrolled_telemetry": {
+        "label": "Only accept telemetry from enrolled agents",
+        "help": "Refuse telemetry that is not signed by an enrolled agent. Turn this on once the Onboarding page lists no machines reporting without enrollment; older agents do not sign. Even while it is off, a machine whose agent already signs cannot be impersonated."
       }
     },
     "_choice": [
@@ -4802,6 +4811,81 @@
         "unknown": "Unknown",
         "failing": "Failing machines"
       }
+    }
+  },
+  "onboarding": {
+    "admin": {
+      "heading": "Onboarding",
+      "intro": "One-time codes that let a PC enrol itself. Give someone a code, they open the onboarding page on the PC, and it installs the agent and joins this fleet.",
+      "new": "New code",
+      "unsigned_heading": "Machines reporting without enrollment",
+      "unsigned_intro": "These machines sent telemetry without an agent credential in the last day. While enrolled-only telemetry is on, it is being refused. Update their agent, or onboard them with a code.",
+      "unsigned_last": "last report {when}",
+      "editor_title": "New onboarding code",
+      "label": "Label",
+      "label_placeholder": "e.g. Reception PC for Maria",
+      "expiry": "Valid for",
+      "expiry_hour": "1 hour",
+      "expiry_day": "1 day",
+      "expiry_week": "7 days",
+      "expiry_help": "A code works once. It stops working when it is used, revoked or expires, whichever comes first.",
+      "create": "Create code",
+      "created_title": "Onboarding code",
+      "created_once": "This code is shown only once. Read it out or send the link; the person opens it on the PC they want to enrol.",
+      "created_link": "Onboarding link",
+      "copy_link": "Copy link",
+      "copied": "Copied",
+      "copy_failed": "Could not copy -- select the text and copy it yourself.",
+      "status": {
+        "active": "Waiting",
+        "expired": "Expired",
+        "revoked": "Revoked",
+        "redeemed": "Used -- not checked in yet",
+        "online": "Used -- online"
+      },
+      "empty": "No onboarding codes yet.",
+      "empty_hint": "Create one to set up a new PC without handing out the fleet enrollment secret.",
+      "col": {
+        "label": "Label",
+        "machine": "Enrolled machine",
+        "expires": "Expires",
+        "status": "Status"
+      },
+      "created_by": "by {email}, {when}",
+      "redeemed_from": "from {ip}, {when}",
+      "revoke": "Revoke",
+      "confirm_revoke_title": "Revoke onboarding code?",
+      "confirm_revoke": "The code \"{label}\" will stop working.",
+      "confirm_revoke_machine": "The code \"{label}\" was used by {machine}. Revoking it also revokes that machine's agent, which then stops receiving commands until it is enrolled again.",
+      "load_failed": "Could not load onboarding codes: {error}"
+    },
+    "wizard": {
+      "title": "Set up this PC",
+      "steps_label": "Onboarding steps",
+      "step_code": "Code",
+      "step_install": "Install",
+      "step_done": "Done",
+      "code_intro": "Enter the six-character code your IT team gave you.",
+      "code_label": "Onboarding code",
+      "continue": "Continue",
+      "install_for": "Code \"{label}\" is valid.",
+      "install_intro": "Download the installer and open it. Windows asks for administrator rights; allow it. The window shows each step and ends with a success line.",
+      "download": "Download installer",
+      "download_hint": "If Windows warns that the file is unrecognised, choose More info, then Run anyway.",
+      "alt_summary": "Prefer PowerShell?",
+      "alt_intro": "Open PowerShell with Run as administrator and paste this command:",
+      "copy": "Copy command",
+      "copied": "Copied",
+      "copy_failed": "Could not copy -- the command is selected, press Ctrl+C.",
+      "waiting": "Waiting for this PC to finish installing...",
+      "enrolled": "{machine} is enrolled. Waiting for the agent to check in...",
+      "online": "{machine} is enrolled and online.",
+      "expired": "This code has expired. Ask your IT team for a new one.",
+      "revoked": "This code was revoked. Ask your IT team for a new one.",
+      "done_hint": "You can close this page.",
+      "too_many": "Too many attempts. Wait a minute and try again.",
+      "code_invalid": "That code is invalid or has expired.",
+      "network_error": "Could not reach the hub. Check the connection and try again."
     }
   }
 }

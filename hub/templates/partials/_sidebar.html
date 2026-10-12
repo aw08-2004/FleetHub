@@ -51,7 +51,7 @@
                          or cap.DEPLOY_PACKAGES in user_capabilities
                          or cap.MANAGE_BACKUPS in user_capabilities or cap.MANAGE_FIRMWARE in user_capabilities %}
     {% set has_admin = cap.VIEW in user_capabilities or cap.VIEW_AUDIT_LOG in user_capabilities
-                       or cap.MANAGE_SETTINGS in user_capabilities
+                       or cap.MANAGE_SETTINGS in user_capabilities or cap.MANAGE_ONBOARDING in user_capabilities
                        or cap.MANAGE_PERMISSION_GROUPS in user_capabilities or cap.MANAGE_USERS in user_capabilities %}
     <nav class="sidebar__nav" aria-label="{{ t('nav.label') }}">
         <div class="sidebar__section" role="group" aria-labelledby="nav-section-fleet">
@@ -244,6 +244,15 @@
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'provisioning.provisioning_page' else '' }}" data-nav-prefix="/provisioning" href="{{ url_for('provisioning.provisioning_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M20 14v3"/><path d="M14 20h3"/><path d="M20 20h1"/></svg>
             <span class="sidebar__link-label">{{ t('nav.provisioning') }}</span>
+        </a>
+        {% endif %}
+        {# Onboarding codes (roadmap #29). Its own capability, so a technician who sets up PCs
+           sees this and not Settings. Beside Provisioning because both put a device into the
+           fleet; the URL is /onboarding-codes because /onboarding is the public wizard. #}
+        {% if cap.MANAGE_ONBOARDING in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint == 'onboarding.onboarding_page' else '' }}" data-nav-prefix="/onboarding-codes" href="{{ url_for('onboarding.onboarding_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="M9 10.5l2 2 4-4"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.onboarding') }}</span>
         </a>
         {% endif %}
         {% if cap.MANAGE_PERMISSION_GROUPS in user_capabilities %}

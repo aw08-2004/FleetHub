@@ -138,6 +138,17 @@ MANAGE_DEVICE_POLICY = "manage_device_policy"
 # separate `lock_device` capability would be one more row in the permissions UI that nobody
 # would ever grant alone.
 WIPE_DEVICE = "wipe_device"
+# Creating and revoking onboarding codes (roadmap #29). A code is a one-time right to put a
+# machine into this fleet. Its own capability rather than a reuse of MANAGE_SETTINGS, which is
+# where the Android provisioning QR sits: that QR carries the shared enrollment secret itself,
+# so it is configuration-grade trust, and a code carries nothing reusable. Setting up a new PC
+# is the most ordinary thing a helpdesk technician does, and they should not need the hub's
+# configuration to do it.
+#
+# Not machine-scoped, because a code names no machine until one spends it. Revoking a code
+# does revoke the agent it minted -- an operator holding this may therefore take one machine
+# off the fleet channel, the one their own code put there, which is visible in the list.
+MANAGE_ONBOARDING = "manage_onboarding"
 MANAGE_SETTINGS = "manage_settings"
 MANAGE_USERS = "manage_users"
 MANAGE_PERMISSION_GROUPS = "manage_permission_groups"
@@ -177,6 +188,7 @@ CAPABILITIES = (
     WIPE_DEVICE,
     MANAGE_RULES,
     MANAGE_DEVICE_GROUPS,
+    MANAGE_ONBOARDING,
     MANAGE_SETTINGS,
     MANAGE_USERS,
     MANAGE_PERMISSION_GROUPS,

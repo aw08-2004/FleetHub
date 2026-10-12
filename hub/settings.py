@@ -834,6 +834,19 @@ REGISTRY = (
     # see bitlocker.py; reading a checkbox as "destroy the keys" would be the most destructive
     # thing in this console.
     _s("security.escrow_bitlocker_keys", "security", "bool", True),
+    # Enrolled-only telemetry (roadmap #29). On: /api/report refuses any report that is not
+    # signed with an enrolled agent's token. Off: unsigned reports are still taken, except for
+    # a machine whose agent has already signed one (fleet.report_latched) -- so an updated PC
+    # cannot be impersonated even while this is off.
+    #
+    # **Default off**, and only because of how this ships. Hubs update themselves from main
+    # within minutes, while agents only move when a release is cut -- the Android one needs a
+    # phone and the signing key -- so a default of on would have refused telemetry from every
+    # agent not yet signing on the day the hub updated. The latch already protects every
+    # machine whose agent signs; the switch is for refusing the rest, and the Onboarding page
+    # lists exactly who that would be, so an operator turns it on once that list is empty.
+    # The intended end state is on (ROADMAP #29); flipping this default is a later change.
+    _s("security.require_enrolled_telemetry", "security", "bool", False),
     # Shadow-AI detection (roadmap #19): name fragments that mark an installed program or app
     # as a generative-AI client. Matched case-insensitively as substrings against the Windows
     # software inventory (#25 B) and the Android app inventory -- see software.genai_matches.

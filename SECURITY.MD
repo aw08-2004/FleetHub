@@ -36,7 +36,9 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
 
 ## Risk Mitigations
 
-1. **Enrollment Secret:** Agents enroll once with a shared secret; only enrolled agents accept commands
+1. **Enrollment:** Agents enroll once, with the shared secret or with a single-use onboarding
+   code. Either way, each agent gets its own token, and only enrolled agents accept commands.
+   Telemetry is signed with that token too, and the hub can refuse unsigned reports.
 2. **Authentication:** Issuing commands requires a valid OAuth/OIDC sign-in (Google, or any
    configured OIDC provider) against the email allow-list or a Permission Group
 3. **Audit Log:** Every action recorded: who did what, when, on which machine
@@ -168,6 +170,52 @@ authenticated. What is worth knowing about it:
   ten megabytes to anyone holding the token. It sits under a single stable `/provisioning/apk/`
   prefix so a reverse proxy can throttle or block it in one rule, and "Stop hosting" on the
   provisioning page takes it offline entirely.
+
+## Onboarding codes and signed telemetry (roadmap #29)
+
+**An onboarding code is a one-time right to put one machine into this fleet.** It is six
+characters long, so it can be read out over the phone. That is also why it is bounded on every
+side:
+
+- **Single use.** The claim is one conditional UPDATE, so two PCs racing on one code cannot
+  both win.
+- **Short-lived.** A code lasts 1 hour, 1 day or 7 days, and there is no "never".
+- **Stored as a hash.**
+- **Rate limited.** Each client is limited by `remote_addr`, not by the spoofable
+  `X-Forwarded-For`, and there is a global ceiling on top.
+- **One refusal for everything.** An unknown, used, expired, revoked or malformed code all get
+  the same 404.
+
+Using a code issues that PC **its own** agent token. The shared `AGENT_ENROLLMENT_SECRET`
+never leaves the hub.
+
+**The token never reaches a browser.** The public `/onboarding` page can only check a code,
+which uses nothing up, and poll its status. The token is returned once, over HTTPS, to the
+elevated install script running on the PC, after the agent has installed. The script then
+writes it to `agent.json`, which is readable only by SYSTEM and Administrators. The script
+refuses a hub URL that is not `https://`, and the agent binary is still verified against the
+Ed25519-signed manifest.
+
+**A leaked code is visible and reversible.** The Onboarding list shows which machine used each
+code, from which IP and when. Creating, using and revoking a code are all security-level audit
+rows, and **Revoke** on a used code also revokes the agent it enrolled.
+
+**Telemetry is signed.** Agents send their own bearer token on `/api/report`. The hub handles
+each case as follows:
+- A bad or revoked token is refused.
+- A valid token reporting under another enrolled machine's name is refused (403).
+- A valid token reporting under a new name nobody holds is treated as a rename. It is audited
+  as `agent.rename`.
+
+`security.require_enrolled_telemetry` refuses unsigned reports. It ships **off**, because
+hubs update before agents do, and should be turned on once the Onboarding page's list of
+unsigned reporters is empty. Once a
+machine's agent has signed a report, unsigned reports under that name are refused even when the
+switch is off.
+
+Until a hub has this on, `/api/report` input is still untrusted. That is why the
+defence-in-depth around it stays: machine-name validation, the write-once BIOS serial, and the
+enrollment check before a duplicate-serial merge.
 
 ## Device tokens (the native client)
 

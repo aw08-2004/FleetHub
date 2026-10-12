@@ -79,6 +79,10 @@ DENIED_PREFIXES = (
     "/api/recordings/",
     # Push registration only works from a device token anyway.
     "/api/push/",
+    # Onboarding codes (roadmap #29). Creating one is minting the right to put a machine in
+    # this fleet, the code is returned exactly once, and redeem hands out an agent token --
+    # none of which belongs in a prompt sent to a provider. The operator uses the page.
+    "/api/onboarding/",
 )
 
 # Exact (METHOD, rule) pairs. Secrets that a model would then hold in its context -- and send

@@ -108,7 +108,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-09
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-12
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -314,6 +314,25 @@ healthy, image mode on, state kept across a recreate, `.env` writable. Still owe
   `logs\` and `data\` into the volume, `up -d`, and repoint the tunnel. Then confirm through
   the **tunnel hostname** that agents heartbeat, long-poll and transfer files, and that the
   console's Live view works (the same non-buffering check as 4d).
+
+**8. Onboarding codes and signed telemetry (#29), owed on Windows, a phone and the signing key.**
+Built 2026-10-12 (hub 1.144.0). The hub suite, the Windows agent tests (599), the Linux agent
+tests and Android Core (251) passed on Windows. The Android **app** project was not compiled:
+the `android` workload is missing here. Its change is one lambda in `AgentService.cs`. **Order
+switch stays off until the agents sign** (see #29).
+- **Cut Windows agent 3.44.0** (`agent/release.ps1 -Version 3.44.0`) and **Linux 0.4.0**: both
+  sign `/api/report`, and Windows also re-secures `agent.json`.
+- **Cut Android 0.3.0** after `dotnet build` of `FleetHubAgent.Android` on a machine with the
+  workload.
+- **Then turn on Settings → Security → Only accept telemetry from enrolled agents**, once
+  Administration → Onboarding → *Machines reporting without enrollment* is empty.
+- **Publish the hub 1.144.0 release** with `deploy/docker/release-notes/1.144.0.md`, which
+  says the switch is off and when to turn it on.
+- **One real onboarding on a clean Windows VM through each path**, the `.cmd` and the one-liner.
+  Expect the PC to appear online, no `EnrollmentSecret` under `HKLM\SOFTWARE\FleetHub\Agent`, and
+  `icacls %ProgramData%\FleetHub\Agent\agent.json` to show only SYSTEM and Administrators.
+  SmartScreen will warn on the downloaded `.cmd`; check the wizard's hint matches what Windows
+  says.
 
 ---
 
@@ -5414,6 +5433,111 @@ longer has to be the Windows box. The cutover itself is owed locally, item 7.
 - **An `install.ps1` menu option** for a Docker hub. The cutover is manual and documented.
 - **Hub-side Wake-on-LAN on a bridge network.** Only `network_mode: host` on a Linux host
   restores it. Agent-relayed wake is unaffected.
+
+---
+## 🚧 29. Self-service onboarding, and telemetry only from enrolled agents   ·   hub 1.144.0 + Windows agent (next release), Linux and Android agents (next release)   ·   `onboarding.py` / `onboarding_web.py`
+
+Until now a Windows PC joined the fleet in one way: a technician ran the installer with the
+fleet-wide `AGENT_ENROLLMENT_SECRET`, which then stayed in plaintext in that PC's
+`HKLM\SOFTWARE\FleetHub\Agent`. So every enrolled PC held a credential that could enrol any
+other PC. `/api/report` also took telemetry from anything under any machine name. This entry
+closes both gaps. Hub and agents ship together, with enrolled-only telemetry **off** until the
+agents have updated. The Windows and Linux agents get a MINOR release that the hub does not
+gate on; the Android agent's release is owed locally (item 8).
+
+### Built · hub 1.144.0
+- **Administration → Onboarding** (`/onboarding-codes`, new capability **`manage_onboarding`**).
+  An operator creates a **six-character, single-use code** that lasts 1 hour, 1 day (the
+  default) or 7 days. The code is shown once, with the link `https://<hub>/onboarding?code=…`.
+  The list shows which machine used each code, from which IP and when, and whether that machine
+  has checked in. **Revoke** on a used code also revokes the agent it enrolled.
+- **`/onboarding`**, a public wizard with three steps: enter the code, run the installer, and
+  wait for the PC to appear. The installer step offers a `.cmd` launcher that elevates itself,
+  plus `irm …/onboarding/run/<code>.ps1 | iex` for an admin PowerShell. The script:
+  1. installs the agent with `agent-install.ps1`, **with no secret** (the signed-manifest check
+     is unchanged);
+  2. **only then** uses up the code;
+  3. writes the credential the hub returns to `agent.json`, readable only by SYSTEM and
+     Administrators;
+  4. restarts the service.
+
+  A failed install therefore does not use up the code.
+- **Using a code issues this PC its own agent ID and token** through
+  `fleet.issue_agent_identity`, the same code path the shared secret uses. The secret never
+  leaves the hub. **No agent change was needed for onboarding itself:** an agent that finds
+  `agent.json` counts as enrolled before it ever looks for a secret.
+- **Signed telemetry.** Every agent now sends its own `Authorization: Bearer <agent_id>:<token>`
+  on `/api/report`. `fleet.authorize_report` handles each case:
+  - a bad token gets a 401 with `reason`, so the agent hears *revoked* or *unknown*;
+  - a valid token under another enrolled machine's name gets a 403;
+  - a valid token under a **new name that no one else holds** moves the enrollment to that
+    name (a renamed or re-cased PC) and is audited as `agent.rename`.
+- **`security.require_enrolled_telemetry`**, **off by default for now**. When it is on,
+  unsigned reports get a 401. When it is off, unsigned reports are accepted, except for a
+  machine whose agent has already signed one (**the latch**, `agents.last_report_auth`). The
+  Onboarding page lists the machines that reported unsigned in the last day, which are the
+  ones the switch would turn away.
+- **Windows agent:** `agent.json` is now saved as a private file. The ACL is applied to the temp
+  file before the move, so the token is never readable by ordinary users, and the file is
+  re-secured on every start for installs made before this change.
+
+### Rollout: one PR, the switch off until the agents sign
+Hubs update themselves from `main` within minutes, but agents only move when a release is
+cut, and the Android release needs a phone and the signing key. A default of *on* would have
+refused telemetry from every agent that does not sign yet on the day the hub updated. So the
+hub and the agents ship together, with the switch **off**:
+1. merge; hubs update to 1.144.0 and accept everything as before, latch aside;
+2. release the Windows, Linux and Android agents;
+3. once the Onboarding page's *Machines reporting without enrollment* list is empty, turn on
+   **Settings → Security → Only accept telemetry from enrolled agents**.
+
+An older hub ignores the `Authorization` header on `/api/report`, so the agents may also
+release first. Making *on* the default is a later hub change, once every agent signs.
+
+### Decisions
+- **A per-machine identity, not the shared secret handed over.** Handing out the secret
+  needed no new code path, but it would have put the fleet credential in the registry of
+  exactly the PCs this feature exists to onboard without one.
+- **The token never reaches a browser.** The wizard calls `check`, which uses nothing up, and
+  `status`. Only `redeem` returns a credential, it does so once, and the caller is the script on
+  the PC. Every refusal (unknown, used, expired, revoked or malformed code) gets the same 404,
+  so the public routes cannot be used to test which codes exist.
+- **Rate limits are per client by `remote_addr`, plus one global ceiling.** The shared limiter
+  keys on the raw `X-Forwarded-For`, which a caller can rotate. The global ceiling stops a
+  guesser who has many addresses: at 300 guesses a minute, the 31⁶ space takes years per code,
+  and every code is dead within a week.
+- **The alphabet leaves out 0, O, 1, I and L.** A code gets read aloud. Look-alikes are refused
+  rather than coerced.
+- **Only the code's hash is stored, like invites.** A six-character code can be brute-forced
+  from its hash offline. That is acceptable only because a code is single-use and short-lived.
+- **The switch defaults to off for this release.** The owner chose *on* as the end state, but
+  shipping it on would have broken telemetry fleet-wide on the day the hub updated. The latch
+  protects every machine whose agent signs even while the switch is off, so the gap is only
+  the machines that do not sign yet, and the Onboarding page lists them.
+- **A rename moves the enrollment instead of being refused.** A refusal would have dropped
+  every re-imaged or re-cased PC off the fleet channel, and for an onboarded PC the only fix
+  would be a new code.
+- **The assistant cannot reach `/api/onboarding/*`.** Creating a code grants the right to add a
+  machine, and `redeem` returns a token.
+
+### Rejected alternatives
+- **A new agent-side `enrollment_code`** that the agent uses up itself. It is the same exchange
+  moved into the agent, and it would have cost an agent release for something the install
+  script already does.
+- **Reusing `manage_settings`**, as Provisioning does. The Android QR carries the shared secret
+  itself; a code carries nothing reusable, and setting up PCs is a helpdesk task.
+- **Two PRs (agents first, then the hub as 2.0.0 with the switch on).** It would have kept
+  *on* as the default, but held onboarding back behind the Android release.
+- **Locking down the whole state directory** instead of the one file: the log beside it is
+  meant to stay readable for diagnosis.
+
+### Not done
+- **A device group or permission scope chosen at code creation.** An onboarded PC lands
+  unscoped, like any other new machine.
+- **Linux and Android onboarding.** The wizard and script are Windows-only; Linux still installs
+  with `install.sh --secret`.
+- **Retiring `AGENT_REPORT_SECRET`.** No agent ever sent it. It is kept as an independent gate
+  for any hub that set it.
 
 ---
 
