@@ -138,6 +138,20 @@ public sealed class FleetClient : IDisposable, IOutputSink
         }
     }
 
+    /// <summary>A heartbeat 401. Only "decommissioned" is acted on here; every other refusal
+    /// leaves the agent exactly where it was, as before roadmap #30.</summary>
+    private void NoteRefusal(string body)
+    {
+        if (!FleetHubAgent.Update.SelfUninstaller.IsDecommissioned(body))
+        {
+            Interlocked.Exchange(ref _decommissionedReplies, 0);
+            return;
+        }
+        var seen = Interlocked.Increment(ref _decommissionedReplies);
+        if (seen >= DecommissionStrikes && Uninstaller is { } uninstaller)
+            _ = uninstaller.StartAsync(CancellationToken.None);
+    }
+
     /// <summary>
     /// Liveness ping.
     ///
@@ -156,20 +170,6 @@ public sealed class FleetClient : IDisposable, IOutputSink
     /// It still has to EXIST, and on the Windows cadence: this is what refreshes the hub's
     /// last_seen, and the console calls a machine offline after 90 seconds without one.
     /// </summary>
-    /// <summary>A heartbeat 401. Only "decommissioned" is acted on here; every other refusal
-    /// leaves the agent exactly where it was, as before roadmap #30.</summary>
-    private void NoteRefusal(string body)
-    {
-        if (!FleetHubAgent.Update.SelfUninstaller.IsDecommissioned(body))
-        {
-            Interlocked.Exchange(ref _decommissionedReplies, 0);
-            return;
-        }
-        var seen = Interlocked.Increment(ref _decommissionedReplies);
-        if (seen >= DecommissionStrikes && Uninstaller is { } uninstaller)
-            _ = uninstaller.StartAsync(CancellationToken.None);
-    }
-
     public async Task<bool> HeartbeatAsync(CancellationToken ct, JsonObject? patches = null,
                                            JsonObject? processes = null)
     {
