@@ -78,6 +78,52 @@ def _ps_quote(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def run_command(script_url):
+    """The PowerShell command that fetches and runs the install script, elevated. ONE copy,
+    used by both the .cmd launcher and the wizard's copy-paste box, so the two cannot drift.
+
+    **The script is saved into a folder only SYSTEM and Administrators can write to.** The
+    first file-based version saved it as %TEMP%\\FleetHub-Onboard.ps1 and then ran it
+    elevated; %TEMP% is the same user's folder, so any non-elevated process of that user could
+    swap the file between the download and the run, and its replacement ran as admin. A random
+    name alone was rejected: a process watching the folder sees the new file anyway. The
+    folder is a fresh GUID under %ProgramData% and gets its ACL in the same call that creates
+    it -- CreateDirectory(path, DirectorySecurity) -- so there is no moment it is open. Users
+    may create folders in %ProgramData% but cannot touch another's, and cannot guess the GUID
+    to pre-create it.
+
+    Saved and run with -File under RemoteSigned, never downloaded into memory and run from
+    there: that is the dropper pattern antivirus blocks (Kaspersky did). Built from single
+    quotes only, with no percent sign, because the .cmd carries it inside one double-quoted
+    cmd.exe argument; _SAFE_URL keeps the URL to characters that survive that too. The admin
+    check is by SID, because the group's NAME is translated on a German or Spanish Windows.
+    """
+    return (
+        "& { "
+        "if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]"
+        "::GetCurrent()).IsInRole([Security.Principal.SecurityIdentifier]'S-1-5-32-544')) "
+        "{ Write-Host 'Run this from PowerShell opened with Run as administrator.' "
+        "-ForegroundColor Red; return }; "
+        "[Net.ServicePointManager]::SecurityProtocol = "
+        "[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; "
+        "$d = Join-Path $env:ProgramData ('FleetHub-Onboard-' + [guid]::NewGuid().ToString('N')); "
+        "$s = New-Object Security.AccessControl.DirectorySecurity; "
+        "$s.SetAccessRuleProtection($true, $false); "
+        "foreach ($i in 'S-1-5-18', 'S-1-5-32-544') { $s.AddAccessRule((New-Object "
+        "Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier $i), "
+        "'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))) }; "
+        "[void][IO.Directory]::CreateDirectory($d, $s); "
+        "$f = Join-Path $d 'onboard.ps1'; "
+        "try { "
+        f"Invoke-WebRequest -UseBasicParsing -Uri {_ps_quote(script_url)} -OutFile $f -ErrorAction Stop; "
+        "Unblock-File -LiteralPath $f; "
+        "powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f "
+        "} catch { Write-Host ('Could not download the onboarding script: ' + $_.Exception.Message "
+        "+ ' Check the connection, or ask for a new code.') -ForegroundColor Red "
+        "} finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue } }"
+    )
+
+
 def create_onboarding_blueprint(db_path, login_required, access, hub_url="",
                                 valid_machine_name=None, unsigned_reporters=None,
                                 machine_record=None):
@@ -210,6 +256,7 @@ def _check(db_path, base, data):
         "code": code,
         "script_url": f"{base}/onboarding/run/{code}.ps1",
         "cmd_url": f"{base}/onboarding/run/{code}.cmd",
+        "command": run_command(f"{base}/onboarding/run/{code}.ps1"),
     }), 200
 
 
@@ -222,7 +269,7 @@ def _live_code(db_path, code):
 
 
 def _script_response(db_path, base, code):
-    """The install script for one live code, as text/plain for `irm | iex`.
+    """The install script for one live code, as text/plain, fetched by run_command.
 
     Rendered only for a code that is live right now, so a guessed or spent code gets a 404
     and not a script. The code is re-normalised and must match the alphabet before it is put
@@ -258,7 +305,7 @@ def _launcher_response(db_path, base, code):
     if not _SAFE_URL.fullmatch(script_url):
         return jsonify({"error": "HUB_URL contains characters the launcher cannot carry; "
                                  "use the PowerShell command instead"}), 409
-    body = render_template("onboarding/onboard.cmd", script_url=script_url)
+    body = render_template("onboarding/onboard.cmd", command=run_command(script_url))
     resp = Response(body.replace("\r\n", "\n").replace("\n", "\r\n"),
                     mimetype="application/octet-stream")
     resp.headers["Content-Disposition"] = f'attachment; filename="FleetHub-Onboard-{norm}.cmd"'

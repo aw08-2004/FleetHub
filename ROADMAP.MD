@@ -5519,7 +5519,15 @@ gate on; the Android agent's release is owed locally (item 8).
   has checked in. **Revoke** on a used code also revokes the agent it enrolled.
 - **`/onboarding`**, a public wizard with three steps: enter the code, run the installer, and
   wait for the PC to appear. The installer step offers a `.cmd` launcher that elevates itself,
-  plus `irm …/onboarding/run/<code>.ps1 | iex` for an admin PowerShell. The script:
+  plus a command for an admin PowerShell. Both run the same command, built once by
+  `onboarding_web.run_command`. It saves the script into a fresh `%ProgramData%` folder that
+  only SYSTEM and Administrators can write to, then runs it with `-File` under `RemoteSigned`.
+  Two earlier versions were rejected:
+  - Running the download from memory under `Bypass`. Kaspersky blocked that as a dropper.
+  - Saving it to the user's `%TEMP%`. Another process of the same user could swap the file
+    before it ran elevated.
+
+  The agent installer the script fetches goes into the same kind of folder. The script:
   1. installs the agent with `agent-install.ps1`, **with no secret** (the signed-manifest check
      is unchanged);
   2. **only then** uses up the code;

@@ -144,7 +144,11 @@ public sealed class SelfUninstaller(ILogger<SelfUninstaller> log)
 
     /// <summary>Remove <paramref name="dir"/> only if it is empty, and never recursively -- so
     /// a FleetHub folder that also holds something else (the client, a log someone copied
-    /// there) is left exactly as it was.</summary>
+    /// there) is left exactly as it was. `requireSafe` runs the install-directory check on the
+    /// PARENT as well: it is one level shallower than the install directory, so it passes only
+    /// when that is at least three deep, and C:\Program Files is never even a candidate. That
+    /// is belt and braces -- a non-recursive delete of an empty folder cannot take anything
+    /// with it -- but it keeps a well-known system folder out of the script entirely.</summary>
     private static void AppendRemoveIfEmpty(StringBuilder sb, string? dir, bool requireSafe)
     {
         if (string.IsNullOrEmpty(dir) || (requireSafe && !IsSafeInstallDir(dir))) return;

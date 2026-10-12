@@ -32,6 +32,23 @@
     function Show-Info($msg) { Write-Host "  $msg" }
     function Show-Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
     function Fail($msg) { throw [System.Exception]::new($msg) }
+    # A fresh folder only SYSTEM and Administrators can write to, ACL set in the same call that
+    # creates it. The installer runs elevated from here, so it must not sit in the user's TEMP,
+    # where any non-elevated process of that user could swap it first -- a random file name
+    # does not help against a process watching the folder. Same reasoning as
+    # onboarding_web.run_command, which put this script in such a folder.
+    function New-PrivateDirectory {
+        $dir = Join-Path $env:ProgramData ('FleetHub-Onboard-' + [guid]::NewGuid().ToString('N'))
+        $sec = New-Object System.Security.AccessControl.DirectorySecurity
+        $sec.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {   # SYSTEM, BUILTIN\Administrators
+            $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                (New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl',
+                'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+        }
+        [void][IO.Directory]::CreateDirectory($dir, $sec)
+        $dir
+    }
 
     try {
         Write-Host "FleetHub onboarding" -ForegroundColor Cyan
@@ -50,16 +67,17 @@
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
         Show-Step "Installing the FleetHub agent"
-        $installer = Join-Path ([IO.Path]::GetTempPath()) ("fleethub-agent-install-" + [guid]::NewGuid().ToString('N') + ".ps1")
-        Invoke-WebRequest -UseBasicParsing -Uri $InstallerUrl -OutFile $installer
-        # Run below under RemoteSigned, which refuses a file marked as downloaded from the web.
-        # Invoke-WebRequest does not mark it today; this keeps that true if a future one does.
-        Unblock-File -LiteralPath $installer -ErrorAction SilentlyContinue
+        $installerDir = New-PrivateDirectory
         try {
+            $installer = Join-Path $installerDir 'agent-install.ps1'
+            Invoke-WebRequest -UseBasicParsing -Uri $InstallerUrl -OutFile $installer
+            # Run below under RemoteSigned, which refuses a file marked as downloaded from the
+            # web. Invoke-WebRequest does not mark it today; this keeps that true if one does.
+            Unblock-File -LiteralPath $installer -ErrorAction SilentlyContinue
             & powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File $installer -HubUrl $HubUrl
             if ($LASTEXITCODE -ne 0) { Fail "The agent installer failed (exit code $LASTEXITCODE). The onboarding code was NOT used; fix the problem above and run this again." }
         } finally {
-            Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $installerDir -Recurse -Force -ErrorAction SilentlyContinue
         }
 
         Show-Step "Enrolling this PC"
