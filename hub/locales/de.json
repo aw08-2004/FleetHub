@@ -2803,7 +2803,7 @@
       "session_ended": "die Fernsitzung wurde beendet",
       "helper_restarted": "die Fernsitzung wurde auf dem PC neu gestartet, dabei verschwand der Hinweis",
       "badge_failed": "der PC konnte den Aufzeichnungshinweis nicht anzeigen",
-      "badge_timeout": "der PC hat den Aufzeichnungshinweis nicht bestätigt (der Agent ist möglicherweise zu alt; Aufzeichnen erfordert Agent 3.43.0 oder neuer)",
+      "badge_timeout": "der PC hat den Aufzeichnungshinweis nicht bestätigt -- entweder ist sein Agent älter als 3.43.0, oder die Bestätigung hat den Hub nie erreicht (prüfen Sie, ob der Hub läuft und fehlerfrei arbeitet)",
       "stream_changed": "die Verbindung wurde auf das Hub-Relay umgestellt",
       "size_limit": "die Aufzeichnung hat ihre Größenbegrenzung erreicht"
     },

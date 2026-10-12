@@ -2916,7 +2916,7 @@
       "session_ended": "the remote session ended",
       "helper_restarted": "the remote session restarted on the PC, which took the badge down",
       "badge_failed": "the PC could not show the recording badge",
-      "badge_timeout": "the PC did not confirm the recording badge (its agent may be too old; recording needs agent 3.43.0 or later)",
+      "badge_timeout": "the PC did not confirm the recording badge -- either its agent is older than 3.43.0, or the confirmation never reached the hub (check the hub is running and healthy)",
       "stream_changed": "the connection switched to the hub relay",
       "size_limit": "the recording reached its size limit"
     },
