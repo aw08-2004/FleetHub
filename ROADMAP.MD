@@ -349,6 +349,20 @@ real SCM yet. On a Windows VM with a **3.43.0 install registered as `TempMonitor
 - **`-Uninstall`** on a migrated PC and on an un-migrated one: no agent service left either way.
 - **Onboarding** on a clean VM ends with `FleetHubAgent` running.
 
+**10. Deleting a device uninstalls its agent (#30), owed on Windows and Linux.** Built
+2026-10-12 (hub 1.146.0). It ships in Windows 3.44.0 and Linux 0.4.0 together with items 8 and
+9. Nothing has removed a real agent yet. On a VM with each agent installed:
+- **Delete it from Devices with the box ticked.** Within about 30 seconds:
+  - the agent service is gone;
+  - `C:\Program Files\FleetHub\Agent` and `%ProgramData%\FleetHub` are gone (Linux:
+    `/opt/fleethub`, `/var/lib/fleethub`, `/etc/fleethub` and the unit);
+  - `schtasks /query /tn FleetHubAgentUninstall` finds nothing.
+- **The same with the PC switched off before the delete.** It should uninstall within a minute
+  of being switched back on.
+- **Unticked:** the agent re-enrolls and the PC reappears, as it did before.
+- **A remote session open while deleting:** the helper in the user's session may hold files in
+  the install directory. Note what is left behind.
+
 ---
 
 ## ✅ Agent service renamed to `FleetHubAgent`   ·   hub 1.145.0 + agent 3.44.0
@@ -5609,6 +5623,83 @@ release first. Making *on* the default is a later hub change, once every agent s
   with `install.sh --secret`.
 - **Retiring `AGENT_REPORT_SECRET`.** No agent ever sent it. It is kept as an independent gate
   for any hub that set it.
+
+---
+## 🚧 30. Deleting a device uninstalls its agent   ·   hub 1.146.0 + Windows agent 3.44.0, Linux agent 0.4.0 (next releases)   ·   `fleet.decommission_machine`, `Update/SelfUninstaller.cs` (both agents)
+
+Deleting a device used to remove only the hub's record. The agent kept running, re-enrolled
+with the shared secret on its next tick, and the machine came straight back in the console.
+Now the delete dialog has **"Also uninstall the agent from this PC, and remove its data
+there"**, ticked by default, and the PC removes its own agent.
+
+### Built · hub 1.146.0
+- **`DELETE /api/machines/<m>?uninstall=1`** calls `fleet.decommission_machine` *before* the
+  agent rows are deleted. That copies each agent's id and token hash into
+  `decommissioned_agents`. When one of those tokens next calls the hub (seconds later, or weeks
+  later if the PC was off), the refusal says `reason: decommissioned`, on the heartbeat and on
+  `/api/report` alike. Only the holder of the real token is told; a forged token hears
+  `unknown`. Without the flag the delete works exactly as before. An API caller that predates
+  the flag must not start uninstalling agents just because the hub was upgraded.
+- **The duplicate-serial merge never calls it.** The merge also deletes a machine record, but
+  that record is the same PC under its old name. `tests/test_decommission.py` pins this.
+- **Console:** `confirmWithOption` in `common.js`, a confirm dialog with one checkbox. The
+  Devices delete uses it.
+
+### Built · agents
+- **Windows (3.44.0):** after **three** heartbeats in a row answer `decommissioned` (about 30
+  seconds), `SelfUninstaller` does the following:
+  1. writes a script into `%ProgramData%\FleetHub\Uninstall`, locked to SYSTEM and
+     Administrators before anything is written into it;
+  2. registers it as a one-shot SYSTEM scheduled task (`FleetHubAgentUninstall`) and runs it.
+
+  The script then:
+  1. marks `FleetHubAgent` and `TempMonitorAgent` for deletion *before* stopping them, so the
+     recovery actions cannot restart them;
+  2. waits for the exe to exit;
+  3. removes the install directory, `%ProgramData%\FleetHub\Agent` (and the pre-rename
+     state dir), both HKLM keys and `FLEETHUB_HUB`;
+  4. deletes the task and itself.
+
+  It leaves the PawnIO driver in place, as `-Uninstall` does. `ShouldReenrollAfter401` now
+  also stays down on `decommissioned`.
+- **Linux (0.4.0):** the same three-strike rule. The script runs as a transient unit
+  (`systemd-run --unit fleethub-agent-uninstall`), outside the agent's cgroup, and removes:
+  - the unit;
+  - `/opt/fleethub/agent`;
+  - `/var/lib/fleethub/agent`;
+  - `/etc/fleethub`.
+
+  Unlike `install.sh --uninstall`, it does not keep the identity and the secret: a deleted
+  machine is not coming back.
+- **Older agents** read `decommissioned` as "not revoked" and re-enroll, which is what every
+  delete did before this change.
+
+### Decisions
+- **A record of the deleted credential, not a queued command.** Deleting a machine deletes its
+  command rows, and most deleted machines are off. A record that waits for the token works
+  whenever the PC is next seen, and needs no new channel to the agent.
+- **Three strikes.** A single 401 can come from a proxy, or from a hub restored from the wrong
+  backup for a minute, and must not be enough to take an agent off a PC.
+- **Script locations only admins can write to.** `%TEMP%`, `C:\Windows\Temp` and `/tmp` were
+  rejected: a file an ordinary user pre-creates there, which a SYSTEM or root task then runs,
+  is a local privilege escalation.
+- **Recursive deletes only on known paths.** The Windows install directory comes from the
+  exe's own path. It is refused if it is shallower than two levels or is a system folder.
+  Linux only deletes under `/opt/fleethub/`; the first draft used a denylist, which let a home
+  directory through.
+- **Checkbox ticked by default** (owner, 2026-10-12). Unticking it covers clearing a stale
+  record of a PC that is still in use.
+
+### Rejected alternatives
+- **Uninstalling from a detached child of the service.** A service's children are not
+  guaranteed to survive its stop, and an uninstall that dies halfway leaves a service
+  registered against a deleted exe, restarted every minute.
+- **Android.** The agent is a device-owner app and cannot simply remove itself. It keeps the
+  old behaviour.
+
+### Not done
+- **Showing whether a deleted PC has been told.** `decommissioned_agents.last_told_at` is
+  recorded, but nothing displays it yet.
 
 ---
 

@@ -160,7 +160,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.145.0"
+HUB_VERSION = "1.146.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -6042,13 +6042,24 @@ def delete_machine(machine):
 
     This removes its identity, temperature readings, fleet enrollment, discovery history,
     and other live inventory and configuration. Historical records that remain useful after
-    decommissioning, such as patch outcomes and backup manifests, survive. Irreversible. If
-    the agent is still running it will re-enroll and reappear on its next report -- this is
-    meant for machines that are actually gone.
+    decommissioning, such as patch outcomes and backup manifests, survive. Irreversible.
+
+    **`?uninstall=1` also tells the PC to remove its own agent** (roadmap #30). The agents
+    enrolled under this name are recorded by fleet.decommission_machine BEFORE their rows are
+    deleted below, and the next time one of them calls the hub -- seconds from now, or weeks,
+    if the PC is off -- it is refused with reason "decommissioned" and uninstalls itself
+    (Windows 3.44.0+, Linux 0.4.0+). Without the flag a still-running agent re-enrolls and
+    reappears, which is the old behaviour and still the right one for tidying up a stale
+    record of a PC that is in use. Absent means no: an API caller that predates the flag must
+    not start uninstalling agents by upgrading the hub.
     """
     machine_name = str(machine).strip()
     if not machine_name:
         return jsonify({"error": "Machine name required"}), 400
+    actor = permissions_web.current_actor()
+    uninstall = str(request.args.get("uninstall", "")).lower() in ("1", "true", "yes")
+    decommissioned = (fleet.decommission_machine(DB_PATH, machine_name, actor=actor)
+                      if uninstall else 0)
     with get_db_conn() as conn:
         conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
@@ -6159,10 +6170,11 @@ def delete_machine(machine):
     backups.delete_secret(LOG_DIR, bitlocker.secret_id_for(machine_name))
     # Drop any in-memory live status so a deleted machine doesn't linger on the Dashboard.
     _evict_live_status(machine_name)
-    actor = permissions_web.current_actor()
     fleet.audit(DB_PATH, actor, "machine.delete", machine_name,
+                {"uninstall": uninstall, "agents_told_to_uninstall": decommissioned},
                 level=fleet.LEVEL_NOTICE)
-    return jsonify({"status": "deleted"}), 200
+    return jsonify({"status": "deleted", "uninstall": uninstall,
+                    "agents_to_uninstall": decommissioned}), 200
 
 
 @app.route('/api/alerts')

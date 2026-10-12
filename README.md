@@ -849,6 +849,16 @@ nothing the caller doesn't already hold.
 Two adjacent pages: `/users` (the registered-users directory — profiles, auto-created
 on first login, `manage_users`) and `/inventory` (fleet-wide hardware/asset view).
 
+### Deleting a device
+
+**Devices → ⋯ → Delete** removes the machine's record. The confirmation's **"Also uninstall
+the agent from this PC"** box is ticked by default. When it is ticked, the PC's agent removes
+itself the next time it contacts the hub, within about 30 seconds if the PC is on, or whenever
+it is next switched on. It takes the service, the install folder and its local data with it.
+This needs Windows agent 3.44.0 or Linux agent 0.4.0 or later; older agents re-enroll and the
+PC reappears, as before. Untick the box to clear a stale record of a PC that is still in use.
+The automatic merge of duplicate machines never uninstalls anything.
+
 ## Fleet command channel (RMM)
 
 Beyond telemetry, the hub can queue **commands** for a machine that its agent

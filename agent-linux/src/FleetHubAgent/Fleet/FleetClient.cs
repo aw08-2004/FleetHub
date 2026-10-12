@@ -66,6 +66,16 @@ public sealed class FleetClient : IDisposable, IOutputSink
 
     public bool IsEnrolled => _identity.IsEnrolled;
 
+    /// <summary>Takes the agent off this machine when the hub says it was deleted with
+    /// "uninstall the agent" ticked (roadmap #30). Set after construction, in Program.cs.</summary>
+    public FleetHubAgent.Update.SelfUninstaller? Uninstaller { get; set; }
+
+    /// <summary>Heartbeats in a row answered "decommissioned". The uninstall starts at
+    /// <see cref="DecommissionStrikes"/>, for the reason the Windows agent gives: one odd 401
+    /// must not be enough to take an agent off a machine.</summary>
+    private int _decommissionedReplies;
+    public const int DecommissionStrikes = 3;
+
     /// <summary>The Authorization value this agent signs with, or null when not enrolled.
     /// TelemetryReporter reads it per request (roadmap #29).</summary>
     public string? BearerValue => _identity is { IsEnrolled: true } id ? id.BearerValue : null;
@@ -146,6 +156,20 @@ public sealed class FleetClient : IDisposable, IOutputSink
     /// It still has to EXIST, and on the Windows cadence: this is what refreshes the hub's
     /// last_seen, and the console calls a machine offline after 90 seconds without one.
     /// </summary>
+    /// <summary>A heartbeat 401. Only "decommissioned" is acted on here; every other refusal
+    /// leaves the agent exactly where it was, as before roadmap #30.</summary>
+    private void NoteRefusal(string body)
+    {
+        if (!FleetHubAgent.Update.SelfUninstaller.IsDecommissioned(body))
+        {
+            Interlocked.Exchange(ref _decommissionedReplies, 0);
+            return;
+        }
+        var seen = Interlocked.Increment(ref _decommissionedReplies);
+        if (seen >= DecommissionStrikes && Uninstaller is { } uninstaller)
+            _ = uninstaller.StartAsync(CancellationToken.None);
+    }
+
     public async Task<bool> HeartbeatAsync(CancellationToken ct, JsonObject? patches = null,
                                            JsonObject? processes = null)
     {
@@ -187,7 +211,13 @@ public sealed class FleetClient : IDisposable, IOutputSink
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 
             using var resp = await _http.SendAsync(req, ct);
+            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                NoteRefusal(await resp.Content.ReadAsStringAsync(ct));
+                return false;
+            }
             if (!resp.IsSuccessStatusCode) return false;
+            Interlocked.Exchange(ref _decommissionedReplies, 0);
             // The reply's `processes_wanted` is how this agent learns to STOP sampling once
             // the card is closed. The only thing read back from a heartbeat; see
             // ApplyProcessesWanted for why a bad reply changes nothing.

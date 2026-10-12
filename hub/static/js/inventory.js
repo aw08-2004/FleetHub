@@ -215,16 +215,21 @@ function matchesSearch(row) {
 
 // ---- actions on one machine -----------------------------------------------------
 async function deleteMachine(machine) {
-    if (!await confirmDialog({
+    // "Also uninstall the agent" is ticked by default (roadmap #30): deleting a PC that is gone
+    // should take its agent with it. Unticking is for a stale record of a PC still in use.
+    const answer = await confirmWithOption({
         title: t('inventory.confirm_delete_title'),
         message: t('inventory.confirm_delete', { machine }),
         confirmLabel: t('common.delete'),
         danger: true,
-    })) {
-        return;
-    }
+        optionLabel: t('inventory.delete_uninstall_agent'),
+        optionChecked: true,
+    });
+    if (!answer) return;
     try {
-        const resp = await fetch('/api/machines/' + encodeURIComponent(machine), { method: 'DELETE' });
+        const url = '/api/machines/' + encodeURIComponent(machine)
+            + (answer.checked ? '?uninstall=1' : '');
+        const resp = await fetch(url, { method: 'DELETE' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         allRows = allRows.filter((r) => r.machine !== machine);
         selected.delete(machine);

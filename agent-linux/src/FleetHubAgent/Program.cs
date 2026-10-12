@@ -54,11 +54,17 @@ try
     // resolution also breaks what would otherwise be a construction cycle, since the dispatcher
     // is registered below the client that reports on it.
     builder.Services.AddSingleton<CommandDispatcher>();
+    builder.Services.AddSingleton<FleetHubAgent.Update.SelfUninstaller>();
     builder.Services.AddSingleton(sp => new FleetClient(
         sp.GetRequiredService<ILogger<FleetClient>>(),
         sp.GetRequiredService<AgentState>(),
         () => AgentCapabilities.For(sp.GetRequiredService<CommandDispatcher>(),
-                                    AgentCapabilities.Implemented)));
+                                    AgentCapabilities.Implemented))
+    {
+        // The self-uninstall (roadmap #30). Not a constructor argument: it depends on nothing
+        // the client does, and the client's signature is shared by the tests.
+        Uninstaller = sp.GetRequiredService<FleetHubAgent.Update.SelfUninstaller>(),
+    });
 
     // The executors, which are the whole of what this agent can be TOLD to do today. Four out
     // of the hub's ~thirty command types, and the gap is deliberate rather than unfinished:

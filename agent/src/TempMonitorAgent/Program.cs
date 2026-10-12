@@ -90,6 +90,7 @@ try
 
     // Fleet command channel
     builder.Services.AddSingleton<FleetClient>();
+    builder.Services.AddSingleton<TempMonitorAgent.Update.SelfUninstaller>();
     // DeployPackageExecutor takes the downloader as an interface (so its verify/run/detect
     // logic is testable without a hub); FleetClient is the real implementation, and must
     // resolve to the SAME singleton that holds this agent's enrollment token.
@@ -212,6 +213,9 @@ try
     // close a cycle that only resolution order keeps open. See FleetClient.Watchdogs.
     host.Services.GetRequiredService<FleetClient>().Watchdogs =
         host.Services.GetRequiredService<WatchdogRunner>();
+    // The self-uninstall (roadmap #30), handed over the same way and for the same reason.
+    host.Services.GetRequiredService<FleetClient>().Uninstaller =
+        host.Services.GetRequiredService<TempMonitorAgent.Update.SelfUninstaller>();
     host.Run();
 }
 catch (Exception ex)

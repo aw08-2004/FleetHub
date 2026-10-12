@@ -1286,6 +1286,12 @@
     line-height: 1.5;
 }
 
+/* The one checkbox confirmWithOption puts under the message (roadmap #30). */
+.modal__option {
+    display: block;
+    margin-top: var(--space-4);
+}
+
 /* ============ Recordings page (roadmap #19) ============ */
 /* The player is as wide as the screen allows: it is somebody's desktop, and at the 620px
    editor width its text is unreadable. */

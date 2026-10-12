@@ -295,7 +295,8 @@
       "online": "En línea",
       "offline": "Fuera de línea",
       "unenrolled": "Sin registrar"
-    }
+    },
+    "delete_uninstall_agent": "Desinstalar también el agente de este PC y borrar allí sus datos. Si el PC está apagado, recibe la orden la próxima vez que se conecte."
   },
   "alerts": {
     "heading": "Alertas",

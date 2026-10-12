@@ -326,7 +326,8 @@
       "online": "Online",
       "offline": "Offline",
       "unenrolled": "Not enrolled"
-    }
+    },
+    "delete_uninstall_agent": "Also uninstall the agent from this PC, and remove its data there. A PC that is off is told the next time it connects."
   },
   "alerts": {
     "heading": "Alerts",

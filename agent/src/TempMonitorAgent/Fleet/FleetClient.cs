@@ -104,6 +104,18 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// with no watchdogs is in.</summary>
     public WatchdogRunner? Watchdogs { get; set; }
 
+    /// <summary>Takes the agent off this PC when the hub says its machine was deleted with
+    /// "uninstall the agent" ticked (roadmap #30). Handed over after construction for the
+    /// reason <see cref="Watchdogs"/> is. Null means the reason is heard and nothing happens.</summary>
+    public TempMonitorAgent.Update.SelfUninstaller? Uninstaller { get; set; }
+
+    /// <summary>How many heartbeats in a row the hub has answered "decommissioned". The
+    /// uninstall starts at <see cref="DecommissionStrikes"/>, not on the first: one odd 401 --
+    /// a proxy, a hub restored from the wrong backup for a minute -- must not be enough to take
+    /// an agent off a PC, and three heartbeats is half a minute.</summary>
+    private int _decommissionedReplies;
+    public const int DecommissionStrikes = 3;
+
     public bool IsEnrolled => _identity.IsEnrolled;
     public string AgentId => _identity.AgentId;
 
@@ -287,6 +299,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
                 return false;
             }
             if (!resp.IsSuccessStatusCode) return false;
+            Interlocked.Exchange(ref _decommissionedReplies, 0);
 
             if (encryption is not null)
                 TempMonitorAgent.Security.BitLockerInventoryReporter.AckSent(encryption);
@@ -360,7 +373,10 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         {
             var reason = JsonNode.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body)
                 ?["reason"]?.GetValue<string>();
-            return !string.Equals(reason, "revoked", StringComparison.OrdinalIgnoreCase);
+            // "decommissioned" (roadmap #30) stays down too: this machine was deleted on
+            // purpose, and re-enrolling would put it straight back in the console.
+            return !string.Equals(reason, "revoked", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(reason, "decommissioned", StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException
                                        or FormatException)
@@ -381,6 +397,16 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// when the refused identity is still the current one closes that.</summary>
     private void ForgetIdentityIfRefused(string sentAs, string body)
     {
+        if (TempMonitorAgent.Update.SelfUninstaller.IsDecommissioned(body))
+        {
+            // The identity is KEPT: every later heartbeat has to keep being told, until the
+            // uninstall task has taken the service away.
+            var seen = Interlocked.Increment(ref _decommissionedReplies);
+            if (seen >= DecommissionStrikes && Uninstaller is { } uninstaller)
+                _ = uninstaller.StartAsync(CancellationToken.None);
+            return;
+        }
+        Interlocked.Exchange(ref _decommissionedReplies, 0);
         if (!ShouldReenrollAfter401(body))
         {
             // Revoked is a decision somebody made. Say so once per service lifetime and stay
