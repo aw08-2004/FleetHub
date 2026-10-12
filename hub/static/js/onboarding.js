@@ -78,7 +78,8 @@ async function checkCode(raw) {
             + '[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; '
             + '$f = "$env:TEMP\\FleetHub-Onboard.ps1"; '
             + `Invoke-WebRequest -UseBasicParsing -Uri '${body.script_url}' -OutFile $f; `
-            + 'powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f';
+            + 'powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f; '
+            + 'Remove-Item $f -ErrorAction SilentlyContinue';
         try { history.replaceState(null, '', `/onboarding?code=${encodeURIComponent(code)}`); }
         catch { /* cosmetic only */ }
         show(2);

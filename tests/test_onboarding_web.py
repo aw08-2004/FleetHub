@@ -185,6 +185,18 @@ def main():
               and "-file" in launcher)
         check("...and never under -ExecutionPolicy Bypass",
               "bypass" not in launcher and "bypass" not in script.lower())
+        # The wizard's copy-paste command is the one operators use most, and it lives in JS,
+        # not in a template -- so it is read from the file, or it could drift back to iex.
+        wizard_js = os.path.join(os.path.dirname(onboarding_web.__file__),
+                                 "static", "js", "onboarding.js")
+        with open(wizard_js, encoding="utf-8") as fh:
+            wizard = fh.read()
+        command = wizard[wizard.index("psCommand.value ="):wizard.index("show(2);")]
+        check("the wizard command saves the script and runs it with -File too",
+              "iex" not in command and "Invoke-Expression" not in command
+              and "-File $f" in command)
+        check("...never under Bypass, and deletes its copy afterwards",
+              "Bypass" not in command and "Remove-Item $f" in command)
         check("a guessed code gets no script", c.get("/onboarding/run/ZZZZZZ.ps1").status_code == 404)
         check("...and no launcher", c.get("/onboarding/run/ZZZZZZ.cmd").status_code == 404)
 
