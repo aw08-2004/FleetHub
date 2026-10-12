@@ -2466,6 +2466,7 @@
       "geom": "{width}×{height} · {encoder} · desktop {desktop}",
       "desktop_unknown": "?",
       "stalled": "The agent is not getting any frames. If this machine has no monitor, install a virtual display below.",
+      "stalled_no_display": "This Windows session has no display to capture — it may be disconnected or signed out. Pick another session in the Session picker above.",
       "stalled_on_desktop": "The agent is not getting any frames on the {desktop} desktop. If this machine has no monitor, install a virtual display below.",
       "signaling_error": "Signaling error: {error}",
       "session_logon_screen": "logon screen",

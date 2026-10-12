@@ -556,6 +556,14 @@
                     desktop: msg.desktop || t('machine.remote.desktop_unknown'),
                 }));
                 hint('');
+            } else if (msg.t === 'capture' && msg.state === 'stalled'
+                       && msg.reason === 'no_display') {
+                // Neither capture path can see a screen: the helper is in a Windows session with
+                // no rendered desktop (a disconnected RDP session, the wrong one after a reboot).
+                // Waiting never fixes that and a virtual display does not either -- the operator
+                // has to pick another session -- so it gets its own sentence rather than the
+                // general stall's advice. An agent too old to send `reason` lands below.
+                hint(t('machine.remote.stalled_no_display'));
             } else if (msg.t === 'capture' && msg.state === 'stalled') {
                 // Two whole sentences rather than one spliced around an optional clause:
                 // "on the X desktop" cannot be dropped into the middle of a translated
