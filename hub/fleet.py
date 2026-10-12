@@ -1372,6 +1372,43 @@ def decommission_machine(db_path, machine, actor="system"):
     return len(rows)
 
 
+#: A decommissioned agent that has been told and then fell silent this long has uninstalled
+#: itself. It acts on its third refusal, about 30 seconds after the first, so a month is
+#: slack enough for a PC switched off mid-uninstall to come back and hear it again.
+DECOMMISSION_TOLD_KEEP_SECONDS = 30 * 86400
+#: How long to wait for a decommissioned agent that has NEVER called since. The PC in a
+#: cupboard: a year, after which it hears "unknown" and re-enrolls like any deleted machine.
+DECOMMISSION_UNTOLD_KEEP_SECONDS = 365 * 86400
+
+
+def prune_decommissioned(db_path, now=None):
+    """Drop decommissioned_agents rows (roadmap #30) that have done their job, or never will.
+
+    Each row keeps a token hash for as long as it exists, so the table must not grow for as
+    long as the hub runs. **The row is what makes a deleted PC uninstall instead of
+    re-enrolling**, though, so a row is dropped only when its question is settled:
+
+      * told, and silent since for DECOMMISSION_TOLD_KEEP_SECONDS -- it heard the answer and
+        stopped calling, which is what uninstalling looks like from here. An agent whose
+        uninstall keeps failing keeps calling, keeps last_told_at fresh, and keeps its row;
+      * never told, DECOMMISSION_UNTOLD_KEEP_SECONDS after the delete -- a PC that has been
+        off for a year. Keeping that row forever was the alternative, and rejected: it is a
+        credential record for a machine that may well have been scrapped.
+
+    Not audited: the decommission itself is a security-level row, and this removes nothing an
+    operator can see. Returns the number of rows dropped.
+    """
+    now = int(time.time()) if now is None else int(now)
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM decommissioned_agents WHERE "
+            "(last_told_at IS NOT NULL AND last_told_at < ?) OR "
+            "(last_told_at IS NULL AND decommissioned_at < ?)",
+            (now - DECOMMISSION_TOLD_KEEP_SECONDS, now - DECOMMISSION_UNTOLD_KEEP_SECONDS),
+        )
+        return cur.rowcount
+
+
 #: Outcomes of `authorize_report`. SIGNED and UNSIGNED are accepted (UNSIGNED only when
 #: the caller allows anonymous telemetry); the other three are refusals.
 REPORT_SIGNED = "signed"

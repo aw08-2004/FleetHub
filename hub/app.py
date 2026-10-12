@@ -4157,6 +4157,15 @@ def retention_pruner():
                     print(f"[retention] Pruned {dropped} never-authenticated enrollment(s).")
             except Exception as e:
                 print(f"[retention] Enrollment prune failed: {e}")
+            # Deleted-with-uninstall agents (roadmap #30) that have been told and gone quiet,
+            # or never called in a year. Each row is a token hash; see
+            # fleet.prune_decommissioned for why a row is kept while it still has a job.
+            try:
+                dropped = fleet.prune_decommissioned(DB_PATH)
+                if dropped:
+                    print(f"[retention] Pruned {dropped} decommissioned agent record(s).")
+            except Exception as e:
+                print(f"[retention] Decommission prune failed: {e}")
             # Location fixes (roadmap #23). Its own try, like its neighbours, and the one
             # prune here that is a PRIVACY control rather than a disk-space one: the table is
             # tiny and would never need pruning for size. What expires is the record of where

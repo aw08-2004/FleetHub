@@ -118,11 +118,39 @@ def test_uninstall_needs_issue_commands():
             sess["user"] = {"email": "tester@example.com"}
 
 
+def test_prune_keeps_a_row_while_it_has_a_job():
+    print("\n-- the record is pruned once its question is settled, never before --")
+    import time
+    told = enrolled("TOLD-PC")
+    client.delete("/api/machines/TOLD-PC?uninstall=1", headers=HEADERS)
+    heartbeat(told)
+    untold = enrolled("CUPBOARD-PC")
+    client.delete("/api/machines/CUPBOARD-PC?uninstall=1", headers=HEADERS)
+    now = time.time()
+    check("nothing is pruned straight away", fleet.prune_decommissioned(app.DB_PATH, now) == 0)
+    month = now + fleet.DECOMMISSION_TOLD_KEEP_SECONDS + 60
+    fleet.prune_decommissioned(app.DB_PATH, month)
+    check("a month after the PC was told and fell silent, its record goes",
+          heartbeat(told).get_json().get("reason") == fleet.AUTH_UNKNOWN)
+    check("...but a PC that has never called since is still waited for",
+          heartbeat(untold).get_json().get("reason") == fleet.AUTH_DECOMMISSIONED)
+    # That heartbeat just told it, so it is now a told row: silent a month after THIS call.
+    fleet.prune_decommissioned(app.DB_PATH, time.time() + fleet.DECOMMISSION_TOLD_KEEP_SECONDS - 60)
+    check("...and once told, it is kept while it might still be calling",
+          heartbeat(untold).get_json().get("reason") == fleet.AUTH_DECOMMISSIONED)
+    gone = enrolled("SCRAPPED-PC")
+    client.delete("/api/machines/SCRAPPED-PC?uninstall=1", headers=HEADERS)
+    fleet.prune_decommissioned(app.DB_PATH, now + fleet.DECOMMISSION_UNTOLD_KEEP_SECONDS + 60)
+    check("a PC never heard from in a year is let go",
+          heartbeat(gone).get_json().get("reason") == fleet.AUTH_UNKNOWN)
+
+
 def main():
     test_delete_with_uninstall()
     test_delete_without_uninstall()
     test_merge_never_uninstalls()
     test_uninstall_needs_issue_commands()
+    test_prune_keeps_a_row_while_it_has_a_job()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

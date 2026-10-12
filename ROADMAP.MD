@@ -5695,6 +5695,11 @@ there"**, ticked by default, and the PC removes its own agent.
   exe's own path. It is refused if it is shallower than two levels or is a system folder.
   Linux only deletes under `/opt/fleethub/`; the first draft used a denylist, which let a home
   directory through.
+- **The records are pruned once they have done their job** (`fleet.prune_decommissioned`, on the
+  retention tick). Each one keeps a token hash, so keeping them all forever was rejected. A
+  record goes 30 days after the PC was last told, once it has stopped calling, which is what an
+  uninstall looks like from the hub. A record for a PC that never called again goes after a
+  year. An agent whose uninstall keeps failing keeps calling, so its record stays.
 - **Checkbox ticked by default** (owner, 2026-10-12). Unticking it covers clearing a stale
   record of a PC that is still in use.
 
