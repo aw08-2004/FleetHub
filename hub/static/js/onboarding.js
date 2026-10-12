@@ -72,9 +72,14 @@ async function checkCode(raw) {
         // TLS 1.2 is switched on first because Windows PowerShell 5.1 can still default to
         // 1.0, which the hub's reverse proxy will refuse -- and the error it gives says
         // nothing about TLS.
+        // Saved to a file and run with -File under RemoteSigned, the same as the .cmd launcher:
+        // a download piped into iex is the dropper pattern antivirus blocks (Kaspersky did).
         psCommand.value = '[Net.ServicePointManager]::SecurityProtocol = '
             + '[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; '
-            + `irm '${body.script_url}' | iex`;
+            + '$f = "$env:TEMP\\FleetHub-Onboard.ps1"; '
+            + `Invoke-WebRequest -UseBasicParsing -Uri '${body.script_url}' -OutFile $f; `
+            + 'powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f; '
+            + 'Remove-Item $f -ErrorAction SilentlyContinue';
         try { history.replaceState(null, '', `/onboarding?code=${encodeURIComponent(code)}`); }
         catch { /* cosmetic only */ }
         show(2);
