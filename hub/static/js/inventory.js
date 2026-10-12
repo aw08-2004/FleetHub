@@ -217,14 +217,18 @@ function matchesSearch(row) {
 async function deleteMachine(machine) {
     // "Also uninstall the agent" is ticked by default (roadmap #30): deleting a PC that is gone
     // should take its agent with it. Unticking is for a stale record of a PC still in use.
-    const answer = await confirmWithOption({
+    // Uninstalling runs code on the PC, so the box is offered only with issue_commands -- the
+    // hub refuses ?uninstall=1 without it, and a box that can only 403 is worse than none.
+    const dialog = {
         title: t('inventory.confirm_delete_title'),
         message: t('inventory.confirm_delete', { machine }),
         confirmLabel: t('common.delete'),
         danger: true,
-        optionLabel: t('inventory.delete_uninstall_agent'),
-        optionChecked: true,
-    });
+    };
+    const answer = CAN_ISSUE
+        ? await confirmWithOption({ ...dialog,
+            optionLabel: t('inventory.delete_uninstall_agent'), optionChecked: true })
+        : ((await confirmDialog(dialog)) && { checked: false });
     if (!answer) return;
     try {
         const url = '/api/machines/' + encodeURIComponent(machine)

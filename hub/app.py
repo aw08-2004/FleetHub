@@ -6052,12 +6052,20 @@ def delete_machine(machine):
     reappears, which is the old behaviour and still the right one for tidying up a stale
     record of a PC that is in use. Absent means no: an API caller that predates the flag must
     not start uninstalling agents by upgrading the hub.
+
+    **The flag also needs issue_commands.** Deleting a record is a settings change; uninstalling
+    runs a SYSTEM task on the PC, which is what issue_commands guards everywhere else. Without
+    this, a manage_settings operator who may not run so much as a script could remove agents.
+    Refused outright rather than downgraded to a plain delete, so the caller is never told
+    "deleted" while believing the PC was cleaned up too.
     """
     machine_name = str(machine).strip()
     if not machine_name:
         return jsonify({"error": "Machine name required"}), 400
     actor = permissions_web.current_actor()
     uninstall = str(request.args.get("uninstall", "")).lower() in ("1", "true", "yes")
+    if uninstall and not access.can(permissions.ISSUE_COMMANDS):
+        return jsonify({"error": "You do not have the 'issue_commands' permission."}), 403
     decommissioned = (fleet.decommission_machine(DB_PATH, machine_name, actor=actor)
                       if uninstall else 0)
     with get_db_conn() as conn:

@@ -95,10 +95,34 @@ def test_merge_never_uninstalls():
           heartbeat(old).get_json().get("reason") == fleet.AUTH_UNKNOWN)
 
 
+def test_uninstall_needs_issue_commands():
+    print("\n-- uninstalling runs code on the PC, so it needs issue_commands --")
+    import permissions
+    agent = enrolled("SETTINGS-ONLY-PC")
+    permissions.create_group(app.DB_PATH, "Settings only",
+                             capabilities=[permissions.VIEW, permissions.MANAGE_SETTINGS],
+                             machines=["SETTINGS-ONLY-PC"], members=["settings@example.com"])
+    with client.session_transaction() as sess:
+        sess["user"] = {"email": "settings@example.com"}
+    try:
+        r = client.delete("/api/machines/SETTINGS-ONLY-PC?uninstall=1", headers=HEADERS)
+        check("manage_settings alone may not uninstall: 403", r.status_code == 403)
+        check("...and nothing was deleted or recorded",
+              heartbeat(agent).status_code == 200)
+        r = client.delete("/api/machines/SETTINGS-ONLY-PC", headers=HEADERS)
+        check("...but may still delete the record without the flag", r.status_code == 200)
+        check("...which tells the agent nothing",
+              heartbeat(agent).get_json().get("reason") == fleet.AUTH_UNKNOWN)
+    finally:
+        with client.session_transaction() as sess:
+            sess["user"] = {"email": "tester@example.com"}
+
+
 def main():
     test_delete_with_uninstall()
     test_delete_without_uninstall()
     test_merge_never_uninstalls()
+    test_uninstall_needs_issue_commands()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 
