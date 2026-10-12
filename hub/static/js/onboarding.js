@@ -69,12 +69,11 @@ async function checkCode(raw) {
         installFor.textContent = t('onboarding.wizard.install_for', { label: body.label });
         downloadCmd.href = body.cmd_url;
         downloadCmd.setAttribute('download', `FleetHub-Onboard-${body.code}.cmd`);
-        // TLS 1.2 is switched on first because Windows PowerShell 5.1 can still default to
-        // 1.0, which the hub's reverse proxy will refuse -- and the error it gives says
-        // nothing about TLS.
-        psCommand.value = '[Net.ServicePointManager]::SecurityProtocol = '
-            + '[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; '
-            + `irm '${body.script_url}' | iex`;
+        // Built by the hub (onboarding_web.run_command), the very command the .cmd launcher
+        // runs, so the two cannot drift. It used to be assembled here, and drifted: it saved
+        // the script into the user's TEMP, where a non-elevated process could swap it before
+        // it ran elevated.
+        psCommand.value = body.command;
         try { history.replaceState(null, '', `/onboarding?code=${encodeURIComponent(code)}`); }
         catch { /* cosmetic only */ }
         show(2);

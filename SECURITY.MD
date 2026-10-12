@@ -228,6 +228,21 @@ Until a hub has this on, `/api/report` input is still untrusted. That is why the
 defence-in-depth around it stays: machine-name validation, the write-once BIOS serial, and the
 enrollment check before a duplicate-serial merge.
 
+## Uninstalling an agent by deleting its device (roadmap #30)
+
+Deleting a device with "uninstall the agent" ticked keeps the deleted agent's token hash. When
+that token next calls, the hub refuses it with `reason: decommissioned`, and the agent removes
+itself. Only the real token holder is told; any other caller hears `unknown`.
+- **Not on a single reply.** The agent acts only after three refusals in a row.
+- **A protected script location.** The Windows uninstall script is written to a folder locked
+  to SYSTEM and Administrators, and the Linux one to a root-only folder. Neither uses a temp
+  directory any user can write to.
+- **Known paths only.** The recursive deletes are limited to the agent's own install and state
+  paths.
+
+A compromised hub could uninstall agents this way. That is far less than the remote code
+execution the same hub already holds over every agent.
+
 ## Device tokens (the native client)
 
 The FleetHub desktop/mobile client authenticates with a **long-lived bearer token** rather

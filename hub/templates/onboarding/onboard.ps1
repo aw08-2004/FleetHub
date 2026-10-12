@@ -1,9 +1,9 @@
 # FleetHub onboarding script (roadmap #29). Rendered by the hub for ONE onboarding code;
-# see hub/onboarding_web.py. Run it in an elevated PowerShell:
-#
-#     irm <this url> | iex
-#
-# or double-click the .cmd launcher the onboarding page offers, which elevates first.
+# see hub/onboarding_web.py. Saved to a file and run with -File, either by the .cmd launcher
+# the onboarding page offers (which elevates first) or by the command the page shows for an
+# elevated PowerShell. Never run straight from memory: that is the dropper pattern antivirus
+# blocks (Kaspersky did, on the first version of the launcher). No comment here names the
+# commands that pattern uses, because scanners read comments too.
 #
 # What it does, in this order, and why the order:
 #   1. Installs the agent with agent-install.ps1 and NO enrollment secret. The installer
@@ -13,8 +13,8 @@
 #      Administrators, and restarts the service so the agent loads it.
 # The token goes from the hub straight into that file. It is never printed.
 #
-# Wrapped in a script block so `irm | iex` can stop on failure without closing the window
-# it was pasted into -- `exit` here would end the operator's elevated session.
+# Wrapped in a script block and stopped with throw, never `exit`, so a failure always
+# reaches the red line at the bottom instead of closing the window before it can be read.
 & {
     $ErrorActionPreference = 'Stop'
     $HubUrl       = {{ hub_url }}
@@ -32,6 +32,23 @@
     function Show-Info($msg) { Write-Host "  $msg" }
     function Show-Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
     function Fail($msg) { throw [System.Exception]::new($msg) }
+    # A fresh folder only SYSTEM and Administrators can write to, ACL set in the same call that
+    # creates it. The installer runs elevated from here, so it must not sit in the user's TEMP,
+    # where any non-elevated process of that user could swap it first -- a random file name
+    # does not help against a process watching the folder. Same reasoning as
+    # onboarding_web.run_command, which put this script in such a folder.
+    function New-PrivateDirectory {
+        $dir = Join-Path $env:ProgramData ('FleetHub-Onboard-' + [guid]::NewGuid().ToString('N'))
+        $sec = New-Object System.Security.AccessControl.DirectorySecurity
+        $sec.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {   # SYSTEM, BUILTIN\Administrators
+            $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                (New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl',
+                'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+        }
+        [void][IO.Directory]::CreateDirectory($dir, $sec)
+        $dir
+    }
 
     try {
         Write-Host "FleetHub onboarding" -ForegroundColor Cyan
@@ -50,13 +67,17 @@
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
         Show-Step "Installing the FleetHub agent"
-        $installer = Join-Path ([IO.Path]::GetTempPath()) ("fleethub-agent-install-" + [guid]::NewGuid().ToString('N') + ".ps1")
-        Invoke-WebRequest -UseBasicParsing -Uri $InstallerUrl -OutFile $installer
+        $installerDir = New-PrivateDirectory
         try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -HubUrl $HubUrl
+            $installer = Join-Path $installerDir 'agent-install.ps1'
+            Invoke-WebRequest -UseBasicParsing -Uri $InstallerUrl -OutFile $installer
+            # Run below under RemoteSigned, which refuses a file marked as downloaded from the
+            # web. Invoke-WebRequest does not mark it today; this keeps that true if one does.
+            Unblock-File -LiteralPath $installer -ErrorAction SilentlyContinue
+            & powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File $installer -HubUrl $HubUrl
             if ($LASTEXITCODE -ne 0) { Fail "The agent installer failed (exit code $LASTEXITCODE). The onboarding code was NOT used; fix the problem above and run this again." }
         } finally {
-            Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $installerDir -Recurse -Force -ErrorAction SilentlyContinue
         }
 
         Show-Step "Enrolling this PC"

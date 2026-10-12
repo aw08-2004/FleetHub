@@ -164,7 +164,7 @@ def main():
         reset_limits()
         ps = c.get(f"/onboarding/run/{code}.ps1")
         script = ps.get_data(as_text=True)
-        check("the .ps1 is served as text for irm | iex",
+        check("the .ps1 is served as plain text",
               ps.status_code == 200 and ps.mimetype == "text/plain")
         check("...naming this hub and this code", f"'{HUB}'" in script and f"'{code}'" in script)
         check("...installing with no enrollment secret", "-EnrollmentSecret" not in script)
@@ -177,6 +177,39 @@ def main():
               b"\r\n" in cmd.data and b"\n" not in cmd.data.replace(b"\r\n", b""))
         check("...pointing at the .ps1 for the same code",
               f"{HUB}/onboarding/run/{code}.ps1".encode() in cmd.data)
+        # Kaspersky blocked the first launcher, which piped the download into iex under
+        # -ExecutionPolicy Bypass: the textbook dropper shape. Neither may come back.
+        launcher = cmd.data.decode().lower()
+        check("...saving the script and running it with -File, never piping into iex",
+              "| iex" not in launcher and "invoke-expression" not in launcher
+              and "-file" in launcher)
+        check("...and never under -ExecutionPolicy Bypass",
+              "bypass" not in launcher and "bypass" not in script.lower())
+        # The wizard's copy-paste command is the one operators use most. It is the hub's
+        # run_command, the same text the .cmd carries -- asserted, so the page cannot go back
+        # to assembling its own (it did, and drifted).
+        command = info["command"]
+        check("the wizard is handed the very command the .cmd runs",
+              command.encode() in cmd.data)
+        wizard_js = os.path.join(os.path.dirname(onboarding_web.__file__),
+                                 "static", "js", "onboarding.js")
+        with open(wizard_js, encoding="utf-8") as fh:
+            check("...and shows it as given", "psCommand.value = body.command;" in fh.read())
+        # Saved into the user's TEMP and then run elevated, the script could be swapped by any
+        # non-elevated process of that user in between. Both downloads that run elevated --
+        # this script, and the agent installer it fetches -- go into an admin-only folder.
+        check("the script is saved into a fresh admin-only folder, not the user's TEMP",
+              "TEMP" not in command and "$env:ProgramData" in command
+              and "CreateDirectory($d, $s)" in command
+              and "SetAccessRuleProtection($true, $false)" in command)
+        check("...run from there with -File under RemoteSigned, and the folder removed after",
+              "-ExecutionPolicy RemoteSigned -File $f" in command
+              and "Remove-Item -LiteralPath $d -Recurse" in command)
+        check("...with no double quote or percent sign to break the .cmd's quoting",
+              '"' not in command and "%" not in command)
+        check("the agent installer goes into such a folder too",
+              "GetTempPath" not in script and "$env:TEMP" not in script
+              and "Join-Path $installerDir 'agent-install.ps1'" in script)
         check("a guessed code gets no script", c.get("/onboarding/run/ZZZZZZ.ps1").status_code == 404)
         check("...and no launcher", c.get("/onboarding/run/ZZZZZZ.cmd").status_code == 404)
 

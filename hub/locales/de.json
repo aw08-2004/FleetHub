@@ -295,7 +295,8 @@
       "online": "Online",
       "offline": "Offline",
       "unenrolled": "Nicht registriert"
-    }
+    },
+    "delete_uninstall_agent": "Außerdem den Agenten von diesem PC deinstallieren und seine Daten dort entfernen. Ein ausgeschalteter PC erhält die Anweisung, sobald er sich das nächste Mal verbindet."
   },
   "alerts": {
     "heading": "Warnungen",

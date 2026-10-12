@@ -732,7 +732,7 @@ function toast(message, { kind = 'info', timeout = 6000 } = {}) {
 // pseudorandom value a reader then has to check is not guarding anything.
 let _dialogSeq = 0;
 
-function _openDialog({ title, message, buttons, initialFocus }) {
+function _openDialog({ title, message, buttons, initialFocus, extra }) {
     return new Promise((resolve) => {
         const dialog = document.createElement('dialog');
         dialog.className = 'modal modal--compact';
@@ -756,6 +756,7 @@ function _openDialog({ title, message, buttons, initialFocus }) {
         text.className = 'modal__message';
         text.textContent = message || '';
         body.appendChild(text);
+        if (extra) body.appendChild(extra);
 
         const foot = document.createElement('div');
         foot.className = 'modal__foot';
@@ -807,6 +808,32 @@ function confirmDialog({ title, message, confirmLabel, cancelLabel, danger = fal
         ],
         initialFocus: danger ? 0 : 1,
     });
+}
+
+/** confirmDialog with one checkbox under the message. Resolves null on Cancel or Escape, and
+ *  `{ checked }` when confirmed -- a different shape from confirmDialog's boolean on purpose,
+ *  so a caller cannot read "confirmed" where it meant "ticked". Written for deleting a device
+ *  with "also uninstall the agent" (roadmap #30); the box's default is the caller's call. */
+function confirmWithOption({ title, message, confirmLabel, cancelLabel, danger = false,
+                             optionLabel, optionChecked = false } = {}) {
+    const wrap = document.createElement('label');
+    wrap.className = 'checkbox modal__option';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = optionChecked;
+    wrap.append(box, document.createTextNode(' ' + (optionLabel || '')));
+    return _openDialog({
+        title: title || t('dialog.confirm_title'),
+        message,
+        extra: wrap,
+        buttons: [
+            { label: cancelLabel || t('common.cancel'), className: 'btn btn--ghost',
+              value: false, cancel: true },
+            { label: confirmLabel || t('dialog.ok'),
+              className: danger ? 'btn btn--danger' : 'btn btn--primary', value: true },
+        ],
+        initialFocus: danger ? 0 : 1,
+    }).then((confirmed) => (confirmed ? { checked: box.checked } : null));
 }
 
 /** Tell the operator something they must read before carrying on -- the outcome of an

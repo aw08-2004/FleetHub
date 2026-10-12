@@ -594,6 +594,9 @@ ACTION_LEVELS = {
     # An enrolled agent reporting under a new hostname (roadmap #29). The credential's
     # identity moved, which is the same class of event as minting it.
     "agent.rename": LEVEL_SECURITY,
+    # Deleting a machine with "uninstall the agent" ticked (roadmap #30): the hub will tell
+    # that PC to remove its own agent, which is a remote action on a machine like any command.
+    "agent.decommission": LEVEL_SECURITY,
     # Onboarding codes (roadmap #29). A code is a one-time right to mint an agent
     # credential, so creating, spending and revoking one sit with `enroll` itself.
     "onboarding.create": LEVEL_SECURITY,
@@ -866,6 +869,20 @@ def init_fleet_db(db_path):
         # only be somebody else. No backfill: before this column existed nothing signed.
         if "last_report_auth" not in agent_columns:
             conn.execute("ALTER TABLE agents ADD COLUMN last_report_auth INTEGER")
+        # Agents whose machine an operator deleted WITH "uninstall the agent" (roadmap #30).
+        # A row here outlives the agents row it was copied from, on purpose: the machine may
+        # be off for weeks, and the only way to tell it to uninstall is to still recognise its
+        # token whenever it next calls. token_hash, never the token, the same as `agents`.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS decommissioned_agents (
+                agent_id          TEXT PRIMARY KEY,
+                machine           TEXT NOT NULL,
+                token_hash        TEXT NOT NULL,
+                decommissioned_at INTEGER NOT NULL,
+                actor             TEXT NOT NULL DEFAULT 'unknown',
+                last_told_at      INTEGER
+            )
+        """)
         # NOTE: databases created before command signing was removed also carry
         # `requires_signature INTEGER NOT NULL DEFAULT 0` and `signature TEXT`
         # here. They are deliberately left in place rather than migrated away:
@@ -1270,6 +1287,10 @@ def authenticate_agent(db_path, agent_id, token, touch=True):
 #: without this. See fleet_web.agent_auth.
 AUTH_UNKNOWN = "unknown"
 AUTH_REVOKED = "revoked"
+#: The machine was deleted with "uninstall the agent" ticked (roadmap #30). An agent that
+#: understands it removes itself; an older one reads it as "not revoked" and re-enrolls, which
+#: is exactly what deleting a machine did before this existed.
+AUTH_DECOMMISSIONED = "decommissioned"
 
 
 def auth_failure_reason(db_path, agent_id, token):
@@ -1296,10 +1317,84 @@ def auth_failure_reason(db_path, agent_id, token):
             (str(agent_id),),
         ).fetchone()
     if row is None:
-        return AUTH_UNKNOWN
+        return _decommissioned_reason(db_path, agent_id, token)
     if not hmac.compare_digest(row["token_hash"], _hash_token(token)):
         return AUTH_UNKNOWN
     return AUTH_REVOKED if row["revoked"] else AUTH_UNKNOWN
+
+
+def _decommissioned_reason(db_path, agent_id, token):
+    """AUTH_DECOMMISSIONED for the holder of a deleted-with-uninstall agent's real token, else
+    AUTH_UNKNOWN. Token first, for the reason auth_failure_reason gives: the answer only ever
+    reaches somebody who already holds the credential. Records when it was last said, so the
+    console can show that the PC has been told."""
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT token_hash FROM decommissioned_agents WHERE agent_id = ?",
+            (str(agent_id),),
+        ).fetchone()
+        if row is None or not hmac.compare_digest(row["token_hash"], _hash_token(token)):
+            return AUTH_UNKNOWN
+        conn.execute("UPDATE decommissioned_agents SET last_told_at = ? WHERE agent_id = ?",
+                     (int(time.time()), str(agent_id)))
+    return AUTH_DECOMMISSIONED
+
+
+def _decommission_rows(conn, machine, actor, now):
+    """Record every agent enrolled as `machine` to be told to uninstall itself (roadmap #30),
+    on the caller's connection, and return their ids. Only delete_machine calls it, inside the
+    same transaction that deletes the agents rows -- see uninstall_actor there.
+
+    Copies revoked rows too. A revoked agent stays down but keeps running; deleting its
+    machine with the box ticked means the operator wants it gone as well.
+    """
+    rows = conn.execute(
+        "SELECT agent_id, token_hash FROM agents WHERE machine = ?", (machine,)
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "INSERT OR REPLACE INTO decommissioned_agents("
+            "agent_id, machine, token_hash, decommissioned_at, actor) VALUES (?, ?, ?, ?, ?)",
+            (row["agent_id"], machine, row["token_hash"], now, actor),
+        )
+    return [r["agent_id"] for r in rows]
+
+
+#: A decommissioned agent that has been told and then fell silent this long has uninstalled
+#: itself. It acts on its third refusal, about 30 seconds after the first, so a month is
+#: slack enough for a PC switched off mid-uninstall to come back and hear it again.
+DECOMMISSION_TOLD_KEEP_SECONDS = 30 * 86400
+#: How long to wait for a decommissioned agent that has NEVER called since. The PC in a
+#: cupboard: a year, after which it hears "unknown" and re-enrolls like any deleted machine.
+DECOMMISSION_UNTOLD_KEEP_SECONDS = 365 * 86400
+
+
+def prune_decommissioned(db_path, now=None):
+    """Drop decommissioned_agents rows (roadmap #30) that have done their job, or never will.
+
+    Each row keeps a token hash for as long as it exists, so the table must not grow for as
+    long as the hub runs. **The row is what makes a deleted PC uninstall instead of
+    re-enrolling**, though, so a row is dropped only when its question is settled:
+
+      * told, and silent since for DECOMMISSION_TOLD_KEEP_SECONDS -- it heard the answer and
+        stopped calling, which is what uninstalling looks like from here. An agent whose
+        uninstall keeps failing keeps calling, keeps last_told_at fresh, and keeps its row;
+      * never told, DECOMMISSION_UNTOLD_KEEP_SECONDS after the delete -- a PC that has been
+        off for a year. Keeping that row forever was the alternative, and rejected: it is a
+        credential record for a machine that may well have been scrapped.
+
+    Not audited: the decommission itself is a security-level row, and this removes nothing an
+    operator can see. Returns the number of rows dropped.
+    """
+    now = int(time.time()) if now is None else int(now)
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM decommissioned_agents WHERE "
+            "(last_told_at IS NOT NULL AND last_told_at < ?) OR "
+            "(last_told_at IS NULL AND decommissioned_at < ?)",
+            (now - DECOMMISSION_TOLD_KEEP_SECONDS, now - DECOMMISSION_UNTOLD_KEEP_SECONDS),
+        )
+        return cur.rowcount
 
 
 #: Outcomes of `authorize_report`. SIGNED and UNSIGNED are accepted (UNSIGNED only when
@@ -1555,15 +1650,31 @@ def enrolled_machines(db_path):
     return {row["machine"] for row in rows}
 
 
-def delete_machine(db_path, machine):
+def delete_machine(db_path, machine, uninstall_actor=None):
     """Remove all fleet rows for a machine: its agent enrollments, its queued/past
     commands, and the command_results / command_output_chunks tied to those commands.
     The append-only audit_log is intentionally left intact (the hub audits the deletion
-    itself). Called when an operator hard-deletes a decommissioned machine."""
+    itself). Called when an operator hard-deletes a decommissioned machine.
+
+    **`uninstall_actor` also tells the machine's agents to uninstall themselves** (roadmap
+    #30): their ids and token hashes are copied into decommissioned_agents in the SAME
+    transaction that deletes their agents rows. It was a separate call before the delete
+    first, and review found the gap: a delete that failed after the copy left the agent
+    authenticating as normal with a decommission record behind it, so an operator who then
+    retried with the box UNticked got an uninstall anyway. Only the operator's Delete with
+    "uninstall the agent" ticked passes it -- never the duplicate-serial merge, which also
+    deletes a machine but is folding one PC's old name into its new one: an uninstall there
+    would remove the agent from a machine that is still in use.
+
+    Returns the number of agents told to uninstall (0 without uninstall_actor).
+    """
     machine = str(machine or "").strip()
     if not machine:
-        return
+        return 0
+    told = []
     with get_conn(db_path) as conn:
+        if uninstall_actor is not None:
+            told = _decommission_rows(conn, machine, uninstall_actor, int(time.time()))
         cmd_ids = [r["id"] for r in conn.execute(
             "SELECT id FROM commands WHERE machine = ?", (machine,)
         ).fetchall()]
@@ -1577,6 +1688,10 @@ def delete_machine(db_path, machine):
             )
         conn.execute("DELETE FROM commands WHERE machine = ?", (machine,))
         conn.execute("DELETE FROM agents WHERE machine = ?", (machine,))
+    if told:
+        audit(db_path, actor=uninstall_actor, action="agent.decommission", level=LEVEL_SECURITY,
+              target=machine, detail={"agent_ids": told})
+    return len(told)
 
 
 # ================================
