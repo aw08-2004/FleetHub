@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.onboarding') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/onboarding.css') }}">
+{% endblock %}
+{% block content %}
+{#
+   Structure only; onboarding-admin.js renders the list from /api/onboarding/codes. Shares
+   permissions.css with Invites for the table, badges and modal, because it is the same kind
+   of page: something is created once, shown once, and then only revoked.
+#}
+<div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+    <div>
+        <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('onboarding.admin.heading') }}</h1>
+        <p class="stat-card__meta">{{ t('onboarding.admin.intro') }}</p>
+    </div>
+    <button class="btn btn--primary" type="button" id="new-code">{{ t('onboarding.admin.new') }}</button>
+</div>
+
+<div id="codes-host"></div>
+
+{# Machines the enrolled-only telemetry switch would cut off (or is cutting off). The list
+   an operator needs codes for, which is why it is on this page and not under Settings. #}
+<div class="card" id="unsigned-card" style="margin-top: var(--space-5);" hidden>
+    <h2 class="section-title">{{ t('onboarding.admin.unsigned_heading') }}</h2>
+    <p class="stat-card__meta">{{ t('onboarding.admin.unsigned_intro') }}</p>
+    <ul class="onboarding-unsigned" id="unsigned-list"></ul>
+</div>
+
+<dialog class="modal" id="code-modal">
+    <form method="dialog">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('onboarding.admin.editor_title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <label class="setting__label" for="code-label">{{ t('onboarding.admin.label') }}</label>
+            <input class="input" id="code-label" maxlength="80" autocomplete="off"
+                   placeholder="{{ t('onboarding.admin.label_placeholder') }}" style="width: 100%;">
+            <label class="setting__label" for="code-ttl" style="margin-top: var(--space-4);">{{ t('onboarding.admin.expiry') }}</label>
+            <select class="input" id="code-ttl" style="width: 14rem;">
+                <option value="3600">{{ t('onboarding.admin.expiry_hour') }}</option>
+                <option value="86400" selected>{{ t('onboarding.admin.expiry_day') }}</option>
+                <option value="604800">{{ t('onboarding.admin.expiry_week') }}</option>
+            </select>
+            <p class="setting__help">{{ t('onboarding.admin.expiry_help') }}</p>
+            <p class="setting__error" id="code-error"></p>
+        </div>
+        <div class="modal__foot">
+            <span class="autosave" id="code-status"></span>
+            <button class="btn" type="button" id="code-cancel">{{ t('common.close') }}</button>
+            <button class="btn btn--primary" type="button" id="code-save">{{ t('onboarding.admin.create') }}</button>
+        </div>
+    </form>
+</dialog>
+
+{# Shown exactly once, like an invite link: only the hash is stored. #}
+<dialog class="modal" id="created-modal">
+    <form method="dialog">
+        <div class="modal__head">
+            <h2 class="modal__title">{{ t('onboarding.admin.created_title') }}</h2>
+        </div>
+        <div class="modal__body">
+            <p class="setting__help">{{ t('onboarding.admin.created_once') }}</p>
+            <p class="onboarding-code" id="created-code"></p>
+            <label class="setting__label" for="created-link">{{ t('onboarding.admin.created_link') }}</label>
+            <input class="input" id="created-link" readonly style="width: 100%;">
+        </div>
+        <div class="modal__foot">
+            <span class="autosave" id="created-status"></span>
+            <button class="btn btn--primary" type="button" id="created-copy">{{ t('onboarding.admin.copy_link') }}</button>
+            <button class="btn" type="button" id="created-close">{{ t('common.close') }}</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/onboarding-admin.js') }}"></script>
+{% endblock %}

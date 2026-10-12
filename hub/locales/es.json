@@ -41,7 +41,8 @@
     "reports": "Informes",
     "assistant": "Asistente",
     "label": "Principal",
-    "skip_to_content": "Saltar al contenido"
+    "skip_to_content": "Saltar al contenido",
+    "onboarding": "Incorporación"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -702,6 +703,10 @@
       "read_recovery_keys": {
         "label": "Leer claves de recuperación",
         "description": "Ver una contraseña de recuperación de BitLocker custodiada para estas máquinas. Cada lectura queda en el registro de auditoría. Para ver si una máquina está cifrada basta con 'Ver'."
+      },
+      "manage_onboarding": {
+        "label": "Gestionar códigos de incorporación",
+        "description": "Crear y revocar códigos de un solo uso con los que un PC se registra a sí mismo desde la página pública de incorporación. Revocar un código ya usado también revoca el agente que registró."
       }
     }
   },
@@ -1346,6 +1351,10 @@
       "security.posture_admin_allowlist": {
         "label": "También autorizados como administradores locales",
         "help": "Cuentas o grupos que pueden pertenecer al grupo local Administradores de un equipo sin que la comprobación falle (CIS 5.4). Indique un SID, DOMINIO\\nombre o solo el nombre. El Administrador integrado, los Administradores del dominio y los grupos de roles de Entra siempre están autorizados."
+      },
+      "security.require_enrolled_telemetry": {
+        "label": "Aceptar telemetría solo de agentes registrados",
+        "help": "Rechazar la telemetría que no esté firmada por un agente registrado. Actívelo cuando la página de Incorporación ya no muestre equipos que informan sin registro; los agentes antiguos no firman. Incluso mientras esté desactivado, un equipo cuyo agente ya firma no puede ser suplantado."
       }
     },
     "ai": {
@@ -4684,6 +4693,81 @@
         "unknown": "Desconocidas",
         "failing": "Equipos afectados"
       }
+    }
+  },
+  "onboarding": {
+    "admin": {
+      "heading": "Incorporación",
+      "intro": "Códigos de un solo uso con los que un PC se registra a sí mismo. Entregue un código, la persona abre la página de incorporación en el PC, y esta instala el agente y lo une a esta flota.",
+      "new": "Nuevo código",
+      "unsigned_heading": "Equipos que informan sin registro",
+      "unsigned_intro": "Estos equipos enviaron telemetría sin credencial de agente en el último día. Mientras solo se acepte telemetría registrada, se está rechazando. Actualice su agente o incorpórelos con un código.",
+      "unsigned_last": "último informe {when}",
+      "editor_title": "Nuevo código de incorporación",
+      "label": "Etiqueta",
+      "label_placeholder": "p. ej. PC de recepción para María",
+      "expiry": "Válido durante",
+      "expiry_hour": "1 hora",
+      "expiry_day": "1 día",
+      "expiry_week": "7 días",
+      "expiry_help": "Un código funciona una vez. Deja de funcionar cuando se usa, se revoca o caduca, lo que ocurra primero.",
+      "create": "Crear código",
+      "created_title": "Código de incorporación",
+      "created_once": "Este código solo se muestra una vez. Díctelo o envíe el enlace; la persona lo abre en el PC que quiere registrar.",
+      "created_link": "Enlace de incorporación",
+      "copy_link": "Copiar enlace",
+      "copied": "Copiado",
+      "copy_failed": "No se pudo copiar: seleccione el texto y cópielo usted.",
+      "status": {
+        "active": "En espera",
+        "expired": "Caducado",
+        "revoked": "Revocado",
+        "redeemed": "Usado: aún sin conectar",
+        "online": "Usado: en línea"
+      },
+      "empty": "Todavía no hay códigos de incorporación.",
+      "empty_hint": "Cree uno para configurar un PC nuevo sin entregar el secreto de registro de la flota.",
+      "col": {
+        "label": "Etiqueta",
+        "machine": "Equipo registrado",
+        "expires": "Caduca",
+        "status": "Estado"
+      },
+      "created_by": "por {email}, {when}",
+      "redeemed_from": "desde {ip}, {when}",
+      "revoke": "Revocar",
+      "confirm_revoke_title": "¿Revocar el código de incorporación?",
+      "confirm_revoke": "El código «{label}» dejará de funcionar.",
+      "confirm_revoke_machine": "El código «{label}» lo usó {machine}. Revocarlo también revoca el agente de ese equipo, que dejará de recibir comandos hasta que se registre de nuevo.",
+      "load_failed": "No se pudieron cargar los códigos de incorporación: {error}"
+    },
+    "wizard": {
+      "title": "Configurar este PC",
+      "steps_label": "Pasos de incorporación",
+      "step_code": "Código",
+      "step_install": "Instalar",
+      "step_done": "Listo",
+      "code_intro": "Introduzca el código de seis caracteres que le dio su equipo de TI.",
+      "code_label": "Código de incorporación",
+      "continue": "Continuar",
+      "install_for": "El código «{label}» es válido.",
+      "install_intro": "Descargue el instalador y ábralo. Windows pedirá permisos de administrador; permítalo. La ventana muestra cada paso y termina con una línea de éxito.",
+      "download": "Descargar instalador",
+      "download_hint": "Si Windows avisa de que el archivo no es reconocido, elija Más información y luego Ejecutar de todas formas.",
+      "alt_summary": "¿Prefiere PowerShell?",
+      "alt_intro": "Abra PowerShell con Ejecutar como administrador y pegue este comando:",
+      "copy": "Copiar comando",
+      "copied": "Copiado",
+      "copy_failed": "No se pudo copiar: el comando está seleccionado, pulse Ctrl+C.",
+      "waiting": "Esperando a que este PC termine la instalación...",
+      "enrolled": "{machine} está registrado. Esperando a que el agente se conecte...",
+      "online": "{machine} está registrado y en línea.",
+      "expired": "Este código ha caducado. Pida uno nuevo a su equipo de TI.",
+      "revoked": "Este código fue revocado. Pida uno nuevo a su equipo de TI.",
+      "done_hint": "Puede cerrar esta página.",
+      "too_many": "Demasiados intentos. Espere un minuto y vuelva a intentarlo.",
+      "code_invalid": "Ese código no es válido o ha caducado.",
+      "network_error": "No se pudo contactar con el hub. Compruebe la conexión y vuelva a intentarlo."
     }
   }
 }

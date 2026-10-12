@@ -35,12 +35,24 @@ public sealed class AgentState
         return new AgentIdentity();
     }
 
+    /// <summary>Persist the enrollment identity, readable only by SYSTEM and Administrators.
+    ///
+    /// The ACL goes onto the temp file BEFORE it is moved into place (a move on one volume
+    /// keeps the file's own security descriptor), so there is no moment at which the token
+    /// sits in a file an ordinary user may read. See StateDirectory.HardenPrivateFile for why
+    /// this file in particular.</summary>
     public void SaveIdentity(AgentIdentity identity)
     {
         EnsureStateDir();
         var json = JsonSerializer.Serialize(identity, JsonOpts);
-        AtomicWrite(AgentConfig.AgentIdentityPath, json);
+        AtomicWrite(AgentConfig.AgentIdentityPath, json, privateFile: true);
     }
+
+    /// <summary>Lock down an agent.json written before SaveIdentity hardened it -- by an
+    /// older agent, or by hand. Run once at startup; returns a note for the log, or null.
+    /// Cheap enough to repeat on every start, and that is what makes it a migration with no
+    /// state of its own.</summary>
+    public static string? HardenIdentityFile() => StateDirectory.HardenPrivateFile(AgentConfig.AgentIdentityPath);
 
     /// <summary>Throw the enrollment identity away, so the next tick enrolls from scratch.
     ///
@@ -156,10 +168,21 @@ public sealed class AgentState
         }
     }
 
-    private static void AtomicWrite(string path, string contents)
+    private static void AtomicWrite(string path, string contents, bool privateFile = false)
     {
         var tmp = path + ".tmp";
         File.WriteAllText(tmp, contents);
+        if (privateFile)
+        {
+            // A failure is not swallowed into a readable credential: the temp file is deleted
+            // and the save throws, which the caller already treats as "not enrolled yet".
+            var note = StateDirectory.HardenPrivateFile(tmp);
+            if (note is not null)
+            {
+                try { File.Delete(tmp); } catch { /* best effort */ }
+                throw new IOException(note);
+            }
+        }
         File.Move(tmp, path, overwrite: true);
     }
 }

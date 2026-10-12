@@ -1,0 +1,151 @@
+/* Onboarding (roadmap #29): the public /onboarding wizard and the code shown once on the
+   admin page. Plain CSS over tokens.css rather than Tailwind classes, because the wizard is
+   a standalone page like login.html and loads neither components.css nor app.css. */
+
+.onboarding-card {
+    max-width: 460px;
+    text-align: left;
+}
+
+.onboarding-card .login-card__brand {
+    justify-content: flex-start;
+}
+
+.onboarding-steps {
+    display: flex;
+    gap: var(--space-2);
+    list-style: none;
+    padding: 0;
+    margin: 0 0 var(--space-5);
+    counter-reset: onboarding-step;
+}
+
+.onboarding-steps__item {
+    flex: 1;
+    font-size: var(--text-sm);
+    color: var(--muted);
+    border-top: 3px solid var(--card-border);
+    padding-top: var(--space-2);
+    counter-increment: onboarding-step;
+}
+
+.onboarding-steps__item::before {
+    content: counter(onboarding-step) ". ";
+}
+
+.onboarding-steps__item--active {
+    color: var(--text);
+    border-top-color: var(--accent);
+    font-weight: 600;
+}
+
+.onboarding-steps__item--done {
+    border-top-color: var(--success);
+}
+
+.onboarding-label {
+    display: block;
+    font-size: var(--text-sm);
+    color: var(--muted);
+    margin-bottom: var(--space-2);
+}
+
+/* The code is read aloud and typed by somebody who is not a technician, so it is set large,
+   spaced and monospaced -- the alphabet has no look-alikes, and this keeps it that way. */
+.onboarding-code-input,
+.onboarding-code {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xl);
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+}
+
+.onboarding-code-input {
+    width: 100%;
+    padding: var(--space-3);
+    margin-bottom: var(--space-4);
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    text-align: center;
+}
+
+.onboarding-code {
+    text-align: center;
+    margin: var(--space-4) 0;
+    color: var(--text);
+    user-select: all;
+}
+
+.onboarding-btn {
+    background: var(--accent-fill);
+    color: var(--accent-contrast);
+    border-color: transparent;
+    justify-content: center;
+    width: 100%;
+    margin-bottom: var(--space-3);
+    cursor: pointer;
+}
+
+.onboarding-btn:hover {
+    background: var(--accent-fill-hover);
+}
+
+.onboarding-btn:disabled {
+    opacity: 0.6;
+    cursor: progress;
+}
+
+.onboarding-alt {
+    margin: var(--space-4) 0;
+    font-size: var(--text-sm);
+}
+
+.onboarding-alt summary {
+    cursor: pointer;
+    color: var(--accent);
+}
+
+.onboarding-command {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2);
+    margin-bottom: var(--space-2);
+    resize: vertical;
+}
+
+/* components.css is not loaded on the public page, so its one plain button is styled here. */
+.onboarding-alt .btn {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-3);
+    cursor: pointer;
+    margin-right: var(--space-2);
+}
+
+.onboarding-done {
+    color: var(--success) !important;
+    font-weight: 600;
+}
+
+.onboarding-unsigned {
+    list-style: none;
+    padding: 0;
+    margin: var(--space-3) 0 0;
+}
+
+.onboarding-unsigned li {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--card-border);
+}

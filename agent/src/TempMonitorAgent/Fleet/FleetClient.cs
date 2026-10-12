@@ -107,6 +107,11 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     public bool IsEnrolled => _identity.IsEnrolled;
     public string AgentId => _identity.AgentId;
 
+    /// <summary>The Authorization value this agent signs with, or null when not enrolled.
+    /// TelemetryReporter reads it per request (roadmap #29), so a report never goes out
+    /// signed with an identity this client has already thrown away.</summary>
+    public string? BearerValue => _identity is { IsEnrolled: true } id ? id.BearerValue : null;
+
     /// <summary>Enroll if not already enrolled. Returns true when enrolled (now or before).</summary>
     public async Task<bool> EnsureEnrolledAsync(string? enrollmentSecret, CancellationToken ct)
     {
@@ -161,8 +166,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     ///
     /// We send the config_version we currently hold; the hub includes a config payload
     /// only when it differs, so the steady-state 10-second heartbeat stays tiny. Config
-    /// rides here rather than on /api/report because this endpoint is authenticated —
-    /// /api/report deliberately is not.
+    /// rides here rather than on /api/report because this endpoint authenticates every
+    /// call, while /api/report still accepts unsigned reports on a hub that has switched
+    /// enrolled-only telemetry off (roadmap #29).
     /// </summary>
     public async Task<bool> HeartbeatAsync(CancellationToken ct)
     {

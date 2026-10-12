@@ -36,6 +36,37 @@ See [agent/README.md](agent/README.md) for the full C#/.NET agent: build/publish
 signing/release process, and `agent/install/agent-install.ps1` (installs the Windows
 Service, the PawnIO sensor driver, and SCM failure-recovery for self-updates).
 
+### Onboarding a PC with a code (no enrollment secret)
+
+A Windows PC can enrol itself without the fleet-wide `AGENT_ENROLLMENT_SECRET`
+(roadmap #29):
+
+1. In the console, **Administration → Onboarding → New code**. Give it a label, pick how
+   long it lasts (1 hour, 1 day or 7 days), and copy the six-character code or the link.
+   Creating codes needs the **Manage onboarding codes** capability.
+2. On the PC, open `https://<your hub>/onboarding` (or the link) and enter the code.
+3. Click **Download installer** and open the file. Accept the administrator prompt.
+   A technician can instead paste the PowerShell command from the same page into an
+   elevated PowerShell.
+4. The page shows the PC as online once its agent checks in.
+
+The installer gives the PC its own credential. The shared secret never reaches the PC, and
+the credential file (`%ProgramData%\FleetHub\Agent\agent.json`) is readable only by SYSTEM and
+Administrators. Each code works once. The Onboarding list shows which machine used a code and
+from which IP. **Revoke** on a used code also revokes that machine's agent.
+
+`HUB_URL` must be the hub's public `https://` address; the script refuses anything else.
+
+### Telemetry only from enrolled agents
+
+Agents sign every telemetry report with their own credential. **Settings → Security → Only
+accept telemetry from enrolled agents** refuses reports that are not signed. **It is off by
+default** until every agent in the fleet is new enough to sign. While it is off, unsigned
+reports are still accepted, except for a machine whose agent has already sent a signed one.
+**Administration → Onboarding** lists machines that sent unsigned reports in the last day:
+each one either runs an agent too old to sign, or was never enrolled. Turn the switch on once
+that list is empty. See ROADMAP #29.
+
 ## Unified installer
 
 `install.ps1` at the repo root is a single menu-driven installer covering every

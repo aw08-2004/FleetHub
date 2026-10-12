@@ -58,6 +58,7 @@ def _register_sidebar_stubs(app):
                            ("apitokens", "download_page"),
                            ("sharing", "sharing_page"),
                            ("provisioning", "provisioning_page"),
+                           ("onboarding", "onboarding_page"),
                            ("location", "fleet_map_page"),
                            ("reports", "reports_page"),
                            ("policy", "policy_page"),

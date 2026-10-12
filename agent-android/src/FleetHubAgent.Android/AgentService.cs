@@ -141,8 +141,11 @@ public sealed class AgentService : Service
         ManagedConfig.ApplyMachineName(this, _names);
 
         _sensors = new AndroidSensorReader(this, _loggerFactory.CreateLogger("Sensors"));
+        // Signed with whatever FleetClient holds at send time (roadmap #29). The lambda reads
+        // the field, so it sees the client constructed further down and any re-enrollment.
         _reporter = new TelemetryReporter(
-            _loggerFactory.CreateLogger<TelemetryReporter>(), identity, _names);
+            _loggerFactory.CreateLogger<TelemetryReporter>(), identity, _names,
+            () => _fleet?.BearerValue);
         // The executors, which are the whole of what this agent can be TOLD to do today. Five
         // out of the hub's ~thirty command types, and the gap is a platform limit rather than a
         // backlog: see CommandDispatcher, which distinguishes the commands Android forbids from

@@ -2,29 +2,39 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using TempMonitorAgent.Fleet;
 
 namespace TempMonitorAgent.Telemetry;
 
 public readonly record struct ReportResult(bool Sent, int? StatusCode, string? LatestVersion);
 
 /// <summary>
-/// Builds the telemetry payload and POSTs it to the hub's open /api/report endpoint
-/// (no auth, 3s timeout, no redirects), with an offline buffer: on a
+/// Builds the telemetry payload and POSTs it to the hub's /api/report endpoint
+/// (3s timeout, no redirects), with an offline buffer: on a
 /// connectivity failure a sensor-stripped copy is queued (bounded
 /// at 1000, oldest dropped) and flushed oldest-first on the next success — stopping on
 /// a connectivity error or HTTP >= 500, dropping an unretryable 4xx.
+///
+/// **Every report is signed with this agent's own credential** (roadmap #29) -- the same
+/// `Authorization: Bearer &lt;agent_id&gt;:&lt;token&gt;` the fleet channel sends, read from
+/// <see cref="FleetClient"/> at send time, so a buffered report flushed after enrollment goes
+/// out signed too. The hub refuses unsigned telemetry by default, because an unsigned report
+/// could come from anything and the console renders it as the machine it names. An agent that
+/// is not enrolled yet sends no header and is refused until it is; that is the point.
 /// </summary>
 public sealed class TelemetryReporter : IDisposable
 {
     private readonly ILogger<TelemetryReporter> _log;
     private readonly HttpClient _http;
     private readonly SystemIdentity _identity;
+    private readonly FleetClient _fleet;
     private readonly Queue<Dictionary<string, object?>> _offline = new();
 
-    public TelemetryReporter(ILogger<TelemetryReporter> log, SystemIdentity identity)
+    public TelemetryReporter(ILogger<TelemetryReporter> log, SystemIdentity identity, FleetClient fleet)
     {
         _log = log;
         _identity = identity;
+        _fleet = fleet;
         _http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
         {
             Timeout = TimeSpan.FromSeconds(3),
@@ -93,9 +103,19 @@ public sealed class TelemetryReporter : IDisposable
     private async Task<HttpResponseMessage> PostAsync(
         Dictionary<string, object?> payload, CancellationToken ct)
     {
-        var json = JsonSerializer.Serialize(payload);
-        using var content = new StringContent(json, Encoding.UTF8, "application/json");
-        return await _http.PostAsync(AgentConfig.ReportUrl, content, ct);
+        using var request = BuildReportRequest(
+            AgentConfig.ReportUrl, JsonSerializer.Serialize(payload), _fleet.BearerValue);
+        return await _http.SendAsync(request, ct);
+    }
+
+    /// <summary>The /api/report request, signed when <paramref name="bearer"/> is not null.
+    /// Public and static so the signing can be tested without a hub.</summary>
+    public static HttpRequestMessage BuildReportRequest(string url, string json, string? bearer)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, url)
+            { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        if (!string.IsNullOrEmpty(bearer)) request.Headers.Authorization = new("Bearer", bearer);
+        return request;
     }
 
     private void EnqueueStripped(Dictionary<string, object?> payload)

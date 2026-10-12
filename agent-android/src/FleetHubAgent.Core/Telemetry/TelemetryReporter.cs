@@ -7,8 +7,8 @@ namespace FleetHubAgent.Telemetry;
 public readonly record struct ReportResult(bool Sent, int? StatusCode);
 
 /// <summary>
-/// Builds the telemetry payload and POSTs it to the hub's open /api/report endpoint (no auth,
-/// 3s timeout, no redirects), with an offline buffer.
+/// Builds the telemetry payload and POSTs it to the hub's /api/report endpoint (3s timeout,
+/// no redirects), signed with this agent's credential, with an offline buffer.
 ///
 /// The buffer is the reason this class is not four lines, and it earns its keep here more than
 /// on any other platform: a phone is off the network several times a day, in a lift, on a
@@ -31,11 +31,12 @@ public readonly record struct ReportResult(bool Sent, int? StatusCode);
 /// machine, and reporting the old name for a queued item is what lets the hub's serial merge
 /// put the two together properly.
 ///
-/// This posts to the ONE endpoint that is deliberately unauthenticated, which is why it is a
-/// separate client from FleetClient and why it carries no bearer token: /api/report predates
-/// enrollment and still serves machines that have never enrolled. This agent reports there
-/// before it has an identity, and that is what makes a device visible in the console within
-/// five seconds of starting even when its enrollment secret is missing.
+/// **Every report is signed** (roadmap #29) with the bearer FleetClient holds, read through
+/// <c>bearer</c> at send time -- so a reading buffered before enrollment goes out signed once
+/// the device has enrolled. The hub refuses unsigned telemetry by default, because an unsigned
+/// report could come from anything and the console renders it as the device it names. A
+/// separate HttpClient from FleetClient's still, for the 3-second budget and the no-redirect
+/// handler. A device with no identity yet sends no header and is refused until it enrols.
 /// </summary>
 public sealed class TelemetryReporter : IDisposable
 {
@@ -43,14 +44,20 @@ public sealed class TelemetryReporter : IDisposable
     private readonly HttpClient _http;
     private readonly SystemIdentity _identity;
     private readonly MachineNameProvider _names;
+    private readonly Func<string?> _bearer;
     private readonly Queue<Dictionary<string, object?>> _offline = new();
 
+    /// <param name="bearer">The Authorization value to sign with, or null while not enrolled.
+    /// A function rather than the FleetClient itself because AgentService builds the reporter
+    /// before the client, and because the client replaces its identity on re-enrollment.</param>
     public TelemetryReporter(
-        ILogger<TelemetryReporter> log, SystemIdentity identity, MachineNameProvider names)
+        ILogger<TelemetryReporter> log, SystemIdentity identity, MachineNameProvider names,
+        Func<string?>? bearer = null)
     {
         _log = log;
         _identity = identity;
         _names = names;
+        _bearer = bearer ?? (() => null);
         // No redirects: this request carries machine identity, and a hub that has been
         // redirected somewhere else is a hub we should notice rather than follow.
         _http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
@@ -135,9 +142,18 @@ public sealed class TelemetryReporter : IDisposable
     private async Task<HttpResponseMessage> PostAsync(
         Dictionary<string, object?> payload, CancellationToken ct)
     {
-        var json = Serialize(payload);
-        using var content = new StringContent(json, Encoding.UTF8, "application/json");
-        return await _http.PostAsync(AgentConfig.ReportUrl, content, ct);
+        using var request = BuildReportRequest(AgentConfig.ReportUrl, Serialize(payload), _bearer());
+        return await _http.SendAsync(request, ct);
+    }
+
+    /// <summary>The /api/report request, signed when <paramref name="bearer"/> is not null.
+    /// Public and static so the signing can be tested without a hub.</summary>
+    public static HttpRequestMessage BuildReportRequest(string url, string json, string? bearer)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, url)
+            { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        if (!string.IsNullOrEmpty(bearer)) request.Headers.Authorization = new("Bearer", bearer);
+        return request;
     }
 
     private void EnqueueStripped(Dictionary<string, object?> payload)

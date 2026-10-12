@@ -27,6 +27,7 @@ from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
 import requests
 
+import auth_helpers
 import fleet
 import alerts
 import refusals
@@ -36,6 +37,7 @@ import permissions
 import users
 import invites
 import invites_web
+import onboarding
 import packages
 import backups
 import remote
@@ -84,6 +86,7 @@ from settings_web import create_settings_blueprint
 from permissions_web import create_access, create_permissions_blueprint
 from users_web import create_users_blueprint
 from invites_web import create_invites_blueprint
+from onboarding_web import create_onboarding_blueprint
 from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
 from backups_web import create_backups_blueprint
@@ -157,7 +160,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.143.0"
+HUB_VERSION = "1.144.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2122,13 +2125,12 @@ if not AI_API_KEY:
           "hosted one.")
 
 # Optional shared secret for the /api/report telemetry endpoint. When set, every
-# report POST must include a matching 'report_secret' field. When unset the endpoint
-# remains open (backwards compatible with existing telemetry-only deployments) but
-# a warning is printed so operators know the exposure.
+# report POST must include a matching 'report_secret' field. **Superseded as the
+# identity control by signed telemetry (roadmap #29)**: agents now sign each report with
+# their own token and `security.require_enrolled_telemetry` can refuse unsigned ones. No
+# agent ever sent this field, so it stays only as an independent extra gate for a hub
+# that already set it -- unset is the normal state, and no longer means "open".
 AGENT_REPORT_SECRET = os.environ.get("AGENT_REPORT_SECRET", "")
-if not AGENT_REPORT_SECRET:
-    print("[fleet] AGENT_REPORT_SECRET unset -- /api/report is unauthenticated.")
-    print("       Set AGENT_REPORT_SECRET in .env to require a shared secret from agents.")
 
 # ================================
 # WEB & WEBSOCKET SETUP
@@ -2516,6 +2518,17 @@ app.register_blueprint(create_users_blueprint(DB_PATH, login_required, access))
 # GET /invite/<code> -- see invites_web.py for what that page is and is not allowed to say.
 app.register_blueprint(create_invites_blueprint(
     DB_PATH, login_required, access, hub_url=HUB_URL))
+# Onboarding codes (roadmap #29): the Onboarding admin page, and the public /onboarding
+# wizard an unenrolled PC is set up through. HUB_URL for the same reason invites need it --
+# the link and the install script both have to name the hub's public address. The machine
+# name validator and the unsigned-reporter list are handed in rather than imported, because
+# both live here in the composition root. See onboarding_web.py for what the public routes
+# may and may not return.
+app.register_blueprint(create_onboarding_blueprint(
+    DB_PATH, login_required, access, hub_url=HUB_URL,
+    valid_machine_name=lambda name: is_valid_machine_name(name),
+    unsigned_reporters=lambda: unsigned_reporters(),
+    machine_record=lambda name: _machine_record(name)))
 # The Audit Log tab -- the read path over the trail every other blueprint writes to.
 # view_audit_log is the perimeter; view_security_audit widens which LEVELS come back, and
 # that widening is applied in SQL, never in the page (see audit_web.py).
@@ -3507,8 +3520,9 @@ def save_machine_info(machine, asset_tag, serial_number, model, companion_versio
                 -- WRITE-ONCE, unlike every other field here, and the argument order is the
                 -- whole difference: the EXISTING value wins. A BIOS serial is immutable
                 -- hardware identity -- that is the entire premise of keying dedup on it --
-                -- and this function's only caller is /api/report, which is unauthenticated
-                -- by design. Last-write-wins let anyone who could reach the hub retype a
+                -- and this function's only caller is /api/report, which accepted unsigned
+                -- reports until roadmap #29 and still does on a hub that switched
+                -- enrolled-only telemetry off. Last-write-wins let anyone who could reach the hub retype a
                 -- real machine's serial to collide with another's and drive
                 -- resolve_serial_group into merging them, which destroys an identity row
                 -- and re-points its permission-group scope. Filling a blank is still
@@ -3559,8 +3573,9 @@ def is_valid_serial(serial):
     return str(serial).strip().lower() not in _JUNK_SERIALS
 
 
-# Anything that can reach the hub may POST /api/report under a name of its choosing --
-# that endpoint is unauthenticated by design (open telemetry ingress). So the name is
+# Anything that can reach the hub could POST /api/report under a name of its choosing --
+# until roadmap #29 the endpoint took unsigned reports, and a hub with
+# security.require_enrolled_telemetry switched off still does. So the name is
 # untrusted input that then flows into every console view, and it is stored, meaning a
 # bad one keeps re-rendering long after the report. The console builds its DOM with
 # textContent and Jinja autoescapes, so this is the second layer, not the only one;
@@ -3826,7 +3841,8 @@ def resolve_serial_group(serial, actor="system:dedup"):
 
     # The survivor must be a machine the hub has actually ENROLLED, not merely one that
     # has posted a report. This is what stops the whole dedup from being a weapon: the
-    # trigger for it arrives on /api/report, which is unauthenticated by design, so
+    # trigger for it arrives on /api/report, which can still take unsigned reports on a hub
+    # that has switched enrolled-only telemetry off (roadmap #29), so
     # without this check anyone who can reach the hub can invent a hostname, claim a real
     # machine's serial while that machine is offline, and have the merge hand them its
     # identity -- deleting its agent enrollment (fleet.delete_machine) and re-pointing
@@ -5008,6 +5024,7 @@ settings.init_settings_db(DB_PATH)
 permissions.init_permissions_db(DB_PATH)
 users.init_users_db(DB_PATH)
 invites.init_invites_db(DB_PATH)
+onboarding.init_onboarding_db(DB_PATH)
 packages.init_packages_db(DB_PATH)
 backups.init_backups_db(DB_PATH)
 remote.init_remote_db(DB_PATH)
@@ -5156,17 +5173,75 @@ def start_local_logger():
 # ================================
 # API FOR REMOTE MACHINES
 # ================================
+# Machines that sent an UNSIGNED report recently, accepted or not: name -> epoch of the last
+# one. In memory on purpose -- it answers "who would the enrolled-only switch cut off right
+# now?" for the Onboarding page, a question about the last day, and a restart forgetting it
+# costs one day of an advisory list. Bounded by the rate limiter and the name validator.
+_unsigned_reporters = {}
+_unsigned_reporters_lock = threading.Lock()
+UNSIGNED_REPORTER_WINDOW_SECONDS = 86400
+
+
+def _note_unsigned_reporter(machine):
+    now = int(time.time())
+    with _unsigned_reporters_lock:
+        _unsigned_reporters[machine] = now
+        if len(_unsigned_reporters) > 5000:
+            cutoff = now - UNSIGNED_REPORTER_WINDOW_SECONDS
+            for name in [m for m, ts in _unsigned_reporters.items() if ts < cutoff]:
+                _unsigned_reporters.pop(name, None)
+
+
+def _machine_has_history(machine):
+    """Does the hub hold a record under `machine` (any case)? fleet.authorize_report asks
+    before letting an enrolled agent rename itself onto it: a rename may only land on a
+    fresh name, never on a machine somebody else's telemetry already describes."""
+    with get_db_conn() as conn:
+        return conn.execute(
+            "SELECT 1 FROM machine_info WHERE machine = ? COLLATE NOCASE LIMIT 1", (machine,)
+        ).fetchone() is not None
+
+
+def _machine_record(machine):
+    """None if the hub holds no record under `machine` (any case), else {"serial": its BIOS
+    serial when that is distinct enough to key identity on, or None}. What onboarding asks
+    before letting a code take a name with history -- see onboarding._check_known_machine.
+    Same is_valid_serial rule as the duplicate merge, so a placeholder serial binds nothing."""
+    with get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT serial_number FROM machine_info WHERE machine = ? COLLATE NOCASE LIMIT 1",
+            (machine,)).fetchone()
+    if row is None:
+        return None
+    serial = row["serial_number"]
+    return {"serial": serial if is_valid_serial(serial) else None}
+
+
+def unsigned_reporters():
+    """[{machine, last_report}] for every machine that reported unsigned in the last day."""
+    cutoff = int(time.time()) - UNSIGNED_REPORTER_WINDOW_SECONDS
+    with _unsigned_reporters_lock:
+        rows = [{"machine": m, "last_report": ts}
+                for m, ts in _unsigned_reporters.items() if ts >= cutoff]
+    return sorted(rows, key=lambda r: r["machine"].lower())
+
+
 @app.route('/api/report', methods=['POST'])
 @rate_limiter.limit('120/minute')
 def report_temp():
-    """Endpoint for other machines to send their temps via POST request.
+    """Endpoint for agents to send their telemetry.
 
-    When AGENT_REPORT_SECRET is configured, every report must include a
-    matching 'report_secret' field. This prevents unauthenticated spoofing
-    of machine telemetry while remaining backwards-compatible with existing
-    deployments that have not yet set the secret.
+    **Signed with the agent's own token (roadmap #29).** Agents send the same
+    `Authorization: Bearer <agent_id>:<token>` the fleet channel uses, and
+    fleet.authorize_report decides what that means: a bad token is refused, a good one
+    under another name re-points the enrollment (a renamed PC), and no token at all is
+    accepted only while `security.require_enrolled_telemetry` is off and the name is not
+    latched to an agent that signs. Until this, anything that could reach the hub could
+    post as any machine, and the console rendered it as that machine.
+
+    AGENT_REPORT_SECRET, when set, is still checked as well -- see its definition.
     """
-    data = request.json
+    data = request.get_json(silent=True)
     if not data or 'machine' not in data or 'temp' not in data:
         return jsonify({"error": "Invalid payload"}), 400
 
@@ -5180,11 +5255,33 @@ def report_temp():
     if not is_valid_machine_name(machine):
         return jsonify({"error": "Invalid machine name"}), 400
     machine = str(machine).strip()
-    # float() on a non-numeric temp would otherwise surface as an unhandled 500.
+    # float() on a non-numeric temp would otherwise surface as an unhandled 500. Checked
+    # BEFORE the identity gate below, because that gate writes (a rename, last_report_auth),
+    # and a report refused for its payload must not have moved an enrollment first (review
+    # on PR #119).
     try:
         temp_value = float(data['temp'])
     except (TypeError, ValueError):
         return jsonify({"error": "temp must be a number"}), 400
+
+    # --- identity gate (roadmap #29) ---
+    # Before anything is written. A refused report must leave no trace -- not a reading, not
+    # a machine_info row, not a last_seen bump -- or "refused" would still mean "shown".
+    claimed_id, claimed_token = auth_helpers.bearer_parts()
+    outcome, reason = fleet.authorize_report(DB_PATH, claimed_id, claimed_token, machine,
+                                             name_has_history=_machine_has_history)
+    if outcome == fleet.REPORT_BAD_TOKEN:
+        return jsonify({"error": "agent authentication required", "reason": reason}), 401
+    if outcome == fleet.REPORT_NAME_TAKEN:
+        return jsonify({"error": "that machine name belongs to another enrolled agent"}), 403
+    if outcome in (fleet.REPORT_UNSIGNED, fleet.REPORT_LATCHED):
+        _note_unsigned_reporter(machine)
+        if outcome == fleet.REPORT_LATCHED:
+            return jsonify({"error": "this machine signs its telemetry; unsigned report refused",
+                            "reason": "unsigned"}), 401
+        if settings.get_bool(DB_PATH, "security.require_enrolled_telemetry"):
+            return jsonify({"error": "only enrolled agents may report telemetry",
+                            "reason": "unsigned"}), 401
     try:
         uptime_seconds = int(data['uptime_seconds']) if data.get('uptime_seconds') is not None else None
     except (TypeError, ValueError):

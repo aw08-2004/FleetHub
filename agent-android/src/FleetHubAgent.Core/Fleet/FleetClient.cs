@@ -71,6 +71,10 @@ public sealed class FleetClient : IDisposable
 
     public bool IsEnrolled => _identity.IsEnrolled;
 
+    /// <summary>The Authorization value this agent signs with, or null when not enrolled.
+    /// TelemetryReporter reads it per request (roadmap #29).</summary>
+    public string? BearerValue => _identity is { IsEnrolled: true } id ? id.BearerValue : null;
+
     /// <summary>Enroll if we have not already, using the shared secret the operator or the MDM
     /// supplied. Returns whether the agent now has an identity.
     ///

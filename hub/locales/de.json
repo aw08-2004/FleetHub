@@ -41,7 +41,8 @@
     "reports": "Berichte",
     "assistant": "Assistent",
     "label": "Hauptnavigation",
-    "skip_to_content": "Zum Inhalt springen"
+    "skip_to_content": "Zum Inhalt springen",
+    "onboarding": "Onboarding"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -702,6 +703,10 @@
       "read_recovery_keys": {
         "label": "Wiederherstellungsschlüssel lesen",
         "description": "Ein hinterlegtes BitLocker-Wiederherstellungskennwort für diese Maschinen angezeigt bekommen. Jeder Lesevorgang wird im Audit-Log festgehalten. Um zu sehen, ob eine Maschine verschlüsselt ist, genügt 'Ansehen'."
+      },
+      "manage_onboarding": {
+        "label": "Onboarding-Codes verwalten",
+        "description": "Einmalcodes erstellen und widerrufen, mit denen sich ein PC über die öffentliche Onboarding-Seite selbst registriert. Das Widerrufen eines verwendeten Codes widerruft auch den damit registrierten Agenten."
       }
     }
   },
@@ -1346,6 +1351,10 @@
       "security.posture_admin_allowlist": {
         "label": "Zusätzlich zulässige lokale Administratoren",
         "help": "Konten oder Gruppen, die Mitglied der lokalen Administratorengruppe eines PCs sein dürfen, ohne dass die Prüfung fehlschlägt (CIS 5.4). Angabe als SID, DOMÄNE\\Name oder reiner Name. Das integrierte Administratorkonto, die Domänen-Admins und Entra-Rollengruppen sind immer zulässig."
+      },
+      "security.require_enrolled_telemetry": {
+        "label": "Telemetrie nur von registrierten Agenten annehmen",
+        "help": "Telemetrie ablehnen, die nicht von einem registrierten Agenten signiert ist. Einschalten, sobald die Onboarding-Seite keine Rechner mehr ohne Registrierung auflistet; ältere Agenten signieren nicht. Auch solange dies aus ist, kann ein Rechner, dessen Agent bereits signiert, nicht nachgeahmt werden."
       }
     },
     "ai": {
@@ -4684,6 +4693,81 @@
         "unknown": "Unbekannt",
         "failing": "Betroffene Geräte"
       }
+    }
+  },
+  "onboarding": {
+    "admin": {
+      "heading": "Onboarding",
+      "intro": "Einmalcodes, mit denen sich ein PC selbst registriert. Geben Sie jemandem einen Code, er öffnet die Onboarding-Seite auf dem PC, und diese installiert den Agenten und nimmt den PC in diese Flotte auf.",
+      "new": "Neuer Code",
+      "unsigned_heading": "Rechner, die ohne Registrierung melden",
+      "unsigned_intro": "Diese Rechner haben am letzten Tag Telemetrie ohne Agenten-Anmeldedaten gesendet. Solange nur registrierte Telemetrie angenommen wird, wird sie abgelehnt. Aktualisieren Sie ihren Agenten oder nehmen Sie sie mit einem Code auf.",
+      "unsigned_last": "letzter Bericht {when}",
+      "editor_title": "Neuer Onboarding-Code",
+      "label": "Bezeichnung",
+      "label_placeholder": "z. B. Empfangs-PC für Maria",
+      "expiry": "Gültig für",
+      "expiry_hour": "1 Stunde",
+      "expiry_day": "1 Tag",
+      "expiry_week": "7 Tage",
+      "expiry_help": "Ein Code funktioniert einmal. Er wird ungültig, sobald er verwendet, widerrufen oder abgelaufen ist -- je nachdem, was zuerst eintritt.",
+      "create": "Code erstellen",
+      "created_title": "Onboarding-Code",
+      "created_once": "Dieser Code wird nur einmal angezeigt. Lesen Sie ihn vor oder senden Sie den Link; die Person öffnet ihn auf dem PC, der registriert werden soll.",
+      "created_link": "Onboarding-Link",
+      "copy_link": "Link kopieren",
+      "copied": "Kopiert",
+      "copy_failed": "Kopieren nicht möglich -- markieren Sie den Text und kopieren Sie ihn selbst.",
+      "status": {
+        "active": "Wartet",
+        "expired": "Abgelaufen",
+        "revoked": "Widerrufen",
+        "redeemed": "Verwendet -- noch nicht gemeldet",
+        "online": "Verwendet -- online"
+      },
+      "empty": "Noch keine Onboarding-Codes.",
+      "empty_hint": "Erstellen Sie einen, um einen neuen PC einzurichten, ohne das Registrierungsgeheimnis der Flotte weiterzugeben.",
+      "col": {
+        "label": "Bezeichnung",
+        "machine": "Registrierter Rechner",
+        "expires": "Läuft ab",
+        "status": "Status"
+      },
+      "created_by": "von {email}, {when}",
+      "redeemed_from": "von {ip}, {when}",
+      "revoke": "Widerrufen",
+      "confirm_revoke_title": "Onboarding-Code widerrufen?",
+      "confirm_revoke": "Der Code „{label}“ funktioniert dann nicht mehr.",
+      "confirm_revoke_machine": "Der Code „{label}“ wurde von {machine} verwendet. Das Widerrufen widerruft auch den Agenten dieses Rechners, der dann keine Befehle mehr erhält, bis er erneut registriert wird.",
+      "load_failed": "Onboarding-Codes konnten nicht geladen werden: {error}"
+    },
+    "wizard": {
+      "title": "Diesen PC einrichten",
+      "steps_label": "Onboarding-Schritte",
+      "step_code": "Code",
+      "step_install": "Installation",
+      "step_done": "Fertig",
+      "code_intro": "Geben Sie den sechsstelligen Code ein, den Sie von Ihrer IT erhalten haben.",
+      "code_label": "Onboarding-Code",
+      "continue": "Weiter",
+      "install_for": "Der Code „{label}“ ist gültig.",
+      "install_intro": "Laden Sie das Installationsprogramm herunter und öffnen Sie es. Windows fragt nach Administratorrechten; erlauben Sie dies. Das Fenster zeigt jeden Schritt und endet mit einer Erfolgsmeldung.",
+      "download": "Installationsprogramm herunterladen",
+      "download_hint": "Wenn Windows warnt, dass die Datei unbekannt ist, wählen Sie „Weitere Informationen“ und dann „Trotzdem ausführen“.",
+      "alt_summary": "Lieber PowerShell?",
+      "alt_intro": "Öffnen Sie PowerShell mit „Als Administrator ausführen“ und fügen Sie diesen Befehl ein:",
+      "copy": "Befehl kopieren",
+      "copied": "Kopiert",
+      "copy_failed": "Kopieren nicht möglich -- der Befehl ist markiert, drücken Sie Strg+C.",
+      "waiting": "Warte, bis dieser PC die Installation abgeschlossen hat...",
+      "enrolled": "{machine} ist registriert. Warte auf die erste Meldung des Agenten...",
+      "online": "{machine} ist registriert und online.",
+      "expired": "Dieser Code ist abgelaufen. Bitten Sie Ihre IT um einen neuen.",
+      "revoked": "Dieser Code wurde widerrufen. Bitten Sie Ihre IT um einen neuen.",
+      "done_hint": "Sie können diese Seite schließen.",
+      "too_many": "Zu viele Versuche. Warten Sie eine Minute und versuchen Sie es erneut.",
+      "code_invalid": "Dieser Code ist ungültig oder abgelaufen.",
+      "network_error": "Der Hub ist nicht erreichbar. Prüfen Sie die Verbindung und versuchen Sie es erneut."
     }
   }
 }

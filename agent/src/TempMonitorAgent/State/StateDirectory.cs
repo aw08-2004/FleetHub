@@ -142,6 +142,41 @@ public static class StateDirectory
         }
     }
 
+    /// <summary>
+    /// Make <paramref name="path"/> -- an existing FILE -- readable only by SYSTEM and
+    /// Administrators, with inheritance cut. The file-level sibling of
+    /// <see cref="HardenPrivate"/>, for one file whose contents are a credential.
+    ///
+    /// Written for agent.json (roadmap #29). The state directory's ACL deliberately leaves
+    /// Users read access (see <see cref="Harden"/>), so the enrollment token in agent.json
+    /// was readable by every local user -- and anyone holding it could post telemetry as this
+    /// machine, poll its commands and answer them. Hardening the whole directory private was
+    /// rejected: the log beside it is meant to be readable by whoever is diagnosing the PC.
+    ///
+    /// Returns null on success, or a note for the log. Never throws, like the others here.
+    /// </summary>
+    public static string? HardenPrivateFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            var security = new FileSecurity();
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            foreach (var sid in new[] { WellKnownSidType.LocalSystemSid, WellKnownSidType.BuiltinAdministratorsSid })
+            {
+                security.AddAccessRule(new FileSystemAccessRule(
+                    new SecurityIdentifier(sid, null), FileSystemRights.FullControl,
+                    AccessControlType.Allow));
+            }
+            new FileInfo(path).SetAccessControl(security);
+            return null;
+        }
+        catch (Exception e)
+        {
+            return $"Could not restrict {path} to SYSTEM and Administrators: {e.Message}";
+        }
+    }
+
     /// <summary>Does this ACL let anyone outside SYSTEM/Administrators/CREATOR OWNER write?</summary>
     private static bool GrantsNonAdminWrite(FileSystemSecurity security)
     {
