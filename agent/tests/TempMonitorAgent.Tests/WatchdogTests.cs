@@ -266,7 +266,7 @@ public class WatchdogTests
     [Fact]
     public void A_protected_service_is_refused_by_the_agent_too()
     {
-        foreach (var name in new[] { "RpcSs", "rpcss", "WinMgmt", "TempMonitorAgent" })
+        foreach (var name in new[] { "RpcSs", "rpcss", "WinMgmt", "TempMonitorAgent", "FleetHubAgent" })
         {
             var (runner, services) = Runner(Entry(service: name, grace: 0));
             services.Status = ServiceControllerStatus.Stopped;

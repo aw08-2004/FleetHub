@@ -5,11 +5,12 @@
     Installs the fleet agent as a Windows Service running under LocalSystem:
       - PawnIO kernel driver (needed by the in-process LibreHardwareMonitorLib for
         sensor access; skipped if already present)
-      - The self-contained agent exe -> C:\Program Files\TempMonitorAgent
-      - A Windows Service "TempMonitorAgent" (Automatic), with SCM failure-recovery
+      - The self-contained agent exe -> C:\Program Files\FleetHub\Agent
+      - A Windows Service "FleetHubAgent" (Automatic), with SCM failure-recovery
         set to restart -- this is what the agent's self-update relies on when it
-        exits with code 17 to swap onto a new binary.
-      - The one-time enrollment secret into HKLM\SOFTWARE\TempMonitorAgent
+        exits with code 17 to swap onto a new binary. A machine still registered under
+        the pre-rename name "TempMonitorAgent" is moved onto the new one.
+      - The one-time enrollment secret into HKLM\SOFTWARE\FleetHub\Agent
 
     Unlike the removed Python companion (a per-logon Scheduled Task in a user session),
     this runs in session 0 as SYSTEM, so restart/rename/gpupdate/scripts work with no one
@@ -40,12 +41,21 @@ param(
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# The Windows service name is deliberately NOT renamed yet. .NET sets ServiceBase.ServiceName
-# from AddWindowsService() in Program.cs, and a self-updating agent swaps its binary without
-# re-registering the service -- so renaming one side without the other leaves the registered
-# name and the binary's name disagreeing on exactly the machines already in the field.
-# Both move together when the assembly is renamed.
-$ServiceName    = "TempMonitorAgent"
+# The service is FleetHubAgent (renamed 2026-10-12). Machines installed before that are
+# registered as TempMonitorAgent until this installer runs on them again, and are migrated
+# then (step 4). **The binary does not care which name it runs under**: for an own-process
+# service the SCM ignores the name the process hands StartServiceCtrlDispatcher, so the
+# ServiceName in Program.cs is cosmetic and a 3.43.0 exe runs fine as FleetHubAgent. An
+# earlier comment here said the two had to move in lockstep; that was wrong, and is why the
+# rename waited.
+#
+# Deliberately NOT migrated by the agent's own self-update: a service deleted while running
+# is only marked for deletion, and the SCM neither starts nor runs recovery on one so marked
+# -- the exit-17 restart would leave the PC dead until someone visits it. The installer
+# migrates with the old service stopped and someone at the keyboard. See ROADMAP.MD, "Agent
+# service renamed to FleetHubAgent".
+$ServiceName       = "FleetHubAgent"
+$LegacyServiceName = "TempMonitorAgent"
 $ExeName        = "TempMonitorAgent.exe"
 $ExePath        = Join-Path $InstallDir $ExeName
 $RegPath        = "HKLM:\SOFTWARE\FleetHub\Agent"
@@ -63,6 +73,19 @@ function Ok($msg)   { Write-Host "  [ok] $msg"   -ForegroundColor Green }
 function Warn($msg) { Write-Host "  [!!] $msg"   -ForegroundColor Yellow }
 function Die($msg)  { Write-Host "  [xx] $msg"   -ForegroundColor Red; exit 1 }
 function Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
+
+# Stop a service and WAIT until it has stopped. sc.exe stop only asks; the blind two-second
+# sleep this replaced could overwrite the exe, or start the renamed service, while the old
+# process was still shutting down -- two agents heartbeating on one identity for a moment.
+function Stop-AgentService([string]$name) {
+    $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if (-not $svc) { return }
+    if ($svc.Status -ne "Stopped") {
+        & sc.exe stop $name | Out-Null
+        try { $svc.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30)) }
+        catch { Warn "$name did not report Stopped within 30s; continuing." }
+    }
+}
 
 #region signed-manifest
 # ----------------------------------------------------------------------
@@ -346,14 +369,18 @@ if (-not $isAdmin) {
 if ($Uninstall) {
     Step "Uninstalling $ServiceName"
 
-    if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-        & sc.exe stop $ServiceName | Out-Null
-        Start-Sleep -Seconds 2
-        & sc.exe delete $ServiceName | Out-Null
-        Ok "Removed service $ServiceName"
-    } else {
-        Say "Service not present."
+    # Both names: a machine not re-installed since the rename is still TempMonitorAgent, and
+    # one whose migration was interrupted could have both. Missing one leaves an agent running
+    # with nothing on disk behind it, restarted by its own recovery actions every minute.
+    $removed = $false
+    foreach ($name in @($ServiceName, $LegacyServiceName)) {
+        if (-not (Get-Service -Name $name -ErrorAction SilentlyContinue)) { continue }
+        Stop-AgentService $name
+        & sc.exe delete $name | Out-Null
+        Ok "Removed service $name"
+        $removed = $true
     }
+    if (-not $removed) { Say "Service not present." }
 
     if (Test-Path $InstallDir) {
         Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -462,10 +489,9 @@ if ($signedSha256) {
 }
 
 # Stop an existing service before overwriting its exe.
-if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-    & sc.exe stop $ServiceName | Out-Null
-    Start-Sleep -Seconds 2
-}
+# Under either name: a machine not yet migrated is still TempMonitorAgent.
+Stop-AgentService $ServiceName
+Stop-AgentService $LegacyServiceName
 
 # Pre-rename installs live at C:\Program Files\TempMonitorAgent. Move them under the
 # shared FleetHub root so hub and agent sit together, and point the existing service
@@ -532,20 +558,44 @@ if ([Environment]::GetEnvironmentVariable("COMMAND_SIGNING_PUBLIC_KEY_HEX", "Mac
 # 4. Service (LocalSystem, Automatic) + failure recovery
 # ----------------------------------------------------------------------
 Step "Registering Windows Service"
-if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-    Say "Service exists; updating binary path."
-    # binPath must be re-pointed after a migration moved the exe under the shared root.
-    & sc.exe config $ServiceName binPath= "`"$ExePath`"" start= auto DisplayName= "FleetHub Agent" | Out-Null
-} else {
-    New-Service -Name $ServiceName -BinaryPathName "`"$ExePath`"" `
-        -DisplayName "FleetHub Agent" -StartupType Automatic `
-        -Description "Reports telemetry and executes fleet commands for FleetHub (RMM)." | Out-Null
-    Ok "Created service $ServiceName"
+$legacy = Get-Service -Name $LegacyServiceName -ErrorAction SilentlyContinue
+# **Order matters on a machine being migrated**: the new service is created and given its
+# recovery actions FIRST, and the old one is deleted only after that worked. Deleting first
+# would leave a PC with no agent service at all if New-Service then failed; this way a failure
+# puts the old service back as it was. Both are stopped by now (step 2), so the two never run
+# at once, and the old one is deleted while stopped, so a recovery restart pending on it
+# cannot bring it back.
+try {
+    if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+        Say "Service exists; updating binary path."
+        # binPath must be re-pointed after a migration moved the exe under the shared root.
+        & sc.exe config $ServiceName binPath= "`"$ExePath`"" start= auto DisplayName= "FleetHub Agent" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "sc.exe config exited $LASTEXITCODE" }
+    } else {
+        New-Service -Name $ServiceName -BinaryPathName "`"$ExePath`"" `
+            -DisplayName "FleetHub Agent" -StartupType Automatic `
+            -Description "Reports telemetry and executes fleet commands for FleetHub (RMM)." | Out-Null
+        Ok "Created service $ServiceName"
+    }
+
+    # Restart on failure -- the self-update exits with code 17 and relies on this.
+    & sc.exe failure $ServiceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe failure exited $LASTEXITCODE" }
+    Ok "Failure recovery: restart x3 @ 60s"
+} catch {
+    if ($legacy) {
+        # The exe may have moved under the shared root above; point the old service at it.
+        & sc.exe config $LegacyServiceName binPath= "`"$ExePath`"" | Out-Null
+        & sc.exe start $LegacyServiceName | Out-Null
+        Die "could not register $ServiceName ($($_.Exception.Message)). $LegacyServiceName was restarted on the new binary."
+    }
+    Die "could not register $ServiceName ($($_.Exception.Message))."
 }
 
-# Restart on failure -- the self-update exits with code 17 and relies on this.
-& sc.exe failure $ServiceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
-Ok "Failure recovery: restart x3 @ 60s"
+if ($legacy) {
+    & sc.exe delete $LegacyServiceName | Out-Null
+    Ok "Migrated service $LegacyServiceName -> $ServiceName"
+}
 
 # ----------------------------------------------------------------------
 # 4b. Allow the service to press Ctrl+Alt+Del

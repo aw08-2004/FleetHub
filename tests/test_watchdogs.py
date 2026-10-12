@@ -92,7 +92,7 @@ def test_validation(db):
     err, _ = save(db, target={"include": [], "exclude": []})
     check("one with no include selector is refused, not defaulted to every PC", err is not None)
 
-    for service in ("RpcSs", "rpcss", " WinMgmt ", "TempMonitorAgent"):
+    for service in ("RpcSs", "rpcss", " WinMgmt ", "TempMonitorAgent", "FleetHubAgent"):
         err, _ = save(db, service=service)
         check(f"'{service.strip()}' is refused however it is spelled", err is not None)
 

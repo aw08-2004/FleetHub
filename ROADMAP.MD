@@ -334,6 +334,58 @@ switch stays off until the agents sign** (see #29).
   SmartScreen will warn on the downloaded `.cmd`; check the wizard's hint matches what Windows
   says.
 
+**9. Agent service renamed to `FleetHubAgent`, owed on Windows.** Built 2026-10-12 (hub
+1.145.0; agent half rides in 3.44.0 with item 8). The installer is served from `main`, so the
+migration is live for anyone re-running it the moment this merges. Nothing here has touched a
+real SCM yet. On a Windows VM with a **3.43.0 install registered as `TempMonitorAgent`**:
+- **Re-run `agent-install.ps1`.** Expect exactly one agent service, `FleetHubAgent`
+  (`sc query TempMonitorAgent` -> 1060), `sc qfailure FleetHubAgent` showing restart x3 @ 60s,
+  and the PC still online in the console under the same agent id.
+- **Self-update after the migration** (point it at a beta, or wait for 3.44.0) and confirm
+  the exit-17 restart brings `FleetHubAgent` back -- this is the recovery-actions path.
+- **The failure path:** make `New-Service` fail (pre-create a `FleetHubAgent` marked for
+  deletion, e.g. `sc delete` it with `services.msc` open) and confirm the installer stops with
+  `TempMonitorAgent` running again, not with no service.
+- **`-Uninstall`** on a migrated PC and on an un-migrated one: no agent service left either way.
+- **Onboarding** on a clean VM ends with `FleetHubAgent` running.
+
+---
+
+## ✅ Agent service renamed to `FleetHubAgent`   ·   hub 1.145.0 + agent 3.44.0
+
+The Windows service was still `TempMonitorAgent` after the FleetHub rename, because the
+installer said the registration and the binary had to be renamed in lockstep. **They do not**:
+for an own-process service the SCM ignores the name the process hands
+`StartServiceCtrlDispatcher`, so `ServiceName` in `Program.cs` is cosmetic (it names the event
+log source) and a 3.43.0 binary runs unchanged as `FleetHubAgent`. The owner asked for the
+rename on 2026-10-12; it covers the **service name only**. The exe (`TempMonitorAgent.exe`),
+namespaces, csproj and legacy `Program Files` / `ProgramData` / registry paths keep their
+names, and none of them had to move.
+
+**Fresh installs register `FleetHubAgent`. An existing install migrates when
+`agent-install.ps1` runs on it again** -- by a technician, `install.ps1` or onboarding (which
+runs the installer). PCs nobody re-installs stay `TempMonitorAgent`, and that is deliberate:
+the binary does not care, so the fleet is allowed to stay mixed. Same shape as the hub's
+`TempMonitorHub` -> `FleetHub - Hub` rename. Migration order in the installer: stop the old
+service and wait for Stopped; create the new one and set its recovery actions; only then
+delete the old one; start the new one. A failed registration restarts the old service and
+stops. Uninstall removes both names. The watchdog guard (hub `PROTECTED_SERVICES` and agent
+`WatchdogGuard`) refuses both, and `onboard.ps1` restarts whichever exists.
+
+*Rejected:*
+- **The agent migrating itself during self-update.** It would reach the whole fleet unattended,
+  and every way it can go wrong ends with a PC offline that only a desk visit fixes. A running
+  service that deletes itself is only *marked* for deletion, and the SCM will neither start nor
+  run recovery on a service so marked, so the exit-17 restart leaves a dead agent. Creating the
+  new service first and then exiting lets the old one's recovery restart it a minute later
+  beside the new one -- two agents on one identity, one state dir and one update dir. Avoiding
+  both needs a detached helper outliving the service: new code on the most dangerous path,
+  testable only on Windows, for a cosmetic gain.
+- **Keeping `TempMonitorAgent` everywhere.** The owner asked for the rename, and fresh installs
+  should not keep minting the legacy name.
+- **A hub-pushed re-run of the installer** to migrate the fleet at once. Possible later through
+  `run_script`, but it is the self-migration above with an extra hop, and nothing needs it.
+
 ---
 
 ## ✅ 6. History page

@@ -24,16 +24,20 @@ namespace TempMonitorAgent.Watchdog;
 ///                         watchdog is watching from.
 ///   gpsvc              -- Group Policy. Restarting it mid-apply is how a machine ends up with
 ///                         half a policy and nothing recording which half.
-///   tempmonitoragent   -- ourselves. If this service is stopped, nothing is evaluating the
-///                         watchdog, so a watchdog on it could never fire. Refusing says that
-///                         out loud; accepting would look like protection and be nothing.
+///   fleethubagent,
+///   tempmonitoragent   -- ourselves, under the current name and the pre-2026-10-12 one a PC
+///                         keeps until the installer runs on it again. If this service is
+///                         stopped, nothing is evaluating the watchdog, so a watchdog on it
+///                         could never fire. Refusing says that out loud; accepting would
+///                         look like protection and be nothing.
 /// </summary>
 public static class WatchdogGuard
 {
     private static readonly HashSet<string> Protected = new(StringComparer.OrdinalIgnoreCase)
     {
         "rpcss", "dcomlaunch", "plugplay", "power", "brokerinfrastructure",
-        "systemeventsbroker", "lsm", "winmgmt", "gpsvc", "tempmonitoragent",
+        "systemeventsbroker", "lsm", "winmgmt", "gpsvc",
+        "fleethubagent", "tempmonitoragent",
     };
 
     /// <summary>Trimmed -- Windows service names are compared case-insensitively, which the

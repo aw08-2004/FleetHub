@@ -72,7 +72,13 @@ try
 {
     var builder = Host.CreateApplicationBuilder(args);
 
-    builder.Services.AddWindowsService(o => o.ServiceName = "TempMonitorAgent");
+    // FleetHubAgent since the 2026-10-12 rename, but **this does not have to match the
+    // registration**: for an own-process service the SCM ignores the name handed to
+    // StartServiceCtrlDispatcher, so a PC still registered as TempMonitorAgent (not
+    // re-installed since) runs this binary unchanged. It only names the event-log source.
+    // The registration itself is agent-install.ps1's job -- see the note there for why
+    // self-update does not migrate it.
+    builder.Services.AddWindowsService(o => o.ServiceName = "FleetHubAgent");
     builder.Services.AddSerilog();
 
     // Core state + telemetry

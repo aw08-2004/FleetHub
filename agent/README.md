@@ -168,13 +168,16 @@ against the key, and say so. The binary is fetched before the running service is
 so a refused download leaves the old agent running.
 
 `-InstallDir` defaults to `C:\Program Files\FleetHub\Agent`. The Windows service is
-still registered as **`TempMonitorAgent`** on purpose: .NET takes the service name from
-the assembly, and a self-updating agent swaps its binary without re-registering, so
-renaming one side alone would break exactly the machines already in the field.
+**`FleetHubAgent`**. A PC installed before 2026-10-12 is registered as `TempMonitorAgent`
+until the installer runs on it again, which migrates it (new service first, old one deleted
+only after that worked); `-Uninstall` removes either. Self-update never re-registers the
+service, and does not need to: the SCM ignores the name an own-process service reports, so
+the same binary runs under both. The exe keeps the name `TempMonitorAgent.exe`. Why the
+fleet is allowed to stay mixed: ROADMAP.MD, *Agent service renamed to `FleetHubAgent`*.
 
 Logs: `%ProgramData%\FleetHub\Agent\companion.log` — kept under that name for the same
-reason as the service name and the `companion_version` wire field: it is what's already
-on disk across the fleet. Plus `remote-helper.log` beside it for the remote view/control
+reason as the `companion_version` wire field: it is what's already on disk across the
+fleet. Plus `remote-helper.log` beside it for the remote view/control
 helper (it runs in a different session, so it gets its own file).
 
 Self-tests runnable on the machine, no hub or browser involved:

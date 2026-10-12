@@ -57,7 +57,10 @@ Each of these looks like leftover mess and is load-bearing.
 
 - **`Temp_Monitor` / `TempMonitorAgent` / `TempMonitorHub`** in code, paths, service names and
   namespaces are **correct**. The product was renamed FleetHub; the GitHub repo rename was
-  cancelled. Do not rename them.
+  cancelled. Do not rename them. **One exception:** the Windows agent's *service* is
+  `FleetHubAgent` since 2026-10-12, and `TempMonitorAgent` survives only as the legacy service
+  name on un-migrated PCs -- so anything naming the service must accept both (ROADMAP.MD,
+  *Agent service renamed to `FleetHubAgent`*). The exe and namespaces keep the old name.
 - **Never remove the `-text` pins in `.gitattributes`**, and never let a tool rewrite line
   endings on the signed manifests or their `.sig` files. A signature covers exact bytes, so a
   rewritten file is indistinguishable from a tampered one and the fleet rejects every update
