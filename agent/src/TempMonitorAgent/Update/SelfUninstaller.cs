@@ -193,7 +193,16 @@ public sealed class SelfUninstaller(ILogger<SelfUninstaller> log)
                 return;
             }
             log.LogWarning("The hub reports this machine was deleted; uninstalling the agent now");
-            await ProcessRunner.RunAsync("schtasks.exe", $"/run /tn {TaskName}", ct, timeoutSeconds: 30);
+            var run = await ProcessRunner.RunAsync("schtasks.exe", $"/run /tn {TaskName}", ct, timeoutSeconds: 30);
+            if (run.ExitCode != 0)
+            {
+                // Re-armed, or a task that was created but never started would leave this PC
+                // enrolled-but-refused until the service restarts: every later "decommissioned"
+                // would hit the once-per-process guard above. /create /f replaces the task, so
+                // the next attempt starts clean.
+                log.LogError("Could not start the uninstall task: {Output}", run.Output);
+                Interlocked.Exchange(ref _started, 0);
+            }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException
                                        or InvalidOperationException)
