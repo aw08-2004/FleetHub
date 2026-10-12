@@ -143,12 +143,16 @@ DEFAULT_WINDOW_SECONDS = 3600
 #:                         sensors through it.
 #:   gpsvc              -- Group Policy. Restarting it mid-apply is how a machine ends up
 #:                         with half a policy and no record of which half.
-#:   tempmonitoragent   -- ourselves. A watchdog on the agent cannot work: if the agent is
+#:   fleethubagent,
+#:   tempmonitoragent   -- ourselves, under the current service name and the pre-2026-10-12
+#:                         one a PC keeps until the installer runs on it again (both are in
+#:                         the field). A watchdog on the agent cannot work: if the agent is
 #:                         stopped, nothing is evaluating the watchdog. Refusing says that,
 #:                         where accepting would look like protection and be nothing.
 PROTECTED_SERVICES = frozenset({
     "rpcss", "dcomlaunch", "plugplay", "power", "brokerinfrastructure",
-    "systemeventsbroker", "lsm", "winmgmt", "gpsvc", "tempmonitoragent",
+    "systemeventsbroker", "lsm", "winmgmt", "gpsvc",
+    "fleethubagent", "tempmonitoragent",
 })
 
 

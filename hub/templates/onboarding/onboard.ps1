@@ -20,7 +20,12 @@
     $HubUrl       = {{ hub_url }}
     $Code         = {{ code }}
     $InstallerUrl = {{ installer_url }}
-    $ServiceName  = 'TempMonitorAgent'
+    # FleetHubAgent since 2026-10-12, and agent-install.ps1 migrates a TempMonitorAgent
+    # registration, so after step 1 it should always be the new name. Looked up after the
+    # install rather than assumed anyway: the installer comes from main and this script from
+    # whatever hub rendered it, and the two need not be the same commit. Guessing wrong here
+    # is the worst place to -- the code is already spent and the credential already written.
+    $ServiceNames = @('FleetHubAgent', 'TempMonitorAgent')
     $StateDir     = Join-Path $env:ProgramData 'FleetHub\Agent'
     $IdentityPath = Join-Path $StateDir 'agent.json'
 
@@ -75,6 +80,8 @@
         if (-not $identity.agent_id -or -not $identity.token) { Fail "The hub's answer did not contain a credential." }
 
         Show-Step "Saving this PC's credential"
+        $ServiceName = $ServiceNames | Where-Object { Get-Service -Name $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+        if (-not $ServiceName) { Fail "The agent service is not installed, although the installer reported success." }
         Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
         if (Test-Path -LiteralPath $IdentityPath) {
