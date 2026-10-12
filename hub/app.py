@@ -2527,7 +2527,8 @@ app.register_blueprint(create_invites_blueprint(
 app.register_blueprint(create_onboarding_blueprint(
     DB_PATH, login_required, access, hub_url=HUB_URL,
     valid_machine_name=lambda name: is_valid_machine_name(name),
-    unsigned_reporters=lambda: unsigned_reporters()))
+    unsigned_reporters=lambda: unsigned_reporters(),
+    machine_record=lambda name: _machine_record(name)))
 # The Audit Log tab -- the read path over the trail every other blueprint writes to.
 # view_audit_log is the perimeter; view_security_audit widens which LEVELS come back, and
 # that widening is applied in SQL, never in the page (see audit_web.py).
@@ -5199,6 +5200,21 @@ def _machine_has_history(machine):
         return conn.execute(
             "SELECT 1 FROM machine_info WHERE machine = ? COLLATE NOCASE LIMIT 1", (machine,)
         ).fetchone() is not None
+
+
+def _machine_record(machine):
+    """None if the hub holds no record under `machine` (any case), else {"serial": its BIOS
+    serial when that is distinct enough to key identity on, or None}. What onboarding asks
+    before letting a code take a name with history -- see onboarding._check_known_machine.
+    Same is_valid_serial rule as the duplicate merge, so a placeholder serial binds nothing."""
+    with get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT serial_number FROM machine_info WHERE machine = ? COLLATE NOCASE LIMIT 1",
+            (machine,)).fetchone()
+    if row is None:
+        return None
+    serial = row["serial_number"]
+    return {"serial": serial if is_valid_serial(serial) else None}
 
 
 def unsigned_reporters():

@@ -5527,6 +5527,15 @@ release first. Making *on* the default is a later hub change, once every agent s
   that keeps its hostname, the operator removes the old enrollment first. The name check,
   the claim and the agent row are one `BEGIN IMMEDIATE` transaction, and so is the rename
   check in `authorize_report`.
+- **A name the hub already has records for needs the hardware that reported it.** The obvious
+  candidates to onboard are machines that already report unsigned, so refusing every name
+  with history would block the main use. Accepting them freely would let any code holder take
+  such a name and latch the real PC out (review on PR #119). So the script sends the PC's
+  BIOS serial, and redeem accepts a name with history only when that serial matches the one
+  the name reported. This is the same write-once serial the duplicate merge keys on. A record
+  with no usable serial (a VM, a whitebox) cannot be matched; an operator deletes it first.
+  The serial is not a secret. It ties onboarding to the hardware without proving identity,
+  and the Onboarding list shows who used each code.
 - **The assistant cannot reach `/api/onboarding/*`.** Creating a code grants the right to add a
   machine, and `redeem` returns a token.
 

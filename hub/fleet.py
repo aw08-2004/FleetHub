@@ -1360,12 +1360,15 @@ def authorize_report(db_path, agent_id, token, machine, name_has_history=None):
 
     renaming = enrolled_as != machine
     own_name = enrolled_as.lower() == machine.lower()
-    if renaming and not own_name and name_has_history is not None and name_has_history(machine):
-        return REPORT_NAME_TAKEN, None
-
     now = int(time.time())
     with get_conn(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
+        # Inside the transaction, so the history check and the re-point cannot be split by a
+        # write in between. The callback reads on its own connection, which WAL allows while
+        # this one holds the write lock.
+        if renaming and not own_name and name_has_history is not None \
+                and name_has_history(machine):
+            return REPORT_NAME_TAKEN, None
         if renaming:
             used = conn.execute(
                 "SELECT 1 FROM agents WHERE machine = ? COLLATE NOCASE AND agent_id != ? "

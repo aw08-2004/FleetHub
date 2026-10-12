@@ -213,6 +213,11 @@ A code also cannot enrol a machine name that a live agent already holds. The hub
 and the code stays unspent. Otherwise, holding any code would be enough to mint a second
 credential for an enrolled machine.
 
+A name the hub already has records for, such as a machine that reports unsigned, can be
+enrolled only by a PC presenting the BIOS serial that name reported. A record without a usable
+serial is refused until an operator deletes it. The serial is not a secret: it ties
+onboarding to the hardware without authenticating it.
+
 `security.require_enrolled_telemetry` refuses unsigned reports. It ships **off**, because
 hubs update before agents do, and should be turned on once the Onboarding page's list of
 unsigned reporters is empty. Once a

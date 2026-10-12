@@ -79,7 +79,8 @@ def _ps_quote(value):
 
 
 def create_onboarding_blueprint(db_path, login_required, access, hub_url="",
-                                valid_machine_name=None, unsigned_reporters=None):
+                                valid_machine_name=None, unsigned_reporters=None,
+                                machine_record=None):
     """Build the onboarding Blueprint.
 
     `hub_url` is the hub's public origin, used for the link the admin copies and the URL the
@@ -87,12 +88,14 @@ def create_onboarding_blueprint(db_path, login_required, access, hub_url="",
     `valid_machine_name` is app.is_valid_machine_name, passed in so a name the telemetry
     route would refuse cannot be minted a credential here. `unsigned_reporters` is
     app.unsigned_reporters: the machines that would be cut off by enrolled-only telemetry,
-    which is the list an operator needs codes for.
+    which is the list an operator needs codes for. `machine_record` is app's view of
+    machine_info, which redeem uses to bind a name with history to its BIOS serial -- see
+    onboarding._check_known_machine.
     """
     bp = Blueprint("onboarding", __name__)
     base = str(hub_url or "").rstrip("/")
     _add_admin_routes(bp, db_path, login_required, access, base, unsigned_reporters)
-    _add_public_routes(bp, db_path, base, valid_machine_name)
+    _add_public_routes(bp, db_path, base, valid_machine_name, machine_record)
     return bp
 
 
@@ -152,9 +155,10 @@ def _add_admin_routes(bp, db_path, login_required, access, base, unsigned_report
 
 
 
-def _add_public_routes(bp, db_path, base, valid_machine_name):
+def _add_public_routes(bp, db_path, base, valid_machine_name, machine_record):
     """The unauthenticated wizard and the routes its install script calls. See the module
-    docstring for what each may return."""
+    docstring for what each may return. Each route is one line over a module-level function,
+    so the decorators -- the limits -- are what is read here."""
     @bp.route("/onboarding", methods=["GET"])
     def onboarding_wizard():
         """The page a person at an unenrolled PC opens. **No login gate.** Renders nothing
@@ -166,98 +170,120 @@ def _add_public_routes(bp, db_path, base, valid_machine_name):
     @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
     @_code_limiter.limit(f"{PER_CLIENT_PER_MINUTE}/minute", key_func=_client_key)
     def check_code():
-        data = request.get_json(silent=True) or {}
-        found = onboarding.check_code(db_path, data.get("code"))
-        if found is None:
-            return _refused()
-        code = onboarding.normalize_code(data.get("code"))
-        return jsonify({
-            "label": found["label"],
-            "expires_at": found["expires_at"],
-            "code": code,
-            "script_url": f"{base}/onboarding/run/{code}.ps1",
-            "cmd_url": f"{base}/onboarding/run/{code}.cmd",
-        }), 200
+        return _check(db_path, base, request.get_json(silent=True) or {})
 
     @bp.route("/onboarding/run/<code>.ps1", methods=["GET"])
     @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
     @_code_limiter.limit(f"{PER_CLIENT_PER_MINUTE}/minute", key_func=_client_key)
     def run_script(code):
-        """The install script for one live code, as text/plain for `irm | iex`.
-
-        Rendered only for a code that is live right now, so a guessed or spent code gets a
-        404 and not a script. The code is re-normalised and must match the alphabet before
-        it is put into the script, and the hub URL is quoted with _ps_quote -- the template
-        never interpolates anything else.
-        """
-        norm = onboarding.normalize_code(code)
-        if norm is None or onboarding.check_code(db_path, norm) is None:
-            return _refused()
-        body = render_template("onboarding/onboard.ps1",
-                               hub_url=_ps_quote(base), code=_ps_quote(norm),
-                               installer_url=_ps_quote(AGENT_INSTALLER_URL))
-        resp = Response(body, mimetype="text/plain")
-        resp.headers["Cache-Control"] = "no-store"
-        return resp
+        return _script_response(db_path, base, code)
 
     @bp.route("/onboarding/run/<code>.cmd", methods=["GET"])
     @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
     @_code_limiter.limit(f"{PER_CLIENT_PER_MINUTE}/minute", key_func=_client_key)
     def run_cmd(code):
-        """A double-clickable launcher: elevates, then fetches and runs the .ps1 above.
-
-        A .cmd rather than a .ps1 download because Windows opens a downloaded .ps1 in
-        Notepad, and the person double-clicking it is not going to know why. It carries the
-        code and the hub URL and nothing else -- no token, nothing that outlives the code.
-        CRLF line endings, because cmd.exe misparses labels and blocks in an LF file.
-        """
-        norm = onboarding.normalize_code(code)
-        if norm is None or onboarding.check_code(db_path, norm) is None:
-            return _refused()
-        script_url = f"{base}/onboarding/run/{norm}.ps1"
-        # cmd.exe has no quoting rule that survives every character (% and " both escape
-        # it), so rather than escape the URL this refuses one that needs escaping. HUB_URL
-        # is operator config and an ordinary one always passes.
-        if not _SAFE_URL.fullmatch(script_url):
-            return jsonify({"error": "HUB_URL contains characters the launcher cannot carry; "
-                                     "use the PowerShell command instead"}), 409
-        body = render_template("onboarding/onboard.cmd", script_url=script_url)
-        body = body.replace("\r\n", "\n").replace("\n", "\r\n")
-        resp = Response(body, mimetype="application/octet-stream")
-        resp.headers["Content-Disposition"] = (
-            f'attachment; filename="FleetHub-Onboard-{norm}.cmd"')
-        resp.headers["Cache-Control"] = "no-store"
-        return resp
+        return _launcher_response(db_path, base, code)
 
     @bp.route("/api/onboarding/redeem", methods=["POST"])
     @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
     @_code_limiter.limit(f"{PER_CLIENT_PER_MINUTE}/minute", key_func=_client_key)
     def redeem_code():
-        """Spend a code and return this machine's credential, once. Called by the install
-        script, never by the wizard page -- see the module docstring."""
-        data = request.get_json(silent=True) or {}
-        machine = str(data.get("machine") or "").strip()
-        if valid_machine_name is not None and not valid_machine_name(machine):
-            return jsonify({"error": "invalid machine name"}), 400
-        try:
-            agent_id, token = onboarding.redeem_code(
-                db_path, data.get("code"), machine, ip=request.remote_addr)
-        except onboarding.NameEnrolled as e:
-            # A live code, a taken name: say so, so the person knows the code is unspent.
-            return refusals.refuse(e, 409)
-        except onboarding.OnboardingError as e:
-            if str(e) == onboarding.INVALID_MESSAGE:
-                return _refused()
-            return refusals.refuse(e)
-        resp = jsonify({"agent_id": agent_id, "token": token})
-        resp.headers["Cache-Control"] = "no-store"
-        return resp, 200
+        return _redeem(db_path, request.get_json(silent=True) or {}, request.remote_addr,
+                       valid_machine_name, machine_record)
 
     @bp.route("/api/onboarding/status/<code>", methods=["GET"])
     @_status_limiter.limit(f"{STATUS_GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
     @_status_limiter.limit(f"{STATUS_PER_MINUTE}/minute", key_func=_client_key)
     def code_status(code):
         state = onboarding.status_for_code(db_path, code)
-        if state is None:
+        return (jsonify(state), 200) if state is not None else _refused()
+
+
+def _check(db_path, base, data):
+    found = onboarding.check_code(db_path, data.get("code"))
+    if found is None:
+        return _refused()
+    code = onboarding.normalize_code(data.get("code"))
+    return jsonify({
+        "label": found["label"],
+        "expires_at": found["expires_at"],
+        "code": code,
+        "script_url": f"{base}/onboarding/run/{code}.ps1",
+        "cmd_url": f"{base}/onboarding/run/{code}.cmd",
+    }), 200
+
+
+def _live_code(db_path, code):
+    """The normalised code if it is live right now, else None."""
+    norm = onboarding.normalize_code(code)
+    if norm is None or onboarding.check_code(db_path, norm) is None:
+        return None
+    return norm
+
+
+def _script_response(db_path, base, code):
+    """The install script for one live code, as text/plain for `irm | iex`.
+
+    Rendered only for a code that is live right now, so a guessed or spent code gets a 404
+    and not a script. The code is re-normalised and must match the alphabet before it is put
+    into the script, and the hub URL is quoted with _ps_quote -- the template never
+    interpolates anything else.
+    """
+    norm = _live_code(db_path, code)
+    if norm is None:
+        return _refused()
+    body = render_template("onboarding/onboard.ps1",
+                           hub_url=_ps_quote(base), code=_ps_quote(norm),
+                           installer_url=_ps_quote(AGENT_INSTALLER_URL))
+    resp = Response(body, mimetype="text/plain")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _launcher_response(db_path, base, code):
+    """A double-clickable launcher: elevates, then fetches and runs the .ps1 above.
+
+    A .cmd rather than a .ps1 download because Windows opens a downloaded .ps1 in Notepad,
+    and the person double-clicking it is not going to know why. It carries the code and the
+    hub URL and nothing else -- no token, nothing that outlives the code. CRLF line endings,
+    because cmd.exe misparses labels and blocks in an LF file.
+    """
+    norm = _live_code(db_path, code)
+    if norm is None:
+        return _refused()
+    script_url = f"{base}/onboarding/run/{norm}.ps1"
+    # cmd.exe has no quoting rule that survives every character (% and " both escape it), so
+    # rather than escape the URL this refuses one that needs escaping. HUB_URL is operator
+    # config and an ordinary one always passes.
+    if not _SAFE_URL.fullmatch(script_url):
+        return jsonify({"error": "HUB_URL contains characters the launcher cannot carry; "
+                                 "use the PowerShell command instead"}), 409
+    body = render_template("onboarding/onboard.cmd", script_url=script_url)
+    resp = Response(body.replace("\r\n", "\n").replace("\n", "\r\n"),
+                    mimetype="application/octet-stream")
+    resp.headers["Content-Disposition"] = f'attachment; filename="FleetHub-Onboard-{norm}.cmd"'
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _redeem(db_path, data, ip, valid_machine_name, machine_record):
+    """Spend a code and return this machine's credential, once. Called by the install script,
+    never by the wizard page -- see the module docstring. `serial` is the PC's BIOS serial,
+    which onboarding.redeem_code checks when the name already has history."""
+    machine = str(data.get("machine") or "").strip()
+    if valid_machine_name is not None and not valid_machine_name(machine):
+        return jsonify({"error": "invalid machine name"}), 400
+    try:
+        agent_id, token = onboarding.redeem_code(
+            db_path, data.get("code"), machine, ip=ip, serial=data.get("serial"),
+            machine_record=machine_record)
+    except onboarding.NameEnrolled as e:
+        # A live code, a taken name: say so, so the person knows the code is unspent.
+        return refusals.refuse(e, 409)
+    except onboarding.OnboardingError as e:
+        if str(e) == onboarding.INVALID_MESSAGE:
             return _refused()
-        return jsonify(state), 200
+        return refusals.refuse(e)
+    resp = jsonify({"agent_id": agent_id, "token": token})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp, 200

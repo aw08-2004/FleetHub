@@ -250,6 +250,28 @@ def test_redeem_onto_enrolled_name(db):
     check("the same code still works for a free name",
           bool(onboarding.redeem_code(db, code, "PC-FREE")[0]))
 
+    print("\n-- a name with history needs the hardware it reported (review on PR #119) --")
+    records = {"pc-7": {"serial": "SER-777"}, "vm-1": {"serial": None}}
+    lookup = lambda name: records.get(name.lower())
+    kid, known = onboarding.create_code(db, "Known name")
+    e = raises(lambda: onboarding.redeem_code(db, known, "PC-7", machine_record=lookup))
+    check("no serial: refused", isinstance(e, onboarding.NameEnrolled))
+    e = raises(lambda: onboarding.redeem_code(db, known, "PC-7", serial="SER-000",
+                                              machine_record=lookup))
+    check("the wrong serial: refused", isinstance(e, onboarding.NameEnrolled))
+    e = raises(lambda: onboarding.redeem_code(db, known, "VM-1", serial="anything",
+                                              machine_record=lookup))
+    check("a record with no usable serial cannot be matched, so is refused",
+          isinstance(e, onboarding.NameEnrolled))
+    check("...and none of that spent the code",
+          onboarding.get_code(db, kid)["status"] == "active")
+    check("the serial it reported (any case, padded): enrolled",
+          bool(onboarding.redeem_code(db, known, "pc-7", serial="  ser-777 ",
+                                      machine_record=lookup)[0]))
+    _, fresh = onboarding.create_code(db, "Fresh name")
+    check("a name the hub has never seen needs no serial",
+          bool(onboarding.redeem_code(db, fresh, "PC-NEW-1", machine_record=lookup)[0]))
+
 
 def main():
     db = fresh_db()

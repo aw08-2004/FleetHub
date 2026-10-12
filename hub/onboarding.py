@@ -96,6 +96,9 @@ class NameEnrolled(OnboardingError):
 NAME_ENROLLED_MESSAGE = ("This PC's name is already enrolled in the fleet. Ask your IT team to "
                          "remove the old enrollment, then run the installer again -- the code "
                          "has not been used.")
+NAME_KNOWN_MESSAGE = ("The fleet already has a machine with this PC's name, and this PC could "
+                      "not be matched to it. Ask your IT team to remove the old record, then "
+                      "run the installer again -- the code has not been used.")
 
 
 # ================================
@@ -243,7 +246,36 @@ def create_code(db_path, label, ttl_seconds=DEFAULT_TTL_SECONDS, actor="unknown"
     return code_id, code
 
 
-def redeem_code(db_path, code, machine, ip=None, now=None):
+def _check_known_machine(machine, serial, machine_record):
+    """Raise NameEnrolled unless this PC may take a name the hub already has records for.
+
+    `machine_record(machine)` is app.py's view of machine_info: None for a name the hub has
+    never seen, else {"serial": the stored BIOS serial if it is usable for identity, or None}.
+
+    **A name with history is the commonest legitimate case and also a takeover route**, which
+    is why this is not a plain refusal (review on PR #119). The Onboarding page tells an
+    operator to onboard exactly the machines that report unsigned today, and those all have
+    history. But a code holder claiming such a name gets a token that signs as it, latches
+    it, and locks the real PC's unsigned reports out. So the redeeming PC has to present the
+    BIOS serial that name already reported -- the same write-once serial the duplicate merge
+    keys on. **The serial is not a secret** (it is on a sticker and in the console), so this
+    binds onboarding to the hardware rather than proving it: it stops a code being spent on
+    an arbitrary existing name, and what is left is visible in the Onboarding list. A name
+    whose record carries no usable serial (a VM, a whitebox) cannot be checked at all and is
+    refused until an operator deletes the old record, the same step a re-imaged PC under a
+    live enrollment takes.
+    """
+    if machine_record is None:
+        return
+    record = machine_record(machine)
+    if record is None:
+        return
+    known = (record.get("serial") or "").strip().lower()
+    if not known or known != str(serial or "").strip().lower():
+        raise NameEnrolled(NAME_KNOWN_MESSAGE)
+
+
+def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_record=None):
     """Spend `code` for `machine` and return (agent_id, token). Raises OnboardingError.
 
     **A name that a live agent already holds is refused, and the code is NOT spent.** Without
@@ -275,6 +307,7 @@ def redeem_code(db_path, code, machine, ip=None, now=None):
             raise OnboardingError(INVALID_MESSAGE)
         if fleet.live_agent_holds(conn, machine):
             raise NameEnrolled(NAME_ENROLLED_MESSAGE)
+        _check_known_machine(machine, serial, machine_record)
         claimed = conn.execute(
             "UPDATE onboarding_codes SET redeemed_at = ?, redeemed_machine = ?, redeemed_ip = ? "
             "WHERE code_id = ? AND redeemed_at IS NULL AND revoked_at IS NULL "

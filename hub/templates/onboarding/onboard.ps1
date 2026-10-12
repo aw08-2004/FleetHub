@@ -55,7 +55,12 @@
         }
 
         Show-Step "Enrolling this PC"
-        $body = @{ code = $Code; machine = $env:COMPUTERNAME } | ConvertTo-Json -Compress
+        # The BIOS serial, read exactly as the agent reads it (Win32_BIOS, trimmed). The hub
+        # uses it only when this PC's name already has history, to check it is the same
+        # hardware -- see onboarding._check_known_machine.
+        $serial = $null
+        try { $serial = ([string](Get-CimInstance -ClassName Win32_BIOS).SerialNumber).Trim() } catch { $serial = $null }
+        $body = @{ code = $Code; machine = $env:COMPUTERNAME; serial = $serial } | ConvertTo-Json -Compress
         try {
             $identity = Invoke-RestMethod -Method Post -Uri "$HubUrl/api/onboarding/redeem" `
                 -ContentType 'application/json' -Body $body -UseBasicParsing
