@@ -1340,36 +1340,24 @@ def _decommissioned_reason(db_path, agent_id, token):
     return AUTH_DECOMMISSIONED
 
 
-def decommission_machine(db_path, machine, actor="system"):
-    """Mark every agent enrolled as `machine` to be told to uninstall itself (roadmap #30).
-
-    **Call it BEFORE delete_machine**, which removes the agents rows this copies. Only the
-    operator's explicit Delete with "uninstall the agent" ticked calls it -- never the
-    duplicate-serial merge, which also deletes a machine but is folding one PC's old name into
-    its new one: an uninstall there would remove the agent from a machine that is still in use.
+def _decommission_rows(conn, machine, actor, now):
+    """Record every agent enrolled as `machine` to be told to uninstall itself (roadmap #30),
+    on the caller's connection, and return their ids. Only delete_machine calls it, inside the
+    same transaction that deletes the agents rows -- see uninstall_actor there.
 
     Copies revoked rows too. A revoked agent stays down but keeps running; deleting its
     machine with the box ticked means the operator wants it gone as well.
-    Returns the number of agents marked.
     """
-    machine = str(machine or "").strip()
-    if not machine:
-        return 0
-    now = int(time.time())
-    with get_conn(db_path) as conn:
-        rows = conn.execute(
-            "SELECT agent_id, token_hash FROM agents WHERE machine = ?", (machine,)
-        ).fetchall()
-        for row in rows:
-            conn.execute(
-                "INSERT OR REPLACE INTO decommissioned_agents("
-                "agent_id, machine, token_hash, decommissioned_at, actor) VALUES (?, ?, ?, ?, ?)",
-                (row["agent_id"], machine, row["token_hash"], now, actor),
-            )
-    if rows:
-        audit(db_path, actor=actor, action="agent.decommission", level=LEVEL_SECURITY,
-              target=machine, detail={"agent_ids": [r["agent_id"] for r in rows]})
-    return len(rows)
+    rows = conn.execute(
+        "SELECT agent_id, token_hash FROM agents WHERE machine = ?", (machine,)
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "INSERT OR REPLACE INTO decommissioned_agents("
+            "agent_id, machine, token_hash, decommissioned_at, actor) VALUES (?, ?, ?, ?, ?)",
+            (row["agent_id"], machine, row["token_hash"], now, actor),
+        )
+    return [r["agent_id"] for r in rows]
 
 
 #: A decommissioned agent that has been told and then fell silent this long has uninstalled
@@ -1662,15 +1650,31 @@ def enrolled_machines(db_path):
     return {row["machine"] for row in rows}
 
 
-def delete_machine(db_path, machine):
+def delete_machine(db_path, machine, uninstall_actor=None):
     """Remove all fleet rows for a machine: its agent enrollments, its queued/past
     commands, and the command_results / command_output_chunks tied to those commands.
     The append-only audit_log is intentionally left intact (the hub audits the deletion
-    itself). Called when an operator hard-deletes a decommissioned machine."""
+    itself). Called when an operator hard-deletes a decommissioned machine.
+
+    **`uninstall_actor` also tells the machine's agents to uninstall themselves** (roadmap
+    #30): their ids and token hashes are copied into decommissioned_agents in the SAME
+    transaction that deletes their agents rows. It was a separate call before the delete
+    first, and review found the gap: a delete that failed after the copy left the agent
+    authenticating as normal with a decommission record behind it, so an operator who then
+    retried with the box UNticked got an uninstall anyway. Only the operator's Delete with
+    "uninstall the agent" ticked passes it -- never the duplicate-serial merge, which also
+    deletes a machine but is folding one PC's old name into its new one: an uninstall there
+    would remove the agent from a machine that is still in use.
+
+    Returns the number of agents told to uninstall (0 without uninstall_actor).
+    """
     machine = str(machine or "").strip()
     if not machine:
-        return
+        return 0
+    told = []
     with get_conn(db_path) as conn:
+        if uninstall_actor is not None:
+            told = _decommission_rows(conn, machine, uninstall_actor, int(time.time()))
         cmd_ids = [r["id"] for r in conn.execute(
             "SELECT id FROM commands WHERE machine = ?", (machine,)
         ).fetchall()]
@@ -1684,6 +1688,10 @@ def delete_machine(db_path, machine):
             )
         conn.execute("DELETE FROM commands WHERE machine = ?", (machine,))
         conn.execute("DELETE FROM agents WHERE machine = ?", (machine,))
+    if told:
+        audit(db_path, actor=uninstall_actor, action="agent.decommission", level=LEVEL_SECURITY,
+              target=machine, detail={"agent_ids": told})
+    return len(told)
 
 
 # ================================

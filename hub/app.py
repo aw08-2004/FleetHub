@@ -6054,8 +6054,8 @@ def delete_machine(machine):
     decommissioning, such as patch outcomes and backup manifests, survive. Irreversible.
 
     **`?uninstall=1` also tells the PC to remove its own agent** (roadmap #30). The agents
-    enrolled under this name are recorded by fleet.decommission_machine BEFORE their rows are
-    deleted below, and the next time one of them calls the hub -- seconds from now, or weeks,
+    enrolled under this name are recorded by fleet.delete_machine, in the same transaction that
+    deletes their rows, and the next time one of them calls the hub -- seconds from now, or weeks,
     if the PC is off -- it is refused with reason "decommissioned" and uninstalls itself
     (Windows 3.44.0+, Linux 0.4.0+). Without the flag a still-running agent re-enrolls and
     reappears, which is the old behaviour and still the right one for tidying up a stale
@@ -6075,12 +6075,11 @@ def delete_machine(machine):
     uninstall = str(request.args.get("uninstall", "")).lower() in ("1", "true", "yes")
     if uninstall and not access.can(permissions.ISSUE_COMMANDS):
         return jsonify({"error": "You do not have the 'issue_commands' permission."}), 403
-    decommissioned = (fleet.decommission_machine(DB_PATH, machine_name, actor=actor)
-                      if uninstall else 0)
     with get_db_conn() as conn:
         conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
-    fleet.delete_machine(DB_PATH, machine_name)
+    decommissioned = fleet.delete_machine(
+        DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
     # Drop the hostname from every permission group's scope too. If the name is later
     # reused by a different physical box, it must not silently inherit this one's
     # access grants -- a stale grant is invisible until it's abused.

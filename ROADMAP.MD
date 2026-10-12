@@ -5633,7 +5633,7 @@ release first. Making *on* the default is a later hub change, once every agent s
   for any hub that set it.
 
 ---
-## 🚧 30. Deleting a device uninstalls its agent   ·   hub 1.146.0 + Windows agent 3.44.0, Linux agent 0.4.0 (next releases)   ·   `fleet.decommission_machine`, `Update/SelfUninstaller.cs` (both agents)
+## 🚧 30. Deleting a device uninstalls its agent   ·   hub 1.146.0 + Windows agent 3.44.0, Linux agent 0.4.0 (next releases)   ·   `fleet.delete_machine(uninstall_actor=)`, `Update/SelfUninstaller.cs` (both agents)
 
 Deleting a device used to remove only the hub's record. The agent kept running, re-enrolled
 with the shared secret on its next tick, and the machine came straight back in the console.
@@ -5641,9 +5641,11 @@ Now the delete dialog has **"Also uninstall the agent from this PC, and remove i
 there"**, ticked by default, and the PC removes its own agent.
 
 ### Built · hub 1.146.0
-- **`DELETE /api/machines/<m>?uninstall=1`** calls `fleet.decommission_machine` *before* the
-  agent rows are deleted. That copies each agent's id and token hash into
-  `decommissioned_agents`. When one of those tokens next calls the hub (seconds later, or weeks
+- **`DELETE /api/machines/<m>?uninstall=1`** passes `uninstall_actor` to `fleet.delete_machine`.
+  That copies each agent's id and token hash into `decommissioned_agents`, in the same
+  transaction that deletes the agent rows. Review rejected the first version, which did the
+  copy as a separate step first: a delete that then failed left a record behind, so a retry
+  with the box unticked still uninstalled the agent. When one of those tokens next calls the hub (seconds later, or weeks
   later if the PC was off), the refusal says `reason: decommissioned`, on the heartbeat and on
   `/api/report` alike. Only the holder of the real token is told; a forged token hears
   `unknown`. Without the flag the delete works exactly as before. An API caller that predates

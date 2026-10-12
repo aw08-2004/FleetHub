@@ -118,6 +118,29 @@ def test_uninstall_needs_issue_commands():
             sess["user"] = {"email": "tester@example.com"}
 
 
+def test_failed_delete_leaves_no_record():
+    print("\n-- a delete that fails leaves no record to uninstall on a later, unticked one --")
+    import sqlite3
+    agent = enrolled("HALF-DELETED")
+    # Make deleting this machine's agents row fail, AFTER the record would have been written.
+    with sqlite3.connect(app.DB_PATH) as conn:
+        conn.execute("CREATE TRIGGER block_half_deleted BEFORE DELETE ON agents "
+                     "WHEN OLD.machine = 'HALF-DELETED' BEGIN SELECT RAISE(ABORT, 'test'); END")
+    try:
+        fleet.delete_machine(app.DB_PATH, "HALF-DELETED", uninstall_actor="test")
+        raised = False
+    except sqlite3.DatabaseError:
+        raised = True
+    finally:
+        with sqlite3.connect(app.DB_PATH) as conn:
+            conn.execute("DROP TRIGGER block_half_deleted")
+    check("the forced failure happened", raised)
+    check("...and the agent still authenticates", heartbeat(agent).status_code == 200)
+    client.delete("/api/machines/HALF-DELETED", headers=HEADERS)
+    check("a retry with the box unticked does NOT uninstall it",
+          heartbeat(agent).get_json().get("reason") == fleet.AUTH_UNKNOWN)
+
+
 def test_prune_keeps_a_row_while_it_has_a_job():
     print("\n-- the record is pruned once its question is settled, never before --")
     import time
@@ -150,6 +173,7 @@ def main():
     test_delete_without_uninstall()
     test_merge_never_uninstalls()
     test_uninstall_needs_issue_commands()
+    test_failed_delete_leaves_no_record()
     test_prune_keeps_a_row_while_it_has_a_job()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
