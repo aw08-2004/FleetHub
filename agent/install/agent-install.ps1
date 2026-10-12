@@ -584,6 +584,12 @@ try {
     Ok "Failure recovery: restart x3 @ 60s"
 } catch {
     if ($legacy) {
+        # Falling back to the old service means the new one must not survive, however far it
+        # got: a FleetHubAgent left registered (Automatic, possibly without recovery actions)
+        # would start beside TempMonitorAgent on the next boot -- two agents on one identity.
+        if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+            & sc.exe delete $ServiceName | Out-Null
+        }
         # The exe may have moved under the shared root above; point the old service at it.
         & sc.exe config $LegacyServiceName binPath= "`"$ExePath`"" | Out-Null
         & sc.exe start $LegacyServiceName | Out-Null

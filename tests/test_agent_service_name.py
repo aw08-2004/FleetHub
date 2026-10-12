@@ -85,6 +85,9 @@ def test_installer():
           failure != -1 and failure < delete)
     check("a failed registration restarts the old service instead of leaving none",
           "sc.exe start $LegacyServiceName" in register[:delete])
+    fallback = section(register, "} catch {", "sc.exe start $LegacyServiceName")
+    check("...after deleting the half-registered new one, so both never start on the next boot",
+          "sc.exe delete $ServiceName" in fallback)
     check("the old name is deleted by name in exactly one place, the migration",
           script.count("sc.exe delete $LegacyServiceName") == 1)
     check("the service started at the end is the new name",
