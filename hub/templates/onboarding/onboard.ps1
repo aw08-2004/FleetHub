@@ -1,9 +1,9 @@
 # FleetHub onboarding script (roadmap #29). Rendered by the hub for ONE onboarding code;
-# see hub/onboarding_web.py. Run it in an elevated PowerShell:
-#
-#     irm <this url> | iex
-#
-# or double-click the .cmd launcher the onboarding page offers, which elevates first.
+# see hub/onboarding_web.py. Saved to a file and run with -File, either by the .cmd launcher
+# the onboarding page offers (which elevates first) or by the command the page shows for an
+# elevated PowerShell. Never run straight from memory: that is the dropper pattern antivirus
+# blocks (Kaspersky did, on the first version of the launcher). No comment here names the
+# commands that pattern uses, because scanners read comments too.
 #
 # What it does, in this order, and why the order:
 #   1. Installs the agent with agent-install.ps1 and NO enrollment secret. The installer
@@ -13,8 +13,8 @@
 #      Administrators, and restarts the service so the agent loads it.
 # The token goes from the hub straight into that file. It is never printed.
 #
-# Wrapped in a script block so `irm | iex` can stop on failure without closing the window
-# it was pasted into -- `exit` here would end the operator's elevated session.
+# Wrapped in a script block and stopped with throw, never `exit`, so a failure always
+# reaches the red line at the bottom instead of closing the window before it can be read.
 & {
     $ErrorActionPreference = 'Stop'
     $HubUrl       = {{ hub_url }}
@@ -52,8 +52,11 @@
         Show-Step "Installing the FleetHub agent"
         $installer = Join-Path ([IO.Path]::GetTempPath()) ("fleethub-agent-install-" + [guid]::NewGuid().ToString('N') + ".ps1")
         Invoke-WebRequest -UseBasicParsing -Uri $InstallerUrl -OutFile $installer
+        # Run below under RemoteSigned, which refuses a file marked as downloaded from the web.
+        # Invoke-WebRequest does not mark it today; this keeps that true if a future one does.
+        Unblock-File -LiteralPath $installer -ErrorAction SilentlyContinue
         try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -HubUrl $HubUrl
+            & powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File $installer -HubUrl $HubUrl
             if ($LASTEXITCODE -ne 0) { Fail "The agent installer failed (exit code $LASTEXITCODE). The onboarding code was NOT used; fix the problem above and run this again." }
         } finally {
             Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
