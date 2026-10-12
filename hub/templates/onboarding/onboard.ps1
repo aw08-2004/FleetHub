@@ -24,13 +24,13 @@
     $StateDir     = Join-Path $env:ProgramData 'FleetHub\Agent'
     $IdentityPath = Join-Path $StateDir 'agent.json'
 
-    function Say($msg)  { Write-Host "  $msg" }
-    function Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
+    function Show-Info($msg) { Write-Host "  $msg" }
+    function Show-Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
     function Fail($msg) { throw [System.Exception]::new($msg) }
 
     try {
         Write-Host "FleetHub onboarding" -ForegroundColor Cyan
-        Say "Hub: $HubUrl"
+        Show-Info "Hub: $HubUrl"
 
         $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
         if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -44,7 +44,7 @@
         # Windows PowerShell 5.1 may still default to TLS 1.0; GitHub and most hubs refuse it.
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-        Step "Installing the FleetHub agent"
+        Show-Step "Installing the FleetHub agent"
         $installer = Join-Path ([IO.Path]::GetTempPath()) ("fleethub-agent-install-" + [guid]::NewGuid().ToString('N') + ".ps1")
         Invoke-WebRequest -UseBasicParsing -Uri $InstallerUrl -OutFile $installer
         try {
@@ -54,17 +54,22 @@
             Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
         }
 
-        Step "Enrolling this PC"
+        Show-Step "Enrolling this PC"
         $body = @{ code = $Code; machine = $env:COMPUTERNAME } | ConvertTo-Json -Compress
         try {
             $identity = Invoke-RestMethod -Method Post -Uri "$HubUrl/api/onboarding/redeem" `
                 -ContentType 'application/json' -Body $body -UseBasicParsing
         } catch {
-            Fail "The hub refused the code. It may have expired or already been used -- ask for a new one. ($($_.Exception.Message))"
+            # The hub's own sentence when it sent one -- "this PC's name is already enrolled"
+            # needs a different fix from "this code has expired", and only the body says which.
+            $reason = $null
+            try { $reason = ($_.ErrorDetails.Message | ConvertFrom-Json).error } catch { $reason = $null }
+            if (-not $reason) { $reason = $_.Exception.Message }
+            Fail "The hub refused to enrol this PC: $reason"
         }
         if (-not $identity.agent_id -or -not $identity.token) { Fail "The hub's answer did not contain a credential." }
 
-        Step "Saving this PC's credential"
+        Show-Step "Saving this PC's credential"
         Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
         if (Test-Path -LiteralPath $IdentityPath) {

@@ -14,7 +14,7 @@
     try {
         var saved = localStorage.getItem('tempmonitor:theme');
         var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.dataset.theme = theme;
     } catch (e) { /* localStorage unavailable, default dark stays */ }
 })();
 </script>
@@ -57,7 +57,7 @@
             <p class="invite-meta">{{ t('onboarding.wizard.download_hint') }}</p>
             <details class="onboarding-alt">
                 <summary>{{ t('onboarding.wizard.alt_summary') }}</summary>
-                <p class="invite-meta">{{ t('onboarding.wizard.alt_intro') }}</p>
+                <label class="onboarding-label" for="ps-command">{{ t('onboarding.wizard.alt_intro') }}</label>
                 <textarea class="onboarding-command" id="ps-command" readonly rows="4"></textarea>
                 <button class="btn" type="button" id="copy-command">{{ t('onboarding.wizard.copy') }}</button>
                 <span class="invite-meta" id="copy-status"></span>

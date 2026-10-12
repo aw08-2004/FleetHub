@@ -5470,8 +5470,12 @@ gate on; the Android agent's release is owed locally (item 8).
   on `/api/report`. `fleet.authorize_report` handles each case:
   - a bad token gets a 401 with `reason`, so the agent hears *revoked* or *unknown*;
   - a valid token under another enrolled machine's name gets a 403;
-  - a valid token under a **new name that no one else holds** moves the enrollment to that
-    name (a renamed or re-cased PC) and is audited as `agent.rename`.
+  - a valid token under a **fresh name** moves the enrollment to that name (a renamed or
+    re-cased PC) and is audited as `agent.rename`. A fresh name is one that no agent row
+    (live or revoked) and no machine record has used.
+  - a valid token under any other name gets a 403. The first version refused only names held
+    by a live agent; review on PR #119 pointed out that one stolen token could then take the
+    name of any machine that reports unsigned, or any revoked machine.
 - **`security.require_enrolled_telemetry`**, **off by default for now**. When it is on,
   unsigned reports get a 401. When it is off, unsigned reports are accepted, except for a
   machine whose agent has already signed one (**the latch**, `agents.last_report_auth`). The
@@ -5517,6 +5521,12 @@ release first. Making *on* the default is a later hub change, once every agent s
 - **A rename moves the enrollment instead of being refused.** A refusal would have dropped
   every re-imaged or re-cased PC off the fleet channel, and for an onboarded PC the only fix
   would be a new code.
+- **A code cannot enrol a name a live agent already holds.** The redeem route answers 409
+  and leaves the code unspent. Without this check, anyone holding any code could mint a
+  second credential for, say, a domain controller (review on PR #119). For a re-imaged PC
+  that keeps its hostname, the operator removes the old enrollment first. The name check,
+  the claim and the agent row are one `BEGIN IMMEDIATE` transaction, and so is the rename
+  check in `authorize_report`.
 - **The assistant cannot reach `/api/onboarding/*`.** Creating a code grants the right to add a
   machine, and `redeem` returns a token.
 

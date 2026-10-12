@@ -65,7 +65,7 @@ if (AgentConfig.TakeMigrationNote() is { Length: > 0 } note) Log.Information("{N
 if (aclNote is { Length: > 0 }) Log.Information("{Note}", aclNote);
 // The enrollment token, readable by every local user on an agent installed before roadmap
 // #29. Re-ACLed on every start rather than once, so there is no migration state to keep.
-var identityNote = new AgentState().HardenIdentityFile();
+var identityNote = AgentState.HardenIdentityFile();
 if (identityNote is { Length: > 0 }) Log.Warning("{Note}", identityNote);
 
 try

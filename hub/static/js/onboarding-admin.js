@@ -32,8 +32,8 @@ const unsignedList = document.getElementById('unsigned-list');
 async function api(path, options) {
     const resp = await fetch(path, options);
     let body = null;
-    try { body = await resp.json(); } catch (e) { /* empty body is fine */ }
-    if (!resp.ok) throw new Error((body && body.error) || `HTTP ${resp.status}`);
+    try { body = await resp.json(); } catch { /* empty body is fine */ }
+    if (!resp.ok) throw new Error(body?.error || `HTTP ${resp.status}`);
     return body;
 }
 
@@ -198,7 +198,8 @@ async function copyLink() {
     try {
         await navigator.clipboard.writeText(createdLink.value);
         createdStatus.textContent = t('onboarding.admin.copied');
-    } catch (e) {
+    } catch {
+        // Refused outside a secure context (plain http on a LAN); the link is selectable.
         createdStatus.textContent = t('onboarding.admin.copy_failed');
         createdLink.select();
     }
@@ -208,12 +209,12 @@ document.getElementById('new-code').addEventListener('click', openEditor);
 document.getElementById('code-cancel').addEventListener('click', () => modal.close());
 saveBtn.addEventListener('click', createCode);
 labelInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); createCode(); }
+    if (e.key === 'Enter') { e.preventDefault(); void createCode(); }
 });
 document.getElementById('created-copy').addEventListener('click', copyLink);
 document.getElementById('created-close').addEventListener('click', () => createdModal.close());
 modal.addEventListener('click', (e) => { if (e.target === modal) modal.close(); });
 
-load();
+void load();
 
 })();

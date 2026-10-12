@@ -1196,19 +1196,45 @@ def issue_agent_identity(db_path, machine, actor, detail=None):
     machine = str(machine or "").strip()
     if not machine:
         raise ValueError("machine is required to enroll")
+    with get_conn(db_path) as conn:
+        agent_id, token = insert_agent(conn, machine)
+    audit_enroll(db_path, machine, agent_id, actor, detail)
+    return agent_id, token
+
+
+def insert_agent(conn, machine):
+    """The agent-row INSERT, on a connection the caller holds. Returns (agent_id, token).
+
+    Exposed for onboarding.redeem_code, which has to check "is this name already enrolled?"
+    and create the row inside ONE immediate transaction -- two codes redeemed for the same
+    name at the same moment would otherwise both pass the check. The caller audits with
+    `audit_enroll` after committing; auditing here would open a second write connection
+    while this one holds the lock.
+    """
     agent_id = uuid.uuid4().hex
     token = secrets.token_urlsafe(32)
     now = int(time.time())
-    with get_conn(db_path) as conn:
-        conn.execute(
-            "INSERT INTO agents(agent_id, machine, token_hash, enrolled_at, last_seen, revoked) "
-            "VALUES (?, ?, ?, ?, ?, 0)",
-            (agent_id, machine, _hash_token(token), now, now),
-        )
+    conn.execute(
+        "INSERT INTO agents(agent_id, machine, token_hash, enrolled_at, last_seen, revoked) "
+        "VALUES (?, ?, ?, ?, ?, 0)",
+        (agent_id, machine, _hash_token(token), now, now),
+    )
+    return agent_id, token
+
+
+def audit_enroll(db_path, machine, agent_id, actor, detail=None):
     audit(db_path, actor=actor, action="enroll",
           level=LEVEL_SECURITY, target=machine,
           detail=dict(detail or {}, agent_id=agent_id))
-    return agent_id, token
+
+
+def live_agent_holds(conn, machine, except_agent=None):
+    """Does a live (non-revoked) agent other than `except_agent` hold `machine`?
+    Case-insensitive, because Windows hostnames are."""
+    return conn.execute(
+        "SELECT 1 FROM agents WHERE machine = ? COLLATE NOCASE AND revoked = 0 "
+        "AND agent_id != ? LIMIT 1", (machine, str(except_agent or "")),
+    ).fetchone() is not None
 
 
 def authenticate_agent(db_path, agent_id, token, touch=True):
@@ -1285,7 +1311,7 @@ REPORT_NAME_TAKEN = "name_taken"
 REPORT_LATCHED = "latched"
 
 
-def authorize_report(db_path, agent_id, token, machine):
+def authorize_report(db_path, agent_id, token, machine, name_has_history=None):
     """Decide who a /api/report is from (roadmap #29). Returns (outcome, reason).
 
     /api/report was the one agent route with no credential: anyone who could reach the hub
@@ -1299,19 +1325,28 @@ def authorize_report(db_path, agent_id, token, machine):
         that would make revoking an agent a no-op for its telemetry.
       * **A valid token reporting under its own name** is REPORT_SIGNED, and marks the row
         with `last_report_auth`: this machine now signs.
-      * **A valid token under a DIFFERENT name is a rename**, not a refusal. A hostname
-        changes (a re-image, an operator renaming the PC, Windows re-casing it), the agent
-        reads the new one at startup, and the credential has to follow it or the machine
-        drops off the fleet channel until somebody re-enrols it -- which, for a PC onboarded
-        with a code, means a new code. The row is re-pointed and audited as `agent.rename`,
-        **unless another live agent already holds the new name** (REPORT_NAME_TAKEN): an
-        enrolled PC must not be able to take over another enrolled PC's identity. The
-        duplicate-serial merge in app.py then folds the old hostname's history in, and its
-        `delete_machine` no longer finds this agent under the old name to delete.
+      * **A valid token under a DIFFERENT, FRESH name is a rename**, not a refusal. A
+        hostname changes (a re-image, an operator renaming the PC, Windows re-casing it), the
+        agent reads the new one at startup, and the credential has to follow it or the
+        machine drops off the fleet channel until somebody re-enrols it -- which, for a PC
+        onboarded with a code, means a new code. The row is re-pointed and audited as
+        `agent.rename`.
+      * **A name somebody else has already used is refused** (REPORT_NAME_TAKEN): any other
+        agent row for it, live or revoked, or -- through `name_has_history`, app.py's view of
+        machine_info -- any machine record at all. Only the agent's own current name, in any
+        case, is exempt. The narrower first version refused only names held by a live agent,
+        and review on PR #119 showed what that left open: one stolen token could re-point
+        itself onto any machine that reports unsigned (every agent in the field today), any
+        revoked one, and any name with history, and its reports would then be stored as that
+        machine. Renaming onto a used name is rare and legitimate only when the old record is
+        stale; an operator deletes that record first, which is the deliberate step it should be.
       * **No token at all** is REPORT_UNSIGNED, unless the name is latched (see
         `report_latched`), which is REPORT_LATCHED. Whether REPORT_UNSIGNED is then
         accepted is the caller's policy (`security.require_enrolled_telemetry`), not this
         function's.
+
+    The check and the re-point run under BEGIN IMMEDIATE, so two agents renaming onto the
+    same fresh name at once cannot both pass the check.
     """
     machine = str(machine or "").strip()
     if not agent_id and not token:
@@ -1323,21 +1358,27 @@ def authorize_report(db_path, agent_id, token, machine):
     if enrolled_as is None:
         return REPORT_BAD_TOKEN, auth_failure_reason(db_path, agent_id, token)
 
+    renaming = enrolled_as != machine
+    own_name = enrolled_as.lower() == machine.lower()
+    if renaming and not own_name and name_has_history is not None and name_has_history(machine):
+        return REPORT_NAME_TAKEN, None
+
     now = int(time.time())
     with get_conn(db_path) as conn:
-        if enrolled_as != machine:
-            taken = conn.execute(
+        conn.execute("BEGIN IMMEDIATE")
+        if renaming:
+            used = conn.execute(
                 "SELECT 1 FROM agents WHERE machine = ? COLLATE NOCASE AND agent_id != ? "
-                "AND revoked = 0 AND machine != ? LIMIT 1",
+                "AND machine != ? LIMIT 1",
                 (machine, str(agent_id), enrolled_as),
             ).fetchone()
-            if taken is not None:
+            if used is not None:
                 return REPORT_NAME_TAKEN, None
             conn.execute("UPDATE agents SET machine = ? WHERE agent_id = ?",
                          (machine, str(agent_id)))
         conn.execute("UPDATE agents SET last_report_auth = ? WHERE agent_id = ?",
                      (now, str(agent_id)))
-    if enrolled_as != machine:
+    if renaming:
         audit(db_path, actor=f"agent:{machine}", action="agent.rename",
               level=LEVEL_SECURITY, target=machine,
               detail={"agent_id": str(agent_id), "previous": enrolled_as})

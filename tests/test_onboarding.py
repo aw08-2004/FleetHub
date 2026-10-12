@@ -212,6 +212,44 @@ def test_authorize_report(db):
     check("a revoked agent is refused and told so",
           outcome == fleet.REPORT_BAD_TOKEN and reason == fleet.AUTH_REVOKED)
 
+    print("\n-- a rename may only land on a FRESH name (review on PR #119) --")
+    c_id, c_tok = fleet.issue_agent_identity(db, "PC-C", actor="test")
+    check("not onto a revoked agent's name",
+          fleet.authorize_report(db, c_id, c_tok, "PC-B")[0] == fleet.REPORT_NAME_TAKEN)
+    history = {"pc-unsigned"}
+    has_history = lambda name: name.lower() in history
+    check("not onto a name the hub already holds records for (any case)",
+          fleet.authorize_report(db, c_id, c_tok, "PC-UNSIGNED",
+                                 name_has_history=has_history)[0] == fleet.REPORT_NAME_TAKEN)
+    check("...and the refused agent is still PC-C",
+          fleet.authenticate_agent(db, c_id, c_tok, touch=False) == "PC-C")
+    history.add("pc-c")
+    check("its own name with history is not a rename at all",
+          fleet.authorize_report(db, c_id, c_tok, "PC-C",
+                                 name_has_history=has_history)[0] == fleet.REPORT_SIGNED)
+    check("...nor is a re-cased own name, even though that name has history",
+          fleet.authorize_report(db, c_id, c_tok, "pc-c",
+                                 name_has_history=has_history)[0] == fleet.REPORT_SIGNED)
+
+
+def test_redeem_onto_enrolled_name(db):
+    print("\n-- a code cannot mint a second credential for an enrolled machine --")
+    fleet.issue_agent_identity(db, "DC-01", actor="test")
+    code_id, code = onboarding.create_code(db, "Not the DC")
+    e = raises(lambda: onboarding.redeem_code(db, code, "dc-01"))
+    check("redeeming onto a live agent's name is refused, in any case",
+          isinstance(e, onboarding.NameEnrolled))
+    check("...the code is not spent", onboarding.get_code(db, code_id)["status"] == "active")
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM agents WHERE machine = 'dc-01' COLLATE NOCASE").fetchone()[0]
+    check("...and no second row exists", rows == 1)
+    check("an invalid code never learns whether a name is enrolled",
+          type(raises(lambda: onboarding.redeem_code(db, "ZZZZZZ", "DC-01")))
+          is onboarding.OnboardingError)
+    check("the same code still works for a free name",
+          bool(onboarding.redeem_code(db, code, "PC-FREE")[0]))
+
 
 def main():
     db = fresh_db()
@@ -222,6 +260,7 @@ def main():
         test_expiry_and_revoke(db)
         test_secret_path_unchanged(db)
         test_authorize_report(db)
+        test_redeem_onto_enrolled_name(db)
     finally:
         try:
             os.remove(db)

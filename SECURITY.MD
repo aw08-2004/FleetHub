@@ -204,8 +204,14 @@ rows, and **Revoke** on a used code also revokes the agent it enrolled.
 each case as follows:
 - A bad or revoked token is refused.
 - A valid token reporting under another enrolled machine's name is refused (403).
-- A valid token reporting under a new name nobody holds is treated as a rename. It is audited
-  as `agent.rename`.
+- A valid token reporting under a fresh name, one that no agent row (live or revoked) and no
+  machine record has used, is treated as a rename. It is audited as `agent.rename`. Any other
+  name is refused, so a stolen token cannot take over a machine that reports unsigned or was
+  revoked.
+
+A code also cannot enrol a machine name that a live agent already holds. The hub answers 409
+and the code stays unspent. Otherwise, holding any code would be enough to mint a second
+credential for an enrolled machine.
 
 `security.require_enrolled_telemetry` refuses unsigned reports. It ships **off**, because
 hubs update before agents do, and should be turned on once the Onboarding page's list of

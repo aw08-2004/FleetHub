@@ -110,14 +110,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// <summary>The Authorization value this agent signs with, or null when not enrolled.
     /// TelemetryReporter reads it per request (roadmap #29), so a report never goes out
     /// signed with an identity this client has already thrown away.</summary>
-    public string? BearerValue
-    {
-        get
-        {
-            var identity = _identity;
-            return identity.IsEnrolled ? identity.BearerValue : null;
-        }
-    }
+    public string? BearerValue => _identity is { IsEnrolled: true } id ? id.BearerValue : null;
 
     /// <summary>Enroll if not already enrolled. Returns true when enrolled (now or before).</summary>
     public async Task<bool> EnsureEnrolledAsync(string? enrollmentSecret, CancellationToken ct)

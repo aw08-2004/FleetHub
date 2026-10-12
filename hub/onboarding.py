@@ -86,6 +86,18 @@ class OnboardingError(Exception):
     """A code that cannot be created or used, with a message meant for a human."""
 
 
+class NameEnrolled(OnboardingError):
+    """A live code, presented for a machine name a live agent already holds. Its own class
+    so the redeem route can answer 409 with the sentence, instead of the 404 every invalid
+    code gets -- the person at the PC needs to know the code is fine and still unspent."""
+
+
+#: Shown to the person at the PC, through the install script.
+NAME_ENROLLED_MESSAGE = ("This PC's name is already enrolled in the fleet. Ask your IT team to "
+                         "remove the old enrollment, then run the installer again -- the code "
+                         "has not been used.")
+
+
 # ================================
 # SCHEMA
 # ================================
@@ -234,10 +246,19 @@ def create_code(db_path, label, ttl_seconds=DEFAULT_TTL_SECONDS, actor="unknown"
 def redeem_code(db_path, code, machine, ip=None, now=None):
     """Spend `code` for `machine` and return (agent_id, token). Raises OnboardingError.
 
-    The claim comes first and is the only thing that decides who wins -- the agent row is
-    minted only by the request whose UPDATE changed a row. If minting then fails, the code
-    stays spent: a code that could be claimed twice because the first claim errored halfway
-    is exactly the failure this module is written against, and an operator can mint another.
+    **A name that a live agent already holds is refused, and the code is NOT spent.** Without
+    this, anybody holding any valid code could mint a second, unrevoked credential for an
+    enrolled machine -- a domain controller, say -- and act as it on the fleet channel and on
+    /api/report (review on PR #119). fleet.authorize_report refuses the same takeover on the
+    rename path; this is the same rule at the front door. The legitimate case -- a re-imaged
+    PC keeping its hostname -- is the operator deleting or revoking the old enrollment first,
+    which is the deliberate step it should be. The code stays live because nothing was
+    minted, so the same person can run the installer again once that is done.
+
+    The check, the claim and the agent row are one IMMEDIATE transaction: two codes redeemed
+    for the same name at the same moment cannot both pass the check, and two PCs racing one
+    code cannot both claim it. Only a live code reaches the name check, so the answer "that
+    name is enrolled" is never given to somebody without one.
     """
     machine = str(machine or "").strip()
     if not machine or len(machine) > MAX_MACHINE_CHARS:
@@ -248,23 +269,26 @@ def redeem_code(db_path, code, machine, ip=None, now=None):
 
     now = int(now if now is not None else time.time())
     with permissions.get_conn(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = _live_row(conn, norm, now)
+        if row is None:
+            raise OnboardingError(INVALID_MESSAGE)
+        if fleet.live_agent_holds(conn, machine):
+            raise NameEnrolled(NAME_ENROLLED_MESSAGE)
         claimed = conn.execute(
             "UPDATE onboarding_codes SET redeemed_at = ?, redeemed_machine = ?, redeemed_ip = ? "
-            "WHERE code_hash = ? AND redeemed_at IS NULL AND revoked_at IS NULL "
+            "WHERE code_id = ? AND redeemed_at IS NULL AND revoked_at IS NULL "
             "  AND expires_at > ?",
-            (now, machine, str(ip or "")[:64] or None, _hash_code(norm), now),
+            (now, machine, str(ip or "")[:64] or None, row["code_id"], now),
         ).rowcount
-        row = conn.execute("SELECT code_id, label FROM onboarding_codes WHERE code_hash = ?",
-                           (_hash_code(norm),)).fetchone()
-    if claimed != 1 or row is None:
-        raise OnboardingError(INVALID_MESSAGE)
-
-    agent_id, token = fleet.issue_agent_identity(
-        db_path, machine, actor=f"onboarding:{row['label']}",
-        detail={"code_id": row["code_id"]})
-    with permissions.get_conn(db_path) as conn:
+        if claimed != 1:
+            raise OnboardingError(INVALID_MESSAGE)
+        agent_id, token = fleet.insert_agent(conn, machine)
         conn.execute("UPDATE onboarding_codes SET agent_id = ? WHERE code_id = ?",
                      (agent_id, row["code_id"]))
+
+    fleet.audit_enroll(db_path, machine, agent_id, actor=f"onboarding:{row['label']}",
+                       detail={"code_id": row["code_id"]})
     fleet.audit(db_path, f"onboarding:{row['label']}", "onboarding.redeem", machine,
                 {"code_id": row["code_id"], "agent_id": agent_id, "ip": ip},
                 level=fleet.LEVEL_SECURITY)

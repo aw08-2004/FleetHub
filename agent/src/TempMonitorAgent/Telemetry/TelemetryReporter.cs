@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -114,11 +113,8 @@ public sealed class TelemetryReporter : IDisposable
     public static HttpRequestMessage BuildReportRequest(string url, string json, string? bearer)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json"),
-        };
-        if (!string.IsNullOrEmpty(bearer))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        if (!string.IsNullOrEmpty(bearer)) request.Headers.Authorization = new("Bearer", bearer);
         return request;
     }
 

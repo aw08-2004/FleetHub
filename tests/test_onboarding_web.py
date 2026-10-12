@@ -23,7 +23,7 @@ import i18n
 import onboarding
 import onboarding_web
 import permissions
-from flask import Blueprint, Flask
+from flask import Blueprint, Flask, session
 from onboarding_web import create_onboarding_blueprint
 from permissions_web import create_access
 
@@ -52,25 +52,14 @@ def fake_login_required(view):
     return wrapped
 
 
-def _register_sidebar_stubs(app):
-    """The admin page renders the shared sidebar, which url_for()s every other page."""
-    for endpoint in ("index", "inventory_page", "alerts_page", "tools_page",
-                     "remote_page", "settings_page", "permissions_page", "logout"):
-        app.add_url_rule(f"/_stub/{endpoint}", endpoint, lambda: "", methods=["GET"])
-    for name, endpoint in (("packages", "packages_page"), ("backups", "backups_page"),
-                           ("invites", "invites_page"), ("audit", "audit_page"),
-                           ("users", "users_page"), ("bios", "firmware_page"),
-                           ("rules", "rules_page"), ("patches", "patches_page"),
-                           ("events", "events_page"), ("apitokens", "download_page"),
-                           ("sharing", "sharing_page"),
-                           ("provisioning", "provisioning_page"),
-                           ("location", "fleet_map_page"), ("reports", "reports_page"),
-                           ("policy", "policy_page"),
-                           ("device_groups", "device_groups_page"),
-                           ("watchdogs", "watchdogs_page")):
-        bp = Blueprint(name, __name__)
-        bp.add_url_rule(f"/_stub/{name}", endpoint, lambda: "", methods=["GET"])
-        app.register_blueprint(bp)
+#: Every endpoint the shared sidebar url_for()s, as "blueprint.endpoint" or a bare endpoint.
+#: The onboarding blueprint is the real one, so it is the one name missing here.
+SIDEBAR_ENDPOINTS = """index inventory_page alerts_page tools_page remote_page settings_page
+    permissions_page logout packages.packages_page backups.backups_page invites.invites_page
+    audit.audit_page users.users_page bios.firmware_page rules.rules_page patches.patches_page
+    events.events_page apitokens.download_page sharing.sharing_page
+    provisioning.provisioning_page location.fleet_map_page reports.reports_page
+    policy.policy_page device_groups.device_groups_page watchdogs.watchdogs_page""".split()
 
 
 def build_app(db_path, unsigned=None):
@@ -82,23 +71,25 @@ def build_app(db_path, unsigned=None):
         db_path, fake_login_required, access, hub_url=HUB,
         valid_machine_name=lambda n: bool(n) and "<" not in n,
         unsigned_reporters=lambda: list(unsigned or [])))
-    _register_sidebar_stubs(app)
+    for name in SIDEBAR_ENDPOINTS:
+        blueprint, _, endpoint = name.rpartition(".")
+        if not blueprint:
+            app.add_url_rule(f"/_stub/{endpoint}", endpoint, lambda: "")
+            continue
+        bp = Blueprint(blueprint, __name__)
+        bp.add_url_rule(f"/_stub/{blueprint}", endpoint, lambda: "")
+        app.register_blueprint(bp)
 
     @app.context_processor
     def _nav_context():
-        from flask import session
         email = (session.get("user") or {}).get("email")
-        context = {"cap": permissions, "hub_version": "test",
-                   "user_capabilities": permissions.effective_permissions(
-                       db_path, email, superusers=SUPERUSERS)["capabilities"],
-                   "open_alert_count": 0, "is_superuser": email in SUPERUSERS,
-                   "latest_agent_version": None}
-        context.update(i18n.template_context("en"))
-        return context
+        caps = permissions.effective_permissions(db_path, email, superusers=SUPERUSERS)
+        return dict(i18n.template_context("en"), cap=permissions, hub_version="test",
+                    user_capabilities=caps["capabilities"], open_alert_count=0,
+                    is_superuser=email in SUPERUSERS, latest_agent_version=None)
 
     @app.before_request
     def _seed_session():
-        from flask import session
         session["user"] = {"email": CURRENT_USER}
 
     return app
@@ -192,6 +183,12 @@ def main():
         print("\n== Status, then redeem (what the script does) ==")
         reset_limits()
         check("status is 'waiting' before the script runs",
+              c.get(f"/api/onboarding/status/{code}").get_json()["state"] == "waiting")
+        fleet.issue_agent_identity(db, "DC-01", actor="test")
+        taken = c.post("/api/onboarding/redeem", json={"code": code, "machine": "DC-01"})
+        check("an enrolled machine's name gets 409, not a second credential",
+              taken.status_code == 409 and "token" not in taken.get_json())
+        check("...and the code is still waiting",
               c.get(f"/api/onboarding/status/{code}").get_json()["state"] == "waiting")
         check("a bad machine name is refused before the code is spent",
               c.post("/api/onboarding/redeem",

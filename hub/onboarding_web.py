@@ -90,13 +90,21 @@ def create_onboarding_blueprint(db_path, login_required, access, hub_url="",
     which is the list an operator needs codes for.
     """
     bp = Blueprint("onboarding", __name__)
-    manage = access.require(permissions.MANAGE_ONBOARDING)
     base = str(hub_url or "").rstrip("/")
+    _add_admin_routes(bp, db_path, login_required, access, base, unsigned_reporters)
+    _add_public_routes(bp, db_path, base, valid_machine_name)
+    return bp
 
-    def _refused():
-        return jsonify({"error": onboarding.INVALID_MESSAGE}), 404
 
-    # ------------------------------------------------------------------ admin page
+def _refused():
+    return jsonify({"error": onboarding.INVALID_MESSAGE}), 404
+
+
+def _add_admin_routes(bp, db_path, login_required, access, base, unsigned_reporters):
+    """The Onboarding page and its API, behind MANAGE_ONBOARDING. Split from the public half
+    so the two gates are never read in the same screenful as each other's routes."""
+    manage = access.require(permissions.MANAGE_ONBOARDING)
+
     @bp.route("/onboarding-codes", methods=["GET"])
     @login_required
     @manage
@@ -142,7 +150,11 @@ def create_onboarding_blueprint(db_path, login_required, access, hub_url="",
             return jsonify({"error": "unknown code"}), 404
         return jsonify(onboarding.get_code(db_path, code_id)), 200
 
-    # ------------------------------------------------------------------ public wizard
+
+
+def _add_public_routes(bp, db_path, base, valid_machine_name):
+    """The unauthenticated wizard and the routes its install script calls. See the module
+    docstring for what each may return."""
     @bp.route("/onboarding", methods=["GET"])
     def onboarding_wizard():
         """The page a person at an unenrolled PC opens. **No login gate.** Renders nothing
@@ -230,6 +242,9 @@ def create_onboarding_blueprint(db_path, login_required, access, hub_url="",
         try:
             agent_id, token = onboarding.redeem_code(
                 db_path, data.get("code"), machine, ip=request.remote_addr)
+        except onboarding.NameEnrolled as e:
+            # A live code, a taken name: say so, so the person knows the code is unspent.
+            return refusals.refuse(e, 409)
         except onboarding.OnboardingError as e:
             if str(e) == onboarding.INVALID_MESSAGE:
                 return _refused()
@@ -246,5 +261,3 @@ def create_onboarding_blueprint(db_path, login_required, access, hub_url="",
         if state is None:
             return _refused()
         return jsonify(state), 200
-
-    return bp

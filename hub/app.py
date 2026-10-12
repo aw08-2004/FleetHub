@@ -5191,6 +5191,16 @@ def _note_unsigned_reporter(machine):
                 _unsigned_reporters.pop(name, None)
 
 
+def _machine_has_history(machine):
+    """Does the hub hold a record under `machine` (any case)? fleet.authorize_report asks
+    before letting an enrolled agent rename itself onto it: a rename may only land on a
+    fresh name, never on a machine somebody else's telemetry already describes."""
+    with get_db_conn() as conn:
+        return conn.execute(
+            "SELECT 1 FROM machine_info WHERE machine = ? COLLATE NOCASE LIMIT 1", (machine,)
+        ).fetchone() is not None
+
+
 def unsigned_reporters():
     """[{machine, last_report}] for every machine that reported unsigned in the last day."""
     cutoff = int(time.time()) - UNSIGNED_REPORTER_WINDOW_SECONDS
@@ -5229,12 +5239,21 @@ def report_temp():
     if not is_valid_machine_name(machine):
         return jsonify({"error": "Invalid machine name"}), 400
     machine = str(machine).strip()
+    # float() on a non-numeric temp would otherwise surface as an unhandled 500. Checked
+    # BEFORE the identity gate below, because that gate writes (a rename, last_report_auth),
+    # and a report refused for its payload must not have moved an enrollment first (review
+    # on PR #119).
+    try:
+        temp_value = float(data['temp'])
+    except (TypeError, ValueError):
+        return jsonify({"error": "temp must be a number"}), 400
 
     # --- identity gate (roadmap #29) ---
     # Before anything is written. A refused report must leave no trace -- not a reading, not
     # a machine_info row, not a last_seen bump -- or "refused" would still mean "shown".
     claimed_id, claimed_token = auth_helpers.bearer_parts()
-    outcome, reason = fleet.authorize_report(DB_PATH, claimed_id, claimed_token, machine)
+    outcome, reason = fleet.authorize_report(DB_PATH, claimed_id, claimed_token, machine,
+                                             name_has_history=_machine_has_history)
     if outcome == fleet.REPORT_BAD_TOKEN:
         return jsonify({"error": "agent authentication required", "reason": reason}), 401
     if outcome == fleet.REPORT_NAME_TAKEN:
@@ -5247,11 +5266,6 @@ def report_temp():
         if settings.get_bool(DB_PATH, "security.require_enrolled_telemetry"):
             return jsonify({"error": "only enrolled agents may report telemetry",
                             "reason": "unsigned"}), 401
-    # float() on a non-numeric temp would otherwise surface as an unhandled 500.
-    try:
-        temp_value = float(data['temp'])
-    except (TypeError, ValueError):
-        return jsonify({"error": "temp must be a number"}), 400
     try:
         uptime_seconds = int(data['uptime_seconds']) if data.get('uptime_seconds') is not None else None
     except (TypeError, ValueError):

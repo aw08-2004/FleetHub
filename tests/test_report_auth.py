@@ -111,6 +111,20 @@ def test_rename():
     check("...and the agent's enrollment moved with it",
           fleet.authenticate_agent(app.DB_PATH, agent[0], agent[1], touch=False) == "NEW-NAME")
 
+    print("\n-- ...but never onto a machine the hub already knows (review on PR #119) --")
+    set_switch(False)
+    check("an unsigned machine reports", report("UNSIGNED-PC").status_code == 200)
+    set_switch(True)
+    r = report("unsigned-pc", agent)
+    check("a signed agent cannot rename itself onto it, in any case", r.status_code == 403)
+    check("...and stays where it was",
+          fleet.authenticate_agent(app.DB_PATH, agent[0], agent[1], touch=False) == "NEW-NAME")
+    r = client.post("/api/report", json={"machine": "ANOTHER-NAME", "temp": "hot"},
+                    headers={"Authorization": f"Bearer {agent[0]}:{agent[1]}"})
+    check("a signed report with a bad payload is refused...", r.status_code == 400)
+    check("...before it could rename the enrollment",
+          fleet.authenticate_agent(app.DB_PATH, agent[0], agent[1], touch=False) == "NEW-NAME")
+
 
 def test_switch_off():
     print("\n-- switch off: anonymous accepted, latched names still protected --")

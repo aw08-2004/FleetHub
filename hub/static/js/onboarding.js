@@ -76,10 +76,11 @@ async function checkCode(raw) {
             + '[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; '
             + `irm '${body.script_url}' | iex`;
         try { history.replaceState(null, '', `/onboarding?code=${encodeURIComponent(code)}`); }
-        catch (e) { /* cosmetic only */ }
+        catch { /* cosmetic only */ }
         show(2);
         startPolling();
-    } catch (e) {
+    } catch {
+        // fetch rejects only when the hub could not be reached at all.
         showError(codeError, t('onboarding.wizard.network_error'));
     } finally {
         submit.disabled = false;
@@ -108,7 +109,7 @@ async function poll() {
             return;
         }
         body = await resp.json();
-    } catch (e) {
+    } catch {
         return;                                   // a dropped poll is not worth a message
     }
     if (body.state === 'waiting') {
@@ -131,21 +132,21 @@ async function poll() {
 form.addEventListener('submit', (e) => {
     e.preventDefault();
     const raw = input.value.trim();
-    if (raw) checkCode(raw);
+    if (raw) void checkCode(raw);
 });
 
 input.addEventListener('input', () => {
     // Upper-case as typed, so what is on screen is what the hub compares.
     const pos = input.selectionStart;
     input.value = input.value.toUpperCase();
-    try { input.setSelectionRange(pos, pos); } catch (e) { /* not a text input */ }
+    try { input.setSelectionRange(pos, pos); } catch { /* not a text input */ }
 });
 
 document.getElementById('copy-command').addEventListener('click', async () => {
     try {
         await navigator.clipboard.writeText(psCommand.value);
         copyStatus.textContent = t('onboarding.wizard.copied');
-    } catch (e) {
+    } catch {
         // Refused outside a secure context; the text is selectable, so say so.
         psCommand.select();
         copyStatus.textContent = t('onboarding.wizard.copy_failed');
@@ -155,7 +156,7 @@ document.getElementById('copy-command').addEventListener('click', async () => {
 const preset = new URLSearchParams(location.search).get('code');
 if (preset) {
     input.value = preset.toUpperCase();
-    checkCode(preset);
+    void checkCode(preset);
 } else {
     input.focus();
 }

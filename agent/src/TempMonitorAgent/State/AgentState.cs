@@ -52,7 +52,7 @@ public sealed class AgentState
     /// older agent, or by hand. Run once at startup; returns a note for the log, or null.
     /// Cheap enough to repeat on every start, and that is what makes it a migration with no
     /// state of its own.</summary>
-    public string? HardenIdentityFile() => StateDirectory.HardenPrivateFile(AgentConfig.AgentIdentityPath);
+    public static string? HardenIdentityFile() => StateDirectory.HardenPrivateFile(AgentConfig.AgentIdentityPath);
 
     /// <summary>Throw the enrollment identity away, so the next tick enrolls from scratch.
     ///
