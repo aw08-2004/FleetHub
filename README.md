@@ -156,6 +156,23 @@ Hub and Agent install side by side under one root — `C:\Program Files\FleetHub
 and `C:\Program Files\FleetHub\Agent`. The Hub installs as the **`FleetHub - Hub`
 Windows Service** (Python wrapped with WinSW, running as LocalSystem).
 
+**The hub needs 64-bit Python.** The installer checks each interpreter it finds and skips
+32-bit ones (installing the 64-bit build alongside if that is all there is), and on a
+reinstall warns if the existing service was running a 32-bit one. A 32-bit hub has a 2 GB
+address space; with 128 waitress threads and 16 MB remote-relay buffers it throws
+`MemoryError` on `/api/remote/session/<id>/relay/down` and `/api/report` while the machine
+still has free RAM, and can then crash the WinSW wrapper into a start-timeout loop. To check
+which interpreter a running hub uses, read `<executable>` from `FleetHub.xml` in the hub
+directory and ask the Python beside it (for `Scripts\waitress-serve.exe`, the `python.exe`
+one level up):
+
+```powershell
+& "C:\Program Files\Python312\python.exe" -c "import struct, sys; print(struct.calcsize('P')*8, sys.executable)"
+```
+
+`32` means re-run `install.ps1 -Component Hub`, which moves the service to a 64-bit
+interpreter, then uninstall the 32-bit Python.
+
 The Hub install downloads the branch archive and lays down just the `hub/` subtree
 (~2 MB: the Python modules, `templates/`, `static/`, `requirements.txt`) rather than
 cloning the whole repo (~85 MB), so the agent tree, tests and docs never land on a

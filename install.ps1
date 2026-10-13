@@ -439,35 +439,153 @@ function Update-ProcessPath {
     $env:Path = $parts -join ";"
 }
 
-function Resolve-Python {
-    # PATH first: the py launcher knows about every installed version, so ask it before python.exe.
-    foreach ($cmd in @("py -3", "python")) {
-        $exe, $rest = $cmd -split " ", 2
-        $found = Get-Command $exe -ErrorAction SilentlyContinue
-        if (-not $found) { continue }
-        try {
-            # Requiring a "Python 3" banner also rejects the Microsoft Store app-execution alias,
-            # which sits on PATH as python.exe but only opens the Store when run.
-            $v = & $exe $rest --version 2>&1
-            if ("$v" -match "Python 3") { return @{ Exe = $found.Source; Args = $rest; Version = "$v".Trim() } }
-        } catch { }
-    }
-    # Nothing usable on PATH. Look where the installers actually put it: a machine-wide install
-    # done seconds ago can still be missing from PATH if the registry broadcast hasn't landed,
-    # and giving up there would send the operator away for a reboot they don't need.
-    foreach ($glob in @("$env:ProgramFiles\Python3*\python.exe",
-                        "${env:ProgramFiles(x86)}\Python3*\python.exe",
-                        "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
-                        "$env:SystemDrive\Python3*\python.exe")) {
-        $cand = Get-ChildItem $glob -ErrorAction SilentlyContinue |
-                    Sort-Object FullName -Descending | Select-Object -First 1
-        if (-not $cand) { continue }
-        try {
-            $v = & $cand.FullName --version 2>&1
-            if ("$v" -match "Python 3") { return @{ Exe = $cand.FullName; Args = $null; Version = "$v".Trim() } }
-        } catch { }
+function Get-PythonBits([string]$Exe, $PyArgs) {
+    # Pointer size of the interpreter itself, not of Windows: a 32-bit python.exe on 64-bit
+    # Windows reports 32 here, which is exactly the case this exists to catch. $null when the
+    # interpreter can't be run at all.
+    # Splatted as an array, never passed as a possibly-empty string: PowerShell 7 hands a native
+    # command "" as a real argument, and python then tries to run a script called "".
+    $pre = @($PyArgs | Where-Object { $_ })
+    try {
+        $bits = & $Exe @pre -c "import struct; print(struct.calcsize('P')*8)" 2>$null
+        if ("$bits".Trim() -match '^(32|64)$') { return [int]$matches[1] }
+    } catch {
+        # Unrunnable is an answer, not an error: the caller treats $null as "not usable".
+        Write-Verbose "Could not run $Exe to read its bitness: $($_.Exception.Message)"
     }
     return $null
+}
+
+# Set by Resolve-Python to every interpreter it turned down, so Ensure-Python can tell "no
+# Python" from "only the wrong Python" -- the fix for the second is not what the operator would
+# guess from "Python not detected". Kept as two lists because "32-bit" and "would not run the
+# probe" (a broken install, an AV block) have different fixes, and reporting the second as the
+# first sends the operator after the wrong cause.
+$script:SkippedPython32 = @()
+$script:SkippedPythonUnverified = @()
+
+function Get-PythonCandidates {
+    # Every interpreter worth asking, in preference order, as @{ Exe; Args; Label }.
+    # PATH first: the py launcher knows about every installed version, so ask it before
+    # python.exe. "-3-64" names a 64-bit 3.x outright; plain "-3" is kept as a fallback for
+    # launchers too old to understand the suffix.
+    foreach ($cmd in @("py -3-64", "py -3", "python")) {
+        $exe, $rest = $cmd -split " ", 2
+        $found = Get-Command $exe -ErrorAction SilentlyContinue
+        if ($found) {
+            @{ Exe = $found.Source; Args = $rest; Label = (@($found.Source, $rest) | Where-Object { $_ }) -join " " }
+        }
+    }
+    # Then where the installers actually put it: a machine-wide install done seconds ago can
+    # still be missing from PATH if the registry broadcast hasn't landed, and giving up there
+    # would send the operator away for a reboot they don't need.
+    # Program Files (x86) is deliberately not searched: only 32-bit builds install there, and
+    # the bitness check would refuse every one of them anyway.
+    # Every match, not just the newest: Python312-32 sorts above Python312 by name, and
+    # stopping at the first would let a 32-bit side-by-side install hide the 64-bit one.
+    # Sorted WITHIN each root, never across them: machine-wide first, because the service runs
+    # as LocalSystem and is baked to this path, and one sort across roots would rank a per-user
+    # interpreter under C:\Users above Program Files purely because "U" sorts after "P".
+    foreach ($glob in @("$env:ProgramFiles\Python3*\python.exe",
+                        "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
+                        "$env:SystemDrive\Python3*\python.exe")) {
+        Get-ChildItem $glob -ErrorAction SilentlyContinue | Sort-Object FullName -Descending |
+            ForEach-Object { @{ Exe = $_.FullName; Args = $null; Label = $_.FullName } }
+    }
+}
+
+function Test-PythonCandidate($Cand) {
+    # The resolved interpreter if $Cand is a runnable 64-bit Python 3, else $null -- warning
+    # once per interpreter it turns down.
+    $pre = @($Cand.Args | Where-Object { $_ })
+    # Requiring a "Python 3" banner also rejects the Microsoft Store app-execution alias,
+    # which sits on PATH as python.exe but only opens the Store when run.
+    $v = "$(& $Cand.Exe @pre --version 2>&1)".Trim()
+    if ($v -notmatch "Python 3") { return $null }
+    $bits = Get-PythonBits $Cand.Exe $Cand.Args
+    if ($bits -eq 64) { return @{ Exe = $Cand.Exe; Args = $Cand.Args; Version = $v } }
+
+    # One warning per interpreter, not per route to it: py -3-64, py -3 and the folder scan
+    # often all land on the same python.exe, and three lines about one install read like three
+    # installs. Keyed on the path Python reports for itself, asked only here on the skip path
+    # so the 64-bit happy path costs nothing extra; the label stands in when it won't run.
+    $key = "$(& $Cand.Exe @pre -c "import sys; print(sys.executable)" 2>$null)".Trim()
+    if (-not $key) { $key = $Cand.Label }
+    if (($script:SkippedPython32 + $script:SkippedPythonUnverified) -contains $key) { return $null }
+
+    # The why only once, for the same reason: four copies of the same paragraph bury the one
+    # line that matters.
+    $tail = if (($script:SkippedPython32 + $script:SkippedPythonUnverified).Count) { "" } else {
+        " The hub needs 64-bit Python: a 32-bit hub runs out of address space and throws MemoryError on the remote relay and /api/report." }
+    if ($bits -eq 32) {
+        Warn "Skipping $v at $($Cand.Label) -- it is 32-bit.$tail"
+        $script:SkippedPython32 += $key
+    } else {
+        Warn "Skipping $v at $($Cand.Label) -- it would not run a one-line bitness probe, so it can't be confirmed 64-bit.$tail"
+        $script:SkippedPythonUnverified += $key
+    }
+    return $null
+}
+
+function Resolve-Python {
+    <#
+      Find a **64-bit** Python 3, or $null.
+
+      Bitness is checked, not assumed, because a 32-bit hub fails late and looks like something
+      else. A 32-bit process has a 2 GB address space; the hub runs waitress with 128 threads,
+      the remote relay (hub/remote_relay.py) buffers 16 MB uploads and answers with a 16 MB
+      b"".join, and /api/report parses whole fleet payloads. Under load that fragments the
+      address space until small allocations throw MemoryError on the relay and on /api/report
+      while the machine still has gigabytes free -- and once the service wrapper falls over the
+      hub sits in a start-timeout loop. This bit OPENCLAW. Nothing in the logs says "32-bit",
+      so the only cheap place to stop it is here, before the interpreter is baked into the
+      service definition.
+
+      Rejected: warning but still accepting a 32-bit interpreter. The operator answering the
+      installer is the one person who won't see the MemoryError weeks later; refusing and
+      falling through to Install-Python (which installs the amd64 build) costs a minute now.
+    #>
+    $script:SkippedPython32 = @()
+    $script:SkippedPythonUnverified = @()
+    foreach ($cand in @(Get-PythonCandidates)) {
+        try {
+            $r = Test-PythonCandidate $cand
+            if ($r) { return $r }
+        } catch {
+            Write-Verbose "Skipping $($cand.Label): $($_.Exception.Message)"
+        }
+    }
+    return $null
+}
+
+function Test-ExistingHubBitness([string]$HubDir) {
+    <#
+      On a reinstall, say loudly if the hub this box has been running was 32-bit.
+
+      The reinstall itself fixes it -- the service definition is rewritten around the 64-bit
+      interpreter Resolve-Python just chose -- but the operator needs to hear it: it explains
+      the MemoryErrors and wrapper crashes that probably sent them here, and the old 32-bit
+      Python is still installed and may still be first on PATH for anything else.
+    #>
+    $xmlPath = Join-Path $HubDir "$HubServiceId.xml"
+    if (-not (Test-Path $xmlPath)) { return }
+    try { $exec = ([xml](Get-Content $xmlPath -Raw)).service.executable } catch { return }
+    if (-not $exec) { return }
+    # The service runs either python.exe directly or waitress-serve.exe from its Scripts\ dir;
+    # the interpreter is beside the former and one level above the latter.
+    $dir = Split-Path $exec -Parent
+    $oldPy = Join-Path $dir "python.exe"
+    if (-not (Test-Path $oldPy)) { $oldPy = Join-Path (Split-Path $dir -Parent) "python.exe" }
+    if (-not (Test-Path $oldPy)) { return }
+    if ((Get-PythonBits $oldPy $null) -ne 32) { return }
+
+    Write-Host ""
+    Write-Host "  !!! The existing hub service was running 32-bit Python: $oldPy" -ForegroundColor Red
+    Write-Host "  !!! A 32-bit hub has a 2 GB address space and throws MemoryError on the remote" -ForegroundColor Red
+    Write-Host "  !!! relay and /api/report under load, then the service wrapper crashes and loops." -ForegroundColor Red
+    Write-Host "  !!! This reinstall moves the service to the 64-bit interpreter chosen above." -ForegroundColor Red
+    Write-Host "  !!! Afterwards, uninstall the 32-bit Python (Settings -> Apps) so nothing picks it up again." -ForegroundColor Red
+    Write-Host ""
 }
 
 function Install-Python {
@@ -482,7 +600,9 @@ function Install-Python {
         # Pin --source winget: without it, winget also probes the msstore source, and a
         # bad msstore cert/network on the machine aborts the whole install even though
         # the winget source works fine.
-        winget install --id Python.Python.3.12 --source winget --scope machine `
+        # --architecture x64 for the same reason Resolve-Python checks bitness: left to itself
+        # winget can pick the x86 installer, and Resolve-Python would then refuse what we just installed.
+        winget install --id Python.Python.3.12 --source winget --scope machine --architecture x64 `
             --silent --accept-package-agreements --accept-source-agreements
         if ($LASTEXITCODE -ne 0) { Warn "winget install failed (exit $LASTEXITCODE). Trying python.org instead." }
         Update-ProcessPath
@@ -520,15 +640,21 @@ function Ensure-Python {
     $py = Resolve-Python
     if ($py) { Ok "Found $($py.Version)"; return $py }
 
-    Warn "Python not detected."
-    if (-not (Prompt-YesNo "Do you want to install it now?" -Default Yes)) {
-        Die "Python 3 is required. Install it from python.org (tick 'Add python.exe to PATH'), then re-run this installer."
+    if ($script:SkippedPython32.Count) {
+        Warn "Only 32-bit Python found. The hub needs the 64-bit build; it installs side by side with the 32-bit one."
+    } elseif ($script:SkippedPythonUnverified.Count) {
+        Warn "Found Python, but none that could be confirmed 64-bit (see above -- a broken install or an antivirus block can cause this). A fresh 64-bit install sidesteps it."
+    } else {
+        Warn "Python not detected."
+    }
+    if (-not (Prompt-YesNo "Do you want to install 64-bit Python now?" -Default Yes)) {
+        Die "64-bit Python 3 is required. Install the 'Windows installer (64-bit)' from python.org (tick 'Add python.exe to PATH'), then re-run this installer."
     }
 
     $py = Install-Python
     if (-not $py) {
-        Die ("Python still isn't available after the install attempt. Install Python 3 manually from " +
-             "python.org (tick 'Add python.exe to PATH'), reboot if the installer asked for one, then re-run this installer.")
+        Die ("64-bit Python still isn't available after the install attempt. Install the 'Windows installer (64-bit)' " +
+             "from python.org (tick 'Add python.exe to PATH'), reboot if the installer asked for one, then re-run this installer.")
     }
     Ok "Installed $($py.Version)"
     return $py
@@ -2171,6 +2297,7 @@ function Install-Hub {
 
     Step "Preparing hub files at $hubDir"
     Move-LegacyHubInstall -NewDir $hubDir
+    Test-ExistingHubBitness $hubDir
 
     if (Test-Path (Join-Path $hubDir ".git")) {
         # A developer clone (this is also the folder the installer is often launched from).
