@@ -2357,6 +2357,7 @@
       "geom": "{width}×{height} · {encoder} · escritorio {desktop}",
       "desktop_unknown": "?",
       "stalled": "El agente no está recibiendo ningún fotograma. Si este equipo no tiene monitor, instala abajo una pantalla virtual.",
+      "stalled_no_display": "Esta sesión de Windows no tiene ninguna pantalla que capturar; puede que esté desconectada o con la sesión cerrada. Elige otra sesión en el selector «Sesión» de arriba.",
       "stalled_on_desktop": "El agente no está recibiendo ningún fotograma en el escritorio {desktop}. Si este equipo no tiene monitor, instala abajo una pantalla virtual.",
       "signaling_error": "Error de señalización: {error}",
       "session_logon_screen": "pantalla de inicio de sesión",
@@ -2803,7 +2804,7 @@
       "session_ended": "la sesión remota terminó",
       "helper_restarted": "la sesión remota se reinició en el equipo y retiró el aviso",
       "badge_failed": "el equipo no pudo mostrar el aviso de grabación",
-      "badge_timeout": "el equipo no confirmó el aviso de grabación (puede que su agente sea antiguo; grabar requiere el agente 3.43.0 o posterior)",
+      "badge_timeout": "el equipo no confirmó el aviso de grabación -- o su agente es anterior a la 3.43.0, o la confirmación nunca llegó al hub (compruebe que el hub esté en marcha y funcione bien)",
       "stream_changed": "la conexión pasó al relé del hub",
       "size_limit": "la grabación alcanzó su límite de tamaño"
     },

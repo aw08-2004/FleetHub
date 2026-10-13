@@ -1252,6 +1252,28 @@ PACKAGING_PROMPT = (
 )
 
 
+# Where the agent writes its logs. agent/src/TempMonitorAgent/AgentConfig.cs is the source of
+# truth (ProgramDataDir, LogPath, RemoteHelperLogPath), and Program.cs / RemoteHelper.cs set the
+# rolling; change these lines when those change. **Without them the model guesses, and guesses
+# wrong**: diagnosing a recording-badge failure on two machines it looked for a logs\ subfolder
+# that does not exist, and once checked only C:\Program Files\FleetHub\Agent and told the
+# operator "the agent writes nothing locally". The badge lines are in the HELPER's log, not the
+# service's, which is the second thing it got wrong. Sent to everyone rather than gated on a
+# command capability: an operator who cannot run a command still asks where the logs are.
+AGENT_LOGS_PROMPT = (
+    "## Agent logs on a machine",
+    "The FleetHub agent logs under %ProgramData%\\FleetHub\\Agent (nothing is written under "
+    "Program Files, and there is no logs\\ subfolder). Older installs that were never migrated "
+    "use %ProgramData%\\TempMonitorAgent instead -- check both.",
+    "- companion.log: the service (heartbeat, commands, updates). Rolls at 1 MB, keeping 4 "
+    "files (companion_001.log, ...).",
+    "- remote-helper.log: the per-session remote helper -- remote control, recording and the "
+    "recording badge. Rolls at 1 MB, keeping 3.",
+    "Both are TempMonitorAgent.exe; the helper is the one with --remote-helper on its command "
+    "line. Read a log with a command (Get-Content -Tail 200) rather than copying the file.",
+)
+
+
 def system_prompt(*, operator, capabilities, scope, pages, context, today, language,
                   tools_note="", mode=MODE_ASK):
     """Everything the model is told up front. Rebuilt on every step, never stored.
@@ -1324,6 +1346,8 @@ def system_prompt(*, operator, capabilities, scope, pages, context, today, langu
         "gpresult, Get-*) are commands too: use `find` or `tail` on command_output to read "
         "the part that matters instead of running them again.",
         tools_note,
+        "",
+        *AGENT_LOGS_PROMPT,
         "",
         *(PACKAGING_PROMPT if "deploy_packages" in capabilities else ()),
         "",

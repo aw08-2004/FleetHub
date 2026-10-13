@@ -41,6 +41,16 @@ public sealed class CaptureEncodePipeline
     /// the RTP clock is worth capping, and a gap this large re-keys the stream anyway.</summary>
     private const int MaxFrameGapMs = 2000;
 
+    /// <summary>Floor and ceiling of the wait between two capture opens that both found nothing
+    /// (see <see cref="OpenBackoffMs"/>).</summary>
+    private const int OpenRetryMinMs = 200;
+    private const int OpenRetryMaxMs = 10_000;
+
+    /// <summary>How often a capture that keeps failing to open says so again in the log. The
+    /// first failure is logged in full; after that, one line per interval is plenty to show
+    /// the helper is alive and still trying.</summary>
+    private const int OpenFailureLogEveryMs = 5 * 60_000;
+
     /// <summary>Reported to the caller whenever the stream's shape changes, so the browser can
     /// be told what it is now looking at.</summary>
     public readonly record struct Geometry(
@@ -72,11 +82,23 @@ public sealed class CaptureEncodePipeline
         return frames;
     }
 
+    /// <summary>A capture that has produced nothing for <see cref="StallThresholdMs"/>.
+    /// <paramref name="Reason"/> is null for the general case, or <see cref="NoDisplay"/> when
+    /// neither Desktop Duplication nor GDI could see a screen at all -- the helper is in a
+    /// Windows session with no rendered desktop, which no amount of waiting fixes and the
+    /// operator can only cure by picking another session.</summary>
+    public readonly record struct Stall(string Desktop, string? Reason)
+    {
+        /// <summary>The wire value of <see cref="Reason"/> for "this session has no display".
+        /// remote.js matches it literally.</summary>
+        public const string NoDisplay = "no_display";
+    }
+
     /// <summary>What the live session wants told about the stream: its shape whenever it
     /// changes, and a capture that has stalled. Both optional, and grouped because they always
     /// travel together -- to the viewer, through the same sink the frames go to.</summary>
     public readonly record struct CaptureHooks(
-        Action<Geometry>? OnGeometry = null, Action<string>? OnStall = null);
+        Action<Geometry>? OnGeometry = null, Action<Stall>? OnStall = null);
 
     /// <summary>Stream captured, encoded frames to a sink until cancelled. Must run on a
     /// thread that owns <paramref name="binder"/> (see the class remarks).</summary>
@@ -98,19 +120,39 @@ public sealed class CaptureEncodePipeline
         Func<bool> keepGoing, Action<byte[], uint> onEncoded, Action<string> log,
         CancellationToken ct = default,
         InputDesktopWatcher? desktops = null, ThreadDesktopBinder? binder = null,
-        Action<Geometry>? onGeometry = null, Action<string>? onStall = null)
+        Action<Geometry>? onGeometry = null, Action<Stall>? onStall = null)
     {
         CaptureSession? session = null;
         int frames = 0;
         long timestamp = 0;
-        bool stallReported = false;
+        var stall = new StallLatch();
         var sinceLastFrame = Stopwatch.StartNew();
+        // Capture opens that found nothing, in a row. A helper injected into a Windows session
+        // with no rendered desktop (a disconnected RDP session, the wrong session after a
+        // reboot) fails every open, forever: DXGI has nothing to duplicate and GDI's BitBlt
+        // fails at once, so before this the loop retried every ~0.6s -- a new D3D device and a
+        // "DXGI unavailable" line each time, 2,000 lines in 80s on OPENCLAW, which rolled the
+        // 1 MB log over and took the start of the session's story with it. Now the retries back
+        // off (OpenBackoffMs), the streak is logged once, and the viewer is told why.
+        int failedOpens = 0;
+        StreamSettings? failedWith = null;
+        bool noDisplay = false;
+        var openClock = Stopwatch.StartNew();
+        long nextOpenAt = 0;
+        var sinceFailureLog = new Stopwatch();
         var tick = Stopwatch.StartNew();
         // Wall clock since the last frame we actually SENT, which is what the RTP timestamps are
         // derived from. Separate from `tick` (which paces the loop) and from `sinceLastFrame`
         // (which is stall detection) because it must only advance across frames that reached the
         // peer -- a frame the encoder swallowed contributes its time to the next one that lands.
         var sinceSent = Stopwatch.StartNew();
+
+        void ReportStall()
+        {
+            if (stall.ShouldReport(sinceLastFrame.ElapsedMilliseconds))
+                onStall?.Invoke(new Stall(binder?.AttachedName ?? "",
+                                          noDisplay ? Stall.NoDisplay : null));
+        }
 
         try
         {
@@ -127,7 +169,28 @@ public sealed class CaptureEncodePipeline
                 //    a rebuild is the only path guaranteed to start with SPS/PPS + IDR.
                 //    Taken unconditionally so a request made before the first build is consumed
                 //    by it rather than forcing a second one straight after.
-                bool keyframeWanted = live.TakeKeyframeRequest() && session is not null;
+                bool keyframeRequested = live.TakeKeyframeRequest();
+                bool keyframeWanted = keyframeRequested && session is not null;
+                //    A keyframe request also means a viewer is starting over, and a viewer that
+                //    is starting over has heard nothing -- including that there is no picture.
+                //    The stall used to be reported once per stall, to whichever sink was current:
+                //    on OPENCLAW it went to a WebRTC peer that never connected, the console moved
+                //    to the hub relay eleven seconds later, and the relay viewer waited forever
+                //    for a picture nobody had told it was not coming. Re-arming here (rather
+                //    than in MediaRouter.Use) also covers a relay viewer that resyncs, and needs
+                //    no memory of old messages that might no longer be true.
+                if (keyframeRequested) stall.Rearm();
+
+                // 2b. Backing off after failed opens. Still iterating every OpenRetryMinMs so a
+                //     desktop switch or a new monitor choice from the viewer retries at once --
+                //     both are exactly what might make a capture possible again.
+                if (session is null && failedOpens > 0 && !desktopSwitched && wanted == failedWith
+                    && openClock.ElapsedMilliseconds < nextOpenAt)
+                {
+                    ReportStall();
+                    if (!SleepOrBreak(OpenRetryMinMs, ct)) break;
+                    continue;
+                }
 
                 if (session is null || desktopSwitched || settingsChanged || keyframeWanted)
                 {
@@ -137,16 +200,43 @@ public sealed class CaptureEncodePipeline
                     else if (settingsChanged) reason = "settings change";
                     else reason = "keyframe requested";
                     session?.Dispose();
-                    session = CaptureSession.Open(wanted, log);
+                    // Only the first open of a failing streak narrates which capture path it
+                    // tried; the rest would repeat it word for word.
+                    session = CaptureSession.Open(wanted, log, quietCapture: failedOpens > 0,
+                                                  out bool sawNoDisplay);
                     if (session is null)
                     {
                         // No frame at all yet -- normal while a desktop switch is in flight, or on
                         // a headless box with no display. Back off and retry rather than exiting:
                         // the whole point of the virtual-display work is that this can recover.
-                        ReportStallOnce(ref stallReported, sinceLastFrame, onStall,
-                                        binder?.AttachedName);
-                        if (!SleepOrBreak(200, ct)) break;
+                        failedOpens++;
+                        failedWith = wanted;
+                        noDisplay = sawNoDisplay;
+                        nextOpenAt = openClock.ElapsedMilliseconds + OpenBackoffMs(failedOpens);
+                        if (failedOpens == 1 || sinceFailureLog.ElapsedMilliseconds >= OpenFailureLogEveryMs)
+                        {
+                            if (failedOpens > 1)
+                                log($"still no capture after {failedOpens} attempts");
+                            else if (noDisplay)
+                                log($"no capture available ({reason}; neither DXGI nor GDI can " +
+                                    "see a screen in this Windows session); retrying, backing " +
+                                    $"off to every {OpenRetryMaxMs / 1000}s");
+                            else
+                                log($"no capture available ({reason}); retrying, backing off " +
+                                    $"to every {OpenRetryMaxMs / 1000}s");
+                            sinceFailureLog.Restart();
+                        }
+                        ReportStall();
+                        if (!SleepOrBreak(OpenRetryMinMs, ct)) break;
                         continue;
+                    }
+                    if (failedOpens > 0)
+                    {
+                        log($"capture available again after {failedOpens} failed attempt(s)");
+                        failedOpens = 0;
+                        failedWith = null;
+                        noDisplay = false;
+                        sinceFailureLog.Reset();
                     }
                     log($"capture rebuilt ({reason}): {session.Width}x{session.Height} @ " +
                         $"{wanted.Fps}fps, {wanted.BitrateBps / 1000}kbps, {session.EncoderDescription}" +
@@ -156,7 +246,7 @@ public sealed class CaptureEncodePipeline
                         session.Width, session.Height,
                         binder?.AttachedName ?? Desktops.CurrentThreadDesktopName() ?? "",
                         session.EncoderDescription, wanted.Monitor, session.MonitorCount));
-                    stallReported = false;
+                    stall.Clear();
                     sinceLastFrame.Restart();
                 }
 
@@ -190,9 +280,9 @@ public sealed class CaptureEncodePipeline
                     continue;
                 }
 
-                if (fresh) { sinceLastFrame.Restart(); stallReported = false; }
+                if (fresh) { sinceLastFrame.Restart(); stall.Clear(); }
                 else if (blind)
-                    ReportStallOnce(ref stallReported, sinceLastFrame, onStall, binder?.AttachedName);
+                    ReportStall();
 
                 long frameDuration100ns = 10_000_000L / wanted.Fps;
                 var encoded = session.Encode(timestamp, frameDuration100ns);
@@ -245,12 +335,50 @@ public sealed class CaptureEncodePipeline
         return (uint)(Math.Clamp(elapsedMs, 1, MaxFrameGapMs) * 90);
     }
 
-    private static void ReportStallOnce(
-        ref bool reported, Stopwatch since, Action<string>? onStall, string? desktop)
+    /// <summary>How long to wait before the next capture open, after <paramref name="failures"/>
+    /// in a row found nothing: doubling from <see cref="OpenRetryMinMs"/> up to
+    /// <see cref="OpenRetryMaxMs"/>. The first few retries stay quick because a desktop switch
+    /// in flight looks exactly like this and clears within a second; the ceiling is what a
+    /// session with no display at all settles into, and is short enough that a virtual display
+    /// coming up is picked up without the operator noticing the wait.</summary>
+    internal static int OpenBackoffMs(int failures)
     {
-        if (reported || since.ElapsedMilliseconds < StallThresholdMs) return;
-        reported = true;
-        onStall?.Invoke(desktop ?? "");
+        if (failures <= 1) return OpenRetryMinMs;
+        int shift = Math.Min(failures - 1, 16);  // 200 << 16 is already far past the ceiling
+        return (int)Math.Min((long)OpenRetryMinMs << shift, OpenRetryMaxMs);
+    }
+
+    /// <summary>
+    /// Whether the viewer has been told the capture is stalled. One report per stall, not one
+    /// per loop tick -- but "once" is per viewer, not per process lifetime, which is the half
+    /// that was missing.
+    ///
+    /// Two different things put it back to unreported, and they are separate methods so the
+    /// call sites say which: <see cref="Clear"/> when a picture arrives (the stall is over, a
+    /// later one is news), and <see cref="Rearm"/> when a viewer starts over while the stall
+    /// goes on (the hub relay switching on, or its viewer resyncing) -- that viewer was never
+    /// told, and a report already sent to a WebRTC peer that never connected reached nobody.
+    /// </summary>
+    internal sealed class StallLatch
+    {
+        private bool _reported;
+
+        /// <summary>True exactly once per stall (and once more after each
+        /// <see cref="Rearm"/>), once nothing has arrived for the stall threshold.</summary>
+        public bool ShouldReport(long sinceLastFrameMs)
+        {
+            if (_reported || sinceLastFrameMs < StallThresholdMs) return false;
+            _reported = true;
+            return true;
+        }
+
+        /// <summary>A picture arrived: the stall, if any, is over.</summary>
+        public void Clear() => _reported = false;
+
+        /// <summary>A viewer is starting over and has heard nothing yet. If the capture is
+        /// still stalled, the next <see cref="ShouldReport"/> tells it at once -- the
+        /// threshold has long passed.</summary>
+        public void Rearm() => _reported = false;
     }
 
     private static bool SleepOrBreak(int ms, CancellationToken ct)
@@ -306,14 +434,23 @@ public sealed class CaptureEncodePipeline
 
         /// <summary>Open a capture and a matching encoder. Returns null when nothing could be
         /// captured -- the caller retries rather than treating that as fatal, because a desktop
-        /// switch in flight and a machine waiting for its virtual display both look like this.</summary>
-        public static CaptureSession? Open(StreamSettings settings, Action<string> log)
+        /// switch in flight and a machine waiting for its virtual display both look like this.
+        ///
+        /// <paramref name="noDisplay"/> says which kind of nothing: true when Desktop Duplication
+        /// was unavailable AND the GDI fallback could not grab a screen either -- a Windows
+        /// session with no rendered desktop. A duplication that is merely silent is not that.
+        /// <paramref name="quietCapture"/> mutes the which-path-did-we-take lines, for retries
+        /// that would only repeat them.</summary>
+        public static CaptureSession? Open(StreamSettings settings, Action<string> log,
+                                           bool quietCapture, out bool noDisplay)
         {
-            IScreenCapture capture = OpenCapture(settings.Monitor, log);
+            noDisplay = false;
+            IScreenCapture capture = OpenCapture(settings.Monitor, quietCapture ? _ => { } : log);
             try
             {
                 if (!WaitForFirstFrame(capture, out int srcW, out int srcH))
                 {
+                    noDisplay = capture is GdiScreenCapture;
                     capture.Dispose();
                     return null;
                 }
