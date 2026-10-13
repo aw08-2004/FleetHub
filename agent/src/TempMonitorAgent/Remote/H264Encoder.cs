@@ -39,6 +39,19 @@ namespace TempMonitorAgent.Remote;
 /// itself is started once per process by <see cref="MediaFoundationRuntime"/>, not here:
 /// MFShutdown is refcounted and would otherwise tear MF down under a replacement encoder.
 ///
+/// <b>Every Media Foundation wrapper created per frame is disposed deterministically.</b> The
+/// SharpGen runtime under Vortice ships with Configuration.EnableReleaseOnFinalizer = false,
+/// so a wrapper that is never disposed never calls Release at all -- not late, never. The
+/// original encoder built a fresh input sample + full-frame buffer (about 3 MB at 1080p) and a
+/// fresh output sample + buffer for every ProcessOutput attempt, and disposed none of them,
+/// so every frame of every session was committed for the life of the helper process. A
+/// helper reached about 19 GB of commit before DWM fell over with STATUS_COMMITMENT_LIMIT.
+/// Rejected: GC.AddMemoryPressure, and turning EnableReleaseOnFinalizer on. Both lean on the
+/// finalizer, and this loop allocates almost no managed memory, so the GC has no reason to run
+/// before the native side has exhausted commit -- and the finalizer thread releasing COM
+/// objects the MFT may still be touching is its own class of bug. The output sample is also
+/// reused rather than reallocated: the in-box encoder copies into it and keeps no reference.
+///
 /// Not thread-safe: one encoder per capture loop (the event pump is internal and owns nothing
 /// the capture thread touches except the queue).
 /// </summary>
@@ -96,6 +109,11 @@ public sealed class H264Encoder : IVideoEncoder
     private ID3D11DeviceContext? _d3dContext;
 
     private int _outputBufferSize;
+    /// <summary>The one output sample we hand a sample-less MFT, reused across every
+    /// ProcessOutput call. Allocated on first use and dropped whenever the size it was cut to
+    /// may have changed (<see cref="CacheOutputStreamInfo"/>) or the transform goes away.</summary>
+    private IMFSample? _outputSample;
+    private IMFMediaBuffer? _outputBuffer;
     private volatile bool _started;
     private volatile bool _disposed;
     private bool _isAsync;
@@ -287,8 +305,9 @@ public sealed class H264Encoder : IVideoEncoder
 
     private void ConfigureTypes(int bitrateBps)
     {
-        // Output type MUST be set before the input type on an encoder MFT.
-        var outType = MediaFactory.MFCreateMediaType();
+        // Output type MUST be set before the input type on an encoder MFT. SetOutputType and
+        // SetInputType AddRef what they keep, so our wrappers can go as soon as they are set.
+        using var outType = MediaFactory.MFCreateMediaType();
         outType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
         outType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
         outType.Set(MediaTypeAttributeKeys.AvgBitrate, (uint)bitrateBps);
@@ -301,7 +320,7 @@ public sealed class H264Encoder : IVideoEncoder
         outType.Set(MediaTypeAttributeKeys.MaxKeyframeSpacing, (uint)(_fps * 2));
         _transform!.SetOutputType(0, outType, 0);
 
-        var inType = MediaFactory.MFCreateMediaType();
+        using var inType = MediaFactory.MFCreateMediaType();
         inType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
         inType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.NV12);
         inType.Set(MediaTypeAttributeKeys.FrameSize, PackU64(_width, _height));
@@ -370,6 +389,8 @@ public sealed class H264Encoder : IVideoEncoder
         // software encoder does not, so size a buffer from the reported minimum (with a floor for
         // MFTs that report 0 before the first frame).
         _outputBufferSize = info.Size > 0 ? info.Size : Math.Max(1 << 16, _width * _height);
+        // A renegotiated type can change the size the MFT needs; cut a new sample next time.
+        ReleaseOutputSample();
     }
 
     private void StartStreaming()
@@ -392,13 +413,17 @@ public sealed class H264Encoder : IVideoEncoder
             {
                 if (AwaitNeedInput(output))
                 {
-                    _transform.ProcessInput(0, BuildSample(nv12, nv12Length, timestamp100ns, duration100ns), 0);
+                    // The MFT AddRefs any input it holds on to, so ours goes whether ProcessInput
+                    // succeeds or throws -- see the class remarks for why this cannot wait for GC.
+                    using (var sample = BuildSample(nv12, nv12Length, timestamp100ns, duration100ns))
+                        _transform.ProcessInput(0, sample, 0);
                     DrainAsyncOutput(output);
                 }
             }
             else
             {
-                _transform.ProcessInput(0, BuildSample(nv12, nv12Length, timestamp100ns, duration100ns), 0);
+                using (var sample = BuildSample(nv12, nv12Length, timestamp100ns, duration100ns))
+                    _transform.ProcessInput(0, sample, 0);
                 DrainSyncOutput(output);
             }
         }
@@ -508,18 +533,33 @@ public sealed class H264Encoder : IVideoEncoder
         }
     }
 
+    /// <summary>Wrap one NV12 frame in a fresh input sample. The caller owns and disposes the
+    /// sample; the buffer wrapper is released here, because AddBuffer gives the sample its own
+    /// reference and ours would otherwise be the one that pins ~3 MB per frame forever.
+    ///
+    /// Fresh per frame rather than reused like the output sample: an async MFT may still hold
+    /// the previous input when the next one is due, and writing into a buffer it is reading
+    /// would corrupt the frame rather than fail.</summary>
     private static IMFSample BuildSample(byte[] nv12, int length, long timestamp100ns, long duration100ns)
     {
         var sample = MediaFactory.MFCreateSample();
-        var buffer = MediaFactory.MFCreateMemoryBuffer(length);
-        buffer.Lock(out var dst, out _, out _);
-        Marshal.Copy(nv12, 0, dst, length);
-        buffer.Unlock();
-        buffer.CurrentLength = length;
-        sample.AddBuffer(buffer);
-        sample.SampleTime = timestamp100ns;
-        sample.SampleDuration = duration100ns;
-        return sample;
+        try
+        {
+            using var buffer = MediaFactory.MFCreateMemoryBuffer(length);
+            buffer.Lock(out var dst, out _, out _);
+            try { Marshal.Copy(nv12, 0, dst, length); }
+            finally { buffer.Unlock(); }
+            buffer.CurrentLength = length;
+            sample.AddBuffer(buffer);
+            sample.SampleTime = timestamp100ns;
+            sample.SampleDuration = duration100ns;
+            return sample;
+        }
+        catch
+        {
+            sample.Dispose();
+            throw;
+        }
     }
 
     // ---------------------------------------------------------------- synchronous MFT drain
@@ -527,8 +567,13 @@ public sealed class H264Encoder : IVideoEncoder
     {
         while (true)
         {
-            var data = new OutputDataBuffer { StreamID = 0, Sample = NewOutputSample() };
+            var ours = RentOutputSample();
+            var data = new OutputDataBuffer { StreamID = 0, Sample = ours };
             var hr = _transform!.ProcessOutput(ProcessOutputFlags.None, 1, ref data, out _);
+            // Copy (on success) and release whatever came back before branching, so no exit
+            // below -- NEED_MORE_INPUT ends every single frame -- can skip the release.
+            if (hr.Success) CopySample(data.Sample, sink);
+            ReleaseOutput(ref data, ours);
 
             if (hr.Code == MF_E_TRANSFORM_NEED_MORE_INPUT) return; // wants the next frame
             if (hr.Code == MF_E_TRANSFORM_STREAM_CHANGE)
@@ -545,8 +590,6 @@ public sealed class H264Encoder : IVideoEncoder
                 _log($"H.264 ProcessOutput failed: 0x{hr.Code:X8}");
                 return; // surface nothing rather than throwing mid-stream
             }
-
-            CopySample(data.Sample, sink);
         }
     }
 
@@ -667,20 +710,20 @@ public sealed class H264Encoder : IVideoEncoder
     private void PullOne(Stream sink)
     {
         // A hardware MFT allocates its own output sample; passing one would be rejected.
-        var data = new OutputDataBuffer
-        {
-            StreamID = 0,
-            Sample = _mftProvidesSamples ? null! : NewOutputSample(),
-        };
+        var ours = _mftProvidesSamples ? null : RentOutputSample();
+        var data = new OutputDataBuffer { StreamID = 0, Sample = ours! };
         var hr = _transform!.ProcessOutput(ProcessOutputFlags.None, 1, ref data, out _);
+        // The MFT-provided sample is ours to release, one per HaveOutput -- at 30 fps on NVENC
+        // this is the same per-frame leak as the sync path's, just allocated on the other side.
+        if (hr.Success) CopySample(data.Sample, sink);
+        ReleaseOutput(ref data, ours);
+
         if (hr.Code == MF_E_TRANSFORM_STREAM_CHANGE) { RenegotiateOutputType(); return; }
         if (hr.Failure)
         {
             WarnOnce(ref _warnedPullFailed,
                 $"H.264 ProcessOutput failed: 0x{hr.Code:X8} (further occurrences not logged)");
-            return;
         }
-        CopySample(data.Sample, sink);
     }
 
     private void WarnOnce(ref bool latch, string message)
@@ -690,11 +733,59 @@ public sealed class H264Encoder : IVideoEncoder
         _log(message);
     }
 
-    private IMFSample NewOutputSample()
+    /// <summary>The reusable output sample, emptied for the next ProcessOutput. Reused rather
+    /// than allocated per call because the sync drain asks at least twice a frame -- the last
+    /// ask always answers NEED_MORE_INPUT -- so a per-call sample is a w*h buffer allocated and
+    /// thrown away on every frame for nothing.</summary>
+    private IMFSample RentOutputSample()
     {
-        var sample = MediaFactory.MFCreateSample();
-        sample.AddBuffer(MediaFactory.MFCreateMemoryBuffer(_outputBufferSize));
-        return sample;
+        if (_outputSample is null)
+        {
+            var sample = MediaFactory.MFCreateSample();
+            try
+            {
+                _outputBuffer = MediaFactory.MFCreateMemoryBuffer(_outputBufferSize);
+                sample.AddBuffer(_outputBuffer);
+            }
+            catch
+            {
+                sample.Dispose();
+                _outputBuffer?.Dispose();
+                _outputBuffer = null;
+                throw;
+            }
+            _outputSample = sample;
+        }
+        // The MFT writes at offset 0 but reports what it wrote through CurrentLength; a stale
+        // length from the previous frame would otherwise be read back as this frame's bytes on
+        // any call that returns success without writing.
+        _outputBuffer!.CurrentLength = 0;
+        return _outputSample;
+    }
+
+    /// <summary>Release what ProcessOutput handed back, except our own reusable sample.
+    ///
+    /// <b>Vortice marshals data.Sample back as a NEW wrapper over the same pointer, without an
+    /// AddRef.</b> Disposing that wrapper when the pointer is ours would release the reference
+    /// <see cref="_outputSample"/> owns, and the next frame would write into freed memory. So
+    /// the comparison is by native pointer, never by reference: a sample the MFT supplied (or
+    /// swapped in) is the MFT's reference transferred to us, and that one must go.</summary>
+    private static void ReleaseOutput(ref OutputDataBuffer data, IMFSample? ours)
+    {
+        var sample = data.Sample;
+        if (sample is not null && (ours is null || sample.NativePointer != ours.NativePointer))
+            sample.Dispose();
+        data.Sample = null!;
+        data.Events?.Dispose();
+        data.Events = null!;
+    }
+
+    private void ReleaseOutputSample()
+    {
+        _outputBuffer?.Dispose();
+        _outputBuffer = null;
+        _outputSample?.Dispose();
+        _outputSample = null;
     }
 
     private static void CopySample(IMFSample? sample, Stream sink)
@@ -763,6 +854,7 @@ public sealed class H264Encoder : IVideoEncoder
         _started = false;
         _transform?.Dispose();
         _transform = null;
+        ReleaseOutputSample();
     }
 
     private void ReleaseD3D()
