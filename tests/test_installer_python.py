@@ -83,7 +83,9 @@ FAKES = r"""
 function Py32  { if ($args -contains '-c') { 'C:\Python312-32\python.exe' } else { 'Python 3.12.7' } }
 function Py32Launcher { Py32 @args }
 function Py64  { 'Python 3.12.7' }
-function PyBad { 'Python 3.12.7' }
+# Answers --version but fails every -c probe, the way an AV block or a broken stdlib does, so
+# its dedup key has to fall back to the label.
+function PyBad { if ($args -contains '-c') { [Console]::Error.WriteLine('blocked'); return } 'Python 3.12.7' }
 function StoreAlias { '' }
 $Bits = @{ Py32 = 32; Py32Launcher = 32; Py64 = 64; PyBad = $null; StoreAlias = $null }
 function Get-PythonBits($Exe, $PyArgs) { $Bits[$Exe] }
@@ -150,6 +152,14 @@ Ensure-Python
           "Skipping Python 3.12.7 at PyBad" in out and "DIE:" in out)
     check(f"{tag}: ...and is NOT reported as 32-bit",
           "32-bit" not in out.replace("a 32-bit hub", "") and "confirmed 64-bit" in out)
+
+    out = run(shell, work, r"""
+function Get-PythonCandidates { Cands 'PyBad','PyBad' }
+$r = Resolve-Python
+"UNVERIFIED: $($script:SkippedPythonUnverified -join ',')"
+""")
+    check(f"{tag}: ...keyed on its label when it won't report its own path, and warned once",
+          "UNVERIFIED: PyBad\n" in out.replace("\r", "") and out.count("WARN: Skipping") == 1)
 
     out = run(shell, work, r"""
 function Get-PythonCandidates { Cands 'StoreAlias' }
