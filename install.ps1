@@ -456,10 +456,13 @@ function Get-PythonBits([string]$Exe, $PyArgs) {
     return $null
 }
 
-# Set by Resolve-Python to every 32-bit interpreter it turned down, so Ensure-Python can tell
-# "no Python" from "only the wrong Python" -- the fix for the second is not what the operator
-# would guess from "Python not detected".
+# Set by Resolve-Python to every interpreter it turned down, so Ensure-Python can tell "no
+# Python" from "only the wrong Python" -- the fix for the second is not what the operator would
+# guess from "Python not detected". Kept as two lists because "32-bit" and "would not run the
+# probe" (a broken install, an AV block) have different fixes, and reporting the second as the
+# first sends the operator after the wrong cause.
 $script:SkippedPython32 = @()
+$script:SkippedPythonUnverified = @()
 
 function Get-PythonCandidates {
     # Every interpreter worth asking, in preference order, as @{ Exe; Args; Label }.
@@ -497,15 +500,19 @@ function Test-PythonCandidate($Cand) {
     if ($v -notmatch "Python 3") { return $null }
     $bits = Get-PythonBits $Cand.Exe $Cand.Args
     if ($bits -eq 64) { return @{ Exe = $Cand.Exe; Args = $Cand.Args; Version = $v } }
-    if ($script:SkippedPython32 -contains $Cand.Label) { return $null }
+    if (($script:SkippedPython32 + $script:SkippedPythonUnverified) -contains $Cand.Label) { return $null }
 
-    $why = if ($bits) { "it is $bits-bit" } else { "its bitness could not be determined" }
     # The why only once: py -3-64, py -3 and the folder scan often all land on the same
     # interpreter, and four copies of the same paragraph bury the one line that matters.
-    $tail = if ($script:SkippedPython32.Count) { "" } else {
+    $tail = if (($script:SkippedPython32 + $script:SkippedPythonUnverified).Count) { "" } else {
         " The hub needs 64-bit Python: a 32-bit hub runs out of address space and throws MemoryError on the remote relay and /api/report." }
-    Warn "Skipping $v at $($Cand.Label) -- $why.$tail"
-    $script:SkippedPython32 += $Cand.Label
+    if ($bits -eq 32) {
+        Warn "Skipping $v at $($Cand.Label) -- it is 32-bit.$tail"
+        $script:SkippedPython32 += $Cand.Label
+    } else {
+        Warn "Skipping $v at $($Cand.Label) -- it would not run a one-line bitness probe, so it can't be confirmed 64-bit.$tail"
+        $script:SkippedPythonUnverified += $Cand.Label
+    }
     return $null
 }
 
@@ -528,6 +535,7 @@ function Resolve-Python {
       falling through to Install-Python (which installs the amd64 build) costs a minute now.
     #>
     $script:SkippedPython32 = @()
+    $script:SkippedPythonUnverified = @()
     foreach ($cand in @(Get-PythonCandidates)) {
         try {
             $r = Test-PythonCandidate $cand
@@ -623,6 +631,8 @@ function Ensure-Python {
 
     if ($script:SkippedPython32.Count) {
         Warn "Only 32-bit Python found. The hub needs the 64-bit build; it installs side by side with the 32-bit one."
+    } elseif ($script:SkippedPythonUnverified.Count) {
+        Warn "Found Python, but none that could be confirmed 64-bit (see above -- a broken install or an antivirus block can cause this). A fresh 64-bit install sidesteps it."
     } else {
         Warn "Python not detected."
     }
