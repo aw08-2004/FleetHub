@@ -215,12 +215,15 @@ public sealed class CaptureEncodePipeline
                         nextOpenAt = openClock.ElapsedMilliseconds + OpenBackoffMs(failedOpens);
                         if (failedOpens == 1 || sinceFailureLog.ElapsedMilliseconds >= OpenFailureLogEveryMs)
                         {
-                            log(failedOpens == 1
-                                ? $"no capture available ({reason}" +
-                                  (noDisplay ? "; neither DXGI nor GDI can see a screen in this " +
-                                               "Windows session" : "") +
-                                  $"); retrying, backing off to every {OpenRetryMaxMs / 1000}s"
-                                : $"still no capture after {failedOpens} attempts");
+                            if (failedOpens > 1)
+                                log($"still no capture after {failedOpens} attempts");
+                            else if (noDisplay)
+                                log($"no capture available ({reason}; neither DXGI nor GDI can " +
+                                    "see a screen in this Windows session); retrying, backing " +
+                                    $"off to every {OpenRetryMaxMs / 1000}s");
+                            else
+                                log($"no capture available ({reason}); retrying, backing off " +
+                                    $"to every {OpenRetryMaxMs / 1000}s");
                             sinceFailureLog.Restart();
                         }
                         ReportStall();
