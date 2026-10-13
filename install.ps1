@@ -449,7 +449,10 @@ function Get-PythonBits([string]$Exe, $PyArgs) {
     try {
         $bits = & $Exe @pre -c "import struct; print(struct.calcsize('P')*8)" 2>$null
         if ("$bits".Trim() -match '^(32|64)$') { return [int]$matches[1] }
-    } catch { }
+    } catch {
+        # Unrunnable is an answer, not an error: the caller treats $null as "not usable".
+        Write-Verbose "Could not run $Exe to read its bitness: $($_.Exception.Message)"
+    }
     return $null
 }
 
@@ -457,6 +460,54 @@ function Get-PythonBits([string]$Exe, $PyArgs) {
 # "no Python" from "only the wrong Python" -- the fix for the second is not what the operator
 # would guess from "Python not detected".
 $script:SkippedPython32 = @()
+
+function Get-PythonCandidates {
+    # Every interpreter worth asking, in preference order, as @{ Exe; Args; Label }.
+    # PATH first: the py launcher knows about every installed version, so ask it before
+    # python.exe. "-3-64" names a 64-bit 3.x outright; plain "-3" is kept as a fallback for
+    # launchers too old to understand the suffix.
+    foreach ($cmd in @("py -3-64", "py -3", "python")) {
+        $exe, $rest = $cmd -split " ", 2
+        $found = Get-Command $exe -ErrorAction SilentlyContinue
+        if ($found) {
+            @{ Exe = $found.Source; Args = $rest; Label = (@($found.Source, $rest) | Where-Object { $_ }) -join " " }
+        }
+    }
+    # Then where the installers actually put it: a machine-wide install done seconds ago can
+    # still be missing from PATH if the registry broadcast hasn't landed, and giving up there
+    # would send the operator away for a reboot they don't need.
+    # Program Files (x86) is deliberately not searched: only 32-bit builds install there, and
+    # the bitness check would refuse every one of them anyway.
+    # Every match, not just the newest: Python312-32 sorts above Python312 by name, and
+    # stopping at the first would let a 32-bit side-by-side install hide the 64-bit one.
+    $globs = @("$env:ProgramFiles\Python3*\python.exe",
+               "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
+               "$env:SystemDrive\Python3*\python.exe")
+    Get-ChildItem $globs -ErrorAction SilentlyContinue | Sort-Object FullName -Descending |
+        ForEach-Object { @{ Exe = $_.FullName; Args = $null; Label = $_.FullName } }
+}
+
+function Test-PythonCandidate($Cand) {
+    # The resolved interpreter if $Cand is a runnable 64-bit Python 3, else $null -- warning
+    # once per 32-bit candidate it turns down.
+    $pre = @($Cand.Args | Where-Object { $_ })
+    # Requiring a "Python 3" banner also rejects the Microsoft Store app-execution alias,
+    # which sits on PATH as python.exe but only opens the Store when run.
+    $v = "$(& $Cand.Exe @pre --version 2>&1)".Trim()
+    if ($v -notmatch "Python 3") { return $null }
+    $bits = Get-PythonBits $Cand.Exe $Cand.Args
+    if ($bits -eq 64) { return @{ Exe = $Cand.Exe; Args = $Cand.Args; Version = $v } }
+    if ($script:SkippedPython32 -contains $Cand.Label) { return $null }
+
+    $why = if ($bits) { "it is $bits-bit" } else { "its bitness could not be determined" }
+    # The why only once: py -3-64, py -3 and the folder scan often all land on the same
+    # interpreter, and four copies of the same paragraph bury the one line that matters.
+    $tail = if ($script:SkippedPython32.Count) { "" } else {
+        " The hub needs 64-bit Python: a 32-bit hub runs out of address space and throws MemoryError on the remote relay and /api/report." }
+    Warn "Skipping $v at $($Cand.Label) -- $why.$tail"
+    $script:SkippedPython32 += $Cand.Label
+    return $null
+}
 
 function Resolve-Python {
     <#
@@ -477,57 +528,12 @@ function Resolve-Python {
       falling through to Install-Python (which installs the amd64 build) costs a minute now.
     #>
     $script:SkippedPython32 = @()
-    $seen = @{}
-    $accept = {
-        param([string]$Exe, $PyArgs, [string]$Label)
-        $pre = @($PyArgs | Where-Object { $_ })
-        # Requiring a "Python 3" banner also rejects the Microsoft Store app-execution alias,
-        # which sits on PATH as python.exe but only opens the Store when run.
-        $v = & $Exe @pre --version 2>&1
-        if ("$v" -notmatch "Python 3") { return $null }
-        $bits = Get-PythonBits $Exe $PyArgs
-        if ($bits -eq 64) { return @{ Exe = $Exe; Args = $PyArgs; Version = "$v".Trim() } }
-        if (-not $seen.ContainsKey($Label)) {
-            $seen[$Label] = $true
-            $why = if ($bits) { "it is $bits-bit" } else { "its bitness could not be determined" }
-            # The why only once: py -3-64, py -3 and the folder scan often all land on the same
-            # interpreter, and four copies of the same paragraph bury the one line that matters.
-            $tail = if ($script:SkippedPython32.Count) { "" } else {
-                " The hub needs 64-bit Python: a 32-bit hub runs out of address space and throws MemoryError on the remote relay and /api/report." }
-            Warn "Skipping $("$v".Trim()) at $Label -- $why.$tail"
-            $script:SkippedPython32 += $Label
-        }
-        return $null
-    }
-
-    # PATH first: the py launcher knows about every installed version, so ask it before
-    # python.exe. "-3-64" names a 64-bit 3.x outright; plain "-3" is kept as a fallback for
-    # launchers too old to understand the suffix.
-    foreach ($cmd in @("py -3-64", "py -3", "python")) {
-        $exe, $rest = $cmd -split " ", 2
-        $found = Get-Command $exe -ErrorAction SilentlyContinue
-        if (-not $found) { continue }
+    foreach ($cand in @(Get-PythonCandidates)) {
         try {
-            $label = if ($rest) { "$($found.Source) $rest" } else { $found.Source }
-            $r = & $accept $found.Source $rest $label
+            $r = Test-PythonCandidate $cand
             if ($r) { return $r }
-        } catch { }
-    }
-    # Nothing usable on PATH. Look where the installers actually put it: a machine-wide install
-    # done seconds ago can still be missing from PATH if the registry broadcast hasn't landed,
-    # and giving up there would send the operator away for a reboot they don't need.
-    # Program Files (x86) is deliberately not searched: only 32-bit builds install there, and
-    # the bitness check would refuse every one of them anyway.
-    foreach ($glob in @("$env:ProgramFiles\Python3*\python.exe",
-                        "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
-                        "$env:SystemDrive\Python3*\python.exe")) {
-        # Every match, not just the newest: Python312-32 sorts above Python312 by name, and
-        # stopping at the first would let a 32-bit side-by-side install hide the 64-bit one.
-        foreach ($cand in (Get-ChildItem $glob -ErrorAction SilentlyContinue | Sort-Object FullName -Descending)) {
-            try {
-                $r = & $accept $cand.FullName $null $cand.FullName
-                if ($r) { return $r }
-            } catch { }
+        } catch {
+            Write-Verbose "Skipping $($cand.Label): $($_.Exception.Message)"
         }
     }
     return $null
