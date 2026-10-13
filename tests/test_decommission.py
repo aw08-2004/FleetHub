@@ -184,15 +184,33 @@ def test_report_in_flight_cannot_bring_the_machine_back():
 
 
 def test_delete_drops_readings_still_queued():
-    print("\n-- a reading still queued for db_writer when the delete lands is dropped --")
-    before = (next(app._reading_seq), "queued-pc", ("before",))
-    elsewhere = (next(app._reading_seq), "other-pc", ("elsewhere",))
-    app.drop_queued_readings("QUEUED-PC")
-    after = (next(app._reading_seq), "queued-pc", ("after",))
-    kept = app._without_dropped_readings([before, elsewhere, after])
-    check("the reading queued before the delete is not written", ("before",) not in kept)
-    check("...another machine's is", ("elsewhere",) in kept)
-    check("...and so is one queued after (a re-enrolled agent)", ("after",) in kept)
+    print("\n-- a reading still queued for db_writer when the delete lands is never written --")
+    import queue
+    from unittest import mock
+    enrolled("QUEUED-PC")
+
+    def readings_for(name):
+        with app.get_db_conn() as conn:
+            return conn.execute("SELECT COUNT(*) FROM readings WHERE machine = ?",
+                                (name,)).fetchone()[0]
+
+    # A private queue, so the running db_writer thread cannot flush these first: the test
+    # plays db_writer itself, through the same write_queued_readings it calls.
+    with mock.patch.object(app, "db_write_queue", queue.Queue()):
+        app.enqueue_reading("2026-10-13 12:00:00", 1791892800, "QUEUED-PC", 41.0)
+        app.enqueue_reading("2026-10-13 12:00:00", 1791892800, "OTHER-PC", 42.0)
+        held = [app.db_write_queue.get_nowait() for _ in range(2)]
+        r = client.delete("/api/machines/QUEUED-PC?uninstall=1", headers=HEADERS)
+        app.enqueue_reading("2026-10-13 12:00:05", 1791892805, "QUEUED-PC", 43.0)
+        held.append(app.db_write_queue.get_nowait())
+        app.write_queued_readings(held)
+    check("the delete succeeds", r.status_code == 200)
+    with app.get_db_conn() as conn:
+        temps = [row[0] for row in conn.execute(
+            "SELECT temp FROM readings WHERE machine = 'QUEUED-PC'")]
+    check("the reading queued before the delete is not written", 41.0 not in temps)
+    check("...one queued after it is (a re-enrolled agent)", temps == [43.0])
+    check("...and another machine's reading is unaffected", readings_for("OTHER-PC") == 1)
 
 
 def test_prune_keeps_a_row_while_it_has_a_job():

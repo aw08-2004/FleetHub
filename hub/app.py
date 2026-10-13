@@ -3314,6 +3314,22 @@ def drop_queued_readings(machine):
         _readings_dropped_before[key] = (mark, now)
 
 
+def write_queued_readings(batch):
+    """Write a db_writer batch, minus whatever a delete has dropped since it was queued.
+
+    **The filter runs inside the write transaction, not before it.** Filtered first, a batch
+    db_writer was already holding could wait on the write lock behind the delete's DELETE FROM
+    readings and then commit the reading the delete had just dropped -- found in review on PR
+    #128. Under BEGIN IMMEDIATE the two cannot interleave: either this transaction commits
+    before the DELETE runs, which then removes its rows, or it starts after the mark and drops
+    them."""
+    with get_db_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        records = _without_dropped_readings(batch)
+        if records:
+            conn.executemany(_READINGS_INSERT_SQL, records)
+
+
 def _without_dropped_readings(batch):
     """The records of a db_writer batch that no delete has dropped since they were queued."""
     with _readings_dropped_lock:
@@ -3340,7 +3356,7 @@ def db_writer():
                 break
 
         try:
-            write_readings_batch(_without_dropped_readings(batch))
+            write_queued_readings(batch)
         except Exception as e:
             print(f"Error writing readings batch to SQLite: {e}")
 
