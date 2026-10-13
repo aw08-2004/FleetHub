@@ -9,7 +9,11 @@
 
     <!-- Windows Service host -->
     <OutputType>Exe</OutputType>
-    <AssemblyName>TempMonitorAgent</AssemblyName>
+    <!-- FleetHubAgent.exe since 2026-10-13. Only the file name moved: the namespaces, this
+         project and its folder keep TempMonitorAgent. A PC keeps the exe it was installed
+         with until agent-install.ps1 runs on it again, because self-update writes the new
+         build over whatever path is running. See ROADMAP.MD, "Agent exe renamed". -->
+    <AssemblyName>FleetHubAgent</AssemblyName>
 
     <!-- WinForms is here for exactly one screen: the attended-consent prompt the remote helper
          shows on the end user's desktop (Remote/ConsentDialog.cs). The service itself stays

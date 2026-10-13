@@ -210,12 +210,12 @@ def battery(shell, work):
     site = os.path.join(work, "site")
     os.makedirs(site, exist_ok=True)
     binary = b"MZ" + os.urandom(4096)
-    with open(os.path.join(site, "TempMonitorAgent.exe"), "wb") as fh:
+    with open(os.path.join(site, "FleetHubAgent.exe"), "wb") as fh:
         fh.write(binary)
     server, base = serve(site)
 
     def publish(name, sha, signer=key):
-        body = ('{"sha256":"%s","url":"%s/TempMonitorAgent.exe","version":"3.99.0"}'
+        body = ('{"sha256":"%s","url":"%s/FleetHubAgent.exe","version":"3.99.0"}'
                 % (sha, base)).encode()
         with open(os.path.join(site, name), "wb") as fh:
             fh.write(body)

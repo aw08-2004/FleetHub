@@ -16,6 +16,11 @@ installer's migration has to happen in the one order that can fail safely:
   * the watchdog guard refuses both names on the hub and on the agent;
   * onboard.ps1 restarts whichever service exists, not a hardcoded one.
 
+The exe followed on 2026-10-13 (TempMonitorAgent.exe -> FleetHubAgent.exe) under the same
+rule, and the same file catches its silent failure: an install that deletes the old exe before
+the service points at the new one, so a failed registration falls back to a service with no
+binary -- or a kill-protection list that knows only one of the two names a PC can be running.
+
 Static checks over the scripts, plus a parse of each under every PowerShell found. Running the
 migration needs a real Windows PC and the SCM -- that is owed locally (ROADMAP.MD).
 """
@@ -114,6 +119,50 @@ def test_agent_and_hub():
           lookup > onboard.find("-File $installer"))
 
 
+def test_exe_rename():
+    print("\n== the exe followed: TempMonitorAgent.exe -> FleetHubAgent.exe (2026-10-13) ==")
+    csproj = read("agent", "src", "TempMonitorAgent", "TempMonitorAgent.csproj")
+    check("the build produces FleetHubAgent.exe",
+          "<AssemblyName>FleetHubAgent</AssemblyName>" in csproj)
+    check("...and the csproj comment carries no '--', which MSBuild refuses to load",
+          "--" not in "".join(part.split("-->")[0] for part in csproj.split("<!--")[1:]))
+
+    script = read("agent", "install", "agent-install.ps1")
+    check("the installer installs FleetHubAgent.exe", '$ExeName        = "FleetHubAgent.exe"' in script)
+    register = script.find('Step "Registering Windows Service"')
+    removal = script.find("Remove-Item $LegacyExePath")
+    check("the old exe is removed only after the service is registered against the new one",
+          register != -1 and removal > register
+          and removal > script.find("sc.exe delete $LegacyServiceName"))
+    check("...after stopping any helper still running from it",
+          -1 < script.find("$_.Path -eq $LegacyExePath") < removal)
+    check("...and a leftover is a warning, never a failed install",
+          "Die" not in section(script, "if ((Test-Path $LegacyExePath)", "\n}\n"))
+    check("the uninstall still removes the whole install directory, both names with it",
+          "Remove-Item $InstallDir -Recurse" in section(script, "if ($Uninstall) {", "\n    exit\n"))
+
+    release = read("agent", "release.ps1")
+    check("release.ps1 publishes and signs FleetHubAgent.exe",
+          'Join-Path $DistDir "FleetHubAgent.exe"' in release
+          and '/$Tag/FleetHubAgent.exe"' in release)
+    check("install.ps1 offers a local build under the new name",
+          "agent\\dist\\FleetHubAgent.exe" in read("install.ps1"))
+
+    # Self-update must keep writing over the RUNNING path, not over a path built from the
+    # new name: that is what makes an un-reinstalled PC safe to leave as it is.
+    updater = read("agent", "src", "TempMonitorAgent", "Update", "SelfUpdater.cs")
+    check("self-update swaps onto Environment.ProcessPath, whatever the exe is called",
+          "var currentPath = Environment.ProcessPath;" in updater
+          and "File.Move(stagedPath, currentPath)" in updater)
+
+    import processes
+    for name in ("FleetHubAgent.exe", "TempMonitorAgent.exe"):
+        check(f"the hub will not offer to end {name}", processes.is_protected(name))
+    guard = read("agent", "src", "TempMonitorAgent", "Fleet", "Executors", "ProcessExecutors.cs")
+    check("...and nor will the agent, under either name",
+          '"fleethubagent"' in guard and '"tempmonitoragent"' in guard)
+
+
 def shells():
     return [s for s in ("powershell", "pwsh") if shutil.which(s)]
 
@@ -140,6 +189,7 @@ def test_parse():
 def main():
     test_installer()
     test_agent_and_hub()
+    test_exe_rename()
     test_parse()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 0 if FAIL == 0 else 1

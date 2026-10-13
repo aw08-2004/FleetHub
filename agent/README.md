@@ -141,7 +141,7 @@ agent/release.ps1 -Version 3.0.1 -Push           # do it, push without prompting
    — keep them in sync. Which digit moves is [VERSIONING.md](../VERSIONING.md); the short
    version is that anything the hub can gate on takes a minor.
 2. `dotnet publish … -o agent/dist` (single-file exe).
-3. `python sign_release.py --sign-agent --file agent/dist/TempMonitorAgent.exe \
+3. `python sign_release.py --sign-agent --file agent/dist/FleetHubAgent.exe \
       --agent-version <v> --agent-url <release-asset-url>` → writes and signs
    `agent/agent.manifest.json` (+ `.sig`). The `--agent-url` must exactly match where
    you upload the exe in the next step — it's baked into the signed manifest.
@@ -155,7 +155,7 @@ agent/release.ps1 -Version 3.0.1 -Push           # do it, push without prompting
 ## Install (elevated PowerShell)
 ```powershell
 agent/install/agent-install.ps1 -EnrollmentSecret <secret> -HubUrl https://your.hub.url
-agent/install/agent-install.ps1 -AgentExe .\dist\TempMonitorAgent.exe -EnrollmentSecret <secret>
+agent/install/agent-install.ps1 -AgentExe .\dist\FleetHubAgent.exe -EnrollmentSecret <secret>
 agent/install/agent-install.ps1 -AgentUrl <release-url> -EnrollmentSecret <secret> `
     -HubUrl https://your.hub.url
 agent/install/agent-install.ps1 -Uninstall
@@ -172,8 +172,12 @@ so a refused download leaves the old agent running.
 until the installer runs on it again, which migrates it (new service first, old one deleted
 only after that worked); `-Uninstall` removes either. Self-update never re-registers the
 service, and does not need to: the SCM ignores the name an own-process service reports, so
-the same binary runs under both. The exe keeps the name `TempMonitorAgent.exe`. Why the
-fleet is allowed to stay mixed: ROADMAP.MD, *Agent service renamed to `FleetHubAgent`*.
+the same binary runs under both. The exe is **`FleetHubAgent.exe`** since 2026-10-13, under
+the same rule: the installer renames an existing `TempMonitorAgent.exe` (and removes the old
+file only once the service points at the new one), while self-update writes each new build
+over whichever path is running, so a PC nobody re-installs keeps the old name. Why the fleet
+is allowed to stay mixed: ROADMAP.MD, *Agent service renamed to `FleetHubAgent`* and *Agent
+exe renamed to `FleetHubAgent.exe`*.
 
 Logs: `%ProgramData%\FleetHub\Agent\companion.log` — kept under that name for the same
 reason as the `companion_version` wire field: it is what's already on disk across the

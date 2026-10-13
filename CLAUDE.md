@@ -60,7 +60,10 @@ Each of these looks like leftover mess and is load-bearing.
   cancelled. Do not rename them. **One exception:** the Windows agent's *service* is
   `FleetHubAgent` since 2026-10-12, and `TempMonitorAgent` survives only as the legacy service
   name on un-migrated PCs -- so anything naming the service must accept both (ROADMAP.MD,
-  *Agent service renamed to `FleetHubAgent`*). The exe and namespaces keep the old name.
+  *Agent service renamed to `FleetHubAgent`*). **The exe followed on 2026-10-13:** a fresh
+  install is `FleetHubAgent.exe`, and `TempMonitorAgent.exe` survives on PCs nobody has
+  re-installed, so anything naming the *process* must accept both (ROADMAP.MD, *Agent exe
+  renamed to `FleetHubAgent.exe`*). Namespaces, the csproj and its folder keep the old name.
 - **Never remove the `-text` pins in `.gitattributes`**, and never let a tool rewrite line
   endings on the signed manifests or their `.sig` files. A signature covers exact bytes, so a
   rewritten file is indistinguishable from a tampered one and the fleet rejects every update

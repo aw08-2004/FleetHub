@@ -5,7 +5,9 @@
     Installs the fleet agent as a Windows Service running under LocalSystem:
       - PawnIO kernel driver (needed by the in-process LibreHardwareMonitorLib for
         sensor access; skipped if already present)
-      - The self-contained agent exe -> C:\Program Files\FleetHub\Agent
+      - The self-contained agent exe -> C:\Program Files\FleetHub\Agent\FleetHubAgent.exe
+        (TempMonitorAgent.exe before 2026-10-13; an existing one is removed once the service
+        points at the new name)
       - A Windows Service "FleetHubAgent" (Automatic), with SCM failure-recovery
         set to restart -- this is what the agent's self-update relies on when it
         exits with code 17 to swap onto a new binary. A machine still registered under
@@ -22,7 +24,7 @@
 
     Usage (elevated PowerShell):
         powershell -ExecutionPolicy Bypass -File agent-install.ps1 -EnrollmentSecret <secret>
-        powershell -ExecutionPolicy Bypass -File agent-install.ps1 -AgentExe .\TempMonitorAgent.exe -EnrollmentSecret <secret>
+        powershell -ExecutionPolicy Bypass -File agent-install.ps1 -AgentExe .\FleetHubAgent.exe -EnrollmentSecret <secret>
         powershell -ExecutionPolicy Bypass -File agent-install.ps1 `
             -AgentUrl <release-asset-url> -EnrollmentSecret <secret>      # NOT verified
         powershell -ExecutionPolicy Bypass -File agent-install.ps1 -Uninstall
@@ -56,8 +58,15 @@ $ErrorActionPreference = "Stop"
 # service renamed to FleetHubAgent".
 $ServiceName       = "FleetHubAgent"
 $LegacyServiceName = "TempMonitorAgent"
-$ExeName        = "TempMonitorAgent.exe"
+# The exe followed on 2026-10-13. Same rule as the service: an existing install is renamed
+# when this installer runs on it, never by self-update, which writes each new build over the
+# path that is already running -- so a PC nobody re-installs keeps TempMonitorAgent.exe, and
+# that is fine, because nothing finds the agent by its file name. The service's binPath is
+# the record of which one a PC runs.
+$ExeName        = "FleetHubAgent.exe"
 $ExePath        = Join-Path $InstallDir $ExeName
+$LegacyExeName  = "TempMonitorAgent.exe"
+$LegacyExePath  = Join-Path $InstallDir $LegacyExeName
 $RegPath        = "HKLM:\SOFTWARE\FleetHub\Agent"
 $LegacyRegPath  = "HKLM:\SOFTWARE\TempMonitorAgent"
 $LegacyInstall  = "C:\Program Files\TempMonitorAgent"
@@ -499,7 +508,7 @@ Stop-AgentService $LegacyServiceName
 # %ProgramData% state and the enrollment secret are handled by the agent itself.
 if ($InstallDir -ne $LegacyInstall -and (Test-Path $LegacyInstall)) {
     Say "Migrating existing install from $LegacyInstall"
-    foreach ($stale in @("$ExeName.old")) {
+    foreach ($stale in @("$ExeName.old", "$LegacyExeName.old")) {
         Remove-Item (Join-Path $LegacyInstall $stale) -Force -ErrorAction SilentlyContinue
     }
     Get-ChildItem -File $LegacyInstall -ErrorAction SilentlyContinue | ForEach-Object {
@@ -601,6 +610,21 @@ try {
 if ($legacy) {
     & sc.exe delete $LegacyServiceName | Out-Null
     Ok "Migrated service $LegacyServiceName -> $ServiceName"
+}
+
+# **The old exe goes only now**, with the service registered against the new one: removed any
+# earlier, a failure above would fall back to a service with no binary behind it. The
+# per-session helpers (remote control, recording badge, user messages) are started from the
+# service's own path, so one started before this install can still be running from the old
+# exe and holding it open; those are stopped first -- the service starts fresh ones from the
+# new exe when they are next needed. A delete that still fails is a warning, not a failure:
+# the leftover is never run again, and the next install removes it.
+if ((Test-Path $LegacyExePath) -and $LegacyExePath -ne $ExePath) {
+    Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $LegacyExePath } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Remove-Item $LegacyExePath, "$LegacyExePath.old" -Force -ErrorAction SilentlyContinue
+    if (Test-Path $LegacyExePath) { Warn "Could not remove $LegacyExePath; it is no longer used." }
+    else { Ok "Removed $LegacyExeName (renamed to $ExeName)" }
 }
 
 # ----------------------------------------------------------------------

@@ -139,10 +139,13 @@ public sealed class SelfUpdater
 
             _log.LogInformation("[update] {Cur} -> {New}", AgentConfig.Version, manifest.Version);
 
-            // 6. Download to staging + verify hash against the SIGNED sha256.
+            // 6. Download to staging + verify hash against the SIGNED sha256. The staged name
+            // is only a name; step 7 moves the file onto whatever path this process runs from,
+            // so a PC installed as TempMonitorAgent.exe stays TempMonitorAgent.exe -- the
+            // installer, not the updater, renames the exe (ROADMAP.MD, "Agent exe renamed").
             Directory.CreateDirectory(AgentConfig.UpdateStagingDir);
             var stagedPath = Path.Combine(AgentConfig.UpdateStagingDir,
-                $"TempMonitorAgent-{manifest.Version}.exe");
+                $"FleetHubAgent-{manifest.Version}.exe");
             var exeBytes = await _http.GetByteArrayAsync(manifest.Url, ct);
             var actualSha = Convert.ToHexString(SHA256.HashData(exeBytes)).ToLowerInvariant();
             if (!string.Equals(actualSha, manifest.Sha256.Trim().ToLowerInvariant(), StringComparison.Ordinal))

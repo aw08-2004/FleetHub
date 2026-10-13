@@ -402,6 +402,51 @@ stops. Uninstall removes both names. The watchdog guard (hub `PROTECTED_SERVICES
 
 ---
 
+## 🚧 Agent exe renamed to `FleetHubAgent.exe`   ·   hub 1.148.0 + agent (next release)
+
+The service rename left the binary as `TempMonitorAgent.exe`, and a PC re-installed through
+onboarding on 2026-10-13 still showed that name; the owner asked for the exe to follow. **Only
+the file name moved:** `<AssemblyName>` is `FleetHubAgent`, while the namespaces, the csproj and
+its folder keep `TempMonitorAgent` -- nothing outside the build sees them.
+
+**Same rule as the service: the installer renames, self-update does not.** `agent-install.ps1`
+installs `FleetHubAgent.exe`, re-points the service at it, and only then removes an existing
+`TempMonitorAgent.exe` (stopping any per-session helper still running from it first; a file it
+cannot delete is a warning, never a failed install). Self-update was already name-agnostic --
+it writes each new build over `Environment.ProcessPath` -- so a PC nobody re-installs keeps
+`TempMonitorAgent.exe` and runs the new build under it. Nothing finds the agent by file name:
+helpers are started from the service's own path, the self-uninstaller deletes the whole install
+directory, and the service's `binPath` is the record of which name a PC has. **Anything that
+names the agent's process must accept both**, which today is the kill-protection list on the hub
+(`processes.PROTECTED_PROCESSES`) and the agent (`ProcessGuard`).
+
+The installer comes from `main` while the binary comes from the signed release, so this takes
+effect for new installs as soon as it merges, still carrying agent 3.44.0. That build protects
+only `tempmonitoragent` itself; the hub's list is the guard for a `FleetHubAgent.exe` until the
+next release, which is why the hub moves in the same change. No `MIN_*` gate: nothing changed on
+the wire.
+
+*Rejected:*
+- **No registry record of the exe path.** Offered by the owner, and not needed: the service's
+  `binPath` already says which exe a PC runs, and nothing else looks.
+- **Self-update renaming the exe.** It would swap the binary under a new name and re-point the
+  service from inside the running service -- the self-migration rejected for the service rename
+  above, for the same reasons.
+- **Renaming the project and namespaces too.** Hundreds of files of churn for a name only
+  developers read.
+
+**Owed on Windows:**
+- **A fresh install** through onboarding: `C:\Program Files\FleetHub\Agent\FleetHubAgent.exe`,
+  service `FleetHubAgent` pointing at it, and the process listed as `FleetHubAgent` with no End
+  button on the machine's Processes card.
+- **A re-install over a `TempMonitorAgent.exe`** with a remote session open, so a helper is
+  running from the old exe: the old file is gone afterwards (or one warning names it), and the
+  service runs the new one.
+- **Next agent release:** `release.ps1` now publishes `FleetHubAgent.exe`; check the asset name
+  on the release and that a PC still on `TempMonitorAgent.exe` self-updates and keeps that name.
+
+---
+
 ## ✅ 6. History page
 
 Done. Per-machine multi-panel dashboard (Komodo-style): CPU load, memory (with total RAM

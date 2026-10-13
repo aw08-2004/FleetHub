@@ -825,7 +825,7 @@ function Install-Agent {
     if (-not $resolvedExe -and -not $resolvedUrl) {
         $localExeDefault = $null
         if ($PSScriptRoot) {
-            $p = Join-Path $PSScriptRoot "agent\dist\TempMonitorAgent.exe"
+            $p = Join-Path $PSScriptRoot "agent\dist\FleetHubAgent.exe"
             if (Test-Path $p) { $localExeDefault = $p }
         }
 

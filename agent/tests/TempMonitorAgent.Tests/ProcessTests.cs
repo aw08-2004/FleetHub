@@ -44,6 +44,8 @@ public class ProcessTests
     [InlineData("svchost.exe")]
     // Ending the agent loses the machine from the console AND loses this command's own
     // result, so the operator would watch a spinner for work that did happen.
+    [InlineData("FleetHubAgent.exe")]
+    // ...under the pre-2026-10-13 exe name too, which a PC keeps until it is re-installed.
     [InlineData("TempMonitorAgent.exe")]
     public void CriticalProcessesAreRefusedHoweverTheyAreSpelled(string name)
     {

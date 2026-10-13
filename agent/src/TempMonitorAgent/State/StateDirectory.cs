@@ -23,7 +23,7 @@ namespace TempMonitorAgent.State;
 /// full control, so they keep write access to it afterwards.
 ///
 /// That is a local privilege escalation, and the self-updater is the path: it stages the
-/// next agent binary at update\TempMonitorAgent-&lt;version&gt;.exe, where the version comes
+/// next agent binary at update\FleetHubAgent-&lt;version&gt;.exe, where the version comes
 /// from a manifest published on GitHub. A standard user could pre-create that exact path,
 /// retain ownership through the service's write, and overwrite the verified bytes in the
 /// window before the swap -- landing arbitrary code at the service's own exe path, which
