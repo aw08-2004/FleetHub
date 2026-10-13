@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import threading
+import itertools
 import csv
 import socket
 import sqlite3
@@ -160,7 +161,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.147.0"
+HUB_VERSION = "1.147.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3278,6 +3279,64 @@ def write_readings_batch(records):
         conn.executemany(_READINGS_INSERT_SQL, records)
 
 db_write_queue = queue.Queue(maxsize=20000)
+
+# Each queued reading carries a sequence number and its case-folded machine name, so a
+# delete can drop the ones still waiting for db_writer -- see drop_queued_readings.
+_reading_seq = itertools.count(1)
+_readings_dropped_before = {}
+_readings_dropped_lock = threading.Lock()
+#: How long a delete's mark is kept. db_writer flushes every DB_WRITE_FLUSH_SECONDS, so any
+#: reading queued before the delete is long gone by then, even behind a slow DELETE.
+READINGS_DROP_MARK_SECONDS = 300
+
+
+def drop_queued_readings(machine):
+    """Make db_writer discard every reading for `machine` queued before this call.
+
+    **A deleted machine's last reading must not land after its history was deleted.** A
+    report that finished just before the delete leaves its reading on db_write_queue, and
+    db_writer can flush it after delete_machine's DELETE FROM readings -- up to
+    DB_WRITE_FLUSH_SECONDS later, longer behind that DELETE's own write lock. Nothing lists
+    machines from readings, so this is no ghost in Inventory, but a hostname reused by a
+    different PC would inherit the stray row as the first point of its history. Found in
+    review on PR #128.
+
+    A sequence mark, not a time window: readings queued after the delete -- a re-enrolled
+    agent, when the box was not ticked -- are kept whatever their timestamp says. Rejected:
+    waiting for the queue to drain, which on a busy fleet may never happen."""
+    key = str(machine).strip().lower()
+    mark = next(_reading_seq)
+    now = time.monotonic()
+    with _readings_dropped_lock:
+        for stale in [k for k, (_, at) in _readings_dropped_before.items()
+                      if now - at > READINGS_DROP_MARK_SECONDS]:
+            del _readings_dropped_before[stale]
+        _readings_dropped_before[key] = (mark, now)
+
+
+def write_queued_readings(batch):
+    """Write a db_writer batch, minus whatever a delete has dropped since it was queued.
+
+    **The filter runs inside the write transaction, not before it.** Filtered first, a batch
+    db_writer was already holding could wait on the write lock behind the delete's DELETE FROM
+    readings and then commit the reading the delete had just dropped -- found in review on PR
+    #128. Under BEGIN IMMEDIATE the two cannot interleave: either this transaction commits
+    before the DELETE runs, which then removes its rows, or it starts after the mark and drops
+    them."""
+    with get_db_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        records = _without_dropped_readings(batch)
+        if records:
+            conn.executemany(_READINGS_INSERT_SQL, records)
+
+
+def _without_dropped_readings(batch):
+    """The records of a db_writer batch that no delete has dropped since they were queued."""
+    with _readings_dropped_lock:
+        marks = {k: mark for k, (mark, _) in _readings_dropped_before.items()}
+    return [record for seq, key, record in batch
+            if key not in marks or seq > marks[key]]
+
 db_writer_thread = None
 db_writer_lock = threading.Lock()
 
@@ -3297,7 +3356,7 @@ def db_writer():
                 break
 
         try:
-            write_readings_batch(batch)
+            write_queued_readings(batch)
         except Exception as e:
             print(f"Error writing readings batch to SQLite: {e}")
 
@@ -3367,7 +3426,7 @@ def enqueue_reading(timestamp_str, timestamp_epoch, machine, temp, sensors_json=
     record = ((timestamp_str, timestamp_epoch, machine, float(temp), sensors_json)
               + _metric_values_tuple(metrics))
     try:
-        db_write_queue.put_nowait(record)
+        db_write_queue.put_nowait((next(_reading_seq), str(machine).strip().lower(), record))
     except queue.Full:
         print("WARNING: SQLite queue is full; writing synchronously.")
         write_readings_batch([record])
@@ -5201,6 +5260,30 @@ def _note_unsigned_reporter(machine):
                 _unsigned_reporters.pop(name, None)
 
 
+#: Striped, not one lock per name: /api/report takes names from the request body, and a dict
+#: keyed by them would grow with whatever an unsigned caller chose to send. Two names sharing a
+#: stripe only means one waits a few milliseconds for the other.
+_INGEST_GATE_STRIPES = 64
+_ingest_gates = [threading.Lock() for _ in range(_INGEST_GATE_STRIPES)]
+
+
+def _ingest_gate(machine):
+    """The lock /api/report holds from its identity check to its last write for `machine`,
+    and that delete_machine holds while it removes that machine's agents.
+
+    **Without it a deleted machine comes straight back as "Online, not enrolled".** A report
+    authenticates (the agent row still exists), then waits on SQLite while the delete wipes
+    readings and machine_info -- seconds, for a month of readings -- and then writes a fresh
+    machine_info row for a name whose agent is now gone. With "uninstall the agent" ticked the
+    agent then uninstalls itself, and the row it left behind sits in Inventory as an
+    unenrolled machine until somebody deletes it a second time. Holding this across both
+    means a report either finishes before the agents go (and the delete then removes what it
+    wrote) or starts after, and is refused.
+
+    Case-folded, because Windows hostnames are and /api/report accepts either casing."""
+    return _ingest_gates[hash(str(machine).strip().lower()) % _INGEST_GATE_STRIPES]
+
+
 def _machine_has_history(machine):
     """Does the hub hold a record under `machine` (any case)? fleet.authorize_report asks
     before letting an enrolled agent rename itself onto it: a rename may only land on a
@@ -5233,6 +5316,101 @@ def unsigned_reporters():
         rows = [{"machine": m, "last_report": ts}
                 for m, ts in _unsigned_reporters.items() if ts >= cutoff]
     return sorted(rows, key=lambda r: r["machine"].lower())
+
+
+def _report_refusal(outcome, reason, machine):
+    """The response refusing a report fleet.authorize_report did not accept, or None."""
+    if outcome == fleet.REPORT_BAD_TOKEN:
+        return jsonify({"error": "agent authentication required", "reason": reason}), 401
+    if outcome == fleet.REPORT_NAME_TAKEN:
+        return jsonify({"error": "that machine name belongs to another enrolled agent"}), 403
+    if outcome in (fleet.REPORT_UNSIGNED, fleet.REPORT_LATCHED):
+        _note_unsigned_reporter(machine)
+        if outcome == fleet.REPORT_LATCHED:
+            return jsonify({"error": "this machine signs its telemetry; unsigned report refused",
+                            "reason": "unsigned"}), 401
+        if settings.get_bool(DB_PATH, "security.require_enrolled_telemetry"):
+            return jsonify({"error": "only enrolled agents may report telemetry",
+                            "reason": "unsigned"}), 401
+    return None
+
+
+def _report_timestamps(data):
+    """(client_ts, reported_ts): the stamp to file the reading under, and the stamp exactly
+    as the agent sent it."""
+    # Optional client-supplied timestamp (used to backfill readings buffered
+    # while the hub was down). Ignore values that are in the future or older than
+    # our retention window -- those are clock-skew garbage, fall back to now().
+    client_ts = data.get('client_ts')
+    try:
+        client_ts = int(client_ts) if client_ts is not None else None
+    except (TypeError, ValueError):
+        client_ts = None
+    # Kept before the range check below nulls an out-of-range stamp: the disk-usage point
+    # further down must know the report was a stale backfill even when its stamp was discarded.
+    reported_ts = client_ts
+    if client_ts is not None:
+        now_epoch = int(time.time())
+        # Bounded by data.ingest_max_backdate_days, NOT by the retention window. They
+        # default to the same 30 days but are deliberately separate: shortening retention
+        # must not start silently flattening reconnect backfills. This code nulls
+        # client_ts rather than rejecting the report, so an over-tight bound would stamp
+        # a week of buffered readings with a single arrival time.
+        max_backdate = settings.get_int(DB_PATH, "data.ingest_max_backdate_days")
+        if client_ts > now_epoch + 300 or client_ts < now_epoch - max_backdate * 86400:
+            client_ts = None
+    return client_ts, reported_ts
+
+
+def _authorize_and_store_report(machine, data, temp_value):
+    """The identity check and every write /api/report makes, run under _ingest_gate.
+    Returns a refusal response, or None once the report is stored."""
+    # --- identity gate (roadmap #29) ---
+    # Before anything is written. A refused report must leave no trace -- not a reading, not
+    # a machine_info row, not a last_seen bump -- or "refused" would still mean "shown".
+    claimed_id, claimed_token = auth_helpers.bearer_parts()
+    outcome, reason = fleet.authorize_report(DB_PATH, claimed_id, claimed_token, machine,
+                                             name_has_history=_machine_has_history)
+    refused = _report_refusal(outcome, reason, machine)
+    if refused is not None:
+        return refused
+    try:
+        uptime_seconds = int(data['uptime_seconds']) if data.get('uptime_seconds') is not None else None
+    except (TypeError, ValueError):
+        uptime_seconds = None
+    sensors = data.get('sensors')
+    if not isinstance(sensors, list):
+        sensors = None
+    client_ts, reported_ts = _report_timestamps(data)
+    reported_version = data.get('companion_version')
+    save_and_emit_temp(machine, temp_value, uptime_seconds, sensors,
+                       timestamp_epoch=client_ts, companion_version=reported_version)
+    # One daily point per volume for the disk-usage forecast (roadmap #27). Live reports
+    # only: the agent stamps every report with client_ts, and one older than ten minutes is a
+    # reconnect backfill describing a past moment. Filing that under today would put last
+    # week's disk on today's point. Read from the stamp as REPORTED, not from client_ts: a
+    # backfill older than data.ingest_max_backdate_days has had client_ts nulled above, and
+    # testing that would file the oldest backfills of all as live. Found in review. No stamp
+    # at all (an agent too old to send one) still counts as live.
+    if sensors and (reported_ts is None or reported_ts >= int(time.time()) - 600):
+        _record_disk_points(machine, sensors)
+    # Keep an enrolled agent's online/offline status fresh off its ordinary temp
+    # reports too, so it doesn't read offline between dedicated heartbeats.
+    fleet.touch_last_seen(DB_PATH, machine)
+    save_machine_info(
+        machine,
+        data.get('asset_tag'),
+        data.get('serial_number'),
+        data.get('model'),
+        reported_version,
+        service_tag=data.get('service_tag'),
+        manufacturer=data.get('manufacturer'),
+        os_caption=data.get('os_caption'),
+        os_version=data.get('os_version'),
+        os_build=data.get('os_build'),
+        os_arch=data.get('os_arch'),
+    )
+    return None
 
 
 @app.route('/api/report', methods=['POST'])
@@ -5273,80 +5451,14 @@ def report_temp():
     except (TypeError, ValueError):
         return jsonify({"error": "temp must be a number"}), 400
 
-    # --- identity gate (roadmap #29) ---
-    # Before anything is written. A refused report must leave no trace -- not a reading, not
-    # a machine_info row, not a last_seen bump -- or "refused" would still mean "shown".
-    claimed_id, claimed_token = auth_helpers.bearer_parts()
-    outcome, reason = fleet.authorize_report(DB_PATH, claimed_id, claimed_token, machine,
-                                             name_has_history=_machine_has_history)
-    if outcome == fleet.REPORT_BAD_TOKEN:
-        return jsonify({"error": "agent authentication required", "reason": reason}), 401
-    if outcome == fleet.REPORT_NAME_TAKEN:
-        return jsonify({"error": "that machine name belongs to another enrolled agent"}), 403
-    if outcome in (fleet.REPORT_UNSIGNED, fleet.REPORT_LATCHED):
-        _note_unsigned_reporter(machine)
-        if outcome == fleet.REPORT_LATCHED:
-            return jsonify({"error": "this machine signs its telemetry; unsigned report refused",
-                            "reason": "unsigned"}), 401
-        if settings.get_bool(DB_PATH, "security.require_enrolled_telemetry"):
-            return jsonify({"error": "only enrolled agents may report telemetry",
-                            "reason": "unsigned"}), 401
-    try:
-        uptime_seconds = int(data['uptime_seconds']) if data.get('uptime_seconds') is not None else None
-    except (TypeError, ValueError):
-        uptime_seconds = None
-    sensors = data.get('sensors')
-    if not isinstance(sensors, list):
-        sensors = None
-    # Optional client-supplied timestamp (used to backfill readings buffered
-    # while the hub was down). Ignore values that are in the future or older than
-    # our retention window -- those are clock-skew garbage, fall back to now().
-    client_ts = data.get('client_ts')
-    try:
-        client_ts = int(client_ts) if client_ts is not None else None
-    except (TypeError, ValueError):
-        client_ts = None
-    # Kept before the range check below nulls an out-of-range stamp: the disk-usage point
-    # further down must know the report was a stale backfill even when its stamp was discarded.
-    reported_ts = client_ts
-    if client_ts is not None:
-        now_epoch = int(time.time())
-        # Bounded by data.ingest_max_backdate_days, NOT by the retention window. They
-        # default to the same 30 days but are deliberately separate: shortening retention
-        # must not start silently flattening reconnect backfills. This code nulls
-        # client_ts rather than rejecting the report, so an over-tight bound would stamp
-        # a week of buffered readings with a single arrival time.
-        max_backdate = settings.get_int(DB_PATH, "data.ingest_max_backdate_days")
-        if client_ts > now_epoch + 300 or client_ts < now_epoch - max_backdate * 86400:
-            client_ts = None
+    # --- identity gate (roadmap #29), then every write it guards ---
+    # Under the ingest gate, so a delete of this machine cannot land between the two: see
+    # _ingest_gate for the "Online, not enrolled" ghost that left behind.
+    with _ingest_gate(machine):
+        refused = _authorize_and_store_report(machine, data, temp_value)
+    if refused is not None:
+        return refused
     reported_version = data.get('companion_version')
-    save_and_emit_temp(machine, temp_value, uptime_seconds, sensors,
-                       timestamp_epoch=client_ts, companion_version=reported_version)
-    # One daily point per volume for the disk-usage forecast (roadmap #27). Live reports
-    # only: the agent stamps every report with client_ts, and one older than ten minutes is a
-    # reconnect backfill describing a past moment. Filing that under today would put last
-    # week's disk on today's point. Read from the stamp as REPORTED, not from client_ts: a
-    # backfill older than data.ingest_max_backdate_days has had client_ts nulled above, and
-    # testing that would file the oldest backfills of all as live. Found in review. No stamp
-    # at all (an agent too old to send one) still counts as live.
-    if sensors and (reported_ts is None or reported_ts >= int(time.time()) - 600):
-        _record_disk_points(machine, sensors)
-    # Keep an enrolled agent's online/offline status fresh off its ordinary temp
-    # reports too, so it doesn't read offline between dedicated heartbeats.
-    fleet.touch_last_seen(DB_PATH, machine)
-    save_machine_info(
-        machine,
-        data.get('asset_tag'),
-        data.get('serial_number'),
-        data.get('model'),
-        reported_version,
-        service_tag=data.get('service_tag'),
-        manufacturer=data.get('manufacturer'),
-        os_caption=data.get('os_caption'),
-        os_version=data.get('os_version'),
-        os_build=data.get('os_build'),
-        os_arch=data.get('os_arch'),
-    )
     # Now that this machine's identity is fresh (and online), collapse any offline
     # duplicate reporting the same BIOS serial -- the OpenClaw -> OPENCLAW rename case.
     # Never let a dedup hiccup fail the report itself.
@@ -6075,11 +6187,18 @@ def delete_machine(machine):
     uninstall = str(request.args.get("uninstall", "")).lower() in ("1", "true", "yes")
     if uninstall and not access.can(permissions.ISSUE_COMMANDS):
         return jsonify({"error": "You do not have the 'issue_commands' permission."}), 403
+    # The agents go FIRST, under the gate /api/report holds, and the record after. In the
+    # other order a report that authenticated before the agents went wrote machine_info back
+    # after it was deleted, and the PC reappeared as "Online, not enrolled" -- every time a
+    # month of readings made the DELETE below slow enough to queue one. See _ingest_gate.
+    with _ingest_gate(machine_name):
+        decommissioned = fleet.delete_machine(
+            DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
+        # Under the gate, so every reading a finished report left queued is behind the mark.
+        drop_queued_readings(machine_name)
     with get_db_conn() as conn:
         conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
-    decommissioned = fleet.delete_machine(
-        DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
     # Drop the hostname from every permission group's scope too. If the name is later
     # reused by a different physical box, it must not silently inherit this one's
     # access grants -- a stale grant is invisible until it's abused.

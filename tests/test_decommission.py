@@ -5,7 +5,9 @@ or nowhere.** The wrong place: the duplicate-serial merge also deletes a machine
 is folding one PC's old name into its new one, and an uninstall there would take the agent off
 a machine that is still in use. Nowhere: a delete with the box ticked that forgets the agent's
 credential before recording it, so the agent is never recognised again and simply re-enrolls --
-the bug this feature exists to end, back again with nothing failing.
+the bug this feature exists to end, back again with nothing failing. And a ghost: a report
+already past its token check when the delete lands, writing the record back so the PC sits in
+Inventory as "Online, not enrolled" after its agent has gone.
 
 Imports app the way test_inventory.py does (env + cwd set before import).
 """
@@ -141,6 +143,76 @@ def test_failed_delete_leaves_no_record():
           heartbeat(agent).get_json().get("reason") == fleet.AUTH_UNKNOWN)
 
 
+def test_report_in_flight_cannot_bring_the_machine_back():
+    print("\n-- a report already past its token check when the delete lands leaves no ghost --")
+    import threading
+    from unittest import mock
+    agent = enrolled("RACE-PC")
+    other = app.app.test_client()
+    with other.session_transaction() as sess:
+        sess["user"] = {"email": "tester@example.com"}
+        sess["csrf_token"] = "t"
+    real_save = app.save_machine_info
+    deleted = {}
+
+    def delete_mid_report(*args, **kwargs):
+        # The report has authenticated and is about to write machine_info: exactly where a
+        # slow readings DELETE used to let the operator's delete finish underneath it.
+        t = threading.Thread(target=lambda: deleted.setdefault(
+            "r", other.delete("/api/machines/RACE-PC?uninstall=1", headers=HEADERS)))
+        t.start()
+        t.join(timeout=1.0)
+        deleted["finished_during_report"] = not t.is_alive()
+        deleted["thread"] = t
+        return real_save(*args, **kwargs)
+
+    with mock.patch.object(app, "save_machine_info", side_effect=delete_mid_report):
+        rep = client.post("/api/report", json={"machine": "RACE-PC", "temp": 40.0, "model": "X"},
+                          headers={"Authorization": f"Bearer {agent[0]}:{agent[1]}"})
+    deleted["thread"].join(timeout=10)
+    check("the in-flight report itself still succeeds", rep.status_code == 200)
+    check("...the delete waited for it rather than finishing underneath it",
+          deleted["finished_during_report"] is False)
+    check("...and then succeeded", deleted["r"].status_code == 200)
+    with app.get_db_conn() as conn:
+        row = conn.execute("SELECT 1 FROM machine_info WHERE machine = 'RACE-PC'").fetchone()
+    check("no machine_info row is left behind", row is None)
+    listed = [m["machine"] for m in client.get("/api/machines").get_json()]
+    check("...so it is not in the machine list as 'Online, not enrolled'", "RACE-PC" not in listed)
+    check("...and the agent is still told to uninstall",
+          heartbeat(agent).get_json().get("reason") == fleet.AUTH_DECOMMISSIONED)
+
+
+def test_delete_drops_readings_still_queued():
+    print("\n-- a reading still queued for db_writer when the delete lands is never written --")
+    import queue
+    from unittest import mock
+    enrolled("QUEUED-PC")
+
+    def readings_for(name):
+        with app.get_db_conn() as conn:
+            return conn.execute("SELECT COUNT(*) FROM readings WHERE machine = ?",
+                                (name,)).fetchone()[0]
+
+    # A private queue, so the running db_writer thread cannot flush these first: the test
+    # plays db_writer itself, through the same write_queued_readings it calls.
+    with mock.patch.object(app, "db_write_queue", queue.Queue()):
+        app.enqueue_reading("2026-10-13 12:00:00", 1791892800, "QUEUED-PC", 41.0)
+        app.enqueue_reading("2026-10-13 12:00:00", 1791892800, "OTHER-PC", 42.0)
+        held = [app.db_write_queue.get_nowait() for _ in range(2)]
+        r = client.delete("/api/machines/QUEUED-PC?uninstall=1", headers=HEADERS)
+        app.enqueue_reading("2026-10-13 12:00:05", 1791892805, "QUEUED-PC", 43.0)
+        held.append(app.db_write_queue.get_nowait())
+        app.write_queued_readings(held)
+    check("the delete succeeds", r.status_code == 200)
+    with app.get_db_conn() as conn:
+        temps = [row[0] for row in conn.execute(
+            "SELECT temp FROM readings WHERE machine = 'QUEUED-PC'")]
+    check("the reading queued before the delete is not written", 41.0 not in temps)
+    check("...one queued after it is (a re-enrolled agent)", temps == [43.0])
+    check("...and another machine's reading is unaffected", readings_for("OTHER-PC") == 1)
+
+
 def test_prune_keeps_a_row_while_it_has_a_job():
     print("\n-- the record is pruned once its question is settled, never before --")
     import time
@@ -174,6 +246,8 @@ def main():
     test_merge_never_uninstalls()
     test_uninstall_needs_issue_commands()
     test_failed_delete_leaves_no_record()
+    test_report_in_flight_cannot_bring_the_machine_back()
+    test_delete_drops_readings_still_queued()
     test_prune_keeps_a_row_while_it_has_a_job()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
