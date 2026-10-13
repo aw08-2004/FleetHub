@@ -1471,6 +1471,12 @@ def test_package_building_follows_the_modes():
           not {"web_read", "download_installer", "create_package"} & set(CALLS[-1][1]))
     check("...nor the playbook sent, which would cost tokens on every step",
           "## Building packages" not in CALLS[-1][0][0]["content"])
+    # The agent-log paths are sent to everyone: without them the model guessed a logs\
+    # folder that does not exist and told an operator the agent writes nothing locally.
+    prompt = CALLS[-1][0][0]["content"]
+    check("every operator is told where the agent logs, helper log included",
+          "%ProgramData%\\FleetHub\\Agent" in prompt and "remote-helper.log" in prompt
+          and "%ProgramData%\\TempMonitorAgent" in prompt)
     settings.set_many(DB, {"ai.assistant_web_enabled": False}, "test")
     settings.invalidate()
 
