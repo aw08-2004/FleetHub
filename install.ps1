@@ -492,7 +492,7 @@ function Get-PythonCandidates {
 
 function Test-PythonCandidate($Cand) {
     # The resolved interpreter if $Cand is a runnable 64-bit Python 3, else $null -- warning
-    # once per 32-bit candidate it turns down.
+    # once per interpreter it turns down.
     $pre = @($Cand.Args | Where-Object { $_ })
     # Requiring a "Python 3" banner also rejects the Microsoft Store app-execution alias,
     # which sits on PATH as python.exe but only opens the Store when run.
@@ -500,18 +500,25 @@ function Test-PythonCandidate($Cand) {
     if ($v -notmatch "Python 3") { return $null }
     $bits = Get-PythonBits $Cand.Exe $Cand.Args
     if ($bits -eq 64) { return @{ Exe = $Cand.Exe; Args = $Cand.Args; Version = $v } }
-    if (($script:SkippedPython32 + $script:SkippedPythonUnverified) -contains $Cand.Label) { return $null }
 
-    # The why only once: py -3-64, py -3 and the folder scan often all land on the same
-    # interpreter, and four copies of the same paragraph bury the one line that matters.
+    # One warning per interpreter, not per route to it: py -3-64, py -3 and the folder scan
+    # often all land on the same python.exe, and three lines about one install read like three
+    # installs. Keyed on the path Python reports for itself, asked only here on the skip path
+    # so the 64-bit happy path costs nothing extra; the label stands in when it won't run.
+    $key = "$(& $Cand.Exe @pre -c "import sys; print(sys.executable)" 2>$null)".Trim()
+    if (-not $key) { $key = $Cand.Label }
+    if (($script:SkippedPython32 + $script:SkippedPythonUnverified) -contains $key) { return $null }
+
+    # The why only once, for the same reason: four copies of the same paragraph bury the one
+    # line that matters.
     $tail = if (($script:SkippedPython32 + $script:SkippedPythonUnverified).Count) { "" } else {
         " The hub needs 64-bit Python: a 32-bit hub runs out of address space and throws MemoryError on the remote relay and /api/report." }
     if ($bits -eq 32) {
         Warn "Skipping $v at $($Cand.Label) -- it is 32-bit.$tail"
-        $script:SkippedPython32 += $Cand.Label
+        $script:SkippedPython32 += $key
     } else {
         Warn "Skipping $v at $($Cand.Label) -- it would not run a one-line bitness probe, so it can't be confirmed 64-bit.$tail"
-        $script:SkippedPythonUnverified += $Cand.Label
+        $script:SkippedPythonUnverified += $key
     }
     return $null
 }

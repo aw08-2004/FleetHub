@@ -28,6 +28,8 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALLER = os.path.join(ROOT, "install.ps1")
+#: Where the fake 32-bit interpreter says it lives -- the dedup key, not the route to it.
+EXE32 = r"C:\Python312-32\python.exe"
 
 PASS = 0
 FAIL = 0
@@ -76,11 +78,14 @@ function Install-Python { $null }
 
 #: Fake interpreters are PowerShell functions: `& $Cand.Exe --version` calls them like an exe.
 FAKES = r"""
-function Py32  { 'Python 3.12.7' }
+# -c is the sys.executable lookup; anything else is --version. Py32 and Py32Launcher are two
+# routes (say, the folder scan and py -3) to the same python.exe.
+function Py32  { if ($args -contains '-c') { 'C:\Python312-32\python.exe' } else { 'Python 3.12.7' } }
+function Py32Launcher { Py32 @args }
 function Py64  { 'Python 3.12.7' }
 function PyBad { 'Python 3.12.7' }
 function StoreAlias { '' }
-$Bits = @{ Py32 = 32; Py64 = 64; PyBad = $null; StoreAlias = $null }
+$Bits = @{ Py32 = 32; Py32Launcher = 32; Py64 = 64; PyBad = $null; StoreAlias = $null }
 function Get-PythonBits($Exe, $PyArgs) { $Bits[$Exe] }
 function Cands([string[]]$exes) { foreach ($e in $exes) { @{ Exe = $e; Args = $null; Label = $e } } }
 """
@@ -108,7 +113,7 @@ $r = Resolve-Python
 "PICKED: $($r.Exe)"; "SKIPPED32: $($script:SkippedPython32 -join ',')"
 """)
     check(f"{tag}: a 32-bit Python is skipped and the 64-bit one after it chosen",
-          "PICKED: Py64" in out and "SKIPPED32: Py32" in out)
+          "PICKED: Py64" in out and f"SKIPPED32: {EXE32}" in out)
     check(f"{tag}: ...saying which one it skipped and why",
           "WARN: Skipping Python 3.12.7 at Py32 -- it is 32-bit." in out and "MemoryError" in out)
 
@@ -119,6 +124,15 @@ $r = Resolve-Python
 """)
     check(f"{tag}: the same interpreter reached twice is warned about once",
           "NULL: True" in out and out.count("WARN: Skipping") == 1)
+
+    out = run(shell, work, r"""
+function Get-PythonCandidates { Cands 'Py32Launcher','Py32' }
+$r = Resolve-Python
+"NULL: $($null -eq $r)"; "SKIPPED32: $($script:SkippedPython32 -join ',')"
+""")
+    check(f"{tag}: ...even when reached by two different routes",
+          "NULL: True" in out and out.count("WARN: Skipping") == 1
+          and f"SKIPPED32: {EXE32}" in out)
 
     out = run(shell, work, r"""
 function Get-PythonCandidates { Cands 'Py32' }
