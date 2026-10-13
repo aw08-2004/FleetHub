@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import threading
+import itertools
 import csv
 import socket
 import sqlite3
@@ -3278,6 +3279,48 @@ def write_readings_batch(records):
         conn.executemany(_READINGS_INSERT_SQL, records)
 
 db_write_queue = queue.Queue(maxsize=20000)
+
+# Each queued reading carries a sequence number and its case-folded machine name, so a
+# delete can drop the ones still waiting for db_writer -- see drop_queued_readings.
+_reading_seq = itertools.count(1)
+_readings_dropped_before = {}
+_readings_dropped_lock = threading.Lock()
+#: How long a delete's mark is kept. db_writer flushes every DB_WRITE_FLUSH_SECONDS, so any
+#: reading queued before the delete is long gone by then, even behind a slow DELETE.
+READINGS_DROP_MARK_SECONDS = 300
+
+
+def drop_queued_readings(machine):
+    """Make db_writer discard every reading for `machine` queued before this call.
+
+    **A deleted machine's last reading must not land after its history was deleted.** A
+    report that finished just before the delete leaves its reading on db_write_queue, and
+    db_writer can flush it after delete_machine's DELETE FROM readings -- up to
+    DB_WRITE_FLUSH_SECONDS later, longer behind that DELETE's own write lock. Nothing lists
+    machines from readings, so this is no ghost in Inventory, but a hostname reused by a
+    different PC would inherit the stray row as the first point of its history. Found in
+    review on PR #128.
+
+    A sequence mark, not a time window: readings queued after the delete -- a re-enrolled
+    agent, when the box was not ticked -- are kept whatever their timestamp says. Rejected:
+    waiting for the queue to drain, which on a busy fleet may never happen."""
+    key = str(machine).strip().lower()
+    mark = next(_reading_seq)
+    now = time.monotonic()
+    with _readings_dropped_lock:
+        for stale in [k for k, (_, at) in _readings_dropped_before.items()
+                      if now - at > READINGS_DROP_MARK_SECONDS]:
+            del _readings_dropped_before[stale]
+        _readings_dropped_before[key] = (mark, now)
+
+
+def _without_dropped_readings(batch):
+    """The records of a db_writer batch that no delete has dropped since they were queued."""
+    with _readings_dropped_lock:
+        marks = {k: mark for k, (mark, _) in _readings_dropped_before.items()}
+    return [record for seq, key, record in batch
+            if key not in marks or seq > marks[key]]
+
 db_writer_thread = None
 db_writer_lock = threading.Lock()
 
@@ -3297,7 +3340,7 @@ def db_writer():
                 break
 
         try:
-            write_readings_batch(batch)
+            write_readings_batch(_without_dropped_readings(batch))
         except Exception as e:
             print(f"Error writing readings batch to SQLite: {e}")
 
@@ -3367,7 +3410,7 @@ def enqueue_reading(timestamp_str, timestamp_epoch, machine, temp, sensors_json=
     record = ((timestamp_str, timestamp_epoch, machine, float(temp), sensors_json)
               + _metric_values_tuple(metrics))
     try:
-        db_write_queue.put_nowait(record)
+        db_write_queue.put_nowait((next(_reading_seq), str(machine).strip().lower(), record))
     except queue.Full:
         print("WARNING: SQLite queue is full; writing synchronously.")
         write_readings_batch([record])
@@ -5259,15 +5302,8 @@ def unsigned_reporters():
     return sorted(rows, key=lambda r: r["machine"].lower())
 
 
-def _authorize_and_store_report(machine, data, temp_value):
-    """The identity check and every write /api/report makes, run under _ingest_gate.
-    Returns a refusal response, or None once the report is stored."""
-    # --- identity gate (roadmap #29) ---
-    # Before anything is written. A refused report must leave no trace -- not a reading, not
-    # a machine_info row, not a last_seen bump -- or "refused" would still mean "shown".
-    claimed_id, claimed_token = auth_helpers.bearer_parts()
-    outcome, reason = fleet.authorize_report(DB_PATH, claimed_id, claimed_token, machine,
-                                             name_has_history=_machine_has_history)
+def _report_refusal(outcome, reason, machine):
+    """The response refusing a report fleet.authorize_report did not accept, or None."""
     if outcome == fleet.REPORT_BAD_TOKEN:
         return jsonify({"error": "agent authentication required", "reason": reason}), 401
     if outcome == fleet.REPORT_NAME_TAKEN:
@@ -5280,13 +5316,12 @@ def _authorize_and_store_report(machine, data, temp_value):
         if settings.get_bool(DB_PATH, "security.require_enrolled_telemetry"):
             return jsonify({"error": "only enrolled agents may report telemetry",
                             "reason": "unsigned"}), 401
-    try:
-        uptime_seconds = int(data['uptime_seconds']) if data.get('uptime_seconds') is not None else None
-    except (TypeError, ValueError):
-        uptime_seconds = None
-    sensors = data.get('sensors')
-    if not isinstance(sensors, list):
-        sensors = None
+    return None
+
+
+def _report_timestamps(data):
+    """(client_ts, reported_ts): the stamp to file the reading under, and the stamp exactly
+    as the agent sent it."""
     # Optional client-supplied timestamp (used to backfill readings buffered
     # while the hub was down). Ignore values that are in the future or older than
     # our retention window -- those are clock-skew garbage, fall back to now().
@@ -5308,6 +5343,29 @@ def _authorize_and_store_report(machine, data, temp_value):
         max_backdate = settings.get_int(DB_PATH, "data.ingest_max_backdate_days")
         if client_ts > now_epoch + 300 or client_ts < now_epoch - max_backdate * 86400:
             client_ts = None
+    return client_ts, reported_ts
+
+
+def _authorize_and_store_report(machine, data, temp_value):
+    """The identity check and every write /api/report makes, run under _ingest_gate.
+    Returns a refusal response, or None once the report is stored."""
+    # --- identity gate (roadmap #29) ---
+    # Before anything is written. A refused report must leave no trace -- not a reading, not
+    # a machine_info row, not a last_seen bump -- or "refused" would still mean "shown".
+    claimed_id, claimed_token = auth_helpers.bearer_parts()
+    outcome, reason = fleet.authorize_report(DB_PATH, claimed_id, claimed_token, machine,
+                                             name_has_history=_machine_has_history)
+    refused = _report_refusal(outcome, reason, machine)
+    if refused is not None:
+        return refused
+    try:
+        uptime_seconds = int(data['uptime_seconds']) if data.get('uptime_seconds') is not None else None
+    except (TypeError, ValueError):
+        uptime_seconds = None
+    sensors = data.get('sensors')
+    if not isinstance(sensors, list):
+        sensors = None
+    client_ts, reported_ts = _report_timestamps(data)
     reported_version = data.get('companion_version')
     save_and_emit_temp(machine, temp_value, uptime_seconds, sensors,
                        timestamp_epoch=client_ts, companion_version=reported_version)
@@ -6120,6 +6178,8 @@ def delete_machine(machine):
     with _ingest_gate(machine_name):
         decommissioned = fleet.delete_machine(
             DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
+        # Under the gate, so every reading a finished report left queued is behind the mark.
+        drop_queued_readings(machine_name)
     with get_db_conn() as conn:
         conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
