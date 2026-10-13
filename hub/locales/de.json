@@ -2357,6 +2357,7 @@
       "geom": "{width}×{height} · {encoder} · Desktop {desktop}",
       "desktop_unknown": "?",
       "stalled": "Der Agent erhält keine Einzelbilder. Hat dieser Computer keinen Monitor, installiere unten eine virtuelle Anzeige.",
+      "stalled_no_display": "Diese Windows-Sitzung hat keine Anzeige, die erfasst werden kann – sie ist vielleicht getrennt oder abgemeldet. Wähle oben unter „Sitzung“ eine andere Sitzung.",
       "stalled_on_desktop": "Der Agent erhält auf dem Desktop {desktop} keine Einzelbilder. Hat dieser Computer keinen Monitor, installiere unten eine virtuelle Anzeige.",
       "signaling_error": "Signalisierungsfehler: {error}",
       "session_logon_screen": "Anmeldebildschirm",

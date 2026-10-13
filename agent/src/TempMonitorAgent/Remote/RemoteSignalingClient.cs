@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -21,8 +22,12 @@ public sealed class RemoteSignalingClient : IDisposable
     private readonly string _iceUrl;
 
     public RemoteSignalingClient(string sessionId, string bearer)
+        : this(sessionId, bearer, new HttpClientHandler()) { }
+
+    /// <summary>The handler is injectable so tests can answer as the hub would without one.</summary>
+    internal RemoteSignalingClient(string sessionId, string bearer, HttpMessageHandler handler)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         var baseUrl = AgentConfig.HubBase;
         var enc = Uri.EscapeDataString(sessionId);
@@ -60,11 +65,17 @@ public sealed class RemoteSignalingClient : IDisposable
 
     /// <summary>Send one signal (offer/ice/bye) to the console side. Returns the hub's sequence
     /// number for it, or 0 if the hub did not report one -- see <see cref="RemoteHelper"/> for
-    /// why the offer's seq matters.</summary>
+    /// why the offer's seq matters.
+    ///
+    /// A 409 throws <see cref="SessionSupersededException"/> rather than the generic
+    /// HttpRequestException: it is the hub's answer, not a transport failure, and it means
+    /// this session is over (see that exception for why that matters).</summary>
     public async Task<int> PostSignalAsync(string kind, object payload, CancellationToken ct)
     {
         using var resp = await _http.PostAsJsonAsync(
             _signalUrl, new { kind, payload }, ct);
+        if (resp.StatusCode == HttpStatusCode.Conflict)
+            throw new SessionSupersededException(kind, await ErrorTextAsync(resp, ct));
         resp.EnsureSuccessStatusCode();
         try
         {
@@ -99,6 +110,21 @@ public sealed class RemoteSignalingClient : IDisposable
 
     public void Dispose() => _http.Dispose();
 
+    /// <summary>The hub's <c>{"error": ...}</c> sentence, or empty if the body is not that.
+    /// Only ever logged.</summary>
+    private static async Task<string> ErrorTextAsync(HttpResponseMessage resp, CancellationToken ct)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("error", out var e) &&
+                   e.ValueKind == JsonValueKind.String ? e.GetString() ?? "" : "";
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return ""; }
+    }
+
     private sealed class PostResult
     {
         [JsonPropertyName("seq")] public int Seq { get; set; }
@@ -124,4 +150,28 @@ public sealed class RemoteSignalingClient : IDisposable
         // candidate init shape -- the peer decodes each based on Kind.
         [JsonPropertyName("payload")] public JsonElement Payload { get; set; }
     }
+}
+
+/// <summary>
+/// The hub refused a signal with 409: it will take no more signaling for this session --
+/// almost always because the session is no longer live (ended, expired, or replaced by a
+/// newer one for this machine), occasionally because it hit the per-session signal cap.
+/// Either way nothing this helper sends will be accepted again.
+///
+/// A type of its own because the generic HttpRequestException from EnsureSuccessStatusCode
+/// escaped RunSessionAsync as "Remote helper terminated unexpectedly". That is an exit WITHOUT
+/// clearing the supervision record, which the service reads as a helper that died
+/// involuntarily -- so it re-injects a fresh one, whose offer gets the same 409, and so on:
+/// OPENCLAW logged seven helpers injected in thirteen seconds on 2026-10-12, for a session
+/// that had already ended. A superseded session is a normal ending, and is handled as one.
+/// </summary>
+public sealed class SessionSupersededException(string kind, string hubMessage)
+    : Exception($"the hub refused the '{kind}' signal with 409" +
+                (hubMessage.Length > 0 ? $" ({hubMessage})" : ""))
+{
+    /// <summary>The signal kind that was refused.</summary>
+    public string Kind { get; } = kind;
+
+    /// <summary>The hub's own sentence for the refusal, or empty.</summary>
+    public string HubMessage { get; } = hubMessage;
 }

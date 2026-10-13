@@ -1511,8 +1511,10 @@ the operator's scope; every session start/stop is in the audit log.
   screen**, which is what makes signing in remotely to a machine nobody is signed into possible
   at all. Injecting into the wrong session is not an error anyone notices: the helper starts,
   Desktop Duplication finds nothing to duplicate and falls back to GDI, and the operator gets a
-  perfectly healthy stream of **a black screen**. The helper logs which tier it chose and its
-  own `session=` at startup.
+  perfectly healthy stream of **a black screen**. When even the GDI fallback can see nothing (a
+  disconnected or signed-out session), the viewer says so and points at the Session picker, and the
+  helper backs off its retries to one every 10 s rather than filling its log. The helper logs which
+  tier it chose and its own `session=` at startup.
 - **The lock screen, the logon screen, and UAC.** The helper follows the Windows *input
   desktop*, re-attaching its capture and input threads whenever it switches (`Default` ↔
   `Winlogon`) and rebuilding Desktop Duplication on the new desktop. That is what makes the lock

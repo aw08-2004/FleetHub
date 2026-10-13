@@ -2357,6 +2357,7 @@
       "geom": "{width}×{height} · {encoder} · escritorio {desktop}",
       "desktop_unknown": "?",
       "stalled": "El agente no está recibiendo ningún fotograma. Si este equipo no tiene monitor, instala abajo una pantalla virtual.",
+      "stalled_no_display": "Esta sesión de Windows no tiene ninguna pantalla que capturar; puede que esté desconectada o con la sesión cerrada. Elige otra sesión en el selector «Sesión» de arriba.",
       "stalled_on_desktop": "El agente no está recibiendo ningún fotograma en el escritorio {desktop}. Si este equipo no tiene monitor, instala abajo una pantalla virtual.",
       "signaling_error": "Error de señalización: {error}",
       "session_logon_screen": "pantalla de inicio de sesión",

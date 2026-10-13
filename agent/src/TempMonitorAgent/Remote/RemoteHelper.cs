@@ -368,8 +368,17 @@ public static class RemoteHelper
             // Fire-and-forget: an HTTP POST must not block SIPSorcery's ICE-gathering thread.
             _ = Task.Run(async () =>
             {
+                SessionSupersededException? refused = null;
                 try { await signaling.PostSignalAsync("ice", payload, cts.Token); }
+                catch (SessionSupersededException e) { refused = e; }
                 catch (Exception e) { Log.Warning("posting local ICE failed: {Msg}", e.Message); }
+                // Not a failure and not the end of the session from here: if the session is
+                // over, the poll loop reads that from its status and tears down in order.
+                // Ending here instead would also end a relay that is still live when the 409
+                // was only the per-session signal cap. Logged outside the catch, by message
+                // only: a stack trace per refused candidate would be noise for a normal ending.
+                if (refused is not null)
+                    Log.Information("Local ICE not accepted: {Msg}", refused.Message);
             });
         };
 
@@ -403,7 +412,23 @@ public static class RemoteHelper
 
         // Offer first, then start streaming, then poll for the answer + remote ICE.
         var offer = await peer.CreateOfferAsync(relayCapable: true);
-        int offerSeq = await signaling.PostSignalAsync("offer", offer, cts.Token);
+        int offerSeq = 0;
+        SessionSupersededException? superseded = null;
+        try { offerSeq = await signaling.PostSignalAsync("offer", offer, cts.Token); }
+        catch (SessionSupersededException e) { superseded = e; }
+        if (superseded is not null)
+        {
+            // The hub has moved on -- the operator stopped, the session expired, or a newer
+            // session for this machine replaced it while the service was re-injecting us. A
+            // normal ending, so it clears the supervision record like one, and is logged like
+            // one -- by message, without a stack trace. Escaping as an exception instead is
+            // what had the service re-inject helper after helper into a session that no longer
+            // existed (see SessionSupersededException).
+            Log.Information("Session {SessionId} superseded before it started ({Msg}); " +
+                            "ending cleanly.", session.SessionId, superseded.Message);
+            RemoteSessionSupervisor.Untrack(session.SessionId);
+            return 0;
+        }
         Log.Information("Posted offer (seq {Seq}); starting capture and awaiting the console's answer.",
                         offerSeq);
 
@@ -425,16 +450,15 @@ public static class RemoteHelper
                     // learns the capture size at all.
                     router.SendControl(GeometryMessage(g));
                 },
-                OnStall: desktop =>
+                OnStall: stall =>
                 {
-                    Log.Warning("Capture has produced nothing for several seconds on desktop {Desktop}",
-                                string.IsNullOrEmpty(desktop) ? "?" : desktop);
-                    router.SendControl(JsonSerializer.Serialize(new
-                    {
-                        t = "capture",
-                        state = "stalled",
-                        desktop,
-                    }));
+                    Log.Warning("Capture has produced nothing for several seconds on desktop " +
+                                "{Desktop}{Reason}",
+                                string.IsNullOrEmpty(stall.Desktop) ? "?" : stall.Desktop,
+                                stall.Reason is null ? "" : $" ({stall.Reason})");
+                    // Through the router, so it reaches whichever transport is current. The
+                    // pipeline re-reports after a relay switch -- see StallLatch.
+                    router.SendControl(StallMessage(stall));
                 }));
         }, cts);
 
@@ -578,6 +602,18 @@ public static class RemoteHelper
             monitor = g.Monitor,
             monitors = g.MonitorCount,
         });
+
+    /// <summary>The <c>capture stalled</c> status message. <c>reason</c> is left out entirely
+    /// when there is none, rather than sent as null: the viewer reads its absence as "the
+    /// general stall", which is also all a viewer older than the field knows, and an agent
+    /// older than the field never sends it -- so neither side has to know the other's version.</summary>
+    internal static string StallMessage(CaptureEncodePipeline.Stall stall) =>
+        stall.Reason is null
+            ? JsonSerializer.Serialize(new { t = "capture", state = "stalled", desktop = stall.Desktop })
+            : JsonSerializer.Serialize(new
+            {
+                t = "capture", state = "stalled", desktop = stall.Desktop, reason = stall.Reason,
+            });
 
     /// <summary>Handle a <c>{"t":"cfg", ...}</c> message from the viewer -- a live quality
     /// change -- or a <c>{"t":"key"}</c> request for a fresh keyframe, which only the hub relay's
