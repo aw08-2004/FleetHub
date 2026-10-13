@@ -160,7 +160,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.147.0"
+HUB_VERSION = "1.147.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -5201,6 +5201,30 @@ def _note_unsigned_reporter(machine):
                 _unsigned_reporters.pop(name, None)
 
 
+#: Striped, not one lock per name: /api/report takes names from the request body, and a dict
+#: keyed by them would grow with whatever an unsigned caller chose to send. Two names sharing a
+#: stripe only means one waits a few milliseconds for the other.
+_INGEST_GATE_STRIPES = 64
+_ingest_gates = [threading.Lock() for _ in range(_INGEST_GATE_STRIPES)]
+
+
+def _ingest_gate(machine):
+    """The lock /api/report holds from its identity check to its last write for `machine`,
+    and that delete_machine holds while it removes that machine's agents.
+
+    **Without it a deleted machine comes straight back as "Online, not enrolled".** A report
+    authenticates (the agent row still exists), then waits on SQLite while the delete wipes
+    readings and machine_info -- seconds, for a month of readings -- and then writes a fresh
+    machine_info row for a name whose agent is now gone. With "uninstall the agent" ticked the
+    agent then uninstalls itself, and the row it left behind sits in Inventory as an
+    unenrolled machine until somebody deletes it a second time. Holding this across both
+    means a report either finishes before the agents go (and the delete then removes what it
+    wrote) or starts after, and is refused.
+
+    Case-folded, because Windows hostnames are and /api/report accepts either casing."""
+    return _ingest_gates[hash(str(machine).strip().lower()) % _INGEST_GATE_STRIPES]
+
+
 def _machine_has_history(machine):
     """Does the hub hold a record under `machine` (any case)? fleet.authorize_report asks
     before letting an enrolled agent rename itself onto it: a rename may only land on a
@@ -5235,44 +5259,9 @@ def unsigned_reporters():
     return sorted(rows, key=lambda r: r["machine"].lower())
 
 
-@app.route('/api/report', methods=['POST'])
-@rate_limiter.limit('120/minute')
-def report_temp():
-    """Endpoint for agents to send their telemetry.
-
-    **Signed with the agent's own token (roadmap #29).** Agents send the same
-    `Authorization: Bearer <agent_id>:<token>` the fleet channel uses, and
-    fleet.authorize_report decides what that means: a bad token is refused, a good one
-    under another name re-points the enrollment (a renamed PC), and no token at all is
-    accepted only while `security.require_enrolled_telemetry` is off and the name is not
-    latched to an agent that signs. Until this, anything that could reach the hub could
-    post as any machine, and the console rendered it as that machine.
-
-    AGENT_REPORT_SECRET, when set, is still checked as well -- see its definition.
-    """
-    data = request.get_json(silent=True)
-    if not data or 'machine' not in data or 'temp' not in data:
-        return jsonify({"error": "Invalid payload"}), 400
-
-    # --- secret gate (Finding 1 fix) ---
-    if AGENT_REPORT_SECRET:
-        provided = data.get('report_secret', '')
-        if not hmac.compare_digest(str(provided), AGENT_REPORT_SECRET):
-            return jsonify({"error": "Invalid or missing report secret"}), 403
-
-    machine = data['machine']
-    if not is_valid_machine_name(machine):
-        return jsonify({"error": "Invalid machine name"}), 400
-    machine = str(machine).strip()
-    # float() on a non-numeric temp would otherwise surface as an unhandled 500. Checked
-    # BEFORE the identity gate below, because that gate writes (a rename, last_report_auth),
-    # and a report refused for its payload must not have moved an enrollment first (review
-    # on PR #119).
-    try:
-        temp_value = float(data['temp'])
-    except (TypeError, ValueError):
-        return jsonify({"error": "temp must be a number"}), 400
-
+def _authorize_and_store_report(machine, data, temp_value):
+    """The identity check and every write /api/report makes, run under _ingest_gate.
+    Returns a refusal response, or None once the report is stored."""
     # --- identity gate (roadmap #29) ---
     # Before anything is written. A refused report must leave no trace -- not a reading, not
     # a machine_info row, not a last_seen bump -- or "refused" would still mean "shown".
@@ -5347,6 +5336,55 @@ def report_temp():
         os_build=data.get('os_build'),
         os_arch=data.get('os_arch'),
     )
+    return None
+
+
+@app.route('/api/report', methods=['POST'])
+@rate_limiter.limit('120/minute')
+def report_temp():
+    """Endpoint for agents to send their telemetry.
+
+    **Signed with the agent's own token (roadmap #29).** Agents send the same
+    `Authorization: Bearer <agent_id>:<token>` the fleet channel uses, and
+    fleet.authorize_report decides what that means: a bad token is refused, a good one
+    under another name re-points the enrollment (a renamed PC), and no token at all is
+    accepted only while `security.require_enrolled_telemetry` is off and the name is not
+    latched to an agent that signs. Until this, anything that could reach the hub could
+    post as any machine, and the console rendered it as that machine.
+
+    AGENT_REPORT_SECRET, when set, is still checked as well -- see its definition.
+    """
+    data = request.get_json(silent=True)
+    if not data or 'machine' not in data or 'temp' not in data:
+        return jsonify({"error": "Invalid payload"}), 400
+
+    # --- secret gate (Finding 1 fix) ---
+    if AGENT_REPORT_SECRET:
+        provided = data.get('report_secret', '')
+        if not hmac.compare_digest(str(provided), AGENT_REPORT_SECRET):
+            return jsonify({"error": "Invalid or missing report secret"}), 403
+
+    machine = data['machine']
+    if not is_valid_machine_name(machine):
+        return jsonify({"error": "Invalid machine name"}), 400
+    machine = str(machine).strip()
+    # float() on a non-numeric temp would otherwise surface as an unhandled 500. Checked
+    # BEFORE the identity gate below, because that gate writes (a rename, last_report_auth),
+    # and a report refused for its payload must not have moved an enrollment first (review
+    # on PR #119).
+    try:
+        temp_value = float(data['temp'])
+    except (TypeError, ValueError):
+        return jsonify({"error": "temp must be a number"}), 400
+
+    # --- identity gate (roadmap #29), then every write it guards ---
+    # Under the ingest gate, so a delete of this machine cannot land between the two: see
+    # _ingest_gate for the "Online, not enrolled" ghost that left behind.
+    with _ingest_gate(machine):
+        refused = _authorize_and_store_report(machine, data, temp_value)
+    if refused is not None:
+        return refused
+    reported_version = data.get('companion_version')
     # Now that this machine's identity is fresh (and online), collapse any offline
     # duplicate reporting the same BIOS serial -- the OpenClaw -> OPENCLAW rename case.
     # Never let a dedup hiccup fail the report itself.
@@ -6075,11 +6113,16 @@ def delete_machine(machine):
     uninstall = str(request.args.get("uninstall", "")).lower() in ("1", "true", "yes")
     if uninstall and not access.can(permissions.ISSUE_COMMANDS):
         return jsonify({"error": "You do not have the 'issue_commands' permission."}), 403
+    # The agents go FIRST, under the gate /api/report holds, and the record after. In the
+    # other order a report that authenticated before the agents went wrote machine_info back
+    # after it was deleted, and the PC reappeared as "Online, not enrolled" -- every time a
+    # month of readings made the DELETE below slow enough to queue one. See _ingest_gate.
+    with _ingest_gate(machine_name):
+        decommissioned = fleet.delete_machine(
+            DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
     with get_db_conn() as conn:
         conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
         conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
-    decommissioned = fleet.delete_machine(
-        DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
     # Drop the hostname from every permission group's scope too. If the name is later
     # reused by a different physical box, it must not silently inherit this one's
     # access grants -- a stale grant is invisible until it's abused.
