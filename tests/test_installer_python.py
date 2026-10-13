@@ -169,6 +169,28 @@ $b = Get-PythonBits 'C:\\nope\\python.exe' $null
           f"BITS: {want}" in out)
     check(f"{tag}: ...and $null, not an exception, for one that can't run", "MISSING: True" in out)
 
+    # The real Get-PythonCandidates, with the three install roots pointed at temp folders and
+    # PATH lookups stubbed out. The per-user root is named to sort ABOVE the machine-wide one,
+    # so a single sort across roots (which this once did) puts it first and fails.
+    pf, lad, sysd = (os.path.join(work, n) for n in ("Z_pf", "A_lad", "M_sys"))
+    exes = [os.path.join(pf, "Python312", "python.exe"),
+            os.path.join(pf, "Python312-32", "python.exe"),
+            os.path.join(lad, "Programs", "Python", "Python313", "python.exe"),
+            os.path.join(sysd, "Python311", "python.exe")]
+    for exe in exes:
+        os.makedirs(os.path.dirname(exe), exist_ok=True)
+        open(exe, "w").close()
+    out = run(shell, work, f"""
+function Get-Command {{ $null }}
+$env:ProgramFiles = '{pf}'; $env:LOCALAPPDATA = '{lad}'; $env:SystemDrive = '{sysd}'
+Get-PythonCandidates | ForEach-Object {{ "CAND: $($_.Exe)" }}
+""", fakes=False)
+    got = [ln[len("CAND: "):].strip() for ln in out.splitlines() if ln.startswith("CAND: ")]
+    check(f"{tag}: candidates keep machine-wide, per-user, drive-root order",
+          got == [exes[1], exes[0], exes[2], exes[3]])
+    check(f"{tag}: ...and every match in a root, so Python312-32 can't hide Python312",
+          exes[0] in got and exes[1] in got)
+
     # Test-ExistingHubBitness walks from <executable> to the python.exe beside it, or one level
     # up for Scripts\waitress-serve.exe -- the two shapes install.ps1 writes.
     hub = os.path.join(work, "hub")

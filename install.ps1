@@ -483,11 +483,15 @@ function Get-PythonCandidates {
     # the bitness check would refuse every one of them anyway.
     # Every match, not just the newest: Python312-32 sorts above Python312 by name, and
     # stopping at the first would let a 32-bit side-by-side install hide the 64-bit one.
-    $globs = @("$env:ProgramFiles\Python3*\python.exe",
-               "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
-               "$env:SystemDrive\Python3*\python.exe")
-    Get-ChildItem $globs -ErrorAction SilentlyContinue | Sort-Object FullName -Descending |
-        ForEach-Object { @{ Exe = $_.FullName; Args = $null; Label = $_.FullName } }
+    # Sorted WITHIN each root, never across them: machine-wide first, because the service runs
+    # as LocalSystem and is baked to this path, and one sort across roots would rank a per-user
+    # interpreter under C:\Users above Program Files purely because "U" sorts after "P".
+    foreach ($glob in @("$env:ProgramFiles\Python3*\python.exe",
+                        "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
+                        "$env:SystemDrive\Python3*\python.exe")) {
+        Get-ChildItem $glob -ErrorAction SilentlyContinue | Sort-Object FullName -Descending |
+            ForEach-Object { @{ Exe = $_.FullName; Args = $null; Label = $_.FullName } }
+    }
 }
 
 function Test-PythonCandidate($Cand) {
