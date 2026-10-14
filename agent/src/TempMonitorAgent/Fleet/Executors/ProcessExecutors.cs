@@ -34,8 +34,9 @@ public static class ProcessGuard
         // Ourselves. Ending the agent does not just lose the Processes card, it loses the
         // machine from the console until the service manager brings it back -- and this very
         // command's result would never be reported, leaving the operator watching a spinner
-        // for work that did happen.
-        "tempmonitoragent",
+        // for work that did happen. Both exe names: FleetHubAgent.exe since 2026-10-13, and a
+        // PC not re-installed since still runs as TempMonitorAgent.exe.
+        "fleethubagent", "tempmonitoragent",
     };
 
     /// <summary>Lowercased, .exe stripped -- the same normalization the hub applies, so a

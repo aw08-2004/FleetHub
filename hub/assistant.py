@@ -1269,8 +1269,9 @@ AGENT_LOGS_PROMPT = (
     "files (companion_001.log, ...).",
     "- remote-helper.log: the per-session remote helper -- remote control, recording and the "
     "recording badge. Rolls at 1 MB, keeping 3.",
-    "Both are TempMonitorAgent.exe; the helper is the one with --remote-helper on its command "
-    "line. Read a log with a command (Get-Content -Tail 200) rather than copying the file.",
+    "Both are FleetHubAgent.exe (TempMonitorAgent.exe on a PC not re-installed since "
+    "2026-10-13); the helper is the one with --remote-helper on its command line. Read a log "
+    "with a command (Get-Content -Tail 200) rather than copying the file.",
 )
 
 

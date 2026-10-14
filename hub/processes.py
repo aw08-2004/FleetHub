@@ -119,6 +119,10 @@ PROTECTED_PROCESSES = frozenset({
     # the console entirely until the service manager restarts it, and the command's own
     # result would never be reported, so the operator would be left watching a spinner for a
     # process they had already ended. Restarting the service is a terminal-tab job.
+    # Both exe names: FleetHubAgent.exe since 2026-10-13, and a PC not re-installed since then
+    # still runs TempMonitorAgent.exe. An agent older than that only refuses the old name
+    # itself, so for a fresh install on such a build this entry is the only guard there is.
+    "fleethubagent",
     "tempmonitoragent",
 })
 

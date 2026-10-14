@@ -209,7 +209,8 @@ for the release process. Updates are Ed25519-verified fail-closed (see
 [Signing releases](#signing-releases) below): an unsigned or tampered manifest is
 refused, not applied.
 
-The binary it replaces is kept beside it as `TempMonitorAgent.exe.old` until the new one
+The binary it replaces is kept beside it as `FleetHubAgent.exe.old` (`TempMonitorAgent.exe.old`
+on a PC installed before 2026-10-13 -- self-update keeps whichever name the PC has) until the new one
 has **reached the hub at least once** — starting is not the same claim as working, and a
 build that cannot report is one you cannot reach to fix. Nothing re-launches it
 automatically (a build too broken to start is also too broken to decide that), but for the
@@ -1670,7 +1671,7 @@ session. There is no separate recording permission.
   (`recording_*`), and so is watching: `recording_view`, once per viewer per recording per
   half hour, because the hub cannot tell a player from a script saving the file.
 - **Checking the badge on a PC** without a hub or a session:
-  `TempMonitorAgent.exe --recording-badge-test 30` shows it for 30 seconds and follows the
+  `FleetHubAgent.exe --recording-badge-test 30` (`TempMonitorAgent.exe` on an older install) shows it for 30 seconds and follows the
   lock screen when it runs as SYSTEM in the console session.
 
 ## Wake-on-LAN

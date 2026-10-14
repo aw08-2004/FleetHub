@@ -75,6 +75,8 @@ def main():
         check("svchost is protected -- killing one takes every service in it down",
               processes.is_protected("svchost.exe"))
         check("the agent will not offer to end itself",
+              processes.is_protected("FleetHubAgent.exe"))
+        check("...under the exe name a PC keeps until it is re-installed, either",
               processes.is_protected("TempMonitorAgent.exe"))
         check("an ordinary program is not", not processes.is_protected("chrome.exe"))
         # explorer.exe is deliberately NOT protected: ending it is a real helpdesk action and

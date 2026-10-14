@@ -52,7 +52,7 @@ $AgentDir   = $PSScriptRoot                      # .../Temp_Monitor/agent
 $Csproj     = Join-Path $AgentDir "src\TempMonitorAgent\TempMonitorAgent.csproj"
 $ConfigCs   = Join-Path $AgentDir "src\TempMonitorAgent\AgentConfig.cs"
 $DistDir    = Join-Path $AgentDir "dist"
-$ExePath    = Join-Path $DistDir "TempMonitorAgent.exe"
+$ExePath    = Join-Path $DistDir "FleetHubAgent.exe"
 $IsBeta       = ($Channel -eq "beta")
 # Must match hub/channels.py's _AGENT_MANIFEST and AgentConfig.BetaManifestUrl. Three copies
 # of this filename exist by necessity -- a PowerShell script, a Python module and a C#
@@ -61,7 +61,9 @@ $ManifestPath = Join-Path $AgentDir $(if ($IsBeta) { "agent.manifest.beta.json" 
 $SignScript = Join-Path $RepoRoot "sign_release.py"
 # The tag differs so the two channels' releases and their assets never collide.
 $Tag        = $(if ($IsBeta) { "agent-v$Version-beta" } else { "agent-v$Version" })
-$AssetUrl   = "https://github.com/$Repo/releases/download/$Tag/TempMonitorAgent.exe"
+# FleetHubAgent.exe since 2026-10-13. The asset name is only a URL: a self-updating agent
+# writes the download over its own path, and the installer over $ExePath, so neither cares.
+$AssetUrl   = "https://github.com/$Repo/releases/download/$Tag/FleetHubAgent.exe"
 
 function Say($msg)  { Write-Host "  $msg" }
 function Ok($msg)   { Write-Host "  [ok] $msg"   -ForegroundColor Green }
