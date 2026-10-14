@@ -72,7 +72,7 @@
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.6" />
     <!-- SignedCms, for reading the signer chain out of a driver's .cat (a PKCS#7 envelope)
          before we make the machine trust that publisher. -->
-    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.0" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <PackageReference Include="Serilog.Extensions.Hosting" Version="9.0.0" />
     <!-- SerilogLoggerFactory, which is what routes SIPSorcery's ILogger output into
          remote-helper.log. Comes in transitively with Extensions.Hosting above; named here
