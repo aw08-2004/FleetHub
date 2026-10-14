@@ -1648,7 +1648,7 @@ session. There is no separate recording permission.
 - **Never silent.** The PC shows a red **Recording Screen** badge in the top-left corner for
   the whole recording, on the lock screen and the logon screen too. The hub stores no video
   until the agent confirms that the badge is on screen. If the badge cannot follow the
-  session to a new desktop, or the remote helper restarts, the recording ends. Needs agent
+  session to a new desktop, the recording ends. Needs agent
   **3.43.0** or later: an older agent never confirms the badge, and the recording fails after
   about 25 seconds with a sentence that says so.
 - **A reason is required** at start. It goes to the audit log with who recorded which PC, and
@@ -1657,8 +1657,13 @@ session. There is no separate recording permission.
   10 minutes** and **Stop recording**. With no answer, the recording ends. Extending needs no
   new reason. The countdown is shown in the console only, never on the PC, so it is never in
   the video.
-- **One stream per recording.** If a session falls back to the hub relay, the recording ends
-  rather than splicing two streams into one file. Start a new one if you need it.
+- **A session switch starts the next part.** Switching user, signing in or signing out on the
+  PC restarts the remote helper and changes the picture. One file can't hold two streams, so
+  the current part ends and the viewer starts **Part 2** on its own once the new session is
+  on screen: same reason, no dialog, and the badge has to show in the new session before
+  anything is stored. The same happens when a session falls back to the hub relay. Parts
+  share the recording's ten minutes (always at least one minute left), and sharing any part
+  shares all of them. **Stop recording** between parts means no next part.
 - **Where they are kept.** `<hub install>\data\<your email>\recordings\<id>.webm`, kept
   until the owner deletes them. The hub locks the `data` folder to SYSTEM and Administrators
   at every start, the same way it locks `.env`. Override the location with

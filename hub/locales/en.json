@@ -2872,6 +2872,9 @@
     "extend": "Extend 10 minutes",
     "pill": "Recording {time}",
     "pill_starting": "Recording…",
+    "pill_continuing": "Recording, next part…",
+    "continuing": "The PC switched session. The recording continues as its next part once the new session is on screen and shows the “Recording Screen” badge…",
+    "part": "Part {n}",
     "starting": "Waiting for the PC to show its “Recording Screen” badge…",
     "countdown": "This recording ends in {time}.",
     "saved": "Recording saved. Find it under Recordings.",
@@ -2918,7 +2921,7 @@
       "helper_restarted": "the remote session restarted on the PC, which took the badge down",
       "badge_failed": "the PC could not show the recording badge",
       "badge_timeout": "the PC did not confirm the recording badge -- either its agent is older than 3.43.0, or the confirmation never reached the hub (check the hub is running and healthy)",
-      "stream_changed": "the connection switched to the hub relay",
+      "stream_changed": "the picture changed under it (a session switch on the PC, or the hub relay taking over)",
       "size_limit": "the recording reached its size limit"
     },
     "not_shared": "Not shared",

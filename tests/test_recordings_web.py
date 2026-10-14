@@ -17,6 +17,11 @@ The silent failures this file exists to catch:
     the owner or a share.
   * **An end reason the console cannot name.** Every recordings.END_REASONS code must be a
     literal key in both scripts that show one, and in every catalog.
+  * **A session switch that silently ends the recording for good, or a continuation that
+    skips the gates.** After a helper restart the browser starts the next part with no reason;
+    that must work for the operator who made the recording and be refused for anybody else.
+    The browser's list of continuable endings must be the hub's, or one side gives up on a
+    switch the other would have accepted.
 """
 import functools
 import json
@@ -320,6 +325,52 @@ def test_library(db, c, leads, rid):
           and recordings.get(db, rid) is None)
 
 
+def test_continuation(db, c, auth):
+    print("\n-- a session switch continues the recording --")
+    sid = open_session(c, auth)
+    rid = start(c, sid).get_json()["id"]
+    ack(c, sid, rid, auth)
+    chunk(c, rid, 0, b"PART1")
+    # The PC switched user: the supervisor relaunched the helper, whose offer ends the part.
+    c.post(f"/api/agent/remote/{sid}/signal", json={"kind": "offer", "payload": {"sdp": "z"}},
+           headers=auth)
+    body = {"session_id": sid, "mime": "video/webm;codecs=vp9", "continues": rid}
+
+    as_user("tech2@x.com")
+    check("another operator cannot continue it (not their session)",
+          c.post("/api/remote/PC-01/recordings", json=body).status_code == 403)
+    as_user("tech@x.com")
+    r = c.post("/api/remote/PC-01/recordings", json=body)
+    nxt = r.get_json()
+    check("the operator who made it continues it with no reason given",
+          r.status_code == 201 and nxt["part"] == 2 and nxt["series_id"] == rid
+          and nxt["reason"] == "Ticket 12: printer driver")
+    signals = c.get(f"/api/agent/remote/{sid}/poll?after_seq=0", headers=auth).get_json()
+    on = [s for s in signals["signals"] if s["kind"] == "record" and s["payload"]["on"]
+          and s["payload"]["recording_id"] == nxt["id"]]
+    check("...and the new helper is asked for its own badge", len(on) == 1)
+    check("...before which no video is accepted",
+          chunk(c, nxt["id"], 0, b"x").status_code == 409)
+    ack(c, sid, nxt["id"], auth)
+    check("...and after which part 2 records", chunk(c, nxt["id"], 0, b"PART2").status_code == 200)
+
+    c.post(f"/api/remote/recordings/{nxt['id']}/stop", json={})
+    r = c.post("/api/remote/PC-01/recordings", json=dict(body, continues=nxt["id"]))
+    check("a part the operator stopped is not continued", r.status_code == 400)
+    r = c.post("/api/remote/PC-01/recordings",
+               json={"session_id": sid, "mime": "video/webm;codecs=vp9", "continues": ""})
+    check("...and an empty `continues` is an ordinary start, which needs a reason",
+          r.status_code == 400)
+    c.post(f"/api/remote/session/{sid}/stop", json={})
+
+    js = open(os.path.join(ROOT, "hub", "static", "js", "remote-recorder.js"),
+              encoding="utf-8").read()
+    listed = re.search(r"CONTINUE_REASONS = \[([^\]]*)\]", js)
+    check("the browser continues after exactly the endings the hub accepts",
+          listed and set(re.findall(r"'([a-z_]+)'", listed.group(1)))
+          == set(recordings.CONTINUE_REASONS))
+
+
 def test_end_reasons_are_named():
     print("\n-- every end reason has words in the console --")
     scripts = {name: open(os.path.join(ROOT, "hub", "static", "js", name), encoding="utf-8").read()
@@ -345,6 +396,7 @@ def main():
     c.post(f"/api/remote/recordings/{rid}/stop", json={})
     rid = test_endings(db, root, c, auth)
     test_library(db, c, leads, rid)
+    test_continuation(db, c, auth)
     test_end_reasons_are_named()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0

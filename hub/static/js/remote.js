@@ -184,8 +184,13 @@
         let relayTimer = null;
         let startedCodec = 'h264';
 
+        // The last setStatus kind: a recording continuing after a session switch waits for
+        // 'ok' (a picture is arriving again) before asking the PC for its badge.
+        let statusKind = 'muted';
+
         function setStatus(text, kind) {
             const state = kind || 'muted';
+            statusKind = state;
             els.status.className = 'status-pill status-pill--' + state;
             els.status.innerHTML = '<span class="status-pill__dot"></span>';
             els.status.append(text);
@@ -218,6 +223,7 @@
                 machine,
                 sessionId: () => sessionId,
                 stream: () => els.video.srcObject,
+                ready: () => running && statusKind === 'ok',
                 onState: onRecordingState,
                 onCountdown: onRecordingCountdown,
             })
@@ -225,17 +231,23 @@
         els.record.hidden = !recorder;
 
         function onRecordingState(state, detail) {
-            const active = state === 'starting' || state === 'recording' || state === 'stopping';
+            const active = ['starting', 'recording', 'stopping', 'continuing'].includes(state);
             els.record.textContent = active ? t('recordings.stop_recording') : t('recordings.record');
             els.record.classList.toggle('btn--danger', active);
             els.record.disabled = state === 'stopping' || (!active && !running);
             els.recPill.hidden = !active;
-            if (state === 'starting') {
+            if (state === 'continuing') {
+                // Between parts: the PC switched session, and the next part starts once its
+                // picture is back. Stop is still offered, and means no next part.
+                els.recPillText.textContent = t('recordings.pill_continuing');
+                hint(t('recordings.continuing'));
+            } else if (state === 'starting') {
                 els.recPillText.textContent = t('recordings.pill_starting');
-                hint(t('recordings.starting'));
+                hint(detail.continuing ? t('recordings.continuing') : t('recordings.starting'));
             } else if (state === 'recording') {
                 els.recPillText.textContent = t('recordings.pill', { time: clock(detail.seconds) });
-                if (els.hint.textContent === t('recordings.starting')) hint('');
+                if (els.hint.textContent === t('recordings.starting')
+                        || els.hint.textContent === t('recordings.continuing')) hint('');
             } else if (state === 'ended') {
                 hint(detail.reason && detail.reason !== 'stopped'
                     ? t('recordings.ended_with_reason',

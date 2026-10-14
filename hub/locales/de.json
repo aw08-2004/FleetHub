@@ -2759,6 +2759,9 @@
     "extend": "Um 10 Minuten verlängern",
     "pill": "Aufzeichnung {time}",
     "pill_starting": "Aufzeichnung…",
+    "pill_continuing": "Aufzeichnung, nächster Teil…",
+    "continuing": "Der PC hat die Sitzung gewechselt. Die Aufzeichnung wird als nächster Teil fortgesetzt, sobald die neue Sitzung zu sehen ist und den Hinweis „Recording Screen“ anzeigt…",
+    "part": "Teil {n}",
     "starting": "Warten, bis der PC den Hinweis „Recording Screen“ anzeigt…",
     "countdown": "Diese Aufzeichnung endet in {time}.",
     "saved": "Aufzeichnung gespeichert. Sie finden sie unter Aufzeichnungen.",
@@ -2805,7 +2808,7 @@
       "helper_restarted": "die Fernsitzung wurde auf dem PC neu gestartet, dabei verschwand der Hinweis",
       "badge_failed": "der PC konnte den Aufzeichnungshinweis nicht anzeigen",
       "badge_timeout": "der PC hat den Aufzeichnungshinweis nicht bestätigt -- entweder ist sein Agent älter als 3.43.0, oder die Bestätigung hat den Hub nie erreicht (prüfen Sie, ob der Hub läuft und fehlerfrei arbeitet)",
-      "stream_changed": "die Verbindung wurde auf das Hub-Relay umgestellt",
+      "stream_changed": "das Bild hat sich geändert (ein Sitzungswechsel auf dem PC oder die Umstellung auf das Hub-Relay)",
       "size_limit": "die Aufzeichnung hat ihre Größenbegrenzung erreicht"
     },
     "not_shared": "Nicht geteilt",

@@ -110,7 +110,8 @@ class _RecordingRoutes:
         out = {k: rec[k] for k in (
             "id", "machine", "owner", "reason", "status", "created_at", "confirmed_at",
             "deadline", "extensions", "ended_at", "end_reason", "end_detail", "size_bytes",
-            "duration_seconds")}
+            "duration_seconds", "part")}
+        out["series_id"] = recordings.series_of(rec)
         # Only the owner sees who else may watch it: they are the only one who can change it.
         if owned:
             out["shares"] = recordings.shares(self.db_path, rec["id"])
@@ -182,9 +183,12 @@ class _RecordingRoutes:
             return refused
         self.reconcile()
         try:
+            # `continues`: the browser carrying a recording on after the PC switched session.
+            # recordings.create decides whether that one may be continued, and takes its reason.
             rec = recordings.create(self.db_path, session_id=sess["id"], machine=machine,
                                     owner=self.me(), reason=data.get("reason"),
-                                    mime=data.get("mime"))
+                                    mime=data.get("mime"),
+                                    continues=str(data.get("continues") or "") or None)
         except ValueError as e:
             return refusals.refuse(e)
         try:

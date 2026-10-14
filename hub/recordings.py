@@ -20,6 +20,20 @@ the session moves to (the lock screen) is reported, and the recording ends.
 relaunched it after a sign-in, or it died) knows nothing of the badge, so its first offer ends
 every live recording of the session -- see end_for_session's callers in remote_web.py.
 
+**...and carries on as the next part of the same series.** Switching user, signing in or
+signing out on the PC relaunches the helper, so the rule above ended every recording at the
+first session switch, which is exactly when the operator most wants it running. A recording
+that ended for one of CONTINUE_REASONS may be *continued* by the browser that made it: a new
+recording in the same `series_id` with `part` one higher, the same reason and owner, its
+shares copied, and its own badge confirmation -- the new helper raises the badge in the new
+Windows session before a byte of it is stored, so "never silent" holds for the person now at
+the console too. The series keeps its clock: a continuation inherits the previous part's
+deadline (never less than CONTINUE_MIN_SECONDS, so the countdown and Extend are still offered),
+or switching user would be a way round the ten-minute limit. *Rejected:* one continuous file
+across the switch. A webm file is one stream, so that means recording a canvas the viewer
+redraws every frame and pausing at the hub while the new badge comes up -- more CPU in every
+operator's browser and a third live state here, to save a click on "Part 2".
+
 **Ten minutes at a time.** A recording runs to a deadline; the browser shows a countdown (in
 the console only, never in the video) and may extend it by another SEGMENT_SECONDS without a
 new reason. *Rejected:* no limit -- a recording left running by accident fills the hub's disk
@@ -65,6 +79,20 @@ END_STREAM_CHANGED = "stream_changed"
 END_SIZE_LIMIT = "size_limit"
 END_REASONS = (END_STOPPED, END_TIME_LIMIT, END_SESSION_ENDED, END_HELPER_RESTARTED,
                END_BADGE_FAILED, END_BADGE_TIMEOUT, END_STREAM_CHANGED, END_SIZE_LIMIT)
+# The endings a recording may be continued after: the picture went away under it while the
+# session itself carried on. Everything else either was the operator's choice, or is a reason
+# a new part would end for too (the badge, the size cap, the clock).
+CONTINUE_REASONS = (END_HELPER_RESTARTED, END_STREAM_CHANGED)
+# How long after the ending a continuation is accepted. The browser starts one as soon as the
+# new helper's picture arrives, which is seconds; the window is for a slow helper relaunch, and
+# keeps an old recording id from being a way to skip the reason dialog later in the session.
+CONTINUE_WINDOW_SECONDS = 120
+# A continuation's minimum time on the clock, so a switch in the last seconds still leaves the
+# operator the countdown and its Extend rather than ending the new part on arrival.
+CONTINUE_MIN_SECONDS = 60
+# A helper that keeps dying would otherwise produce a part every few seconds for as long as the
+# session lasts. The agent caps its own session moves well below this.
+MAX_SERIES_PARTS = 20
 
 SEGMENT_SECONDS = 10 * 60
 # Extending is offered in the last minute. A little wider here than in the browser so a click
@@ -140,6 +168,15 @@ def init_recordings_db(db_path):
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(recordings)")}
         if "end_detail" not in columns:
             conn.execute("ALTER TABLE recordings ADD COLUMN end_detail TEXT")
+        # Added with continuations (hub 1.149.0). A recording made before then has a NULL
+        # series and is a series of one -- series_of() reads it that way.
+        if "series_id" not in columns:
+            conn.execute("ALTER TABLE recordings ADD COLUMN series_id TEXT")
+        if "part" not in columns:
+            conn.execute("ALTER TABLE recordings ADD COLUMN part INTEGER NOT NULL DEFAULT 1")
+        # One part N per series, so two continuations of the same part racing cannot both land.
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_recordings_series_part "
+                     "ON recordings(series_id, part) WHERE series_id IS NOT NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recordings_owner ON recordings(owner)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recordings_session "
                      "ON recordings(session_id)")
@@ -254,13 +291,47 @@ def live_for_session(db_path, session_id):
     return [_row(r) for r in rows]
 
 
-def create(db_path, *, session_id, machine, owner, reason, mime, now=None):
+def series_of(rec):
+    """The series a recording belongs to: its own id for one made before continuations
+    existed, which is what it is -- a series of one."""
+    return rec.get("series_id") or rec["id"]
+
+
+def _continuable(db_path, continues, *, session_id, owner, now):
+    """The recording `continues` names, if a new part may follow it; ValueError otherwise.
+
+    Every condition is one the browser meets without trying -- same operator, same session,
+    seconds after a helper restart -- so a refusal here is a stale page or a hand-made
+    request, and gets one sentence for all of them rather than an oracle for which held."""
+    refused = ValueError("That recording cannot be continued. Start a new one.")
+    prev = get(db_path, continues) if is_recording_id(continues) else None
+    if (prev is None or prev["owner"] != permissions.normalize_email(owner)
+            or prev["session_id"] != str(session_id) or prev["status"] != STATUS_ENDED
+            or prev["end_reason"] not in CONTINUE_REASONS
+            or now - int(prev["ended_at"] or 0) > CONTINUE_WINDOW_SECONDS):
+        raise refused
+    if int(prev["part"] or 1) >= MAX_SERIES_PARTS:
+        raise ValueError(f"This recording has reached {MAX_SERIES_PARTS} parts. "
+                         "Start a new one if you still need it.")
+    return prev
+
+
+def create(db_path, *, session_id, machine, owner, reason, mime, now=None, continues=None):
     """A new recording in `starting`. The caller has already established that `owner` is the
     operator viewing `session_id` and may remote-control `machine`, and sends the agent its
     `record` signal next.
 
     The reason is required and kept verbatim (trimmed): it is the one line an auditor reads
-    to decide whether recording this screen was justified."""
+    to decide whether recording this screen was justified.
+
+    `continues` is the id of the part this one follows after a session switch (see the module
+    docstring). The reason is then the previous part's, not the caller's: the operator gave it
+    once for the recording, and an automatic continuation has nobody to ask."""
+    now = int(now if now is not None else time.time())
+    prev = None
+    if continues:
+        prev = _continuable(db_path, continues, session_id=session_id, owner=owner, now=now)
+        reason = prev["reason"]
     reason = str(reason or "").strip()
     if not reason:
         raise ValueError("A reason is required to start a recording.")
@@ -272,23 +343,41 @@ def create(db_path, *, session_id, machine, owner, reason, mime, now=None):
     already = "This session is already being recorded."
     if live_for_session(db_path, session_id):
         raise ValueError(already)
-    now = int(now if now is not None else time.time())
     recording_id = uuid.uuid4().hex
+    series_id = series_of(prev) if prev else recording_id
+    part = int(prev["part"] or 1) + 1 if prev else 1
+    # Carried, and only made "at least a minute from now" when the badge is confirmed.
+    deadline = prev["deadline"] if prev else None
     try:
         with get_conn(db_path) as conn:
             conn.execute(
                 "INSERT INTO recordings(id, session_id, machine, owner, reason, status, mime, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, deadline, series_id, part) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (recording_id, str(session_id), str(machine),
-                 permissions.normalize_email(owner), reason, STATUS_STARTING, mime, now))
+                 permissions.normalize_email(owner), reason, STATUS_STARTING, mime, now,
+                 deadline, series_id, part))
     except sqlite3.IntegrityError:
-        # The race the check above cannot see: idx_recordings_one_live refused the second.
+        # The races the checks above cannot see: idx_recordings_one_live refused a second live
+        # recording, or idx_recordings_series_part a second continuation of the same part.
         raise ValueError(already)
+    if prev:
+        _copy_shares(db_path, prev["id"], recording_id, now)
+    detail = {"recording_id": recording_id, "session_id": str(session_id), "reason": reason}
+    if prev:
+        detail.update(continues=prev["id"], part=part)
     fleet.audit(db_path, actor=owner, action="recording_start", level=fleet.LEVEL_SECURITY,
-                target=str(machine),
-                detail={"recording_id": recording_id, "session_id": str(session_id),
-                        "reason": reason})
+                target=str(machine), detail=detail)
     return get(db_path, recording_id)
+
+
+def _copy_shares(db_path, from_id, to_id, now):
+    """A continuation is shared with whoever the part before it was. Copied rather than looked
+    up through the series, so can_view stays one recording's question."""
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO recording_shares(recording_id, kind, principal, added_by, "
+            "added_at) SELECT ?, kind, principal, added_by, ? FROM recording_shares "
+            "WHERE recording_id = ?", (to_id, now, from_id))
 
 
 def confirm_badge(db_path, recording_id, machine, state, now=None, detail=None):
@@ -311,11 +400,14 @@ def confirm_badge(db_path, recording_id, machine, state, now=None, detail=None):
     if rec is None or rec["machine"] != machine:
         return None
     if state == "shown" and rec["status"] == STATUS_STARTING:
+        # A first part gets ten minutes; a continuation keeps its series' deadline.
+        deadline = (max(int(rec["deadline"]), now + CONTINUE_MIN_SECONDS)
+                    if rec["deadline"] else now + SEGMENT_SECONDS)
         with get_conn(db_path) as conn:
             conn.execute(
                 "UPDATE recordings SET status = ?, confirmed_at = ?, deadline = ? "
                 "WHERE id = ? AND status = ?",
-                (STATUS_RECORDING, now, now + SEGMENT_SECONDS, rec["id"], STATUS_STARTING))
+                (STATUS_RECORDING, now, deadline, rec["id"], STATUS_STARTING))
     elif state in ("failed", "hidden"):
         finish(db_path, rec["id"], END_BADGE_FAILED, actor=machine, now=now, detail=detail)
     return get(db_path, rec["id"])
@@ -568,13 +660,35 @@ def _share_users(users, owner):
     return emails
 
 
+def series_members(db_path, rec):
+    """Every part of `rec`'s series that its owner still has, in order."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM recordings WHERE owner = ? AND COALESCE(series_id, id) = ? "
+            "ORDER BY part", (rec["owner"], series_of(rec))).fetchall()
+    return [_row(r) for r in rows] or [rec]
+
+
 def set_shares(db_path, rec, *, groups, users, actor, now=None):
-    """Replace a recording's shares. The caller has established that `actor` is the owner --
-    nobody else may share (no re-sharing). Returns (added, removed) for the audit."""
+    """Replace the shares of a recording AND every other part of its series. The caller has
+    established that `actor` is the owner -- nobody else may share (no re-sharing). Returns
+    (added, removed) for `rec` itself.
+
+    The series, because the owner shares "the recording of that session", and a part 2 they
+    forgot to tick would be the half of it a colleague cannot see. Each part keeps its own
+    rows and its own audit entry, so can_view and the audit log are unchanged."""
     now = int(now if now is not None else time.time())
     group_ids = _share_groups(db_path, groups)
     emails = _share_users(users, rec["owner"])
+    result = ([], [])
+    for member in series_members(db_path, rec):
+        changed = _set_shares_one(db_path, member, group_ids, emails, actor, now)
+        if member["id"] == rec["id"]:
+            result = changed
+    return result
 
+
+def _set_shares_one(db_path, rec, group_ids, emails, actor, now):
     before = shares(db_path, rec["id"])
     wanted = {(SHARE_GROUP, g) for g in group_ids} | {(SHARE_USER, e) for e in emails}
     had = ({(SHARE_GROUP, g) for g in before["groups"]}
