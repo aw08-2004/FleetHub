@@ -365,7 +365,7 @@ def test_continuation(db, c, auth):
 
     js = open(os.path.join(ROOT, "hub", "static", "js", "remote-recorder.js"),
               encoding="utf-8").read()
-    listed = re.search(r"CONTINUE_REASONS = \[([^\]]*)\]", js)
+    listed = re.search(r"CONTINUE_REASONS = new Set\(\[([^\]]*)\]\)", js)
     check("the browser continues after exactly the endings the hub accepts",
           listed and set(re.findall(r"'([a-z_]+)'", listed.group(1)))
           == set(recordings.CONTINUE_REASONS))

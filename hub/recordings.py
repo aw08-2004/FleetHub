@@ -349,6 +349,7 @@ def create(db_path, *, session_id, machine, owner, reason, mime, now=None, conti
     # Carried, and only made "at least a minute from now" when the badge is confirmed.
     deadline = prev["deadline"] if prev else None
     try:
+        # One transaction with the share copy, so a part never exists unshared even briefly.
         with get_conn(db_path) as conn:
             conn.execute(
                 "INSERT INTO recordings(id, session_id, machine, owner, reason, status, mime, "
@@ -356,12 +357,12 @@ def create(db_path, *, session_id, machine, owner, reason, mime, now=None, conti
                 (recording_id, str(session_id), str(machine),
                  permissions.normalize_email(owner), reason, STATUS_STARTING, mime, now,
                  deadline, series_id, part))
+            if prev:
+                _copy_shares(conn, prev["id"], recording_id, now)
     except sqlite3.IntegrityError:
         # The races the checks above cannot see: idx_recordings_one_live refused a second live
         # recording, or idx_recordings_series_part a second continuation of the same part.
         raise ValueError(already)
-    if prev:
-        _copy_shares(db_path, prev["id"], recording_id, now)
     detail = {"recording_id": recording_id, "session_id": str(session_id), "reason": reason}
     if prev:
         detail.update(continues=prev["id"], part=part)
@@ -370,14 +371,14 @@ def create(db_path, *, session_id, machine, owner, reason, mime, now=None, conti
     return get(db_path, recording_id)
 
 
-def _copy_shares(db_path, from_id, to_id, now):
+def _copy_shares(conn, from_id, to_id, now):
     """A continuation is shared with whoever the part before it was. Copied rather than looked
-    up through the series, so can_view stays one recording's question."""
-    with get_conn(db_path) as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO recording_shares(recording_id, kind, principal, added_by, "
-            "added_at) SELECT ?, kind, principal, added_by, ? FROM recording_shares "
-            "WHERE recording_id = ?", (to_id, now, from_id))
+    up through the series, so can_view stays one recording's question. Runs on create()'s
+    connection, inside the INSERT's transaction."""
+    conn.execute(
+        "INSERT OR IGNORE INTO recording_shares(recording_id, kind, principal, added_by, "
+        "added_at) SELECT ?, kind, principal, added_by, ? FROM recording_shares "
+        "WHERE recording_id = ?", (to_id, now, from_id))
 
 
 def confirm_badge(db_path, recording_id, machine, state, now=None, detail=None):

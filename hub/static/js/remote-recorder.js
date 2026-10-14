@@ -47,7 +47,7 @@
     // recordings.CONTINUE_REASONS. A continuation waits CONTINUE_SETTLE_MS before looking for
     // the new picture -- the old track can still read `live` for a moment after its helper is
     // gone -- and gives up after CONTINUE_WAIT_MS, inside the hub's 120-second window.
-    const CONTINUE_REASONS = ['helper_restarted', 'stream_changed'];
+    const CONTINUE_REASONS = new Set(['helper_restarted', 'stream_changed']);
     const CONTINUE_SETTLE_MS = 3000;
     const CONTINUE_WAIT_MS = 60000;
 
@@ -163,42 +163,50 @@
             // the hub is answering cancels THIS one (finish) rather than re-stopping that one.
             rec = null;
             setState('starting', { continuing: !!continues });
+            if (!await requestRecording(reason, mime, continues)) return;
+            if (await confirmBadge(Date.now() + BADGE_WAIT_MS)) beginRecording(mime);
+        }
+
+        /** Ask the hub for the recording. True once it exists and is still wanted. */
+        async function requestRecording(reason, mime, continues) {
             const res = await call('POST',
                 `/api/remote/${encodeURIComponent(opts.machine)}/recordings`,
                 { session_id: opts.sessionId(), reason, mime, continues: continues || null });
             if (!res.ok) {
-                if (state !== 'starting') return;          // cancelled meanwhile
-                setState('failed', { error: res.data.error || t('common.hub_error',
-                                                               { status: res.status }) });
-                return;
+                if (state === 'starting') {                 // not cancelled meanwhile
+                    setState('failed', { error: res.data.error || t('common.hub_error',
+                                                                   { status: res.status }) });
+                }
+                return false;
             }
             adopt(res.data);
             if (state !== 'starting') {
                 // Stopped while the hub was creating it: end it there too, or the PC raises a
                 // badge for a recording nobody is making until the hub's sweep notices.
                 await call('POST', base + encodeURIComponent(rec.id) + '/stop', {});
-                return;
+                return false;
             }
-            // Wait for the PC to confirm its badge. Not a moment longer than needed: every
-            // second here is a second the operator is looking at "waiting for the PC".
-            const giveUp = Date.now() + BADGE_WAIT_MS;
-            while (Date.now() < giveUp) {
-                await sleep(BADGE_POLL_MS);
-                if (state !== 'starting') return;          // stopped meanwhile
-                const poll = await call('GET', base + encodeURIComponent(rec.id));
-                if (poll.ok) adopt(poll.data);
-                if (rec.status === 'recording') break;
-                if (rec.status === 'failed' || rec.status === 'ended') {
-                    setState('failed', { error: endReasonText(rec.end_reason, rec.end_detail) });
-                    return;
-                }
+            return true;
+        }
+
+        /** Wait for the PC to confirm its badge. Not a moment longer than needed: every second
+         *  here is a second the operator is looking at "waiting for the PC". True once it is
+         *  up; false when this start is over, already reported (stopped meanwhile, refused,
+         *  or out of time). Recurses rather than looping, as attempt() does. */
+        async function confirmBadge(giveUp) {
+            await sleep(BADGE_POLL_MS);
+            if (state !== 'starting') return false;          // stopped meanwhile
+            const poll = await call('GET', base + encodeURIComponent(rec.id));
+            if (poll.ok) adopt(poll.data);
+            if (rec.status === 'recording') return true;
+            if (rec.status === 'failed' || rec.status === 'ended') {
+                setState('failed', { error: endReasonText(rec.end_reason, rec.end_detail) });
+                return false;
             }
-            if (rec.status !== 'recording') {
-                await call('POST', base + encodeURIComponent(rec.id) + '/stop', {});
-                setState('failed', { error: endReasonText('badge_timeout') });
-                return;
-            }
-            beginRecording(mime);
+            if (Date.now() < giveUp) return confirmBadge(giveUp);
+            await call('POST', base + encodeURIComponent(rec.id) + '/stop', {});
+            setState('failed', { error: endReasonText('badge_timeout') });
+            return false;
         }
 
         function beginRecording(mime) {
@@ -333,7 +341,7 @@
         }
 
         function endedOrContinue(reason) {
-            if (rec && CONTINUE_REASONS.includes(reason)) continueAfter(rec);
+            if (rec && CONTINUE_REASONS.has(reason)) continueAfter(rec);
             else setState('ended', { reason });
         }
 
@@ -344,19 +352,23 @@
             const session = opts.sessionId();
             const giveUp = Date.now() + CONTINUE_WAIT_MS;
             setState('continuing', { reason: prev.end_reason });
-            (async () => {
-                await sleep(CONTINUE_SETTLE_MS);
-                while (state === 'continuing' && Date.now() < giveUp) {
-                    if (!session || opts.sessionId() !== session) break;
-                    const ready = opts.ready ? opts.ready() : true;
-                    if (ready && liveTrack(opts.stream())) {
-                        await start(prev.reason, prev.id);
-                        return;
-                    }
-                    await sleep(BADGE_POLL_MS);
-                }
-                if (state === 'continuing') setState('ended', { reason: prev.end_reason });
-            })();
+            void sleep(CONTINUE_SETTLE_MS).then(() => awaitPicture(prev, session, giveUp));
+        }
+
+        /** One look for the new picture, and another BADGE_POLL_MS later until giveUp. */
+        async function awaitPicture(prev, session, giveUp) {
+            if (state !== 'continuing') return;              // stopped meanwhile
+            if (!session || opts.sessionId() !== session || Date.now() >= giveUp) {
+                setState('ended', { reason: prev.end_reason });
+                return;
+            }
+            const ready = opts.ready ? opts.ready() : true;
+            if (ready && liveTrack(opts.stream())) {
+                await start(prev.reason, prev.id);
+                return;
+            }
+            await sleep(BADGE_POLL_MS);
+            await awaitPicture(prev, session, giveUp);
         }
 
         /** Stop recording: flush the last chunk, then tell the hub. Resolves once the hub has
