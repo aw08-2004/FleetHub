@@ -3816,6 +3816,20 @@ recording's agent half waits on the 3.43.0 release (see *Owed locally*).
     deadline and an unconfirmed badge each end one too (`recordings.reconcile`).
   * **One stream per recording.** A switch to the hub relay ends the recording
     (`stream_changed`) rather than splicing a second webm header into the file.
+  * **...and a session switch continues it as the next part** (hub 1.149.0). Switching user,
+    signing in or signing out relaunches the helper, so the two rules above ended every
+    recording at the first switch. After `helper_restarted` or `stream_changed` the browser
+    now waits for the new picture and starts a continuation: same series, part + 1, the
+    first part's reason (no dialog), its shares copied, and its own badge confirmation, so
+    the new session shows "Recording Screen" before anything of it is stored. The series
+    keeps its deadline (a switch in the last minute leaves up to a minute, capped at one minute
+    past the agreed time for the whole series -- review of #131), or switching user would reset the ten-minute
+    limit; continuing is accepted only for the same operator and session, within 2 minutes,
+    up to 20 parts. Sharing any part shares the series, and the Recordings page labels each
+    row "Part N". An operator's Stop never continues. *Rejected:* one continuous file across
+    the switch -- it needs the browser to record a canvas it redraws every frame and the hub
+    to pause rather than end while the new badge comes up, which costs CPU in every
+    operator's browser and a third live state, to save one file per switch.
   * **Locked like `.env`.** `envfile.protect_directory` restricts the `data` folder to SYSTEM,
     Administrators and the hub's own account at every start, with inheritable entries so each
     new recording is born private. *Rejected:* a BLOB column -- every database backup would

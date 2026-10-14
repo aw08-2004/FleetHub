@@ -18,6 +18,11 @@ The silent failures this file exists to catch:
   * **Re-sharing, or a share that points nowhere.** Unknown groups are refused, the owner is
     never stored as a share, and nothing but the owner's own call changes the list.
   * **An owner folder that climbs out of the recordings root.** It is built from an email.
+  * **A continuation that is a way round the rules.** A recording carried on after a session
+    switch skips the reason dialog, so it must be the same operator, the same session, an
+    ending the operator did not choose, and recent -- and it keeps its series' clock, or
+    switching user would reset the ten-minute limit. Two continuations of one part racing
+    must not both land.
 """
 import os
 import sqlite3
@@ -265,6 +270,103 @@ def test_sharing():
           len(fleet.list_audit(db, action="recording_share")["entries"]) == 1)
 
 
+def cont(db, prev_id, session="s1", owner="ann@x.com", now=1000):
+    return recordings.create(db, session_id=session, machine="PC-01", owner=owner, reason=None,
+                             mime="video/webm;codecs=vp9", now=now, continues=prev_id)
+
+
+def test_continuation():
+    print("\n-- a session switch continues the recording as its next part --")
+    db, _root = setup()
+    gid = permissions.create_group(db, "Leads", capabilities=[permissions.VIEW], members=[])
+    first = new(db, now=1000)
+    check("a first recording is part 1 of its own series",
+          first["part"] == 1 and recordings.series_of(first) == first["id"])
+    recordings.confirm_badge(db, first["id"], "PC-01", "shown", now=1000)
+    recordings.set_shares(db, first, groups=[gid], users=["bob@x.com"], actor="ann@x.com")
+    recordings.end_for_session(db, "s1", recordings.END_HELPER_RESTARTED, now=1200)
+
+    check("another operator cannot continue it",
+          raises(ValueError, cont, db, first["id"], owner="eve@x.com", now=1205))
+    check("...nor can it be continued into another session",
+          raises(ValueError, cont, db, first["id"], session="s2", now=1205))
+    check("...nor once the window has passed",
+          raises(ValueError, cont, db, first["id"],
+                 now=1200 + recordings.CONTINUE_WINDOW_SECONDS + 1))
+    check("...nor from an id that is not a recording's",
+          raises(ValueError, cont, db, "../" + first["id"], now=1205))
+
+    second = cont(db, first["id"], now=1205)
+    check("the continuation is part 2 of the same series",
+          second["part"] == 2 and second["series_id"] == first["id"])
+    check("...with the first part's reason, though none was given",
+          second["reason"] == first["reason"])
+    check("...waiting for its own badge like any start",
+          second["status"] == recordings.STATUS_STARTING)
+    check("...shared with whoever the first part was",
+          recordings.shares(db, second["id"]) == {"groups": [gid], "users": ["bob@x.com"]})
+    audit = fleet.list_audit(db, action="recording_start")["entries"]
+    check("...and audited as a continuation of the first",
+          audit[0]["detail"].get("continues") == first["id"] and audit[0]["detail"]["part"] == 2)
+    got = recordings.confirm_badge(db, second["id"], "PC-01", "shown", now=1210)
+    check("its badge keeps the series' clock instead of starting a new ten minutes",
+          got["deadline"] == 1000 + recordings.SEGMENT_SECONDS)
+
+    recordings.finish(db, second["id"], recordings.END_STOPPED, now=1220)
+    check("a part the operator stopped is not continued",
+          raises(ValueError, cont, db, second["id"], now=1225))
+    # The first part still meets every condition, but its part 2 exists: a second continuation
+    # of it is the losing half of a race, and the series index refuses it.
+    check("the same part cannot be continued twice",
+          raises(ValueError, cont, db, first["id"], now=1225))
+
+    # A switch in the last seconds still leaves time for the countdown and its Extend.
+    late = new(db, session="s3", now=2000)
+    recordings.confirm_badge(db, late["id"], "PC-01", "shown", now=2000)
+    deadline = 2000 + recordings.SEGMENT_SECONDS
+    recordings.finish(db, late["id"], recordings.END_STREAM_CHANGED, now=deadline - 10)
+    nxt = cont(db, late["id"], session="s3", now=deadline - 5)
+    got = recordings.confirm_badge(db, nxt["id"], "PC-01", "shown", now=deadline - 2)
+    check("...a continuation gets up to a minute",
+          got["deadline"] == deadline - 2 + recordings.CONTINUE_MIN_SECONDS)
+    # Switch user again at the end of that minute, and again: the floor must not hand out a
+    # fresh minute each time (review of #131) -- one minute past the agreed time, in total.
+    capped = deadline + recordings.CONTINUE_MIN_SECONDS
+    recordings.finish(db, nxt["id"], recordings.END_HELPER_RESTARTED, now=got["deadline"] - 5)
+    again = cont(db, nxt["id"], session="s3", now=got["deadline"] - 4)
+    got = recordings.confirm_badge(db, again["id"], "PC-01", "shown", now=got["deadline"] - 3)
+    check("...but a second switch cannot push past the agreed time plus that minute",
+          got["deadline"] == capped)
+    recordings.finish(db, again["id"], recordings.END_HELPER_RESTARTED, now=capped - 1)
+    third = cont(db, again["id"], session="s3", now=capped - 1)
+    got = recordings.confirm_badge(db, third["id"], "PC-01", "shown", now=capped - 1)
+    check("...nor can a third", got["deadline"] == capped)
+    nxt = third
+
+    recordings.finish(db, nxt["id"], recordings.END_HELPER_RESTARTED, now=deadline)
+    with recordings.get_conn(db) as conn:
+        conn.execute("UPDATE recordings SET part = ? WHERE id = ?",
+                     (recordings.MAX_SERIES_PARTS, nxt["id"]))
+    check("a series stops at MAX_SERIES_PARTS (a helper that keeps dying)",
+          raises(ValueError, cont, db, nxt["id"], session="s3", now=deadline + 1))
+
+    recordings.set_shares(db, first, groups=[], users=["cy@x.com"], actor="ann@x.com")
+    check("sharing one part shares every part of the series",
+          recordings.shares(db, second["id"]) == {"groups": [], "users": ["cy@x.com"]})
+    check("...and leaves other recordings alone",
+          recordings.shares(db, late["id"]) == {"groups": [], "users": []})
+    # A recording made before continuations has no series_id: it is a series of one.
+    with recordings.get_conn(db) as conn:
+        conn.execute("INSERT INTO recordings(id, session_id, machine, owner, reason, status, "
+                     "mime, created_at) VALUES (?, 'old', 'PC-01', 'ann@x.com', 'r', ?, "
+                     "'video/webm', 1)", ("d" * 32, recordings.STATUS_ENDED))
+    legacy = recordings.get(db, "d" * 32)
+    check("a recording from before continuations is a series of one",
+          legacy["series_id"] is None and legacy["part"] == 1
+          and recordings.series_of(legacy) == "d" * 32
+          and [r["id"] for r in recordings.series_members(db, legacy)] == ["d" * 32])
+
+
 def test_storage():
     print("\n-- where the files live, and deleting them --")
     db, root = setup()
@@ -318,6 +420,7 @@ def main():
     test_deadline_and_extend()
     test_reconcile()
     test_sharing()
+    test_continuation()
     test_storage()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0

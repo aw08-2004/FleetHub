@@ -109,13 +109,29 @@
         return cell;
     }
 
+    // A recording carried on after the PC switched session is a series of parts, one file
+    // each (hub/recordings.py). Each part stays its own row -- played, downloaded and deleted
+    // on its own -- and says which part it is, so "why is my 20-minute recording three files"
+    // answers itself. A series of one says nothing.
+    function partLabel(rec, rows) {
+        const inSeries = rows.filter((r) => r.series_id === rec.series_id).length;
+        return (rec.part > 1 || inSeries > 1) ? t('recordings.part', { n: rec.part }) : '';
+    }
+
+    function machineCell(rec, rows) {
+        const cell = el('td', null, rec.machine);
+        const label = partLabel(rec, rows);
+        if (label) cell.appendChild(el('span', 'stat-card__meta', ' ' + label));
+        return cell;
+    }
+
     function renderMine(rows) {
         mineBody.replaceChildren();
         $('recordings-mine-empty').hidden = rows.length > 0;
         rows.forEach((rec) => {
             const tr = el('tr');
             tr.appendChild(el('td', null, fmtTime(rec.created_at)));
-            tr.appendChild(el('td', null, rec.machine));
+            tr.appendChild(machineCell(rec, rows));
             tr.appendChild(el('td', null, formatDuration(rec.duration_seconds)));
             tr.appendChild(el('td', null, formatBytes(rec.size_bytes)));
             tr.appendChild(el('td', null, rec.reason));
@@ -135,7 +151,7 @@
         rows.forEach((rec) => {
             const tr = el('tr');
             tr.appendChild(el('td', null, fmtTime(rec.created_at)));
-            tr.appendChild(el('td', null, rec.machine));
+            tr.appendChild(machineCell(rec, rows));
             tr.appendChild(el('td', null, rec.owner));
             tr.appendChild(el('td', null, formatDuration(rec.duration_seconds)));
             tr.appendChild(el('td', null, rec.reason));
