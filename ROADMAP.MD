@@ -3822,7 +3822,8 @@ recording's agent half waits on the 3.43.0 release (see *Owed locally*).
     now waits for the new picture and starts a continuation: same series, part + 1, the
     first part's reason (no dialog), its shares copied, and its own badge confirmation, so
     the new session shows "Recording Screen" before anything of it is stored. The series
-    keeps its deadline (at least a minute left), or switching user would reset the ten-minute
+    keeps its deadline (a switch in the last minute leaves up to a minute, capped at one minute
+    past the agreed time for the whole series -- review of #131), or switching user would reset the ten-minute
     limit; continuing is accepted only for the same operator and session, within 2 minutes,
     up to 20 parts. Sharing any part shares the series, and the Recordings page labels each
     row "Part N". An operator's Stop never continues. *Rejected:* one continuous file across

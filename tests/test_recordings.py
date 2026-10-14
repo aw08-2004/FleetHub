@@ -327,8 +327,21 @@ def test_continuation():
     recordings.finish(db, late["id"], recordings.END_STREAM_CHANGED, now=deadline - 10)
     nxt = cont(db, late["id"], session="s3", now=deadline - 5)
     got = recordings.confirm_badge(db, nxt["id"], "PC-01", "shown", now=deadline - 2)
-    check("...a continuation always gets at least a minute",
+    check("...a continuation gets up to a minute",
           got["deadline"] == deadline - 2 + recordings.CONTINUE_MIN_SECONDS)
+    # Switch user again at the end of that minute, and again: the floor must not hand out a
+    # fresh minute each time (review of #131) -- one minute past the agreed time, in total.
+    capped = deadline + recordings.CONTINUE_MIN_SECONDS
+    recordings.finish(db, nxt["id"], recordings.END_HELPER_RESTARTED, now=got["deadline"] - 5)
+    again = cont(db, nxt["id"], session="s3", now=got["deadline"] - 4)
+    got = recordings.confirm_badge(db, again["id"], "PC-01", "shown", now=got["deadline"] - 3)
+    check("...but a second switch cannot push past the agreed time plus that minute",
+          got["deadline"] == capped)
+    recordings.finish(db, again["id"], recordings.END_HELPER_RESTARTED, now=capped - 1)
+    third = cont(db, again["id"], session="s3", now=capped - 1)
+    got = recordings.confirm_badge(db, third["id"], "PC-01", "shown", now=capped - 1)
+    check("...nor can a third", got["deadline"] == capped)
+    nxt = third
 
     recordings.finish(db, nxt["id"], recordings.END_HELPER_RESTARTED, now=deadline)
     with recordings.get_conn(db) as conn:

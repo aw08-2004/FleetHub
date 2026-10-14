@@ -1662,7 +1662,8 @@ session. There is no separate recording permission.
   the current part ends and the viewer starts **Part 2** on its own once the new session is
   on screen: same reason, no dialog, and the badge has to show in the new session before
   anything is stored. The same happens when a session falls back to the hub relay. Parts
-  share the recording's ten minutes (always at least one minute left), and sharing any part
+  share the recording's ten minutes (a switch in the last minute leaves up to a minute, but
+  never more than one minute past the agreed time however often it happens), and sharing any part
   shares all of them. **Stop recording** between parts means no next part.
 - **Where they are kept.** `<hub install>\data\<your email>\recordings\<id>.webm`, kept
   until the owner deletes them. The hub locks the `data` folder to SYSTEM and Administrators

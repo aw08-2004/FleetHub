@@ -28,8 +28,11 @@ recording in the same `series_id` with `part` one higher, the same reason and ow
 shares copied, and its own badge confirmation -- the new helper raises the badge in the new
 Windows session before a byte of it is stored, so "never silent" holds for the person now at
 the console too. The series keeps its clock: a continuation inherits the previous part's
-deadline (never less than CONTINUE_MIN_SECONDS, so the countdown and Extend are still offered),
-or switching user would be a way round the ten-minute limit. *Rejected:* one continuous file
+deadline, or switching user would be a way round the ten-minute limit. A switch in the last
+seconds gets up to CONTINUE_MIN_SECONDS so the countdown and Extend are still offered, but
+**never past the series' agreed time plus that minute** (series_deadline) -- a floor of
+"a minute from now" alone gave every switch another minute, so switching user at each
+deadline ran a series a minute past ten per switch (review of #131). *Rejected:* one continuous file
 across the switch. A webm file is one stream, so that means recording a canvas the viewer
 redraws every frame and pausing at the hub while the new badge comes up -- more CPU in every
 operator's browser and a third live state here, to save a click on "Part 2".
@@ -88,7 +91,8 @@ CONTINUE_REASONS = (END_HELPER_RESTARTED, END_STREAM_CHANGED)
 # keeps an old recording id from being a way to skip the reason dialog later in the session.
 CONTINUE_WINDOW_SECONDS = 120
 # A continuation's minimum time on the clock, so a switch in the last seconds still leaves the
-# operator the countdown and its Extend rather than ending the new part on arrival.
+# operator the countdown and its Extend rather than ending the new part on arrival. Capped by
+# series_deadline: one minute past the agreed time at most, however many switches.
 CONTINUE_MIN_SECONDS = 60
 # A helper that keeps dying would otherwise produce a part every few seconds for as long as the
 # session lasts. The agent caps its own session moves well below this.
@@ -297,6 +301,22 @@ def series_of(rec):
     return rec.get("series_id") or rec["id"]
 
 
+def series_deadline(db_path, rec):
+    """The time the operator agreed to for `rec`'s series: part 1's badge plus ten minutes, and
+    ten more for every Extend in any part. Derived rather than stored, because both inputs
+    are already kept and a column would be one more thing a continuation has to carry right.
+
+    With part 1 deleted (the owner may delete one part while another records) there is no
+    agreed start to count from, so it answers a minute before the part's carried deadline,
+    which leaves the floor adding nothing -- erring towards ending on time."""
+    members = series_members(db_path, rec)
+    first = members[0]
+    if first["part"] != 1 or not first["confirmed_at"]:
+        return int(rec["deadline"] or 0) - CONTINUE_MIN_SECONDS
+    extensions = sum(int(m["extensions"] or 0) for m in members)
+    return int(first["confirmed_at"]) + SEGMENT_SECONDS * (1 + extensions)
+
+
 def _continuable(db_path, continues, *, session_id, owner, now):
     """The recording `continues` names, if a new part may follow it; ValueError otherwise.
 
@@ -346,7 +366,7 @@ def create(db_path, *, session_id, machine, owner, reason, mime, now=None, conti
     recording_id = uuid.uuid4().hex
     series_id = series_of(prev) if prev else recording_id
     part = int(prev["part"] or 1) + 1 if prev else 1
-    # Carried, and only made "at least a minute from now" when the badge is confirmed.
+    # Carried; confirm_badge applies the capped last-minute floor.
     deadline = prev["deadline"] if prev else None
     try:
         # One transaction with the share copy, so a part never exists unshared even briefly.
@@ -401,9 +421,14 @@ def confirm_badge(db_path, recording_id, machine, state, now=None, detail=None):
     if rec is None or rec["machine"] != machine:
         return None
     if state == "shown" and rec["status"] == STATUS_STARTING:
-        # A first part gets ten minutes; a continuation keeps its series' deadline.
-        deadline = (max(int(rec["deadline"]), now + CONTINUE_MIN_SECONDS)
-                    if rec["deadline"] else now + SEGMENT_SECONDS)
+        # A first part gets ten minutes; a continuation keeps its series' deadline, with the
+        # last-minute floor capped (see the module docstring).
+        if rec["deadline"]:
+            floor = min(now + CONTINUE_MIN_SECONDS,
+                        series_deadline(db_path, rec) + CONTINUE_MIN_SECONDS)
+            deadline = max(int(rec["deadline"]), floor)
+        else:
+            deadline = now + SEGMENT_SECONDS
         with get_conn(db_path) as conn:
             conn.execute(
                 "UPDATE recordings SET status = ?, confirmed_at = ?, deadline = ? "
