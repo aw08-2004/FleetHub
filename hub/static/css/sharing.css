@@ -1,0 +1,66 @@
+/* Sharing page (roadmap #15). Only what components.css and machine.css do not already cover.
+ *
+ * The borrowed screen itself is styled by machine.css, which this page loads for the same
+ * reason the Remote page does: the viewer is the machine page's remote card, cloned. Before
+ * it was loaded here the viewer rendered as raw browser-default selects and buttons -- the
+ * markup was right and nothing was styling it, which reads as a broken page rather than a
+ * missing stylesheet. */
+
+/* Hostname and its "Borrowed" badge on one line. The badge stays on every row (sharing.js
+ * says why); stacking it under the name doubled each row's height for a single word. */
+.share-name {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    font-weight: 600;
+}
+
+/* The row whose detail or screen is open below the table, so the panel underneath can be
+ * traced back to the row it belongs to without reading the hostname twice. */
+.data-table tr.is-selected td {
+    background: var(--accent-soft);
+}
+
+/* The detail card and the screen sit under the table, spaced off it and off each other. */
+.share-panel {
+    margin-top: var(--space-5);
+}
+
+.share-panel__head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+}
+
+.share-panel__head .section-title {
+    margin-bottom: 0;
+}
+
+/* Close sits at the far end of the head, whatever else the head holds. */
+.share-panel__close {
+    margin-left: auto;
+}
+
+.share-panel__meta {
+    margin-bottom: var(--space-4);
+}
+
+/* The detail tiles carry strings ("Microsoft Windows 10 Pro"), not the single number the
+ * stat-card value size was chosen for -- at 32px they wrapped and dwarfed the table above. */
+.share-panel .stat-card__value {
+    font-size: var(--text-md);
+    margin-bottom: 0;
+    overflow-wrap: anywhere;
+}
+
+.share-panel .card-grid {
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.share-panel .stat-card {
+    padding: var(--space-4);
+}

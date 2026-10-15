@@ -77,8 +77,10 @@
     }
 
     function actionCell(buttons) {
-        const cell = el('td');
-        cell.style.whiteSpace = 'nowrap';
+        // The shared actions-cell class rather than per-button margins: it keeps the column
+        // as narrow as its buttons and right-aligned, and spaces only BETWEEN buttons, so a
+        // single button no longer sits indented off the cell edge.
+        const cell = el('td', 'data-table__actions');
         buttons.forEach((button) => cell.appendChild(button));
         return cell;
     }
@@ -86,9 +88,12 @@
     function button(label, className, onClick) {
         const node = el('button', className || 'btn', label);
         node.type = 'button';
-        node.style.marginLeft = 'var(--space-2)';
         node.addEventListener('click', onClick);
         return node;
+    }
+
+    function borrowedKey(machine) {
+        return `${machine.link_id}/${machine.share_id}`;
     }
 
     // ================================
@@ -318,12 +323,16 @@
 
         machines.forEach((machine) => {
             const row = el('tr');
+            row.dataset.key = borrowedKey(machine);
+            if (row.dataset.key === selectedKey) row.classList.add('is-selected');
             const name = el('td');
-            name.appendChild(el('div', null, machine.hostname));
+            const nameLine = el('div', 'share-name');
+            nameLine.appendChild(el('span', null, machine.hostname));
             // Badged on every row, not once at the top of the table. A borrowed machine is
             // read one row at a time, and a heading above the list is not where somebody
             // looks before clicking a button.
-            name.appendChild(el('span', 'badge', t('sharing.borrowed_badge')));
+            nameLine.appendChild(el('span', 'badge', t('sharing.borrowed_badge')));
+            name.appendChild(nameLine);
             row.appendChild(name);
             row.appendChild(el('td', null,
                                machine.peer_label || t('sharing.unnamed_hub')));
@@ -373,10 +382,34 @@
         });
     }
 
+    // Which borrowed row the panels below the table belong to, kept as a key rather than a
+    // node because Refresh re-renders the table and the highlight has to survive it.
+    let selectedKey = null;
+
+    function markSelected(key) {
+        selectedKey = key;
+        if (!borrowedHost) return;
+        borrowedHost.querySelectorAll('tr[data-key]').forEach((row) => {
+            row.classList.toggle('is-selected', row.dataset.key === selectedKey);
+        });
+    }
+
+    function closeDetail() {
+        if (!borrowedDetail) return;
+        borrowedDetail.replaceChildren();
+        borrowedDetail.hidden = true;
+        if (!openViewer) markSelected(null);
+    }
+
     async function openBorrowed(machine) {
         if (!borrowedDetail) return;
+        // One machine at a time below the table: a screen left open for a different PC
+        // would sit under this one's details and read as belonging to it.
+        if (openViewer && selectedKey !== borrowedKey(machine)) closeScreen();
+        markSelected(borrowedKey(machine));
         borrowedDetail.hidden = false;
-        borrowedDetail.replaceChildren(el('p', 'stat-card__meta', t('common.loading')));
+        borrowedDetail.replaceChildren(
+            el('p', 'stat-card__meta share-panel', t('common.loading')));
         try {
             const url = `/api/sharing/borrowed/${encodeURIComponent(machine.link_id)}`
                 + `/${encodeURIComponent(machine.share_id)}/machine`;
@@ -385,18 +418,28 @@
             // Verbatim. A refusal from the owning hub explains itself -- "the operator who
             // shared this machine no longer holds 'view' on it" -- and rewording it here
             // into something generic would throw away the only actionable half.
-            borrowedDetail.replaceChildren(el('div', 'banner banner--warn', err.message));
+            borrowedDetail.replaceChildren(
+                el('div', 'banner banner--warn share-panel', err.message));
         }
     }
 
+    function statusLabel(status) {
+        // The owner hub sends its own slug; the two it is known to send get this console's
+        // words, and anything else is shown as sent rather than guessed at.
+        if (status === 'online') return t('sharing.state.online');
+        if (status === 'offline') return t('sharing.state.offline');
+        return status;
+    }
+
     function renderBorrowedDetail(machine, detail) {
-        const card = el('div', 'card');
-        card.style.marginTop = 'var(--space-5)';
-        const head = el('div');
+        const card = el('div', 'card share-panel');
+        const head = el('div', 'share-panel__head');
         head.appendChild(el('h2', 'section-title', detail.machine || machine.hostname));
         head.appendChild(el('span', 'badge', t('sharing.borrowed_badge')));
+        head.appendChild(button(t('common.close'), 'btn btn--ghost share-panel__close',
+                                closeDetail));
         card.appendChild(head);
-        card.appendChild(el('p', 'stat-card__meta',
+        card.appendChild(el('p', 'stat-card__meta share-panel__meta',
             t('sharing.borrowing.owned_by', {
                 hub: machine.peer_label || t('sharing.unnamed_hub'),
             })));
@@ -405,7 +448,7 @@
             [t('sharing.detail.model'),
              [detail.manufacturer, detail.model].filter(Boolean).join(' ')],
             [t('sharing.detail.os'), detail.os_caption || detail.os],
-            [t('sharing.detail.status'), detail.status],
+            [t('sharing.detail.status'), statusLabel(detail.status)],
             [t('sharing.detail.temp'),
              detail.temp === null || detail.temp === undefined ? null : `${detail.temp} °C`],
             [t('sharing.detail.uptime'),
@@ -444,22 +487,30 @@
             screenHost.replaceChildren();
             screenHost.hidden = true;
         }
+        if (borrowedDetail && borrowedDetail.hidden) markSelected(null);
     }
 
     function openScreen(machine) {
         if (!screenHost || !viewerTemplate || !window.RemoteViewer) return;
         closeScreen();
+        // Same rule as openBorrowed, the other way round: details for a different PC must
+        // not stay above this one's screen.
+        if (selectedKey !== borrowedKey(machine)) closeDetail();
+        markSelected(borrowedKey(machine));
 
         const base = `/api/sharing/borrowed/${encodeURIComponent(machine.link_id)}`
             + `/${encodeURIComponent(machine.share_id)}/remote`;
 
-        const bar = el('div', 'toolbar');
-        bar.style.justifyContent = 'space-between';
+        // The viewer card carries the hostname as its own title, so this bar only says
+        // whose machine it is and offers the way out.
+        const bar = el('div', 'share-panel__head share-panel');
+        bar.appendChild(el('span', 'badge', t('sharing.borrowed_badge')));
         bar.appendChild(el('span', 'stat-card__meta',
             t('sharing.borrowing.owned_by', {
                 hub: machine.peer_label || t('sharing.unnamed_hub'),
             })));
-        bar.appendChild(button(t('common.close'), 'btn', closeScreen));
+        bar.appendChild(button(t('common.close'), 'btn btn--ghost share-panel__close',
+                               closeScreen));
 
         const panel = el('div', 'remote-screen');
         panel.append(viewerTemplate.content.cloneNode(true));

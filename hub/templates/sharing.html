@@ -2,6 +2,11 @@
 {% block title %}{{ t('nav.sharing') }} - FleetHub{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+{# machine.css for the borrowed screen: the viewer partial below is the machine page's
+   remote card, and its styles live there -- the Remote page loads it for the same reason.
+   Without it the viewer renders as unstyled browser-default controls. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/machine.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/sharing.css') }}">
 {% endblock %}
 {% block content %}
 {#
@@ -193,6 +198,12 @@
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+{# fleet-api.js before remote.js: every request the viewer makes goes through
+   window.FleetApi. Missing here, Connect failed with "Cannot read properties of undefined
+   (reading 'postJson')" -- the routes table was right, the helper behind it was absent.
+   It finds no #machine-config on this page, so FleetApi.machine is null and remote.js does
+   not bootstrap a viewer of its own. #}
+<script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
 {# remote.js before sharing.js: sharing.js calls window.RemoteViewer.create to open a
    borrowed screen, and the factory has to exist by then. #}
 <script src="{{ url_for('static', filename='js/remote.js') }}"></script>
