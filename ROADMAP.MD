@@ -108,7 +108,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-12
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-15
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -362,6 +362,17 @@ real SCM yet. On a Windows VM with a **3.43.0 install registered as `TempMonitor
 - **Unticked:** the agent re-enrolls and the PC reappears, as it did before.
 - **A remote session open while deleting:** the helper in the user's session may hold files in
   the install directory. Note what is left behind.
+
+**11. Remote view on a phone (issue #133), owed on an iPhone.** Built 2026-10-15 (hub 1.150.0)
+from a Linux container: `tests/test_remote_touch.py` drives `remote-touch.js` with fake pointer
+events under node, but no real touch has reached it. On an iPhone, in Safari, on the Remote page:
+- **Fullscreen** covers the sidebar and topbar too, and **Exit fullscreen** brings them back.
+  Navigate away while fullscreen and come back: the page must not open covering the window.
+- A pinch zooms the **picture**, not the page, and two fingers pan it.
+- One finger moves the drawn cursor; a tap clicks where the **cursor** is, once (not also
+  under the finger); two fingers tapped right-click; hold then drag moves a window.
+- The same on an iPad (which takes the native, prefixed fullscreen path), and a desktop
+  browser's mouse is unchanged.
 
 ---
 
@@ -1750,6 +1761,26 @@ agent long-polls. `remote_relay.py` (in memory) + routes in `remote_web.py`;
   plaintext point above); storing frames in SQLite (25 writes a second through the single
   `db_writer`, for data nobody wants after a restart). In-memory state assumes the hub is one
   process, which it is; a multi-worker deployment would have to move it.
+
+### On a phone · hub 1.150.0 (issue #133)
+
+Safari on an iPhone could neither go fullscreen nor zoom. **Fullscreen:** iPhone Safari has
+the Fullscreen API on `<video>` only, so `stage.requestFullscreen` was undefined and threw
+before its own `.catch()` -- the button did nothing at all. Now feature-detected (with the
+`webkit` names for iPad), and where there is none the stage is pinned over the page by CSS and
+the shell's frame is lifted over the sidebar and topbar (`app-frames__frame--takeover`). The
+Safari address bar stays; only a home-screen app could lose it, which is #11's ground.
+**Input:** a touch now drives a **virtual cursor**, as Microsoft's Remote Desktop app does in
+its mouse-pointer mode -- the owner's choice on the issue (`remote-touch.js`). One finger moves
+the cursor by the finger's travel, a tap clicks at the cursor, two fingers tapped right-click,
+hold-then-drag drags; pinch zooms the picture locally (a CSS transform) and two fingers pan it.
+*Rejected:* direct touch, clicking under the finger (a fingertip covers a dozen 1080p pixels at
+phone size, and is unusable short of a zoom that means panning all session); tap-then-touch to
+drag (two quick taps must stay a double-click, and telling them apart costs every tap a third of
+a second); the `<video>`'s own `webkitEnterFullscreen` (the system player, with no input).
+The Sharing page keeps mouse input only: it loads neither `remote-touch.js` nor `machine.css`.
+**Not done:** scrolling the remote PC by touch, and a keyboard on a phone. **Owed on a phone:**
+see *Owed locally*, item 11.
 
 **Open, on-hardware follow-ups** (validate/tune together, as agreed): the **secure desktop**
 (capturing/injecting on Winlogon during UAC — the SYSTEM-in-session enabler is in place, the

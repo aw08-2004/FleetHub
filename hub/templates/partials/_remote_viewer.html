@@ -114,6 +114,10 @@
            user gesture. object-fit: contain preserves aspect ratio -- remote.js maps
            click coordinates against the rendered content box, not the element box. #}
         <video class="remote-stage__video" data-remote="video" playsinline autoplay muted></video>
+        {# The virtual cursor a touch drives (remote-touch.js, issue #133). Hidden until the
+           first touch, so a mouse user never sees it. Its tip is the element's top-left
+           corner, which is the point a tap clicks. #}
+        <div class="remote-stage__cursor" data-remote="cursor" aria-hidden="true" hidden></div>
         <div class="remote-stage__overlay" data-remote="overlay" hidden>
             <span class="remote-stage__badge" data-remote="overlay-status">{{ t('machine.remote.live') }}</span>
             <button type="button" class="btn btn--ghost" data-remote="exit-fullscreen">{{ t('machine.remote.exit_fullscreen') }}</button>

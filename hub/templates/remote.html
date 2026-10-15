@@ -71,6 +71,10 @@
    window.RemoteRecorder exists, so Sharing (whose machines are borrowed and never
    recorded) simply does not load it. Roadmap #19. #}
 <script src="{{ url_for('static', filename='js/remote-recorder.js') }}"></script>
+{# remote-touch.js before remote.js too: the virtual cursor and pinch-zoom a phone drives the
+   picture with (issue #133). Sharing does not load it -- it does not load machine.css either,
+   which the cursor is drawn by -- so a borrowed screen keeps plain mouse input. #}
+<script src="{{ url_for('static', filename='js/remote-touch.js') }}"></script>
 <script src="{{ url_for('static', filename='js/remote.js') }}"></script>
 <script src="{{ url_for('static', filename='js/remote-workspace.js') }}"></script>
 {% endblock %}

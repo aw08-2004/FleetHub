@@ -2375,6 +2375,7 @@
       "vdd_queued": "En cola. Sigue el resultado del comando en la pestaña Comandos; la página del equipo se actualiza cuando el agente responde.",
       "vdd_queue_failed": "No se pudo poner en cola: {error}",
       "fullscreen_refused": "Pantalla completa rechazada: {error}",
+      "touch_hint": "Táctil: arrastre para mover el puntero, toque para hacer clic, toque con dos dedos para el clic derecho, mantenga pulsado y arrastre para arrastrar. Pellizque para ampliar y arrastre con dos dedos para desplazar la imagen.",
       "view_only_note": "Solo ver: se suprime la entrada desde este navegador. Es una protección contra accidentes, no un permiso: no impide que otra persona controle el equipo.",
       "failed": "Fallo",
       "session_ended": "Sesión terminada.",
