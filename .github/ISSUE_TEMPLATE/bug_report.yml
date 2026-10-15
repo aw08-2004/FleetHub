@@ -1,0 +1,141 @@
+name: Bug report
+description: Something in the console, an agent, the client or the installer does the wrong thing.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This repository is public.** Redact hostnames, IPs, operator emails, user names,
+        device tokens, invite links, BitLocker recovery keys and backup keys before pasting
+        anything. A security hole goes through [SECURITY.MD](https://github.com/aw08-2004/Temp_Monitor/blob/main/SECURITY.MD), not here.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Where the wrong behaviour shows up. If the console shows a machine wrongly, it may still be the agent -- pick your best guess.
+      options:
+        - Hub / web console
+        - Windows agent (FleetHubAgent / TempMonitorAgent)
+        - Linux agent
+        - Android agent
+        - Desktop / mobile client app
+        - Installer (install.ps1)
+        - Self-update / release channel
+        - Docs
+    validations:
+      required: true
+
+  - type: input
+    id: area
+    attributes:
+      label: Feature area
+      description: Page or feature, with the roadmap number if you know it.
+      placeholder: "e.g. Backups (#1), Remote view (#2), Patch management (#14), Session recording (#19)"
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw. Exact error text, toast or panel message beats a paraphrase.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: From a known state. Say whether it happens every time, sometimes, or once.
+      placeholder: |
+        1. Open Machines -> PC-XXXX -> Tools -> Files
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: hub-version
+    attributes:
+      label: Hub version
+      description: As the console reports it. Three numbers, e.g. 1.149.1.
+      placeholder: "1.x.y"
+    validations:
+      required: true
+
+  - type: input
+    id: agent-version
+    attributes:
+      label: Agent / client version
+      description: For the affected machine(s), or "n/a" for a hub-only problem.
+      placeholder: "Windows agent 3.x.y / Linux 0.x.y / client 1.x.y / n/a"
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Release channel
+      options:
+        - stable
+        - beta
+        - don't know
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: How widespread
+      options:
+        - One machine
+        - Some machines
+        - Every machine
+        - Hub only, no machine involved
+    validations:
+      required: true
+
+  - type: textarea
+    id: machine-context
+    attributes:
+      label: Machine context
+      description: |
+        Only if an agent is involved. Windows edition and build, service name
+        (`FleetHubAgent`, or legacy `TempMonitorAgent` on a PC not re-installed since
+        2026-10-12), domain-joined or not, and whether a user was signed in.
+      placeholder: "Windows 11 Pro 24H2, service FleetHubAgent, domain-joined, user signed in"
+
+  - type: textarea
+    id: started
+    attributes:
+      label: When it started
+      description: After a hub update, an agent update, a settings change, a Windows update? "Always been like this" is a useful answer too.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Hub: `logs/` next to the hub. Agent: `C:\ProgramData\FleetHub\Agent\`.
+        Browser: the DevTools console for console problems. **Redact before pasting.**
+      render: text
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Drag images in. Blur machine names and user names.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched open and closed issues and ROADMAP.MD for this.
+          required: true
+        - label: I redacted hostnames, emails, IPs, tokens and keys from everything above.
+          required: true

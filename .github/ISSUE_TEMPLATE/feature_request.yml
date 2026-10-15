@@ -1,0 +1,75 @@
+name: Feature request
+description: Something FleetHub should do that it does not do today.
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [ROADMAP.MD](https://github.com/aw08-2004/Temp_Monitor/blob/main/ROADMAP.MD) first -- it lists what is planned, and also
+        what was **rejected and why**. If your idea was rejected there, say what has changed.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Where it would live. Pick several if it needs both sides.
+      multiple: true
+      options:
+        - Hub / web console
+        - Windows agent
+        - Linux agent
+        - Android agent
+        - Desktop / mobile client app
+        - Installer (install.ps1)
+        - Docs
+    validations:
+      required: true
+
+  - type: input
+    id: roadmap
+    attributes:
+      label: Related roadmap item
+      placeholder: "#14, or none"
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to get done on the helpdesk today and why it is hard. The problem, not the solution.
+      placeholder: "When a user reports X, I have to RDP in, open Y and check Z by hand on every machine..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: How it could look in the console, and what the agent would have to do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: What you do today instead, and other approaches you considered and why they fall short.
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Permissions and security
+      description: |
+        Who should be allowed to do this -- a new capability, or an existing one? Does it run
+        something on the machine, read user data, or need to reach a new destination?
+        See [SECURITY.MD](https://github.com/aw08-2004/Temp_Monitor/blob/main/SECURITY.MD).
+
+  - type: dropdown
+    id: importance
+    attributes:
+      label: How much it matters
+      options:
+        - Blocking real work
+        - Saves real time every week
+        - Nice to have
+    validations:
+      required: true
