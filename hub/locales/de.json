@@ -2375,6 +2375,7 @@
       "vdd_queued": "Eingereiht. Verfolge das Befehlsergebnis im Reiter Befehle; die Computerseite aktualisiert sich, sobald der Agent zurückmeldet.",
       "vdd_queue_failed": "Einreihen nicht möglich: {error}",
       "fullscreen_refused": "Vollbild abgelehnt: {error}",
+      "touch_hint": "Touch: Ziehen bewegt den Mauszeiger, Tippen klickt, Tippen mit zwei Fingern ist ein Rechtsklick, Halten und dann Ziehen zieht. Mit zwei Fingern aufziehen zoomt, mit zwei Fingern ziehen verschiebt das Bild.",
       "view_only_note": "Nur ansehen: Eingaben aus diesem Browser werden unterdrückt. Das ist ein Versehensschutz, keine Berechtigung – es hindert niemand anderen daran, den Computer zu steuern.",
       "failed": "Fehlgeschlagen",
       "session_ended": "Sitzung beendet.",

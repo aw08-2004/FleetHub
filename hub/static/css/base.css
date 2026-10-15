@@ -126,6 +126,20 @@ button, select, input {
     display: none;
 }
 
+/* A frame whose page asked for the whole window: the remote viewer's fullscreen fallback on
+   iPhone Safari, which has no Fullscreen API for it to use (remote.js, setPseudoFullscreen).
+   Inside the frame the viewer can only cover the frame, and the sidebar and topbar would
+   stay around it, so the frame itself is lifted over the chrome. Set and cleared from inside
+   the frame; the shell never touches it. */
+.app-frames__frame--takeover {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 200;
+}
+
 /* The pinned assistant (roadmap #26): the same persistent frame, docked right of the page.
    `order` rather than DOM position, because shell.js creates frames in the order they are
    first visited and the dock must be last whatever that order was. Hidden below 900px by

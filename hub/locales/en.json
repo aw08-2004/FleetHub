@@ -2484,6 +2484,7 @@
       "vdd_queued": "Queued. Watch the command result on the Commands tab; the machine page updates once the agent reports back.",
       "vdd_queue_failed": "Could not queue: {error}",
       "fullscreen_refused": "Fullscreen refused: {error}",
+      "touch_hint": "Touch: drag to move the pointer, tap to click, tap with two fingers to right-click, hold then drag to drag. Pinch to zoom, drag with two fingers to pan.",
       "view_only_note": "View only: input from this browser is suppressed. This is an accident guard, not a permission — it does not stop anyone else driving the machine.",
       "failed": "Failed",
       "session_ended": "Session ended.",

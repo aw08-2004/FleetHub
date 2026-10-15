@@ -126,6 +126,7 @@
             overlay: q('overlay'),
             overlayStatus: q('overlay-status'),
             exitFullscreen: q('exit-fullscreen'),
+            cursor: q('cursor'),
             hint: q('hint'),
             meta: q('meta'),
             desktopBadge: q('desktop-badge'),
@@ -183,6 +184,10 @@
         let relayCapable = false;
         let relayTimer = null;
         let startedCodec = 'h264';
+        // Fullscreen without the Fullscreen API -- iPhone Safari (see toggleFullscreen).
+        let pseudoFull = false;
+        // Touch input (remote-touch.js), where the page loaded it. Created in wireInput.
+        let touch = null;
 
         // The last setStatus kind: a recording continuing after a session switch waits for
         // 'ok' (a picture is arriving again) before asking the PC for its badge.
@@ -709,6 +714,7 @@
             remoteSet = false;
             pendingIce = [];
             captured = { w: 0, h: 0 };
+            if (touch) touch.reset();
             els.start.disabled = false;
             els.stop.disabled = true;
             els.cad.disabled = true;
@@ -774,7 +780,23 @@
             v.tabIndex = 0;   // make it focusable so it can receive key events
             let lastMove = 0;
 
+            // A phone gets a virtual cursor and pinch-zoom instead (remote-touch.js, issue
+            // #133). Every mouse handler below then has to ignore the mouse events iOS
+            // replays after a tap, or a tap would click at the cursor AND under the finger.
+            if (window.RemoteTouch) {
+                touch = window.RemoteTouch.create({
+                    stage: els.stage,
+                    video: v,
+                    cursor: els.cursor,
+                    size: () => captured,
+                    send: sendInput,
+                    onFirstTouch: () => hint(t('machine.remote.touch_hint')),
+                });
+            }
+            const replayed = () => !!touch && touch.recentlyTouched();
+
             v.addEventListener('mousemove', (e) => {
+                if (replayed()) return;
                 const now = performance.now();
                 if (now - lastMove < MOVE_THROTTLE_MS) return;
                 lastMove = now;
@@ -782,12 +804,14 @@
                 if (pos) sendInput({ t: 'm', x: pos[0], y: pos[1] });
             });
             v.addEventListener('mousedown', (e) => {
+                if (replayed()) { e.preventDefault(); return; }
                 v.focus();
                 const pos = normPos(e);
                 if (pos) sendInput({ t: 'd', b: e.button, x: pos[0], y: pos[1] });
                 e.preventDefault();
             });
             v.addEventListener('mouseup', (e) => {
+                if (replayed()) { e.preventDefault(); return; }
                 const pos = normPos(e);
                 if (pos) sendInput({ t: 'u', b: e.button, x: pos[0], y: pos[1] });
                 e.preventDefault();
@@ -924,20 +948,57 @@
         }
 
         // ---- Fullscreen ------------------------------------------------------------------
+        // iPhone Safari has no Fullscreen API for anything but a <video>, and taking the
+        // VIDEO fullscreen would hand it to the system player -- no overlay, no input. There
+        // requestFullscreen is simply undefined, and calling it threw before the .catch()
+        // could say so: the button did nothing at all (issue #133). The webkit- names are
+        // iPad Safari, which does have the API on elements, only prefixed.
+        function nativeFullscreenElement() {
+            return document.fullscreenElement || document.webkitFullscreenElement || null;
+        }
+
         function toggleFullscreen() {
-            if (document.fullscreenElement) {
-                document.exitFullscreen().catch(() => {});
-            } else {
-                els.stage.requestFullscreen().catch(
-                    (e) => hint(t('machine.remote.fullscreen_refused', { error: e.message })));
+            if (pseudoFull) { setPseudoFullscreen(false); return; }
+            if (nativeFullscreenElement()) {
+                const exit = document.exitFullscreen || document.webkitExitFullscreen;
+                try { Promise.resolve(exit.call(document)).catch(() => {}); } catch (e) { /* ok */ }
+                return;
             }
+            const request = els.stage.requestFullscreen || els.stage.webkitRequestFullscreen;
+            if (!request) { setPseudoFullscreen(true); return; }
+            // Called synchronously, still inside the click: a browser grants fullscreen only to
+            // a user gesture, and Firefox counts a later microtask as too late. The prefixed
+            // call returns nothing rather than a promise, hence Promise.resolve.
+            const refused = (e) => hint(t('machine.remote.fullscreen_refused', { error: e.message }));
+            try {
+                Promise.resolve(request.call(els.stage)).catch(refused);
+            } catch (e) {
+                refused(e);
+            }
+        }
+
+        /** The fallback: the stage pinned over the whole page by CSS. It can only cover the
+         *  page it is in, and this page normally lives in the shell's frame with the sidebar
+         *  and topbar around it -- so the frame element is told to cover the window as well.
+         *  Same origin, so frameElement is reachable; unframed it is null and the stage alone
+         *  is enough. Safari's own address bar stays: no page can remove that, which is what
+         *  "Add to Home Screen" (roadmap #11's territory) would be for. */
+        function setPseudoFullscreen(on) {
+            pseudoFull = on;
+            els.stage.classList.toggle('remote-stage--pseudo-full', on);
+            const frame = window.frameElement;
+            if (frame) frame.classList.toggle('app-frames__frame--takeover', on);
+            showFullscreenState(on);
         }
 
         // Registered on the document (that is where the event fires) but answered per viewer:
         // `full` is false for every viewer except the one whose stage is actually fullscreen,
         // so with several screens open the other tabs' overlays stay hidden.
         function onFullscreenChange() {
-            const full = document.fullscreenElement === els.stage;
+            showFullscreenState(nativeFullscreenElement() === els.stage);
+        }
+
+        function showFullscreenState(full) {
             els.overlay.hidden = !full;
             els.fullscreen.textContent = full ? t('machine.remote.exit_fullscreen')
                                               : t('machine.remote.fullscreen');
@@ -951,6 +1012,9 @@
         // leave a page that is already unloading (sendBeacon cannot set the JSON content-type
         // the hub requires, which is why this is not one).
         function onPageHide() {
+            // The takeover class sits on the SHELL's frame element, which outlives this page:
+            // left on, the next page in that frame would open covering the whole window.
+            if (pseudoFull) setPseudoFullscreen(false);
             if (sessionId) stopSession(sessionId, { keepalive: true });
             if (pc) { try { pc.close(); } catch (e) {} }
         }
@@ -976,7 +1040,10 @@
                 ? recorder.stop('stopped') : Promise.resolve();
             flushed.finally(() => stopSession(id));
             teardown('muted');
+            if (pseudoFull) setPseudoFullscreen(false);
+            if (touch) touch.dispose();
             document.removeEventListener('fullscreenchange', onFullscreenChange);
+            document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
             window.removeEventListener('pagehide', onPageHide);
             window.removeEventListener('pageshow', onPageShow);
         }
@@ -1017,6 +1084,7 @@
         });
 
         document.addEventListener('fullscreenchange', onFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', onFullscreenChange);
         window.addEventListener('pagehide', onPageHide);
         window.addEventListener('pageshow', onPageShow);
 

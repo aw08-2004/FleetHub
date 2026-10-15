@@ -838,6 +838,12 @@
     background: #000;
     border-radius: var(--radius-md);
     overflow: hidden;
+    /* Every gesture on the picture belongs to remote-touch.js -- the cursor, the pinch, the
+       pan. Left to the browser, a pinch zoomed the whole page instead (issue #133). */
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
 }
 
 .remote-stage__video {
@@ -858,6 +864,45 @@
 .remote-stage:fullscreen .remote-stage__video {
     max-height: 100vh;
     height: 100vh;
+}
+
+/* iPad Safari's prefixed fullscreen. A rule of its own, not a second selector on the one
+   above: a browser that does not know one selector in a list drops the whole rule. */
+.remote-stage:-webkit-full-screen .remote-stage__video {
+    max-height: 100vh;
+    height: 100vh;
+}
+
+/* The fallback where there is no Fullscreen API at all -- iPhone Safari (remote.js,
+   setPseudoFullscreen). The stage covers the page; remote.js has the shell's frame cover the
+   window around it (.app-frames__frame--takeover, base.css). dvh, not vh: on a phone 100vh is
+   the height with the browser's toolbars hidden, so the bottom of the desktop would sit
+   underneath them. */
+.remote-stage--pseudo-full {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    border-radius: 0;
+}
+
+.remote-stage--pseudo-full .remote-stage__video {
+    max-height: none;
+    height: 100vh;
+    height: 100dvh;
+}
+
+/* The virtual cursor (remote-touch.js). Positioned by its top-left corner, which is the
+   arrow's tip and the point a tap clicks; never a target itself, or it would swallow the
+   touches meant for the picture under it. */
+.remote-stage__cursor[hidden] { display: none; }
+
+.remote-stage__cursor {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    pointer-events: none;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M1 1v16l4.5-4.2 3 6.2 2.6-1.2-3-6.1H14z' fill='%23fff' stroke='%23000' stroke-width='1.2' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat;
+    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
 }
 
 /* [hidden] again -- and the worst of the three, because this one is painted ON the remote
