@@ -41,7 +41,7 @@ param(
     [switch]$Push,
     [switch]$DryRun,
     [string]$SigningKey,
-    [string]$Repo = "aw08-2004/Temp_Monitor",
+    [string]$Repo = "aw08-2004/FleetHub",
     [ValidateSet("stable","beta")][string]$Channel = "stable"
 )
 

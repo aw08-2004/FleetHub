@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Check [ROADMAP.MD](https://github.com/aw08-2004/Temp_Monitor/blob/main/ROADMAP.MD) first -- it lists what is planned, and also
+        Check [ROADMAP.MD](https://github.com/aw08-2004/FleetHub/blob/main/ROADMAP.MD) first -- it lists what is planned, and also
         what was **rejected and why**. If your idea was rejected there, say what has changed.
 
   - type: dropdown
@@ -61,7 +61,7 @@ body:
       description: |
         Who should be allowed to do this -- a new capability, or an existing one? Does it run
         something on the machine, read user data, or need to reach a new destination?
-        See [SECURITY.MD](https://github.com/aw08-2004/Temp_Monitor/blob/main/SECURITY.MD).
+        See [SECURITY.MD](https://github.com/aw08-2004/FleetHub/blob/main/SECURITY.MD).
 
   - type: dropdown
     id: importance

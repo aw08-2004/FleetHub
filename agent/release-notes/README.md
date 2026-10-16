@@ -51,5 +51,5 @@ longer goes in a file.
 To fix a release that was already published with a mangled body:
 
 ```powershell
-gh release edit agent-v3.27.0 --repo aw08-2004/Temp_Monitor --notes-file .\release-notes\3.27.0.md
+gh release edit agent-v3.27.0 --repo aw08-2004/FleetHub --notes-file .\release-notes\3.27.0.md
 ```

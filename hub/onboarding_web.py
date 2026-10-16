@@ -57,7 +57,7 @@ STATUS_GLOBAL_PER_MINUTE = 1200
 #: uses -- the repository's main branch -- so an onboarded PC runs exactly the installer a
 #: technician would, signature check included.
 AGENT_INSTALLER_URL = (
-    "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/install/agent-install.ps1")
+    "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent/install/agent-install.ps1")
 
 _code_limiter = RateLimiter()
 _SAFE_URL = re.compile(r"https?://[A-Za-z0-9.\-:\[\]/_]+")

@@ -275,12 +275,12 @@ public static class AgentConfig
     // Overridable via env (mirrors HubBase) so the self-update path can be exercised
     // against a local server instead of raw.githubusercontent.com.
     //
-    // Deliberately still the pre-rename repo path. Pointing this at .../FleetHub/ before
-    // the repo is actually renamed would 404 every update check -- and since a failed
-    // check is (correctly) non-fatal and silent, the whole fleet would simply stop
-    // updating with no way to push a fix. The old path works today and keeps working
-    // after the rename via GitHub's redirect, so it is strictly the safer of the two.
-    // Move it to the new path only in the release that follows the repo rename.
+    // The repo has been renamed Temp_Monitor -> FleetHub, so this now names the new path.
+    // It had to wait for the rename: pointing at .../FleetHub/ earlier would have 404'd every
+    // update check, and since a failed check is (correctly) non-fatal and silent, the whole
+    // fleet would simply have stopped updating with no way to push a fix. Agents built before
+    // this change still read the old path, and reach the same file through GitHub's redirect
+    // -- which holds only as long as nobody creates a new repo named Temp_Monitor here.
     // BOTH channels' manifests are compiled in (roadmap #21), and the hub picks between them
     // by NAME. That is what keeps the release trust root intact while still letting a few
     // machines take a build early: the hub can move this machine onto the other train, but
@@ -291,9 +291,9 @@ public static class AgentConfig
     // the manifest is only ever read from `main` (see the note above) and a second live
     // branch would multiply the ways a release can be published somewhere nothing reads.
     public const string StableManifestUrl =
-        "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json";
+        "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent/agent.manifest.json";
     public const string BetaManifestUrl =
-        "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.beta.json";
+        "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent/agent.manifest.beta.json";
 
     /// <summary>The manifest this machine's channel points at.
     ///

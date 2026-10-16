@@ -34,5 +34,5 @@ longer than one plain sentence goes in a file.
 To fix a release already published with a mangled body:
 
 ```powershell
-gh release edit android-agent-v0.2.0 --repo aw08-2004/Temp_Monitor --notes-file .\release-notes\0.2.0.md
+gh release edit android-agent-v0.2.0 --repo aw08-2004/FleetHub --notes-file .\release-notes\0.2.0.md
 ```

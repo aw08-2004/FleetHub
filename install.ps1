@@ -1,6 +1,6 @@
 <#
     FleetHub - Unified Installer
-    https://github.com/aw08-2004/Temp_Monitor
+    https://github.com/aw08-2004/FleetHub
 
     Interactive menu over the three install paths:
       1) Agent      - C#/.NET Windows Service (the only telemetry client)
@@ -33,7 +33,7 @@
         powershell -ExecutionPolicy Bypass -File install.ps1 -Component Turn -Uninstall
 
     From the web:
-        irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1 | iex
+        irm https://raw.githubusercontent.com/aw08-2004/FleetHub/main/install.ps1 | iex
 #>
 
 param(
@@ -96,7 +96,7 @@ $ErrorActionPreference = "Stop"
 # Silencing it keeps the run moving and the log readable.
 $ProgressPreference = "SilentlyContinue"
 
-$Repo           = "aw08-2004/Temp_Monitor"
+$Repo           = "aw08-2004/FleetHub"
 $InstallerUrl   = "https://raw.githubusercontent.com/$Repo/main/install.ps1"
 $AgentInstallUrl= "https://raw.githubusercontent.com/$Repo/main/agent/install/agent-install.ps1"
 $PythonFallback = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe"

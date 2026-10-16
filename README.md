@@ -50,7 +50,7 @@ On a Windows server, run the installer and choose **Install Hub**. It installs t
 Python.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1)))"
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/FleetHub/main/install.ps1)))"
 ```
 
 To run the hub in Docker instead:
@@ -80,7 +80,7 @@ After the first sign-in, you can edit sign-in, TURN and AI settings in the conso
 - **Windows, with the enrollment secret:**
 
   ```powershell
-  powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1))) -Component Agent -HubUrl https://hub.example.com -EnrollmentSecret <secret>"
+  powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/FleetHub/main/install.ps1))) -Component Agent -HubUrl https://hub.example.com -EnrollmentSecret <secret>"
   ```
 
 - **Linux:** see [agent-linux/README.md](agent-linux/README.md).

@@ -232,7 +232,7 @@ public static class AgentConfig
     /// The filename must match `channels._AGENT_MANIFEST`: a mismatch is a fleet that silently
     /// never updates.</summary>
     public const string StableManifestUrl =
-        "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-android/"
+        "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-android/"
         + "agent-android.manifest.json";
 
     /// <summary>The manifest URL. Overridable through managed configuration nowhere and
