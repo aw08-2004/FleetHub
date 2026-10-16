@@ -52,9 +52,15 @@ public sealed class CaptureEncodePipeline
     private const int OpenFailureLogEveryMs = 5 * 60_000;
 
     /// <summary>Reported to the caller whenever the stream's shape changes, so the browser can
-    /// be told what it is now looking at.</summary>
+    /// be told what it is now looking at.
+    ///
+    /// <paramref name="OutputDevice"/> is for the input thread only and never goes on the wire
+    /// (see <see cref="IScreenCapture.OutputDevice"/>): <paramref name="Monitor"/> is what the
+    /// viewer ASKED for, OutputDevice is the screen it is actually being shown, and the two
+    /// differ whenever the capture fell back.</summary>
     public readonly record struct Geometry(
-        int Width, int Height, string Desktop, string Encoder, int Monitor, int MonitorCount);
+        int Width, int Height, string Desktop, string Encoder, int Monitor, int MonitorCount,
+        string? OutputDevice = null);
 
     /// <summary>Capture <paramref name="seconds"/> to an Annex-B <c>.h264</c> file. Returns the
     /// number of encoded frames. <paramref name="preference"/> is exposed here (unlike the live
@@ -245,7 +251,8 @@ public sealed class CaptureEncodePipeline
                     onGeometry?.Invoke(new Geometry(
                         session.Width, session.Height,
                         binder?.AttachedName ?? Desktops.CurrentThreadDesktopName() ?? "",
-                        session.EncoderDescription, wanted.Monitor, session.MonitorCount));
+                        session.EncoderDescription, wanted.Monitor, session.MonitorCount,
+                        session.OutputDevice));
                     stall.Clear();
                     sinceLastFrame.Restart();
                 }
@@ -407,6 +414,8 @@ public sealed class CaptureEncodePipeline
         public int SourceWidth { get; }
         public int SourceHeight { get; }
         public int MonitorCount { get; }
+        /// <summary>The monitor the capture is showing; see <see cref="IScreenCapture.OutputDevice"/>.</summary>
+        public string? OutputDevice => _capture.OutputDevice;
         public string EncoderDescription => _encoder.Description;
         /// <summary>The capture has a real picture in hand (see <see cref="IScreenCapture.HasFrame"/>),
         /// so silence from it means "nothing moved", not "nothing works".</summary>

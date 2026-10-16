@@ -71,16 +71,18 @@ internal static class DisplayProbe
         return report;
     }
 
-    /// <summary>Number of DXGI outputs on the primary adapter. Used by the capture pipeline to
-    /// tell the viewer how many monitors it could pick between; 0 on a headless box.</summary>
-    internal static int OutputCount()
-    {
-        try { return OutputNames().Count; }
-        catch { return 0; }
-    }
+    /// <summary>Number of outputs the capture can open, counted from <see cref="DxgiOutputs"/>.
+    /// Used by the capture pipeline to tell the viewer how many monitors it could pick between;
+    /// 0 on a headless box.
+    ///
+    /// This used to count <see cref="OutputNames"/> while saying it counted DXGI outputs. The two
+    /// can disagree (a second adapter, a mirrored pair), and every index the dropdown offered
+    /// beyond what DXGI had silently showed output 0 instead (issue #138).</summary>
+    internal static int OutputCount() => DxgiOutputs.List().Count;
 
-    /// <summary>Device names of the desktop-attached displays, in enumeration order -- the same
-    /// order the monitor index in <see cref="StreamSettings.Monitor"/> refers to.</summary>
+    /// <summary>Friendly names of the desktop-attached displays, in <c>EnumDisplayDevices</c>
+    /// order. For the inventory report only: this is NOT the order the monitor index in
+    /// <see cref="StreamSettings.Monitor"/> refers to -- that is <see cref="DxgiOutputs"/>.</summary>
     internal static List<string> OutputNames()
     {
         var names = new List<string>();

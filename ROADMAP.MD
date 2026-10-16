@@ -108,7 +108,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-15
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-16
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -373,6 +373,24 @@ events under node, but no real touch has reached it. On an iPhone, in Safari, on
   under the finger); two fingers tapped right-click; hold then drag moves a window.
 - The same on an iPad (which takes the native, prefixed fullscreen path), and a desktop
   browser's mouse is unchanged.
+
+**12. Remote input on the screen being watched (issue #138), owed in a live session.** Fixed
+2026-10-16 in the agent only (no hub change, no wire change -- an agent **PATCH**, rides in the
+next release). Capture, input and the monitor dropdown each numbered the screens with a
+different Windows enumeration (DXGI, `EnumDisplayMonitors`, `EnumDisplayDevices`), and on a
+desk laid out 2 - 1 - 3 the orders disagree: the operator watched one screen and clicked on its
+neighbour. Now `DxgiOutputs` is the only numbering, the capture tells input the GDI device name
+of the output it really opened (fallback included), and input maps onto that monitor by name.
+Rejected: sorting the list left-to-right so the console's 1-2-3 matches the desk -- it would move
+every existing monitor choice to a different screen, and the console's labels still would not be
+Windows' own display numbers (that needs names on the wire, an agent MINOR). Checked on a
+three-monitor workstation that DXGI lists `DISPLAY1, 2, 3` while `EnumDisplayMonitors` lists
+`DISPLAY2, 1, 3` -- the exact mismatch -- and that the two agree on device names; not yet
+checked with a real session. On a PC with three monitors in a non-default order:
+- Pick each screen in the viewer and click a corner of the picture: the pointer lands on **that**
+  screen's corner, from a desktop browser and from a phone.
+- Lock the PC (Win+L) and repeat on the lock screen, then sign back in.
+- A PC with two GPUs: every screen the dropdown offers opens, and none silently shows another.
 
 ---
 
