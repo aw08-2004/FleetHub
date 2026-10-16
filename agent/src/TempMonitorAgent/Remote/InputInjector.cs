@@ -275,7 +275,7 @@ public sealed class InputInjector
             var monitors = new List<Monitor>();
             MonitorEnumProc cb = (IntPtr h, IntPtr dc, ref RECT r, IntPtr d) =>
             {
-                var info = new MONITORINFOEXW { cbSize = Marshal.SizeOf<MONITORINFOEXW>() };
+                var info = new MonitorInfoEx { cbSize = Marshal.SizeOf<MonitorInfoEx>() };
                 if (GetMonitorInfoW(h, ref info))
                     monitors.Add(new Monitor(info.szDevice,
                         (info.dwFlags & MONITORINFOF_PRIMARY) != 0,
@@ -290,6 +290,22 @@ public sealed class InputInjector
             return new MonitorRect(0, 0,
                 GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
         }
+
+        // GetMonitorInfoW and its MONITORINFOEXW live here, not in the P/Invoke block below:
+        // ForDevice is their only caller.
+        private const uint MONITORINFOF_PRIMARY = 0x00000001;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct MonitorInfoEx
+        {
+            public int cbSize;
+            public RECT rcMonitor, rcWork;
+            public uint dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MonitorInfoEx info);
     }
 
     /// <summary>One entry of <c>EnumDisplayMonitors</c>, reduced to what input mapping needs.</summary>
@@ -349,21 +365,7 @@ public sealed class InputInjector
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int left, top, right, bottom; }
 
-    private const uint MONITORINFOF_PRIMARY = 0x00000001;
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct MONITORINFOEXW
-    {
-        public int cbSize;
-        public RECT rcMonitor, rcWork;
-        public uint dwFlags;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
-    }
-
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT rect, IntPtr data);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFOEXW info);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
