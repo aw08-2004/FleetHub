@@ -127,6 +127,9 @@
             overlayStatus: q('overlay-status'),
             exitFullscreen: q('exit-fullscreen'),
             cursor: q('cursor'),
+            kbd: q('kbd'),
+            kbdSink: q('kbd-sink'),
+            kbdStrip: q('kbd-strip'),
             hint: q('hint'),
             meta: q('meta'),
             desktopBadge: q('desktop-badge'),
@@ -188,6 +191,8 @@
         let pseudoFull = false;
         // Touch input (remote-touch.js), where the page loaded it. Created in wireInput.
         let touch = null;
+        // The phone keyboard (remote-keyboard.js, issue #138). Created in wireInput.
+        let keyboard = null;
 
         // The last setStatus kind: a recording continuing after a session switch waits for
         // 'ok' (a picture is arriving again) before asking the PC for its badge.
@@ -783,6 +788,23 @@
             // A phone gets a virtual cursor and pinch-zoom instead (remote-touch.js, issue
             // #133). Every mouse handler below then has to ignore the mouse events iOS
             // replays after a tap, or a tap would click at the cursor AND under the finger.
+            // One keyboard button per viewer, but one remembered position for all of them:
+            // the operator moved it off the part of the screen they need, and that is the same
+            // part on the next PC.
+            if (window.RemoteKeyboard && els.kbd) {
+                keyboard = window.RemoteKeyboard.create({
+                    stage: els.stage,
+                    button: els.kbd,
+                    sink: els.kbdSink,
+                    strip: els.kbdStrip,
+                    send: sendInput,
+                    storageKey: 'fleethub.remote.kbdPos',
+                });
+                // A phone or tablet gets it up front; anything else after its first touch.
+                try {
+                    if (window.matchMedia('(pointer: coarse)').matches) keyboard.show();
+                } catch (e) { /* no matchMedia -- the first touch still shows it */ }
+            }
             if (window.RemoteTouch) {
                 touch = window.RemoteTouch.create({
                     stage: els.stage,
@@ -790,7 +812,10 @@
                     cursor: els.cursor,
                     size: () => captured,
                     send: sendInput,
-                    onFirstTouch: () => hint(t('machine.remote.touch_hint')),
+                    onFirstTouch: () => {
+                        hint(t('machine.remote.touch_hint'));
+                        if (keyboard) keyboard.show();
+                    },
                 });
             }
             const replayed = () => !!touch && touch.recentlyTouched();
@@ -1042,6 +1067,7 @@
             teardown('muted');
             if (pseudoFull) setPseudoFullscreen(false);
             if (touch) touch.dispose();
+            if (keyboard) keyboard.dispose();
             document.removeEventListener('fullscreenchange', onFullscreenChange);
             document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
             window.removeEventListener('pagehide', onPageHide);
@@ -1081,6 +1107,7 @@
         });
         els.viewOnly.addEventListener('change', () => {
             hint(els.viewOnly.checked ? t('machine.remote.view_only_note') : '');
+            if (keyboard) keyboard.setEnabled(!els.viewOnly.checked);
         });
 
         document.addEventListener('fullscreenchange', onFullscreenChange);
