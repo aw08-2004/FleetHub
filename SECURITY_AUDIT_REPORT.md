@@ -288,8 +288,30 @@ The following fixes were implemented based on the findings above:
 
 | # | Finding | Reason |
 |---|---------|--------|
-| 2 | CSRF Content-Type model | This is a deliberate architectural decision documented extensively in the codebase. Implementing CSRF tokens would require touching every state-changing endpoint and the frontend. Recommend as a separate project. |
 | 6 | Unauthenticated APK download | Correctly identified in the audit as "design is sound for the stated use case." No action needed. |
+
+*Finding 2 stood in this table when the report was written and was fixed the same day: see
+the update below.*
+
+---
+
+## Update (2026-10-15) -- what changed after the report
+
+Re-checked against the code, not against the table above. The report is otherwise left as it was
+written.
+
+| # | Finding | State on 2026-10-15 |
+|---|---------|---------------------|
+| 2 | CSRF relies on Content-Type | **Fixed (`0e1e7c0`, 2026-09-11, the same day), and the "Not Fixed" row above was wrong by the end of it.** A per-session synchronizer token is issued in a `<meta>` tag, rotated at every sign-in, and sent as `X-CSRF-Token` on every cookie-authenticated POST, PUT, PATCH and DELETE by a global interceptor in `common.js`; the content-type rule stays behind it for POST. A first version widened the content-type rule to DELETE too and took twenty-six bodyless console `DELETE` calls with it (`31fcee9`); the two are now separate sets in `app.py`. `tests/test_csrf.py` pins both. Bearer callers (agents, device tokens) bypass both, deliberately. |
+| 1 | Unauthenticated `/api/report` | **Superseded by signed telemetry (roadmap #29, hub 1.144.0 and Windows agent 3.44.0).** Agents now sign every report with their own token; a signed report under another enrolled machine's name is refused (403); a renamed machine keeps its enrollment only onto a name no agent row and no machine record has used. **Unsigned reports are still accepted** until *Settings → Endpoint Security → Only accept telemetry from enrolled agents* is switched on, which waits on the Linux 0.4.0 and Android 0.3.0 releases (it was off on the deployed hub on 2026-10-15); a machine whose agent has signed once is protected even while it is off. `AGENT_REPORT_SECRET` is retained as an independent gate for a hub that set it, but no agent ever sent it. |
+| 7 | No rate limiting | `rate_limit.py` is used by `/api/report` (120/min), `/api/agent/enroll` (10/min) and the public onboarding routes (per `remote_addr` plus a global ceiling, because the shared limiter keys on a spoofable `X-Forwarded-For`). The sign-in callbacks and the provisioning APK download are still not limited. |
+| 8 | Duplicate `_bearer_agent` | The shared helper in `auth_helpers.py` is used by `app.py` and eight blueprints; **`packages_web.py` still has its own `_bearer_agent(db_path)`**, a different signature that was never folded in. |
+| 6 | Unauthenticated APK download | Unchanged, and now documented in `SECURITY.MD` including that this route has no rate limit. |
+
+New unauthenticated or weakly authenticated surface added since the report, each documented in
+`SECURITY.MD`: the public onboarding wizard and its three routes (single-use six-character codes,
+stored as a hash, uniform 404s), `GET /invite/<code>`, and `/download/manifest.json` with its
+signature.
 
 ---
 

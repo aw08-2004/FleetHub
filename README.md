@@ -6,7 +6,16 @@ machine runs an agent that reads sensors and reports them to a central **hub**
 
 - Hub: `hub/app.py` (served via `hub/wsgi.py`), live at https://your.domain.com
 - **Agent:** `agent/` — a C#/.NET Windows Service. See [agent/README.md](agent/README.md).
-- Unified installer (Agent / Hub / TURN relay): `install.ps1`
+  Smaller siblings report into the same hub: the [Linux agent](agent-linux/README.md)
+  (`agent-linux/`) and the [Android agent](agent-android/README.md) (`agent-android/`).
+- **Client:** `app/` — the Flutter desktop client, paired to a hub with a device token
+  ([app/README.md](app/README.md)); downloaded from the console's **Download Client** page.
+- Unified installer (Agent / Hub / TURN relay): `install.ps1`; the hub also ships as a
+  container image ([Running the hub in Docker](#running-the-hub-in-docker)).
+- Where else to look: [ROADMAP.MD](ROADMAP.MD) (what is shipped, planned or rejected, and what
+  is owed on a real machine), [VERSIONING.md](VERSIONING.md) (what a version number means and
+  what breaks if one is wrong), [SECURITY.MD](SECURITY.MD) (threat model, personal-data
+  inventory, reporting a vulnerability).
 
 ## The legacy Python companion is gone
 
@@ -59,8 +68,9 @@ from which IP. **Revoke** on a used code also revokes that machine's agent.
 
 ### Telemetry only from enrolled agents
 
-Agents sign every telemetry report with their own credential. **Settings → Security → Only
-accept telemetry from enrolled agents** refuses reports that are not signed. **It is off by
+Agents sign every telemetry report with their own credential (Windows agent 3.44.0 and later;
+the Linux and Android agents sign from their next releases). **Settings → Endpoint Security →
+Only accept telemetry from enrolled agents** refuses reports that are not signed. **It is off by
 default** until every agent in the fleet is new enough to sign. While it is off, unsigned
 reports are still accepted, except for a machine whose agent has already sent a signed one.
 **Administration → Onboarding** lists machines that sent unsigned reports in the last day:
@@ -217,10 +227,11 @@ automatically (a build too broken to start is also too broken to decide that), b
 window in which it matters the previous binary is still on disk to be renamed back.
 
 The hub nudges this along: `/api/report` echoes back the newest agent version it has
-read from the manifest, so an agent goes and checks as soon as it sees a number ahead
-of its own instead of waiting for its own weekly poll. Clients below 3.0.0 are
-deliberately sent nothing at all — there is no 2.x release left to point them at, and
-handing a companion a 3.x number would make it try to install an agent binary as if it
+read from the manifest *for that machine's platform and channel*, so an agent goes and checks
+as soon as it sees a number ahead of its own instead of waiting for its own weekly poll. A
+Linux or Android agent is told about its own manifest, never the Windows one. A Windows client
+below 3.0.0 is deliberately sent nothing at all — there is no 2.x release left to point it at,
+and handing a companion a 3.x number would make it try to install an agent binary as if it
 were a Python script.
 
 ### Hub self-updates (opt-in)
@@ -371,12 +382,46 @@ migrated by hand — see [Removing a legacy Python companion](#removing-a-legacy
 
 ## Hub
 
-`hub/app.py` receives reports at `POST /api/report` (open, no auth -- agents
-must be able to post without signing in), and serves these views (gated behind
-OIDC sign-in plus permission groups, see below):
+`hub/app.py` receives reports at `POST /api/report`, the one telemetry route that is not behind
+the console sign-in, because an agent has no browser session. An agent authenticates it with its
+own token; an unsigned report is still accepted until *Only accept telemetry from enrolled
+agents* is switched on (see [Telemetry only from enrolled agents](#telemetry-only-from-enrolled-agents)).
+Everything else is gated behind OIDC sign-in plus permission groups (see below), apart from four
+deliberately public surfaces: the onboarding wizard, the invite preview, the signed client manifest
+and the provisioning APK download (each is described in [SECURITY.MD](SECURITY.MD)).
 
-- `/` -- a card per machine (live temp, status, uptime); click one to open
-  its detail page
+The sidebar has three sections, and a link is drawn only when you hold a capability that opens
+its page. **Fleet:**
+
+- `/` **Dashboard** -- fleet-wide: counts, OS mix, live aggregates (average and peak
+  temperature, disk space) and a few ranked attention lists (hottest, longest offline, low
+  disk), all from one `/api/fleet/summary`. Machines are reached through Devices.
+- `/inventory` **Devices** -- one row per machine of the hardware and asset facts agents report,
+  with status quick filters, a row menu (Open, Terminal, Files, Network, Wake now, Delete) and a
+  checkbox to act on a selection: wake, deploy a package, report, export CSV. Deleting a device
+  can also uninstall its agent (see below).
+- `/map` **Map** -- managed Android devices that have a known position (see
+  [Locating a device](#locating-a-device)).
+- `/reports` **Reports** -- the device sheet and the fleet software catalog (see
+  [Device reports and installed software](#device-reports-and-installed-software)).
+- `/alerts` **Alerts** -- conditions that want attention: rule matches, watchdogs that gave up,
+  duplicate machines that share a serial while both online, and managed machines with no
+  Active Directory computer object (see below).
+- `/assistant` **Assistant** -- the AI conversation (see [The assistant](#the-assistant)).
+
+**Operate:** **Remote** (`/remote`, [Remote view & control](#remote-view--control)),
+**Recordings** (`/recordings`), **Packages** (`/packages`), **Patches** (`/patches`),
+**Events** (`/events`), **Fleet tasks** (`/tools`, the fleet halves of Backup and Firmware),
+**Rules** (`/rules`, with the Scripts library), **Watchdogs** (`/watchdogs`), **Device groups**
+(`/device-groups`) and **Device policy** (`/policy`). **Administration** (folds away):
+**Audit Log** (`/audit`), **Sharing** (`/sharing`), **Settings** (`/settings`), **Device
+provisioning** (`/provisioning`), **Onboarding** (`/onboarding-codes`), **Permission Groups**
+(`/permissions`), **Invite Links** (`/invites`), **Users** (`/users`) and **Download Client**
+(`/download`). **Ctrl+K** (or the search field in the topbar) finds a device by name, serial,
+asset tag or OS, or a page by name.
+
+A machine's own page:
+
 - `/machine/<name>` -- that machine's live temp, uptime, agent version,
   asset tag/serial number/model, a Storage card with one % occupied tile per
   volume (used/total/free), a Cooling card with one tile per fan (RPM plus the
@@ -391,12 +436,12 @@ OIDC sign-in plus permission groups, see below):
   sensors** section lists everything else the agent reports -- the whole
   LibreHardwareMonitor tree, grouped hardware -> category -> sensor, including
   the readings nothing charts (VRM temperatures, rail voltages, battery charge
-  and wear). Collapsed by default and only polled while open.
-- `/alerts` -- conditions that want attention: machines running hot, and
-  duplicate machines that share a serial while both online (see below)
-- `/inventory` -- one row per machine of the hardware/asset facts agents report
-- `/audit` -- the audit log (see below); `/packages`, `/backups` -- their own
-  sections below; `/settings`, `/users`, `/permissions` -- administration
+  and wear). Collapsed by default and only polled while open. Seven tabs
+  (`?tab=` slugs): **Overview**, **Terminal**, **Backup**, **Firmware**, **Network**,
+  **Files** and **Report**. A machine switcher beside the name keeps the current tab, and a tab
+  the machine has said it cannot answer is hidden (see [Machine capabilities](#machine-capabilities)).
+  `/backups` and `/firmware` are old addresses that land on **Fleet tasks**, and
+  `/tools?tab=X&machine=Y` redirects to that machine's tab.
 
 ### The machine page reports at 1 Hz while you are watching it
 
@@ -467,20 +512,23 @@ and is audited.
 
 ### Temperature alerts
 
-A machine is flagged as running hot when its **average** temperature over a
-window (default **5 minutes**, `hub.high_temp_avg_window_seconds` in Settings) is
-at or above the high-temperature threshold (`hub.high_temp_threshold`). Averaging
-is the point: a momentary spike no longer raises an alert, only a sustained
-condition does.
+**A temperature alert is an ordinary rule.** Until hub 1.80.0 the hub judged heat itself, from a
+rolling average over `hub.high_temp_avg_window_seconds` against `hub.high_temp_threshold`. Both
+settings are gone: that was a second alerting engine, fleet-wide, for a condition the rules
+engine already expresses (see [Rules and scripts](#rules-and-scripts)). A hub upgraded across
+that release received a **disabled** rule named *High temperature*, seeded from whatever the two
+settings held (85 °C and 300 s if they were unset). **Review it and enable it** -- nobody
+enabled it for you. Writing your own is `metric.cpu_temp >= 85` held for 300 seconds, and it can
+aim at some machines and not others, or raise an alert, run a command, ask the user or notify.
+`for_seconds` is stricter than the old average: the condition must hold continuously, so one dip
+below the threshold restarts the clock.
 
-The check runs on the hub every ~30 s (`evaluate_high_temp_once`), so alerts are
-independent of any browser being open. A high-temperature alert appears in the
-**Alerts tab**, not on the Dashboard -- the Dashboard is a live temp/status view.
-Alerts **stay until an operator dismisses them**: when the machine cools, the
-*episode* is closed but the card remains, and the next hot spell raises a **new**
-alert beside it rather than overwriting the old one's numbers. Alerts are
-machine-scoped: an operator only sees, and is only badge-counted for, machines
-within their scope.
+A rule's alert appears in the **Alerts tab**, not on the Dashboard -- the Dashboard is a live
+temp/status view. Rules are evaluated on the hub, so alerts are independent of any browser being
+open. Alerts **stay until an operator dismisses them**: when the condition clears, the
+*episode* is closed but the card remains, and the next occurrence raises a **new** alert beside
+it rather than overwriting the old one's numbers. Alerts are machine-scoped: an operator only
+sees, and is only badge-counted for, machines within their scope.
 
 ### Grouped alerts and recommended fixes
 
@@ -714,13 +762,28 @@ gets the union of every group they're in. Scope is either an explicit machine li
 | `view` | see these machines, their history and their command results |
 | `view_audit_log` | read the audit log (info + notice; **not** machine-scoped) |
 | `view_security_audit` | additionally see security-level entries — does nothing alone |
-| `issue_commands` | run scripts and restart/shutdown/install — **code execution as SYSTEM** |
-| `remote_control` | start a remote view/control session |
+| `issue_commands` | run scripts and restart/shutdown/install, browse a machine's files — **code execution as SYSTEM** |
+| `remote_control` | start a remote view/control session, and record one |
 | `deploy_packages` | schedule software deployments |
 | `manage_backups` | configure backups and trigger restores (deliberately fleet-wide) |
+| `manage_firmware` | change BIOS settings and flash firmware — the one action with no way back |
+| `manage_patches` | approve updates, set maintenance windows, push a patch run outside one |
+| `read_recovery_keys` | be shown an escrowed BitLocker recovery password (every read is audited) |
+| `locate_device` | ask a managed Android device where it is, on demand |
+| `manage_device_policy` | write app blocklists, allowlists and time rules for managed devices |
+| `wipe_device` | lock a managed device, and erase it |
+| `manage_rules` | create and edit rules and watchdogs (a rule that sends commands also needs `issue_commands`; a watchdog needs both; the Scripts library needs `issue_commands` alone) |
+| `manage_device_groups` | create, edit and delete device groups -- editing one changes what every rule and deployment aimed at it reaches |
+| `manage_onboarding` | create and revoke one-time onboarding codes |
 | `manage_settings` | change hub settings; delete/merge machines, pin sensors, dismiss alerts |
 | `manage_users` | edit the registered-users directory (a profile directory, not access) |
 | `manage_permission_groups` | create and edit groups — i.e. grant anyone, including themselves, any of the above |
+
+Most read-only inventory sits behind plain `view` plus machine scope (disks, BIOS version, patch
+inventory, software, posture, collected events); the capabilities above exist where a read or a
+write is a different kind of act than looking at a temperature graph. A paired device (the
+desktop client) can hold a subset of these but never `manage_settings`, `manage_users`,
+`manage_permission_groups` or `manage_firmware` -- see [SECURITY.MD](SECURITY.MD).
 
 > ⚠️ **`ALLOWED_EMAILS` bypasses all of it.** It is the break-glass superuser list:
 > every capability over every machine, and the hub refuses to start with it empty.
@@ -873,9 +936,11 @@ on first login, `manage_users`) and `/inventory` (fleet-wide hardware/asset view
 the agent from this PC"** box is ticked by default. When it is ticked, the PC's agent removes
 itself the next time it contacts the hub, within about 30 seconds if the PC is on, or whenever
 it is next switched on. It takes the service, the install folder and its local data with it.
-This needs Windows agent 3.44.0 or Linux agent 0.4.0 or later; older agents re-enroll and the
-PC reappears, as before. Untick the box to clear a stale record of a PC that is still in use.
-The automatic merge of duplicate machines never uninstalls anything.
+This needs Windows agent 3.44.0 or later (the Linux agent's half is in source and ships in 0.4.0, which
+is not released yet); older agents re-enroll and the PC reappears, as before. Untick the box to clear a stale record of a PC that is still in use.
+The automatic merge of duplicate machines never uninstalls anything. The box is offered only to
+someone who holds `issue_commands`, because the uninstall runs a task as SYSTEM on the PC; the
+hub refuses the request with a 403 otherwise, rather than quietly turning it into a plain delete.
 
 ## Fleet command channel (RMM)
 
@@ -931,12 +996,18 @@ never did — it was telemetry-only, which is why it was replaced.
   complete is appended, and `issue_command` records the issuing operator's email plus
   the **full command params, including script text**. With no second gate, that trail
   is the only answer to "who ran this?" — so it must never be allowed to go quiet.
-- **CSRF**: the console endpoints only accept `application/json` bodies. That is
-  load-bearing, not incidental — it's what stops a cross-site POST from a signed-in
-  operator's browser becoming fleet-wide RCE (that content type isn't CORS-safelisted,
-  so cross-origin requests preflight and fail; an HTML form can't produce it). The
-  session cookie is additionally pinned `SameSite=Lax` + `Secure`. Don't add
-  `force=True` to a `get_json()` call, a form-encoded fallback, or permissive CORS.
+- **CSRF**: two controls, and a cookie-authenticated state-changing request must pass both.
+  A **synchronizer token** is the one that actually stops a cross-site write: a random value
+  per session, rotated on every sign-in, rendered into a `<meta>` tag and echoed by `common.js`
+  as `X-CSRF-Token` on every POST, PUT, PATCH and DELETE. Behind it, as defence in depth, a POST
+  body must be `application/json` — that content type isn't CORS-safelisted, so a cross-origin
+  fetch preflights and fails, and an HTML form can't produce it. That is what stops a
+  cross-site POST from a signed-in operator's browser becoming fleet-wide RCE. The session
+  cookie is additionally pinned `SameSite=Lax` + `Secure`. Bearer callers (agents and paired
+  devices) pass neither check, because a bearer header is not an ambient credential. The only
+  cookie-authenticated exemptions are four named multipart upload endpoints
+  (`CSRF_UPLOAD_ENDPOINTS` in `app.py`). Don't add `force=True` to a `get_json()` call, a
+  form-encoded fallback, permissive CORS, or an upload exemption.
 
 <details>
 <summary>Previously: signed high-risk commands (removed in hub 1.10 / agent 3.1)</summary>
@@ -1104,6 +1175,32 @@ are deliberately refused by the generic `POST /api/fleet/commands` endpoint and 
 saved as favorites: the guards above live on the dedicated route, and a saved PID is a
 different process by tomorrow.
 
+### The Files tab (browse, transfer, open)
+
+A machine's **Files** tab browses its disk and moves files both ways: volumes, then folders,
+with **Open**, **Download**, **Upload**, **Copy**, **Cut/Paste**, **Rename**, **New folder** and
+**Delete** on the right-click menu. It answers "the report is on my desktop and I can't open it"
+and "put this driver in `C:\Temp` for me", which until then meant a SYSTEM shell -- a terminal
+moves text, not bytes.
+
+- **Gate: `issue_commands` + machine scope for all of it**, reading included. A folder listing is
+  the names of somebody's documents and the same door reads the bytes inside them, so it is not
+  inventory in the way a process list is. Every navigation is an audited command: "who opened the
+  payroll folder, and when" has an answer.
+- **Transfers go through a spool on the hub, in both directions**, because the machine and your
+  browser are never awake on the same network at once. Capped at 2 GB, expired after an hour with
+  the bytes deleted, and a folder download is zipped on the machine. Downloads are served as
+  attachments with an octet-stream type: the bytes are whatever someone put on that machine.
+- **Delete is permanent and says so.** The agent runs as SYSTEM, so a deleted file cannot go to
+  the person's Recycle Bin; the confirmation names every item.
+- **Open** asks two questions and remembers neither. *Where*: in the console (a preview of an
+  allowlist of types up to 10 MB; never `html` or `svg`, which would run on the hub's own origin)
+  or on the machine. *As whom*, for the machine: the signed-in user, with their profile and
+  desktop, or SYSTEM, which is refused for a document.
+- A folder listing is capped at 2,000 entries, and the panel says so. No drag-and-drop, no
+  folder upload, no editing.
+- **Agent 3.33.0 or later**; Open on the machine needs 3.34.0.
+
 ### Disk usage in the Files tab (folder sizes, what changed, when it is full)
 
 Every Windows agent from **3.40.0** reads each fixed NTFS volume's Master File Table once a day.
@@ -1140,6 +1237,93 @@ API: `GET /api/disk-usage/machines/<m>` (volumes, latest point, forecast, last s
 `.../path-history?volume=C:&path=...`, `.../browse?volume=C:&path=...&day=YYYY-MM-DD`,
 `POST .../scan`. Agents post the summary to `POST /api/agent/disk-usage` and the full-depth
 history to `POST /api/agent/disk-usage/history` (gzip; 409 means "send the full tree").
+
+## Rules and scripts
+
+A **rule** is a condition over the data your PCs report, and what should happen when it matches
+(`/rules`; [rules.py](hub/rules.py) is the model, [rules_web.py](hub/rules_web.py) the HTTP
+surface). Everything the hub knows about a machine is a named variable -- `metric.cpu_temp`,
+`sys.uptime_days`, `disk.c.free_gb`, `event.id_4625.count`, BIOS settings, signed-in sessions,
+AD facts, processes, and custom fields you define -- and a condition is written against them
+in a builder or as a text expression. **Preview** shows which PCs match right now.
+
+- **Unknown is not false.** A variable can be missing (a PC that never reported a BIOS block) or
+  stale (an offline PC's last temperature). Both read *unknown*, a comparison involving unknown
+  is unknown, and a rule fires only on a true answer. Without that, `disk.c.free_gb < 10` would
+  fire on every machine that has never reported a disk.
+- **Target.** Every PC, named PCs, an AD OU, a custom field's value, or a saved
+  [device group](#device-groups).
+- **Timing.** `for_seconds` (the condition must hold continuously), a cooldown, and *fire once
+  per match*, which asks when the condition *becomes* true instead of every hour while it stays
+  true -- `sys.uptime_days > 7` holds until somebody reboots, and a dialog that returns hourly
+  buys the person at the desk nothing.
+- **Actions.** Raise an alert; send a command; run a saved script; show a message on the PC
+  whose buttons lead to further actions (a dialog on Windows; on an Android device a notification
+  with up to three buttons, which needs agent 0.3.0 -- earlier releases answer "not implemented");
+  wait before asking again; call a webhook; send an email (this one needs SMTP details in the
+  hub's `.env`).
+- **Probes.** A rule can read something no regular telemetry carries -- a registry value, a file
+  version or a WMI property. A *script* probe runs PowerShell you wrote on every PC the rule
+  looks at and is off until you allow it (**Settings → Rules → Allow script probes**).
+- **Two switches decide whether any of it happens** (**Settings → Rules**). *Let rules run
+  their actions* is on; *Let rules send commands to PCs* is **off by default**, because alerting
+  on a condition and restarting a PC on a condition are different levels of trust. With the
+  first off a rule still evaluates and records what it would have done. A rule that appears to
+  do nothing on a fresh hub is usually the second switch. A rule is also clamped to *Most PCs
+  one rule may act on at once* and *Shortest gap between commands from one rule*.
+- **Who may write one.** `manage_rules` writes rules; a rule that sends commands or runs a
+  script also needs `issue_commands`, because a rule removes the human who would otherwise
+  press the button. What a rule did, to which PC, and how the person at the PC answered is kept
+  for *Keep rule history for* (90 days).
+
+**Scripts** (the tab beside Rules) are a library of named PowerShell, `cmd`, `bash` or `sh`
+bodies with a timeout and declared inputs that the referencing rule fills in. A rule points at
+one by name and the body is read **when the rule fires**, so editing a script changes what every
+rule using it runs; deleting one a rule references is refused (409, naming the rules). A script
+is code that runs as SYSTEM, so writing one, and reading its body, needs `issue_commands`;
+listing the names is `view`. A script suggested by the AI is saved **switched off**.
+
+You can also describe a rule in English: with AI assistance on, [the assistant](#the-assistant)
+drafts it, and it is always saved switched off for you to read first.
+
+## Watchdogs
+
+A **watchdog** (`/watchdogs`) keeps a Windows service running without anyone being paged: when
+the service stops, the agent restarts it within about two minutes, and only a service that will
+not stay up reaches a person. Each watchdog names a service, a grace period, and a limit of
+restarts inside a window. Past the limit it **gives up**, raises an alert (kind *watchdog*) on
+the Alerts tab, and clears itself once the attempts age out of the window -- a bad afternoon
+does not need an operator to re-arm it. A restart that fails counts toward the limit too.
+
+- **The agent is given desired state, never a condition.** The hub resolves each machine's
+  targets (the rules' grammar: every PC, named PCs, an AD OU, a field value, a device group) and
+  hands the agent a flat list on the heartbeat; the agent evaluates it on a loop of its own every
+  30 seconds. There is deliberately no second copy of the rules engine on the machine.
+- **It keeps working with the hub gone.** Unlike a device policy, the document has no expiry: a
+  machine that cannot reach the hub is exactly when a stopped service has to come back. The cost
+  is that deleting a watchdog does not disarm an offline machine until it next checks in.
+- **Writing one needs `manage_rules` and `issue_commands`**: restarting a service on every machine
+  it reaches, unattended, is `restart_process` by another name. The agent and the hub both refuse
+  to touch the agent's own service (`FleetHubAgent`, or `TempMonitorAgent` on a PC not yet
+  re-installed).
+- **Agent 3.37.1 or later.** An older agent never says it understands watchdogs, so the console
+  never reports it as covered.
+
+## Device groups
+
+A **device group** (`/device-groups`) is a saved, named target filter: the include/exclude
+selectors a rule already uses (named PCs, an AD OU, a custom field value, every PC), stored once
+under a name. A rule or a watchdog can aim at a group (expanded each time it is evaluated), the
+Packages deploy dialog can **Add a group** (a snapshot of its in-scope members at that moment --
+a deployment must not change targets after you confirmed it), and Devices and Reports can be
+filtered to one. Groups hold selectors, not hand-picked lists, so a replaced laptop does not
+leave a stale member behind.
+
+Writing a group needs `manage_device_groups`, and **your scope must cover every PC the group
+resolves to** on create, edit and delete, because editing a group changes what every rule aimed at
+it reaches, including rules other people wrote. Reading and using one is `view`, with definitions
+and member lists limited to your scope. A group a rule aims at cannot be deleted (409, naming the
+rules).
 
 ## Package deployment (PDQ-style)
 
@@ -1257,11 +1441,42 @@ The equivalents elsewhere: IIS `maxAllowedContentLength` (default ~30 MB) *and*
 `maxRequestLength`; Apache `LimitRequestBody`; Cloudflare's proxy caps free plans at
 100 MB and it cannot be raised from the origin.
 
+## Patch management
+
+Is the fleet patched? (`/patches`; [patches.py](hub/patches.py) is the model,
+[patches_web.py](hub/patches_web.py) the HTTP surface, `Patch/` in the agent.) Patching is the
+package engine with a vendor-supplied catalog: a patch run is a deployment whose contents came
+from Windows Update instead of from an operator.
+
+- **Inventory.** Each Windows PC reports its pending OS and driver updates (the Windows Update
+  API) and third-party updates (`winget upgrade`), change-only on the heartbeat. A Linux agent
+  reports what `apt` or `dnf` offers and **installs nothing**; the capability report is what stops
+  the hub queueing an install for it.
+- **Approvals are fleet-wide per update; windows are per group.** Approving a KB is a statement
+  about the patch. *When* it may run is what varies, so a **maintenance window** carries the
+  scope (every PC, or a named list), the days of the week, a start time and a duration, and a
+  reboot policy -- `never`, `if_required` (the default) or `always`. Auto-approval of security and critical updates is a setting
+  (**Settings → Patches → Approve these automatically**), off by default; drivers and feature
+  updates are never offered for it.
+- **An install is confirmed by the machine coming back and no longer offering the update**, never
+  by an exit code, so a patch that reported success and did not apply cannot look like a success.
+  A run waits in *rebooting* for **Give up on a restarting machine after** (a day) and then
+  records an install nobody could verify, rather than a failure.
+- **Emergency push** is a run that ignores every window. It is its own capability,
+  `manage_patches`, because forcing a reboot outside an agreed window is a different thing to hand
+  someone than pushing an installer inside one. Reading inventory and compliance is `view` plus
+  scope.
+- Retries default to 3 attempts per machine with a backoff that doubles from 15 minutes. A
+  machine's update list is forgotten after **Forget a machine's update list after** (30 days), so
+  a fleet that stopped reporting cannot show a compliance figure that has not been true for months.
+- **Agent 3.35.0 or later**, deployed after hub 1.93.0.
+
 ## Backups
 
 A consistent snapshot of the hub database, compressed, encrypted **on the hub** and pushed
 offsite on a schedule. Core logic in [backups.py](hub/backups.py), HTTP surface in
-[backups_web.py](hub/backups_web.py), UI at `/backups`, and the restore tool at
+[backups_web.py](hub/backups_web.py), UI on **Fleet tasks → Backup** (`/tools`; the old `/backups`
+address redirects there), and the restore tool at
 [restore_backup.py](hub/restore_backup.py). State lives in the same SQLite DB
 (`backup_destinations`, `backup_runs`, `backup_state`, plus `backup_machine_config`,
 `backup_file_sets`, `backup_files` and `backup_restores` for the per-PC half below).
@@ -1285,12 +1500,12 @@ than restoring as a plausible-looking corrupt database.
 > protects nothing. If this server is lost and the key was never written down elsewhere,
 > every backup ever taken is permanently unreadable.
 >
-> The hub generates it once, shows it once, and nags on the Backups page until an operator
+> The hub generates it once, shows it once, and nags on Fleet tasks → Backup until an operator
 > confirms it is stored somewhere else. Every reveal is written to the audit log.
 >
 > **Moved or reinstalled the hub?** A hub that comes up without its `.env` generates a new
 > key, and from that moment it cannot read a single archive the old installation wrote —
-> even though you still have the key that opens them. Tools → Backup → **Use an existing
+> even though you still have the key that opens them. Fleet tasks → Backup → **Use an existing
 > key** takes that key and adopts it, replacing the generated one (it asks first, and names
 > the key it is about to discard). Destination credentials are re-encrypted under the
 > imported key in the same step, so the schedules keep working; any it could not read are
@@ -1362,12 +1577,12 @@ Agent-facing (token auth): `POST /api/agent/backups/upload/<run_id>`,
 > by a link, an `<img src>`, or anything else a browser fetches on someone's behalf. Keep
 > it that way.
 
-Tunables live in Settings under **Backups**, or on the Backups page itself: on/off,
+Tunables live in Settings under **Backups**, or on Fleet tasks → Backup itself: on/off,
 destination, interval, and generations to keep.
 
 ### Per-PC file backups
 
-Configured on the Backups page's **Backup Settings** tab, per machine on that machine's
+Configured on Fleet tasks → Backup → **Backup Settings**, per machine on that machine's
 **Backup** tab. Path selection lives in [backup_paths.py](hub/backup_paths.py).
 
 **You never enumerate user profiles.** A pattern is written once with tokens and expanded
@@ -1494,9 +1709,11 @@ other 100, and a green row means nobody does.
 
 ## Remote view & control
 
-Live remote view **and control** of a managed PC over WebRTC (H.264), from the machine
-page's **Remote** tab. Gated on the `remote_control` capability plus the machine being in
-the operator's scope; every session start/stop is in the audit log.
+Live remote view **and control** of a managed PC over WebRTC (H.264), from the **Remote** page
+(`/remote`, under Operate; the machine page links to it). The page keeps several sessions alive
+side by side, and keeps them connected while you move around the console. Gated on the
+`remote_control` capability plus the machine being in the operator's scope; every session
+start/stop is in the audit log.
 
 - **How it works.** The agent runs as SYSTEM in session 0, which has no desktop to capture,
   so on session start it injects a helper (the same signed agent binary, `--remote-helper`)
@@ -1623,9 +1840,10 @@ the operator's scope; every session start/stop is in the audit log.
   involved. `encoder` (auto / hardware / software) pins the H.264 MFT flavour, which separates a
   hardware encoder that will not run on this machine from a broken capture pipeline.
 
-> **Status:** built — shipped in hub 1.44.0 / agent 3.14.0; the agent half has been
-> signed-released since (current: agent 3.15.0). Deploy the hub before an agent release
-> so the fleet never runs ahead of it.
+> **Status:** built and released — hub 1.40.0 / agent 3.13.0, and extended since: the hub relay
+> fallback (hub 1.141.0 / agent 3.42.0), session recording (hub 1.142.0 / agent 3.43.0), and the
+> phone touch controls (hub 1.150.0). Deploy the hub before an agent release so the fleet never
+> runs ahead of it.
 >
 > **On-hardware validation still outstanding**, in rough order of how much rests on it:
 > 1. Whether Desktop Duplication works against the Winlogon desktop after `SetThreadDesktop`
@@ -1637,6 +1855,17 @@ the operator's scope; every session start/stop is in the audit log.
 > 4. Whether the hand-rolled SetupAPI root-device creation matches what `devcon`/`nefcon` do.
 >
 > Per-machine consent override is still a follow-up.
+
+### On a phone
+
+The Remote page works from a phone (hub 1.150.0). **Fullscreen** covers the sidebar and topbar
+too, and works on iPhone Safari, where the browser's fullscreen API exists only for video: there
+the viewer is pinned over the page instead, and the Safari address bar stays. Touch drives a
+**virtual cursor**, as Microsoft's Remote Desktop app does: one finger moves the cursor by the
+finger's travel, a tap clicks where the **cursor** is, two fingers tapped right-click, hold then
+drag moves a window; pinch zooms the picture (not the page) and two fingers pan it. Scrolling the
+remote PC by touch and a phone keyboard are not built. A desktop browser's mouse is unchanged.
+Not yet tried on a real iPhone (ROADMAP.MD, *Owed locally*).
 
 ### Session recording
 
@@ -1679,6 +1908,33 @@ session. There is no separate recording permission.
 - **Checking the badge on a PC** without a hub or a session:
   `FleetHubAgent.exe --recording-badge-test 30` (`TempMonitorAgent.exe` on an older install) shows it for 30 seconds and follows the
   lock screen when it runs as SYSTEM in the console session.
+
+## Firmware and BIOS settings
+
+Read and change BIOS settings across the fleet, and flash a BIOS. A machine's **Firmware** tab
+holds its own settings; **Fleet tasks → Firmware** holds the image library and the fleet's
+update history. There is no cross-vendor BIOS API, so the agent dispatches on the reported
+manufacturer: Dell, HP and Lenovo each through their own WMI namespace, with no vendor CLI to
+install first. The hub never branches on vendor.
+
+- **Three outcomes, kept apart.** *Supported*; *unsupported* (a VM, a whitebox, a Dell with
+  neither firmware interface -- neutral, permanent and quiet); and *error* (an interface that
+  exists and throws, or answers with nothing). A machine no agent has described yet is a fourth
+  state, *not reported*, never written off as unsupported.
+- **A change is confirmed by re-reading the attribute**, not by assuming a restart: a new value is
+  *applied*, the old value with no write error is *pending a restart*, and only that one ever
+  asks for one. The BIOS setup password is kept in the master-key secret store (fleet-wide, with a
+  per-machine override) and never in command parameters.
+- **A flash is confirmed by the BIOS version the machine reports after its restart**, not by the
+  tool's exit code, so a staged image waits for the restart. Images are sha256-pinned in the
+  library; hardware and power preconditions (AC power, a minimum battery charge) refuse by name at
+  both ends; there is one attempt per machine and no retry. On a BitLocker PC the agent suspends
+  protection for the flash and the target row records it, along with the update tool's exit code.
+- **Three gates.** Reading is `view`; forcing a re-read is `issue_commands`; changing a setting or
+  flashing is `manage_firmware`, because this is the one action in the product with no way back.
+- A flash that was staged and whose result never arrived is applied once the new BIOS version
+  shows up (hub 1.140.1).
+- **Agent 3.19.0 or later** to read, 3.20.1 to change or flash.
 
 ## Wake-on-LAN
 
@@ -1753,8 +2009,7 @@ than the `shutdown` that gate already covers.
 `POST /api/wake/requests/<id>/cancel`, `GET /api/wake/requests`. The adapters arrive on the
 existing `POST /api/agent/heartbeat` under a `network` key.
 
-> **Status:** built — hub 1.63.0 / agent 3.21.0. **The agent half ships in source and needs
-> a signed release** before the fleet gains it; deploy the hub first.
+> **Status:** built and released — hub 1.63.0 / agent 3.21.0 (2026-08-02).
 >
 > **On-hardware validation outstanding**: the WMI device power policy and the
 > `*WakeOnMagicPacket` value real drivers publish, whether a docked laptop reports the dock's
@@ -1839,11 +2094,12 @@ the absence of something it never looked for:
   seconds — but for a PC switched off before a holiday it is a week, and a week of confident
   zeros is exactly what you do not want a brute-force rule reading.
 
-> **Status:** collection built — hub 1.118.0; rule conditions over the counters — hub 1.128.0,
-> with the truncated-report case corrected in hub 1.131.1.
-> The agent half is in the source tree and reaches the fleet with the next agent release, so
-> nothing is collected until then, and until it is, every counter above reads unknown. Grouping
-> events into alert bundles is roadmap #17 and shipped in hub 1.124.0 — see
+> **Status:** collection built and released — hub 1.118.0 / agent 3.37.0 (2026-09-22); rule
+> conditions over the counters — hub 1.128.0, with the truncated-report case corrected in hub
+> 1.131.1 and the adopted-document residue closed by hub 1.141.0 with agent 3.42.0. A machine on
+> an agent older than 3.37.0 never reports, and every counter for it reads unknown. The agent's
+> query has not yet been confirmed against a real event log (ROADMAP.MD, *Owed locally*).
+> Grouping events into alert bundles is roadmap #17 and shipped in hub 1.124.0 — see
 > [grouped alerts](#grouped-alerts-and-recommended-fixes).
 
 ## Network discovery and shadow IT
@@ -1905,18 +2161,16 @@ to `POST /api/agent/discovery/scan/<id>` under agent bearer auth, rather than re
 command output -- a full /22 is a thousand rows, and keeping the two apart is what lets the
 console tell an empty subnet from a report that was lost.
 
-> **Status:** first slice built -- hub 1.125.0. **The agent half ships in source and needs a
-> signed release** before any machine can answer; deploy the hub first, as always. Until
-> then the card is visible and a sweep fails with the agent's own `unknown command type:
-> network_sweep`, which is why there is no agent-version gate on this one.
+> **Status:** built and released -- hub 1.125.0 / agent 3.37.0 (2026-09-22), with MAC vendor
+> names in hub 1.141.0. A machine on an older agent fails a sweep with the agent's own
+> `unknown command type: network_sweep`, which is why there is no agent-version gate on this one.
 >
-> **Not in this slice**: the Intune/Azure cross-reference, a fleet-wide sweep, scheduled
-> sweeps, and MAC vendor lookup. See roadmap #18 for why each was left out.
+> **Deliberately not built**: the Intune/Azure cross-reference (declined by the owner on
+> 2026-10-08), a fleet-wide sweep, and scheduled sweeps. See roadmap #18 for why each was left out.
 >
-> **The agent half has no tests and has never been executed.** It compiles clean, which
-> caught a real error, but compiling is not running -- the agent test host needs
-> `Microsoft.WindowsDesktop.App`, which is Windows-only. The hub half is covered by tests
-> against literal payloads.
+> **The agent half has no tests.** It compiles clean, which caught a real error, but compiling is
+> not running -- the agent test host needs `Microsoft.WindowsDesktop.App`, which is Windows-only.
+> The hub half is covered by tests against literal payloads.
 >
 > **On-hardware validation outstanding**: how long `SendARP` actually blocks on an
 > unanswered address, whether 32 probes in flight is polite on a busy segment, what a VPN or
@@ -1968,9 +2222,9 @@ the console has always offered stays offered by a machine that has reported noth
 new one (locking, wiping) waits for an explicit claim. It is a courtesy either way; every route
 re-decides.
 
-> **Status:** built — hub 1.106.0. Only the Android agent reports capabilities today; the
-> Windows and Linux agents send nothing and are treated as unknown by design, which means
-> nothing on their pages changes.
+> **Status:** built — hub 1.106.0. The Android and Linux agents report capabilities; the Windows
+> agent sends nothing and is treated as unknown by design, which means nothing on a Windows
+> machine's page changes.
 
 ## Blocking apps
 
@@ -2211,7 +2465,11 @@ background with their coordinates and says so, rather than showing grey squares.
 `GET /map`.
 
 > **Status:** built — hub 1.101.0 / Android agent source. **Not yet exercised on hardware** —
-> see the hardware-validation table in `ROADMAP.MD`.
+> see the hardware-validation table in `ROADMAP.MD`. **Locating cannot succeed on a released
+> Android agent (0.2.3 and earlier):** the agent declared the location permissions but never asked
+> for them, so every locate answers that the permission has not been granted. Asking for it, and
+> granting it silently on a fully managed device, is in `main` for 0.3.0 and is not released
+> (`agent-android/release-notes/0.3.0.md`).
 
 ## Android device provisioning
 
@@ -2351,25 +2609,142 @@ read a BitLocker recovery key (`read_recovery_keys`) and backup history (`manage
 `GET /api/software/catalog/machines?name=&version=`, `GET /api/software/genai`. The inventory arrives on the existing
 `POST /api/agent/heartbeat` under a `software` key, change-only.
 
-> **Status:** hub 1.133.0. The Software section fills in once the agent release carrying
-> `SoftwareInventoryReporter` is cut (roadmap #25); until then every PC reads **Waiting for a
-> newer agent**. **Not yet exercised on hardware.**
+> **Status:** hub 1.133.0 / agent 3.38.0 (software), hub 1.134.0 / agent 3.39.0 (posture). A PC
+> whose agent predates 3.38.0 reads **Waiting for a newer agent** in the Software section.
+> Hardware detail (memory modules, disks, monitors) and licensing are not built (roadmap #25 C).
+> **Not yet exercised on hardware** (ROADMAP.MD, *Owed locally*).
+
+## BitLocker recovery keys
+
+When BitLocker locks a volume on its own -- a firmware update that moves the TPM measurement, a
+disk moved into another chassis, a PIN failed too often -- the 48-digit recovery password is the
+only way back in, and a key nobody escrowed is discovered missing exactly once, at the worst
+moment. Each Windows PC reports its BitLocker posture on the heartbeat; the hub answers with the
+protector ids it has no key for, and the agent then sends exactly those. A settled fleet
+transmits no key material at all.
+
+- **Where the keys live.** Posture is in the database. The recovery passwords are in a sidecar
+  encrypted with `BACKUP_MASTER_KEY` and keyed by machine name, so a key copied between machines
+  fails to decrypt instead of being handed to the wrong PC, and **no recovery password is ever
+  inside the database file a hub backup copies offsite**. Collection needs that master key; with
+  none, nothing is collected (**Settings → Endpoint Security → Escrow BitLocker recovery keys**,
+  on by default; switching it off stops collection and never deletes what is escrowed).
+- **Reading a key is an event.** `read_recovery_keys` plus machine scope, one protector per call,
+  written to the audit log at security level *before* the key is produced. Knowing that a laptop is
+  encrypted, or that the hub holds its key, is only `view`.
+- **A key is never deleted because a machine stopped reporting its protector** -- a decrypted
+  disk or a half-failed inventory would otherwise erase the only copy. The orphan is shown on the
+  card. Deleting the machine is the one thing that removes its keys. A duplicate-machine merge that
+  could not move the keys with it is refused, and the refusal is audited.
+- Not built: turning BitLocker on across the fleet. Escrow came first so that, when it is built,
+  there is somewhere for the keys to go.
+- Agent 3.37.0 or later.
+
+## Sharing a machine with another hub
+
+Lend one machine to a colleague's hub (`/sharing`) for a second pair of eyes, with exactly the
+rights you choose and no more. It is off until you switch on **Settings → Cross-hub Sharing →
+Share machines with other hubs**, and pairing uses a one-time code that one hub issues and the
+other redeems for a long-lived peer credential (its lifetime slides on use, 365 days by default).
+
+- **The borrowing hub never speaks to your agent.** Its requests go to *your* hub, which checks
+  the grant and queues the command on its own queue for its own agent; the agent is never told
+  another hub exists. So a fully compromised borrower can still only ask for actions inside the
+  grant, and neither the hub URL nor the enrollment secret is something a hub can send an agent.
+- **You pick each capability, from an allow-list of three:** `view`, `issue_commands` and
+  `remote_control`. Nothing rides along: a remote-control-only share shows a stub -- hostname,
+  online state, Connect -- and no telemetry at all. Administrative capabilities cannot be shared.
+- **A share is one machine**, with an expiry of your choosing or none, and is revoked immediately
+  -- revoking kills sessions in flight, not just the next request. If the person who created it has
+  since lost the permission, the share shows as *suspended* and names the capability, instead of
+  quietly doing less.
+- **On the borrowing side** the machine is badged as borrowed everywhere, is never enrolled there,
+  is left out of fleet-wide operations and counts, and keeps showing (marked stale, with when it
+  was last heard from) while the lending hub is unreachable. Telemetry is proxied live, never
+  mirrored. A peer sees a projection of the machine, not the asset record: no serial, asset tag or
+  AD data.
+- **Both hubs audit every borrowed action**, and the lender's trail names the peer hub and the
+  remote operator. No agent release is involved.
+
+## Release channels (stable and beta)
+
+An agent release otherwise reaches every machine within about fifteen minutes. A **beta** channel
+lets a few machines take a build first.
+
+- **Per machine.** **Settings → Fleet → Default agent channel** (stable unless you change it) and
+  a pin on an individual machine, under *Machine settings* on its page. The pilot ring is a few
+  rows, not a second fleet.
+- **The hub sends a channel *name*, never a URL.** The agent has both manifest URLs compiled in,
+  so a compromised hub can at worst move a machine onto the other train -- where the manifest is
+  signed by the same offline key and the binary is hash-checked against the signed value.
+- **One number sequence for both channels.** Beta is where a version appears *first*:
+  `release.ps1 -Channel beta` writes the beta manifest (`agent.manifest.beta.json`, created by the
+  first beta) and tags the release `agent-v<version>-beta`. **Promoting is copying the beta
+  manifest over the stable one**, nothing is renumbered, and every machine already on that build
+  does nothing. Leaving beta never rolls a machine back (every updater installs only what is
+  strictly newer); the console says *ahead of stable* instead, because a PC that quietly stops
+  updating looks broken.
+- **The hub and the client have channels too.** **Settings → Hub → This hub's release channel**
+  reads `HUB_VERSION` off the `beta` branch instead of `main` (and the container image has
+  `beta-X.Y.Z` and `beta` tags); **Client release channel** picks which desktop-client manifest the
+  Download Client page offers. The Linux and Android agents each have a manifest pair of their own.
+
+## Languages
+
+The console speaks English, German and Spanish. Each user chooses a language in the account menu;
+with no choice, the browser's language is used, and English if that is not offered. Text that
+comes from the server (capability descriptions, setting labels and help, units) is resolved in
+the same language. To add or change a string, edit `hub/locales/en.json`, `de.json` and `es.json`
+in the same change: `tests/test_i18n.py` fails on a missing or extra key, and on a placeholder
+that does not match the English one.
+
+## Desktop client
+
+A native Windows client (Flutter, `app/`) for watching a fleet without keeping a browser tab open:
+the fleet list, one machine's detail, open alerts as Windows toasts, Wake-on-LAN and saved
+commands as quick actions. Console administration stays in the browser. **Administration →
+Download Client** (`/download`) lists the builds in the signed client manifest -- it renders only
+a manifest whose Ed25519 signature verifies, with each build's SHA-256 -- and **Settings → Hub →
+Client release channel** picks stable or beta. Stable is 1.0.0; 1.1.0 (one instance per logon
+session) is on beta.
+
+The client signs in with a **device token**, not a cookie: it opens the system browser, you sign
+in normally and confirm what the device may do, and a one-time code is exchanged for the token. A
+token holds a subset of its owner's capabilities, intersected live on every request (removing
+someone from a group disables their devices at once), never `manage_settings`, `manage_users`,
+`manage_permission_groups` or `manage_firmware`, and slides to expire after
+`hub.device_token_lifetime_days` (90). Paired devices are listed, and revocable, on the **Users**
+page's Devices tab. A phone registered for push is sent a *count* of new alerts and nothing about
+them (hub 1.119.0). See [app/README.md](app/README.md); **the client has not yet been run against
+a live hub** (ROADMAP.MD #11).
 
 ## Signing releases
 
-One artifact in this repo is Ed25519-signed so a compromised hub or repo commit
-can't push code that runs as admin fleet-wide unverified:
+Every binary this project distributes is covered by an Ed25519 signature, from one offline key,
+so a compromised hub or repo commit can't push code that runs as admin fleet-wide unverified.
+What is signed is a small **manifest** (version, sha256, download URL) rather than the binary;
+the binary is hash-checked against the signed value. None of the binaries is Authenticode-signed.
 
-- **The C# agent** (`agent/`) — the self-update manifest `agent/agent.manifest.json`
+- **The C# Windows agent** (`agent/`) — the self-update manifest `agent/agent.manifest.json`
   carries the version, the exe's sha256 and its download URL, and is signed
   byte-for-byte. See [agent/README.md](agent/README.md) for `agent/release.ps1`
   (automates the whole release: version bump, publish, GitHub release, sign, upload)
   or the manual `sign_release.py --sign-agent` steps. `.gitattributes` pins the
   manifest and its `.sig` to `-text` so git never rewrites line endings — the signed
   bytes must match exactly what the fleet downloads.
+- **The Linux agent** (`agent-linux/agent-linux.manifest.json`) and **the Android agent**
+  (`agent-android/agent-android.manifest.json`) — each has its own manifest and its own
+  `release.ps1`, and the hub advertises the one that matches the platform a machine reports.
+  `install.sh` and `agent-install.ps1` verify the same manifest before a first install.
+- **The desktop client** (`hub/client.manifest.json`, served as `/download/manifest.json`) — a
+  list of builds, signed as one document and verified by the Download Client page and by the
+  installed client before it offers an update.
+- **Beta channel manifests** (`*.manifest.beta.json`) are signed by the same key; see
+  [Release channels](#release-channels-stable-and-beta).
 
 (`companion.py` was signed with the same key until it was removed from the repo.
-Nothing signs a loose file anymore.)
+Nothing signs a loose file anymore. The hub itself is not signed: it updates from `main` over
+HTTPS, or from a container image you pull, and trusts GitHub rather than this key.)
 
 One-time setup: `python sign_release.py --genkey`, keep the private key OFF the
 repo, paste the printed public key into the agent's `AgentConfig.UpdatePublicKeyHex`.

@@ -8,7 +8,17 @@ that one's README too -- everything it says about publishing applies here unchan
 Write for the operators who run the fleet, not for whoever changed the code: what they will
 notice, what it costs them, and what to do when it misbehaves.
 
-Two things are different from the Windows agent, and both belong in every file here:
+From 0.3.0 on, the layout is the Conventional Changelog one that release-please produces, the same
+as the Windows agent's from 3.43.0 (`agent/release-notes/README.md`, *Format*): a heading
+`## X.Y.Z (YYYY-MM-DD)`, then only the sections that have entries (`### ⚠ BREAKING CHANGES`,
+`### Features`, `### Bug Fixes`, `### Performance Improvements`, `### Code Refactoring`,
+`### Documentation`, `### Tests`), one bullet per change as `* **scope:** what an operator will
+notice (#PR) (commit)`. A file for a release that has not been cut carries `(unreleased)` in place
+of the date; replace it with the date the release is cut. `0.2.0.md` to `0.2.3.md` are long-form
+prose and stay as they were published.
+
+Two things are different from the Windows agent, and both belong in every file here, whatever the
+layout -- put them under Features, Bug Fixes or Documentation as fits:
 
 - **A managed phone can do things a PC cannot, to a person rather than to a machine.** Locating a
   device, listing the apps somebody uses and erasing what they are holding are not features of

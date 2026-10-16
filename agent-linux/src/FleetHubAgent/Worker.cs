@@ -28,7 +28,7 @@ namespace FleetHubAgent;
 /// takes. Worse, the machine can read offline (the hub's 90-second window) because its own
 /// telemetry post is queued in front of its heartbeat.
 ///
-/// The Windows agent runs six loops; this one runs five. The missing one (processes) backs a
+/// The Windows agent runs seven loops; this one runs six. The missing one (watchdogs) backs a
 /// feature this agent does not have -- see AgentConfig.Version for why it deliberately sits
 /// below the console's version gates for it, and README.md for what is next.
 /// </summary>

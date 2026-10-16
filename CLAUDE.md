@@ -1,22 +1,27 @@
 # FleetHub
 
-Windows fleet management / RMM for one IT helpdesk group. Three shipped components on three
+Windows fleet management / RMM for one IT helpdesk group. Five shipped components on five
 independent version lines, each with a real updater running in the field — so a version
 mistake here reaches real machines, or silently reaches none of them.
 
-- `hub/` — Flask + Socket.IO console and API. The only thing an operator sees.
+- `hub/` — Flask + Socket.IO console and API. The only thing an operator sees. Also ships as a
+  container image (`hub/Dockerfile`, `deploy/docker/`).
 - `agent/` — C#/.NET 10 Windows Service, LocalSystem, installed on every managed PC.
+- `agent-linux/`, `agent-android/` — much smaller agents on their own `0.x` lines, with their
+  own signed manifests and `release.ps1`. Their versions are not comparable with the Windows
+  agent's, and must stay below `3.0.0` (`VERSIONING.md`).
 - `app/` — Flutter desktop client (roadmap #11).
 - `tests/` — the hub's Python suite.
-- `install.ps1` — unified menu-driven installer for all three.
+- `install.ps1` — unified menu-driven installer for the hub, the Windows agent and the TURN
+  relay (`turn/`); the Linux agent has its own `agent-linux/install/install.sh`.
 
 Four canonical docs already exist. Go to them by question, not by default:
 
 | Question | File |
 |---|---|
 | What a feature does, or how to operate it | `README.md` — grep it, don't read it |
-| Is this planned or shipped, and what was rejected | `ROADMAP.MD` — features `#1`–`#22` |
-| Anything about a version number | `VERSIONING.md` — 120 lines, read it whole |
+| Is this planned or shipped, and what was rejected | `ROADMAP.MD` — features `#1`–`#30` (two numbers are used twice; code comments cite them as they are) |
+| Anything about a version number | `VERSIONING.md` — about 170 lines, read it whole |
 | Auth, capabilities, threat model | `SECURITY.MD` |
 | What is waiting on Windows, a phone or the signing key | `ROADMAP.MD` → *Owed locally*, top of file -- surface it at the start of a local session |
 
@@ -41,9 +46,10 @@ Four canonical docs already exist. Go to them by question, not by default:
   *strictly* newer", so a repeated or lowered number means nothing happens anywhere while the
   release looks shipped. This has bitten twice.
 - **Agent and client versions move only when cutting a release, and only via the scripts** —
-  `agent/release.ps1 -Version x.y.z` and `python release_client.py --set-version x.y.z`. Each
-  has a two-file pair that must agree, and the scripts are what keep them in sync. Unreleased
-  source on `main` keeps the old number.
+  `agent/release.ps1 -Version x.y.z` (the Linux and Android agents each have their own
+  `release.ps1`) and `python release_client.py --set-version x.y.z`. Each has a two-file pair
+  that must agree (Android has a third number, `<ApplicationDisplayVersion>`), and the scripts are
+  what keep them in sync. Unreleased source on `main` keeps the old number.
 - **Agent MINOR has teeth.** Anything the hub might gate on needs one, because the hub hardcodes
   the minor that introduced a feature — `MIN_PTY_AGENT`, `MIN_PROCESS_AGENT`, `MIN_OPEN_AGENT`
   and friends in `hub/static/js/`. Those constants are a compatibility API, not trivia.
@@ -81,7 +87,9 @@ Each of these looks like leftover mess and is load-bearing.
   runner into a plain pytest call.
 - Editing one module: `pytest tests/test_x.py` works — `tests/conftest.py` adapts the house
   pattern.
-- Agent: `dotnet test agent/TempMonitorAgent.slnx`.
+- Agent: `dotnet test agent/TempMonitorAgent.slnx`. The Linux and Android agents have
+  `agent-linux/FleetHubAgent.slnx` and `agent-android/FleetHubAgent.Android.slnx`; the Android
+  *app* project needs the `android` workload and is not built by a plain `dotnet test`.
   Publish: `dotnet publish agent/src/TempMonitorAgent/TempMonitorAgent.csproj -c Release -o agent/dist`.
 - **From Linux, the agent still compiles** -- run `dotnet build agent/TempMonitorAgent.slnx -p:EnableWindowsTargeting=true`
   (after `apt-get install -y dotnet-sdk-10.0`). The tests cannot be *run* there, but compiling
@@ -125,7 +133,7 @@ explicitly approved that specific one. Approved so far:
 Still not allowed without asking: a JS framework, a bundler, npm/`node_modules` for the hub.
 
 **Agent.** `net10.0-windows`, published self-contained single-file win-x64, runs as a Windows
-Service under LocalSystem. `Worker.cs` is six independent concurrent loops. Class suffixes are
+Service under LocalSystem. `Worker.cs` is seven independent concurrent loops. Class suffixes are
 load-bearing: `*Executor.cs` implements `ICommandExecutor` for one fleet command type (its
 `Type` must match the hub's `COMMAND_TYPE`; routed by `Fleet/CommandDispatcher.cs`),
 `*Reporter.cs` pushes change-only data on the heartbeat, `*Reader.cs` is a local read-only
@@ -171,7 +179,7 @@ The most distinctive thing about this codebase, and what a generic model gets wr
 
 ## Roadmap upkeep
 
-`ROADMAP.MD` is the live board — features `#1`–`#22` marked ✅ done / 🚧 partial / 📋 planned.
+`ROADMAP.MD` is the live board — features `#1`–`#30` marked ✅ done / 🚧 partial / 📋 planned.
 Update an entry when a feature's status actually changes, and record the decision and the
 alternatives you rejected there. Code comments cite these numbers, so a stale board makes them
 lie.

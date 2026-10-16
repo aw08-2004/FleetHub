@@ -1,12 +1,21 @@
 # FleetHub — C#/.NET Fleet Agent
 
-The fleet's only telemetry client: a Windows Service (runs under **LocalSystem**) that
+The Windows telemetry client: a Windows Service (runs under **LocalSystem**) that
 replaced the Python `companion.py`, since removed from the repo. It reaches telemetry
 parity with the companion **and** speaks the hub's fleet command channel: it enrolls,
 heartbeats, polls for commands, executes them, reports
 results, and updates itself from a **signed** manifest (verified fail-closed). It also
-carries the client half of the interactive terminal (ConPTY), package deployment,
-per-PC file backup/restore, and remote view/control.
+carries the client half of the interactive terminal (ConPTY), package deployment, patching,
+per-PC file backup/restore, remote view/control and session recording, firmware settings and
+flashing, Wake-on-LAN, the file explorer, disk usage, event log collection, network sweeps,
+software and security-posture inventory, BitLocker key escrow and self-healing watchdogs --
+every one a section of [../README.md](../README.md). The [Linux](../agent-linux/README.md) and
+[Android](../agent-android/README.md) agents are separate, much smaller projects that speak the
+same wire protocol; their versions are not comparable with this one's
+([../VERSIONING.md](../VERSIONING.md)).
+
+**Current release: 3.44.0** (2026-10-13). `main` carries one change not yet in a release: the
+exe is built as `FleetHubAgent.exe` (see *Install* below).
 
 - **Target:** .NET 10 (`net10.0-windows`), published **self-contained single-file
   win-x64** (no runtime install needed on the fleet).
@@ -19,25 +28,44 @@ per-PC file backup/restore, and remote view/control.
 
 ## Layout
 ```
-src/TempMonitorAgent/
-  Program.cs / Worker.cs         host + main loop, executor registration
+src/TempMonitorAgent/            (the folder and namespaces keep the pre-rename name on purpose)
+  Program.cs / Worker.cs         host + executor registration; Worker is seven independent
+                                 concurrent loops (telemetry, heartbeat, commands, inventory,
+                                 processes, updates, watchdogs)
   AgentConfig.cs                 constants, endpoints, trust roots, %ProgramData% paths
   Models.cs                      wire DTOs shared across the client surfaces
-  Telemetry/                     SensorReader (LHM), SystemInfo (WMI), TelemetryReporter
+  Telemetry/                     SensorReader (LHM), SystemInfo (WMI), TelemetryReporter,
+                                 VolumeReader, ProcessReader/Reporter, LiveTelemetry
   Fleet/                         FleetClient, SignatureVerifier, CommandDispatcher,
                                  OutputStreamer, ProcessRunner, WingetLocator,
                                  Shell/ (ConPTY sessions), Executors/
   Backup/                        BackupFilesExecutor, RestoreFilesExecutor (VSS, chains)
-  Remote/                        remote view/control helper + virtual-display executors
-  Update/                        SelfUpdater, VersionUtil
-  State/                         AgentState (agent.json, restart_state.json)
-tests/TempMonitorAgent.Tests/    xUnit: update-manifest sig verify, versions
+  Bios/                          firmware settings reader/writer, FirmwareFlasher
+  DiskUsage/                     MFT reader, folder trees, the daily scan and its delta upload
+  Events/                        Windows event log query and reporter
+  Files/                         list/copy/move/delete/fetch/push/open for the Files tab
+  Network/                       NIC inventory, Wake-on-LAN, ARP sweep
+  Patch/                         Windows Update + winget scan, patch install
+  Remote/                        remote view/control helper, hub relay, recording badge,
+                                 virtual-display executors
+  Security/                      BitLocker inventory and escrow, security posture
+  Software/                      installed-software inventory
+  UserMessage/                   the dialog behind the rules engine's "show a message"
+  Watchdog/                      the document the heartbeat delivers, and the runner
+  Update/                        SelfUpdater, SelfUninstaller, VersionUtil
+  State/                         AgentState (agent.json, restart_state.json), RuntimeConfig
+tests/TempMonitorAgent.Tests/    xUnit; the whole suite is run on Windows only
 tests/ShellParserTests/          xUnit: terminal/ConPTY stream parsing
-install/agent-install.ps1        installs the service (+ PawnIO, recovery, enroll secret)
+install/agent-install.ps1        installs the service (+ PawnIO, recovery); the onboarding
+                                 wizard's script (hub/templates/onboarding/onboard.ps1) runs it
 ```
 
 ## Wire protocol (must match the Python hub)
-- Telemetry: `POST /api/report` (no auth). Cadence 5s temp / 10s sensors / 600s uptime.
+- Telemetry: `POST /api/report`, signed with the agent's own bearer token from 3.44.0 (an older
+  agent sends it unsigned, which the hub accepts until *Only accept telemetry from enrolled
+  agents* is switched on). Cadence defaults to 5 s per reading and 10 s per full sensor block, set
+  from the hub (**Settings → History Metrics**) and rising to 1 Hz while an operator watches the
+  machine's page.
 - Fleet: `POST /api/agent/enroll` → `{agent_id, token}`; then
   `Authorization: Bearer <agent_id>:<token>` on `POST /api/agent/heartbeat`,
   `GET /api/agent/commands` (pull+claim), `POST /api/agent/commands/<id>/result`,
@@ -68,19 +96,28 @@ install/agent-install.ps1        installs the service (+ PawnIO, recovery, enrol
   verified here. No key was ever configured, so in practice they were always refused —
   which is why removing the gate is what made them work, not a loosening.)
 
-Implemented executors (registered in `Program.cs`):
+Implemented executors (registered in `Program.cs`; each `Type` must match the hub's command
+type, and `Fleet/CommandDispatcher.cs` routes on it):
 
 | Area | Types |
 |---|---|
 | Low risk | `restart`, `shutdown`, `rename`, `gpupdate`, `install_app` |
-| Scripts | `run_script` |
-| Packages | `deploy_package` |
+| Scripts and rules | `run_script`, `show_message`, `collect_probe` |
+| Packages and patches | `deploy_package`, `install_patches` |
 | Terminal | `shell_open`, `shell_input`, `shell_signal`, `shell_reset` |
 | Backups | `backup_files`, `restore_files` |
 | Remote | `start_remote_session`, `install_virtual_display`, `uninstall_virtual_display`, `set_virtual_display_mode`, `refresh_remote_inventory` |
 | Processes | `kill_process`, `restart_process` |
+| Files | `list_directory`, `file_operation`, `fetch_file`, `push_file`, `open_item`, `scan_disk_usage` |
+| Firmware | `refresh_bios_inventory`, `set_bios_settings`, `update_bios` |
+| Network | `wake_machine`, `prepare_wake`, `network_sweep` |
 
-`install_driver` / `update_bios` are still registered as `StubExecutor`s.
+`install_driver` is still registered as a `StubExecutor` that always fails; `update_bios` is real
+(it was a stub until 3.20.1). **Not every feature is a command**: the inventory reporters
+(software, patches, BIOS, NICs, posture, BitLocker, events, disk usage) and the watchdog runner
+push change-only data on the heartbeat or their own POST, driven by a document or a flag the hub
+sent back. See the class suffixes in [../CLAUDE.md](../CLAUDE.md): `*Executor.cs` is a command,
+`*Reporter.cs` pushes change-only data, `*Reader.cs` is a local read-only probe.
 
 **Still signed, and unrelated to the above:** the self-update manifest. `SelfUpdater`
 verifies it with `SignatureVerifier.VerifyRaw` against `AgentConfig.UpdatePublicKeyHex`
@@ -185,7 +222,19 @@ fleet. Plus `remote-helper.log` beside it for the remote view/control
 helper (it runs in a different session, so it gets its own file).
 
 Self-tests runnable on the machine, no hub or browser involved:
-`--desktop-probe [seconds]` (which input desktop, and can this process attach to it)
-and `--remote-capture-test <file.h264> <seconds> [monitor] [fps] [kbps] [encoder]`
+`--desktop-probe [seconds]` (which input desktop, and can this process attach to it),
+`--remote-capture-test <file.h264> <seconds> [monitor] [fps] [kbps] [encoder]`
 (a playable clip straight from the capture + encode path; `encoder` is auto, hardware
-or software, which is how you tell a broken hardware MFT from a broken pipeline).
+or software, which is how you tell a broken hardware MFT from a broken pipeline),
+and `--recording-badge-test [seconds]` (shows the session-recording badge, and follows the lock
+screen when run as SYSTEM in the console session).
+
+## Enrolling
+
+Either with the fleet-wide `AGENT_ENROLLMENT_SECRET` (the installer writes it to
+`HKLM\SOFTWARE\FleetHub\Agent`), or without it: a PC given a single-use **onboarding code**
+installs with no secret, then receives its own credential, written to `agent.json` readable only
+by SYSTEM and Administrators (roadmap #29, hub 1.144.0). An agent that finds `agent.json` counts
+as enrolled before it ever looks for a secret. When the hub deletes a device with *Also uninstall
+the agent* ticked, the next three heartbeats answer `decommissioned` and `Update/SelfUninstaller.cs`
+removes the service, the install folder and the local data (roadmap #30).

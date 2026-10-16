@@ -10,6 +10,14 @@ either one has to be moved to 0.3.0 by hand once (re-run `install.sh`; see
 `release-notes/0.3.0.md`). It reports telemetry, enrolls, heartbeats, and executes four command
 types. See *What it does not do*.
 
+**`main` is ahead of 0.3.0, and none of it is released.** The agent signs `/api/report` with its
+own token (roadmap #29), refuses a second credential for an enrolled name, and removes itself,
+its unit and its data when its device is deleted from the hub with *Also uninstall the agent*
+ticked (`Update/SelfUninstaller.cs`, roadmap #30). It ships as 0.4.0; until then a Linux machine
+still enrolls with `--secret` (the onboarding wizard is Windows-only), the hub's *Only accept
+telemetry from enrolled agents* switch must stay off while any Linux box reports unsigned, and
+deleting a Linux device leaves its agent running.
+
 ---
 
 ## Why C#, and why a separate project
@@ -81,8 +89,8 @@ works against an unmodified hub.
 | **Self-update** | Ed25519-signed manifest, its own train, verified fail-closed before anything is written. systemd restarts the unit onto the new binary |
 
 Six concurrent loops — telemetry, heartbeat, commands, update, inventory, processes — for the reason
-the Windows agent's six exist: in a serial loop the slowest step sets the latency of every
-other one. The inventory loop is the clearest case: an `apt` dependency solve is seconds of
+the Windows agent's seven exist (it adds watchdogs): in a serial loop the slowest step sets the
+latency of every other one. The inventory loop is the clearest case: an `apt` dependency solve is seconds of
 work and the hub calls a machine offline after ninety.
 
 ## What it does not do
@@ -111,10 +119,11 @@ report rather than onto a version number.
 ```
 src/FleetHubAgent/        the agent
   AgentConfig.cs          version, endpoints, cadence, state paths
-  Worker.cs               the five loops
+  Worker.cs               the six loops
   Fleet/                  hub client, dispatcher, executors, capability report, output streaming
   Patch/                  what apt/dnf says is available, and the heartbeat payload for it
-  Update/                 the signed self-update: manifest verification and the swap
+  Update/                 the signed self-update (manifest verification and the swap), and the
+                          self-uninstall a deleted device triggers
   Telemetry/              /proc and /sys readers, the report builder
   State/                  agent.json, and keeping it root-only
 tests/FleetHubAgent.Tests/  xunit; everything under test is pure

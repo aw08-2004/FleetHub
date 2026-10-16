@@ -8,6 +8,13 @@ Wake-on-LAN, and saved commands as quick actions. Console administration — set
 permission groups, firmware — deliberately stays in the browser and cannot be granted to a
 device at all.
 
+**Status (checked 2026-10-15).** `1.0.0` is the stable release (`hub/client.manifest.json`);
+`1.1.0`, which adds the one-instance-per-session guard below, is signed and published on the
+**beta** channel only (`hub/client.manifest.beta.json`), and `lib/version.dart` and
+`pubspec.yaml` both read 1.1.0. The build exists and launches; **it has never talked to a live
+hub** (ROADMAP.MD #11), so pairing and the poll loop have only run against tests and fakes. The hub
+half of push (`push.py`, hub 1.119.0) is built and no Android build exists to receive it.
+
 ## How it talks to a hub
 
 Ordinary HTTPS JSON against endpoints the hub already had. **The hub gained authentication

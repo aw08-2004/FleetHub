@@ -12,6 +12,15 @@ Either way it's [coturn](https://github.com/coturn/coturn), which implements the
 `password = base64(HMAC-SHA1(secret, username))`. The hub and coturn share **one secret** and
 never exchange a per-user database.
 
+**A dead relay no longer means no remote view.** Since hub 1.141.0 / agent 3.42.0, when WebRTC
+cannot connect at all (or has not twenty seconds after the agent's offer), the session falls back
+to the hub: the agent POSTs its encoded frames to the hub over HTTPS and the browser long-polls
+them back (`hub/remote_relay.py`). The pill reads **Live (via hub)** and every switch writes a
+`remote_session_relay` audit row. It is slower and costs hub bandwidth, so it is a fallback, not a
+reason to leave coturn broken; turn it off with **Settings → Remote Control → Fall back to
+relaying through the hub**. Not offered for a machine borrowed from another hub, nor by an agent
+older than 3.42.0.
+
 **Two ways to run it, and the choice is not cosmetic:**
 
 | Host | How | Cross-NAT |

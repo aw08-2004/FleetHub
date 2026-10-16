@@ -35,11 +35,14 @@ line this PR moves, or write "unchanged".
 |---|---|---|
 | Hub | `HUB_VERSION` in `hub/app.py` | `1.x.y` / unchanged |
 | Agent | `AgentConfig.Version` **and** csproj `<Version>` | `3.x.y` / unchanged |
+| Linux agent | `AgentConfig.Version` **and** csproj `<Version>` (`agent-linux/`) | `0.x.y` / unchanged |
+| Android agent | `AgentConfig.Version`, both csproj `<Version>`s **and** `<ApplicationDisplayVersion>` | `0.x.y` / unchanged |
 | Client | `clientVersion` **and** `pubspec.yaml` | `1.x.y` / unchanged |
 
 - Every hub change bumps `HUB_VERSION`, including a hub-only one.
 - The two-file pairs must match; move them with `agent/release.ps1 -Version …`
-  or `python release_client.py --set-version …`, not by hand.
+  (`agent-linux/` and `agent-android/` have their own) or
+  `python release_client.py --set-version …`, not by hand.
 - A minor, not a patch, if the hub might gate on it or an operator can see it.
 - A **major** means a running deployment breaks. If this is one, say what an
   operator must do by hand, and state the deploy order explicitly: **hub first**,
@@ -47,9 +50,11 @@ line this PR moves, or write "unchanged".
 
 ## Release
 
-Only if this ships an agent or client build.
+Only if this ships an agent or client build, or bumps `HUB_VERSION`.
 
-- [ ] Release note added at `agent/release-notes/<version>.md`
+- [ ] Release note added at `agent/release-notes/<version>.md` (or the Linux/Android agent's own
+      `release-notes/`), in the release-please layout its README describes
+- [ ] If `HUB_VERSION` moves: a note at `deploy/docker/release-notes/<version>.md`
 - [ ] Hub deployed before the agent release is cut
 - [ ] Any hub-side version gate names the version that actually carries the
       feature (a "built at" number in the roadmap is a *source* version and is

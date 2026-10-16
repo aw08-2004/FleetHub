@@ -10,7 +10,7 @@ some piece of code already depends on.
 | **Hub** | `HUB_VERSION` in [hub/app.py](hub/app.py) | `hub_update_available()`, against `main` |
 | **Agent (Windows)** | `Version` in [AgentConfig.cs](agent/src/TempMonitorAgent/AgentConfig.cs) **and** `<Version>` in [TempMonitorAgent.csproj](agent/src/TempMonitorAgent/TempMonitorAgent.csproj) | `SelfUpdater`, against the signed manifest |
 | **Agent (Linux)** | `Version` in [agent-linux/…/AgentConfig.cs](agent-linux/src/FleetHubAgent/AgentConfig.cs) **and** `<Version>` in its csproj | its own signed manifest |
-| **Agent (Android)** | `Version` in [agent-android/…/AgentConfig.cs](agent-android/src/FleetHubAgent.Core/AgentConfig.cs) **and** `<Version>` in **both** csproj files | its own signed manifest |
+| **Agent (Android)** | `Version` in [agent-android/…/AgentConfig.cs](agent-android/src/FleetHubAgent.Core/AgentConfig.cs) **and** `<Version>` in **both** csproj files, **and** `<ApplicationDisplayVersion>` in the Android one (what the phone's app-info screen shows; `<ApplicationVersion>` is a build counter and is left alone) | its own signed manifest |
 | **Client** | `clientVersion` in [app/lib/version.dart](app/lib/version.dart) **and** `version:` in [app/pubspec.yaml](app/pubspec.yaml) | `updater.dart`, against the signed client manifest |
 
 **The three agent lines are not comparable with each other, and nothing may compare them.**
@@ -89,6 +89,13 @@ the last of them stable and pointed at by `agent-android.manifest.json`. **So ha
 tagged — drift rather than a decision, because the pair moves through `release.ps1` and that tag
 was cut without it (roadmap #22).
 
+**Free does not mean unbounded: both lines must stay below `3.0.0`, for a different reason.**
+The console's `MIN_*_AGENT` gates compare a machine's version numerically, so a Linux or Android
+agent numbered `3.x` would be offered a terminal, a process list and a file browser it cannot
+answer. Both `release.ps1` scripts refuse a major digit of 3 or more, and each agent's
+`VersionGateTests` pins the floor. Moving past it is a decision about those gates moving onto the
+capability report first (`capabilities.py`), not a version bump.
+
 ### MINOR — new capability, or a user-visible change in behaviour
 
 A new page, tab, metric, action or setting; a new field on the wire; a new language; a
@@ -104,6 +111,9 @@ const MIN_STREAMING_AGENT   = '3.1.0';   // fleet-terminal.js
 const MIN_INTERACTIVE_AGENT = '3.2.0';
 const MIN_PTY_AGENT         = '3.15.0';
 const MIN_PROCESS_AGENT     = '3.24.0';  // processes.js
+const MIN_FILES_AGENT       = '3.33.0';  // files.js
+const MIN_OPEN_AGENT        = '3.34.0';
+const MIN_DISKUSAGE_AGENT   = '3.40.0';
 ```
 
 Those constants are a compatibility API. A capability shipped in a patch release leaves
@@ -123,6 +133,11 @@ was rendering while marked `hidden` because a `display: flex` outranked the UA s
 deployed hub, whether or not `HUB_AUTO_UPDATE` is on. A push that only touches docs or
 `tests/` needs no bump, because there is nothing for a hub to install.
 
+**Hub release notes.** Every version published as a container image has a file in
+[deploy/docker/release-notes/](deploy/docker/release-notes/README.md), written for the operator
+deciding whether and when to take it. Agents' notes live beside each agent, in
+`agent/release-notes/`, `agent-linux/release-notes/` and `agent-android/release-notes/`.
+
 The same number is the hub's **container image tag**. `.github/workflows/hub-image.yml`
 publishes `ghcr.io/<owner>/temp_monitor-hub:X.Y.Z` from `main`, and `beta-X.Y.Z` from
 `beta`. It **fails** if `HUB_VERSION` is not three numeric components, or if that tag already
@@ -132,7 +147,18 @@ cannot install a release that has no new tag.
 **Agent and client — only when cutting a release.** The number means "what is signed and
 downloadable", so it moves in `agent/release.ps1` / `release_client.py`, not in the commit
 that writes the feature. Source that sits on `main` unreleased keeps the old number; the
-roadmap tracks the gap.
+roadmap tracks the gap (*Owed locally*, at the top of `ROADMAP.MD`, lists what is merged and not
+yet in a release). A consequence worth knowing: a release tag points at the commit that was the
+tip when the GitHub release was created, and the version bump and signed manifest are committed
+after it, so the tagged commit's source can still read the previous version while the uploaded
+binary reports the new one. The binary and the manifest are what machines compare.
+
+**Not every feature needs a version gate.** A feature whose hub half can tell by itself that an
+agent has not answered — a state row that does not exist yet, a `support: null`, a document
+version the agent never echoes — needs no `MIN_*` constant, and writing one would name a release
+that has not been cut. Disk usage's folder sizes are the exception because they change what a
+folder listing contains (`MIN_DISKUSAGE_AGENT`); software inventory, security posture, event
+logs, watchdogs and BitLocker escrow gate on the absence of a report instead.
 
 ## Not covered by this policy
 

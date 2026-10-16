@@ -17,10 +17,14 @@ system administration use cases:
 
 - **Source Code:** Fully open-source (GPL-3.0), auditable on GitHub
 - **Signed Artifacts:** All agent updates are Ed25519-signed; manifests are verified fail-closed
+  (the Windows, Linux and Android agents each have their own, and so does the desktop client)
 - **Audit Trail:** Every RMM command is logged with operator email + full params
 - **Operator Control:** Remote code execution requires an authorized OAuth/OIDC sign-in, or a
   device token minted by one (see "Device tokens" below)
-- **Signed Releases:** Authenticode-signed executables
+- **Signed Releases:** release **manifests** are signed with one offline Ed25519 key and the
+  binary is hash-checked against the signed sha256. The executables themselves are **not**
+  Authenticode-signed (no code-signing certificate exists), so SmartScreen and some antivirus
+  products will warn on a fresh download; the trust root is the offline key, not a CA
 - **HTTPS-only:** All hub-to-agent communication over TLS
 
 ## RMM Legitimate Use
@@ -62,8 +66,10 @@ inventoried separately here so that nobody has to infer it from a feature list.
 | **App usage** — foreground seconds per package, per the device's own local day | Managed Android devices, **only where somebody has granted usage access on the device itself** | Enforcing daily screen-time budgets, and showing an operator why a budget did or did not bite | `machine_usage` in the hub's SQLite database | `data.usage_retention_days`, default **14 days**, then deleted by the retention pruner. Deleting a machine erases it immediately | `view` **plus** the machine being in the operator's scope |
 | **File and folder names, with their sizes, over time**: the full path of every folder and file on each fixed NTFS drive, including other users' profiles | Managed Windows PCs with agent 3.40.0 or newer, by a daily read of the drive's file table (roadmap #27). File contents are never read | Showing what is filling a disk and when it will be full, and comparing a folder with an earlier day | One SQLite file per machine and drive under `logs/disk_history/`, outside the main database; the latest two trees also stay on the PC in `%ProgramData%\FleetHub\Agent\diskusage`, readable by SYSTEM and Administrators only | `data.disk_usage_daily_days` (default **90 days**) daily, then weekly until `data.disk_usage_keep_days` (default **365 days**), then folded into one baseline. Deleting a machine erases it immediately | `issue_commands` **plus** the machine being in the operator's scope, the same gate as browsing the machine's files |
 | **Screen recordings** -- video of a Windows PC's screen during a remote session, with the operator's stated reason, who recorded, which PC and for how long. Video only: keystrokes are never recorded | Managed Windows PCs with agent 3.43.0 or newer, **only while an operator records a session they opened**, ten minutes at a time unless extended. The PC shows a "Recording Screen" badge throughout, on the lock and logon screens too, and the hub stores no video until the agent confirms the badge is up (roadmap #19) | Evidence of what was done on a PC, for the audit trail and for colleagues | One `.webm` file per recording under `<install>\data\<owner>\recordings\`, a folder the hub restricts to SYSTEM and Administrators at every start; metadata in `recordings` in the hub's SQLite database | **Until the owner deletes it** -- no expiry, by the owner's decision. The Recordings page shows each owner their total so they know when to delete | The operator who made it, and the permission groups and people they share it with (a group share follows the group's current membership). Only the owner shares or deletes; nobody re-shares. Every start, end, extension, share, download and delete is audited, and so is every access to the video (`recording_view`, once per viewer per recording per half hour) |
+| **Windows event log records**, which can name people: a Security-channel 4625 names the account somebody typed a password for | Managed Windows PCs with agent 3.37.0 or newer, **only the channels, event ids and levels an operator subscribed to** (Events page, `manage_settings`); a hub with no subscriptions collects nothing. Nothing is back-filled | Finding who is being brute-forced, and counting events for a rule | `events` tables in the hub's SQLite database; identical repeats within five minutes are one row with a count | `data.event_retention_days`, default **14 days**, plus a per-machine row cap enforced as records arrive | Reading: `view` plus the machine being in scope. Choosing what is collected: `manage_settings` |
+| **Assistant conversations** -- what an operator asked, and what the assistant read to answer, which includes real machine names | Operators who use the console assistant (off until an admin turns it on in Settings → AI). The same text is **sent to the AI provider the hub is configured with**, which is a third party unless it is self-hosted | Answering questions about the fleet, and doing work as the operator | The hub's SQLite database, private to the operator who had the conversation | `ai.assistant_history_days`, default **30 days**, then deleted | The operator who had it. The assistant can read only what that operator's own session can, and is denied recovery keys, API keys, device tokens, the interactive terminal and every recording route |
 
-Four properties of that row are deliberate and worth stating plainly:
+Four properties of the device-position row are deliberate and worth stating plainly:
 
 - **Collection is on demand only.** There is no background location, no periodic sample and no
   travel history. The only history that exists is a history of *when somebody asked*, which is
@@ -166,8 +172,11 @@ authenticated. What is worth knowing about it:
   serve the one APK recorded as hosted. Uploading again or removing the APK mints a new token
   and every code printed before it stops resolving — which is how a QR photographed off a bench
   is killed.
-- **What is not there:** the hub has no rate limiting, anywhere, and this route will serve about
-  ten megabytes to anyone holding the token. It sits under a single stable `/provisioning/apk/`
+- **What is not there:** this route has no rate limiting, and it will serve about ten megabytes
+  to anyone holding the token. (The hub does rate-limit three other unauthenticated or
+  weakly-authenticated surfaces, with a small in-memory sliding window per client address:
+  `/api/report` at 120 a minute, `/api/agent/enroll` at 10 a minute, and the public onboarding
+  routes, which also have a global ceiling.) It sits under a single stable `/provisioning/apk/`
   prefix so a reverse proxy can throttle or block it in one rule, and "Stop hosting" on the
   provisioning page takes it offline entirely.
 
@@ -230,7 +239,9 @@ enrollment check before a duplicate-serial merge.
 
 ## Uninstalling an agent by deleting its device (roadmap #30)
 
-Deleting a device with "uninstall the agent" ticked keeps the deleted agent's token hash. When
+Asking for the uninstall needs `issue_commands` as well as the right to delete the device: it
+runs a SYSTEM task on the PC, so the hub answers 403 to anyone without that capability instead of
+quietly doing a plain delete. Deleting a device with "uninstall the agent" ticked keeps the deleted agent's token hash. When
 that token next calls, the hub refuses it with `reason: decommissioned`, and the agent removes
 itself. Only the real token holder is told; any other caller hears `unknown`.
 - **Not on a single reply.** The agent acts only after three refusals in a row.
@@ -306,6 +317,82 @@ controls are stated here rather than left implicit:
   seat count, no other redeemers. Previewing it consumes nothing. The code travels the
   sign-in round trip in the signed session cookie, never as a query parameter, so it does not
   reach referrer headers or proxy logs.
+
+## The console assistant (roadmap #26)
+
+The assistant is a language model that can call the hub's own API. Its security model is "the
+operator, with a seat belt", and the controls are stated here because it is the one feature that
+sends fleet data to a third party:
+
+- **It runs as the signed-in operator.** Every tool call is replayed through the app's own
+  request handler with a copy of that operator's session, so `login_required`, both `access`
+  gates and every inline scope check apply unchanged. There is no `use_assistant` capability and
+  no second authorization model; it can do what the operator can do and nothing more.
+- **Tiers fail closed.** Reads run at once; a few small writes (dismiss an alert, wake a PC, draft
+  a rule, which is created **switched off**) run at once and are audited; everything else that
+  changes a machine or access becomes a **card** the operator must press Confirm on, run once
+  within ten minutes and audited at security level as `assistant.action_confirmed`. A wipe also
+  asks for the machine's name. Per-conversation modes (**Ask**, **Auto**, **Bypass**) move that
+  line, start in Ask, show a warning when raised, and log every action that ran unasked as
+  `assistant.action_auto`.
+- **Never reachable, in any mode:** recovery-key reveals, API-key and device-token routes, the
+  interactive terminal's input, agent and peer routes, the onboarding routes, every recording
+  route, and the assistant itself.
+- **The model's links are the hub's.** It writes symbolic links; the hub resolves them for the
+  viewer's scope when the answer is shown, and strips any markdown link the model wrote itself.
+- **Real machine names go to the provider** (the owner's decision, 2026-10-02). *Show the
+  assistant* is off by default for exactly that reason, including on a hub that already uses AI for
+  the alert recommendations. The provider's API key is write-only in the console and lives in
+  `.env`, never in the settings table.
+- **Building packages from the internet** is a separate switch (*Let the assistant use the
+  internet*, off by default). It fetches only `https` addresses on the public internet, never the
+  hub's own network; downloads land in a staging folder, are never run by the hub, and are deleted
+  after 24 hours unless turned into a package; and it never deploys what it built.
+
+## Sharing a machine with another hub (roadmap #15)
+
+A peer hub holds a subset of an operator's capabilities, scoped to one machine, intersected live.
+The controls:
+
+- **The borrowing hub never speaks to your agent.** It calls your hub's API; your hub validates
+  the grant and queues the command on its own queue for its own agent. There is no channel to
+  filter, which is stronger than a check: an agent never learns another hub exists, and neither the
+  hub URL nor the enrollment secret is something a hub can send an agent.
+- **Shareable capabilities are an allow-list of three:** `view`, `issue_commands` and
+  `remote_control`. A capability added in future is not shareable until somebody decides it is.
+  Nothing rides along: a remote-control-only share shows no telemetry.
+- **A lapsed share is refused by name**, and revocation kills sessions in flight. Pairing uses a
+  single-use code; the resulting peer credential slides on use and expires
+  (`sharing.peer_lifetime_days`). The feature is off until `sharing.enabled` is switched on.
+- **A peer sees a projection**, never the asset record: no serial, asset tag or AD data. It reads
+  back only its own commands and sessions. Both hubs write an audit row for every borrowed action.
+
+## Release channels (roadmap #21)
+
+The hub tells an agent a channel **name**, never a URL: the agent has both manifest URLs compiled
+in, so a compromised hub can at worst move a machine between the stable and beta trains, where
+the manifest is still signed by the same offline key and the binary is hash-checked against the
+signed value. It cannot introduce a download location the agent did not already trust. Moving a
+machine, or the fleet default, is `manage_settings` and is audited.
+
+## Escrowed BitLocker recovery keys (roadmap #19)
+
+The hub can hold each Windows PC's BitLocker recovery password so a locked-out PC is recoverable.
+It is the most sensitive secret the hub stores about the fleet, so:
+
+- **The keys are never in the database file a hub backup copies offsite.** Posture and protector
+  ids are in SQLite; the passwords are in a sidecar encrypted with `BACKUP_MASTER_KEY` and keyed
+  by machine name, so a blob copied between machines fails to decrypt. With no master key,
+  nothing is collected.
+- **Keys do not ride the heartbeat.** The hub asks for exactly the protector ids it lacks, and the
+  server recomputes that set when the keys arrive, so an enrolled agent cannot file ids it invented.
+  A settled fleet transmits no key material.
+- **Reading one is `read_recovery_keys` plus machine scope**, one protector per call, named in the
+  request body rather than the URL, and audited at security level *before* the key is produced.
+  The assistant cannot reach the route, and a paired device may hold the capability only if its
+  owner does.
+- **Keys are never pruned because a machine stopped reporting them**; deleting the machine is the
+  one thing that removes them, and a machine merge that cannot move them is refused.
 
 ## For Antivirus Teams
 
@@ -383,7 +470,7 @@ If you're unsure whether something is in scope, please report it anyway — we'd
 
 | Severity | Definition | Examples |
 |----------|-----------|----------|
-| **Critical** | Attacker can execute code as SYSTEM fleet-wide without authentication | Unauthenticated RCE in `/api/agent/*`, command verification bypass, manifest signature forgery |
+| **Critical** | Attacker can execute code as SYSTEM fleet-wide without authentication | Unauthenticated RCE in `/api/agent/*`, a way past an agent's bearer-token check, manifest signature forgery |
 | **High** | Attacker gains unauthorized admin access or exfiltrates sensitive data | Authentication bypass, unauthorized command execution, credential theft, audit log deletion |
 | **Medium** | Attacker causes service disruption or accesses scoped/limited data | Denial of service, machine-scoped RCE boundary bypass, cross-user data leaks |
 | **Low** | Informational or requires user interaction / existing access | Missing rate limiting, poor error messages, hardcoded non-secrets, typos |
@@ -396,7 +483,7 @@ This project applies the following security principles:
 - **Least privilege:** Agents run as SYSTEM only when needed (sensor access, remote control); users can scope operator access to specific machines
 - **Defense in depth:** Multiple layers — signatures, tokens, audit logs, allow-lists — so no single layer is a single point of failure
 - **Transparency:** Audit logs record every fleet command with operator info and full parameters
-- **Defense-in-breadth:** Communication over TLS, session cookies pinned `SameSite=Lax`, CSRF protection via `Content-Type` enforcement
+- **Defense-in-breadth:** Communication over TLS, session cookies pinned `SameSite=Lax` and `Secure`, CSRF protection by a per-session synchronizer token (`X-CSRF-Token`, rotated at every sign-in) with `application/json` enforcement on POST kept behind it
 
 ## Security Contact
 
