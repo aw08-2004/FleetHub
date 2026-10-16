@@ -115,6 +115,8 @@ const RENDERERS = {
     duplicate_serial: renderDuplicateSerial,
     ad_unmatched: renderAdUnmatched,
     high_temperature: renderHighTemp,
+    ticket_new: renderTicketNew,
+    ticket_overdue: renderTicketOverdue,
 };
 
 function renderAlert(alert) {
@@ -257,6 +259,46 @@ function renderAdUnmatched(alert) {
                            t('alerts.ad_unmatched.body', { machine: machineName }));
     card.appendChild(alertActions(alert, card));
     return card;
+}
+
+// Tickets opened from a PC (roadmap #31). One card per machine, carrying a count, so the card
+// links to the Tickets page filtered by nothing more than the eye: the ids are on the detail,
+// and the newest one is where an operator starts. The ticket text is deliberately NOT here --
+// alerts are VIEW, a ticket is `view_tickets`, and this card must not show what the ticket's
+// own route would refuse.
+//
+// Titles and bodies are passed in already translated, from literal keys in the two callers --
+// a key assembled here would be invisible to tests/test_i18n.py's scan.
+function ticketAlertParams(alert) {
+    const detail = alert.detail || {};
+    return { machine: alert.machine || t('alerts.unknown_machine'),
+             count: detail.count || (detail.ticket_ids || []).length };
+}
+
+function renderTicketAlert(alert, title, body) {
+    const ids = (alert.detail || {}).ticket_ids || [];
+    const card = alertCard(title, body);
+    const actions = alertActions(alert, card);
+    if (ids.length) {
+        const open = document.createElement('a');
+        open.className = 'btn btn--ghost';
+        open.textContent = t('alerts.ticket.open');
+        open.href = '/tickets/' + encodeURIComponent(ids[ids.length - 1]);
+        actions.insertBefore(open, actions.firstChild);
+    }
+    card.appendChild(actions);
+    return card;
+}
+
+function renderTicketNew(alert) {
+    const p = ticketAlertParams(alert);
+    return renderTicketAlert(alert, t('alerts.ticket_new.title', p), t('alerts.ticket_new.body', p));
+}
+
+function renderTicketOverdue(alert) {
+    const p = ticketAlertParams(alert);
+    return renderTicketAlert(alert, t('alerts.ticket_overdue.title', p),
+                             t('alerts.ticket_overdue.body', p));
 }
 
 // A kind this build does not know about -- an older console against a newer hub. Says

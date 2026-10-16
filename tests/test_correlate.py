@@ -36,6 +36,14 @@ import events
 import rules
 import scripts
 
+# The event rows below sit at a fixed 2023 NOW, far past data.event_retention_days, and
+# `import app` starts the retention pruner, whose first pass runs at once. Whether it reached
+# `events.prune` before or after record_event wrote those rows was a race: invisible while the
+# pruner got there first, and a lost event fact whenever a new prune step ahead of it (the
+# ticket prunes, roadmap #31) made it arrive later. The pruner looks the function up at call
+# time, so replacing it here is enough; this module tests correlation, not retention.
+events.prune = lambda *args, **kwargs: 0
+
 PASS = 0
 FAIL = 0
 

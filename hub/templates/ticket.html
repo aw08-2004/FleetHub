@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}{{ t('tickets.ticket_title', id=ticket_id) }} - FleetHub{% endblock %}
+{% block content %}
+<p class="stat-card__meta" style="margin-bottom: var(--space-3);">
+    <a href="{{ url_for('tickets.tickets_page') }}">{{ t('tickets.back') }}</a>
+</p>
+
+<div id="ticket-root" data-ticket-id="{{ ticket_id }}">
+    <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-3);" id="ticket-subject"></h1>
+    <div class="toolbar" style="margin-bottom: var(--space-5);" id="ticket-meta"></div>
+    <p class="banner banner--warn" id="ticket-error" hidden></p>
+
+    <div class="card" style="margin-bottom: var(--space-5);">
+        <h2 class="section-title">{{ t('tickets.description') }}</h2>
+        <p id="ticket-body" style="white-space: pre-wrap;"></p>
+        <div id="ticket-shots" style="display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4);"></div>
+    </div>
+
+    {# Only drawn for manage_tickets holders. The routes enforce the same capability, so a
+       console that drew these wrongly would be offering a 403, not a way past one. #}
+    <div class="card" style="margin-bottom: var(--space-5);" id="ticket-manage" hidden>
+        <div class="toolbar">
+            <label class="stat-card__meta">{{ t('tickets.status') }}
+                <select class="input" id="ticket-status"></select>
+            </label>
+            <button type="button" class="btn btn--ghost" id="ticket-assign-me">{{ t('tickets.assign_me') }}</button>
+            <button type="button" class="btn btn--ghost" id="ticket-unassign">{{ t('tickets.unassign') }}</button>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom: var(--space-5);">
+        <h2 class="section-title">{{ t('tickets.labels') }}</h2>
+        <p class="stat-card__meta">{{ t('tickets.labels_help') }}</p>
+        <div id="ticket-labels" style="display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0;"></div>
+        <form class="toolbar" id="ticket-label-form" hidden>
+            <input class="input" id="ticket-label-input" type="text" maxlength="64"
+                   placeholder="{{ t('tickets.label_placeholder') }}">
+            <button type="submit" class="btn btn--ghost">{{ t('tickets.label_add') }}</button>
+        </form>
+    </div>
+
+    <div class="card" style="margin-bottom: var(--space-5);">
+        <h2 class="section-title">{{ t('tickets.facts') }}</h2>
+        <p class="stat-card__meta">{{ t('tickets.facts_help') }}</p>
+        <div class="table-scroll">
+            <table class="data-table"><tbody id="ticket-facts"></tbody></table>
+        </div>
+    </div>
+
+    {# Suggest-only (roadmap #31): a button, never a timer, and a drafted script lands in the
+       library switched off. #}
+    <div class="card" style="margin-bottom: var(--space-5);" id="ticket-ai">
+        <h2 class="section-title">{{ t('tickets.ai_heading') }}</h2>
+        <p class="stat-card__meta">{{ t('tickets.ai_help') }}</p>
+        <div class="toolbar" style="margin: var(--space-3) 0;">
+            <button type="button" class="btn btn--primary" id="ticket-triage" hidden>{{ t('tickets.ai_ask') }}</button>
+            <button type="button" class="btn btn--ghost" id="ticket-draft" hidden>{{ t('tickets.ai_draft') }}</button>
+            <span class="stat-card__meta" id="ticket-ai-status"></span>
+        </div>
+        <div id="ticket-triage-result" hidden>
+            <p id="ticket-triage-summary"></p>
+            <p class="stat-card__meta" id="ticket-triage-cause"></p>
+            <ol id="ticket-triage-steps"></ol>
+            <pre id="ticket-triage-script" style="white-space: pre-wrap; overflow-x: auto;" hidden></pre>
+            <p class="stat-card__meta" id="ticket-triage-meta"></p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 class="section-title">{{ t('tickets.thread') }}</h2>
+        <div id="ticket-messages"></div>
+        <p class="stat-card__meta" id="ticket-messages-empty" hidden>{{ t('tickets.thread_empty') }}</p>
+        <form id="ticket-reply-form" hidden style="margin-top: var(--space-4);">
+            <textarea class="input" id="ticket-reply" rows="4" style="width: 100%;"
+                      placeholder="{{ t('tickets.reply_placeholder') }}"></textarea>
+            <div class="toolbar" style="margin-top: var(--space-2);">
+                <label class="stat-card__meta">
+                    <input type="checkbox" id="ticket-internal"> {{ t('tickets.internal') }}
+                </label>
+                <button type="submit" class="btn btn--primary">{{ t('tickets.reply_send') }}</button>
+            </div>
+            <p class="stat-card__meta">{{ t('tickets.reply_help') }}</p>
+        </form>
+    </div>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/ticket.js') }}?v={{ hub_version }}"></script>
+{% endblock %}

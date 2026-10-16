@@ -66,6 +66,7 @@ import apkhost
 import provisioning
 import rules
 import watchdogs
+import tickets
 import scripts
 import ai
 import assistant
@@ -119,6 +120,7 @@ from webfetch_web import create_webfetch_blueprint
 from correlate_web import create_correlate_blueprint
 from rules_web import create_rules_blueprint
 from watchdogs_web import create_watchdogs_blueprint
+from tickets_web import create_tickets_blueprint
 import device_groups
 from device_groups_web import create_device_groups_blueprint
 from directory_web import create_directory_blueprint
@@ -161,7 +163,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.151.0"
+HUB_VERSION = "1.152.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -216,6 +218,11 @@ FILE_SPOOL_DIR = os.path.join(LOG_DIR, "filespool")
 # the main database rather than in it. A system drive's history is millions of rows, and the
 # main database is the file every backup copies and every query shares. See disk_history.py.
 DISK_HISTORY_DIR = os.path.join(LOG_DIR, "disk_history")
+# Ticket screenshots (roadmap #31): <root>/<ticket_id>/<attachment_id>.jpg. Outside the
+# database for the disk-history reason, and under LOG_DIR rather than the install root because
+# they are short-lived working data with a retention of their own, not operator files kept
+# until somebody deletes them -- see tickets.prune_attachments.
+TICKET_ATTACHMENT_DIR = os.path.join(LOG_DIR, "ticket_attachments")
 # Session recordings (roadmap #19): <root>/<owner>/recordings/<id>.webm. In the install root
 # rather than beside the database, because the owner asked for them there and because that is
 # where they belong: they are operator data, kept until somebody deletes them, not working
@@ -2788,6 +2795,18 @@ app.register_blueprint(create_correlate_blueprint(
     api_key=lambda: os.environ.get("AI_API_KEY", ""),
 ))
 
+# Tickets opened from a PC (roadmap #31). Its own capabilities, `view_tickets` and
+# `manage_tickets`, scoped by machine -- id-keyed routes check the ticket's machine inline, see
+# tickets_web.py. The same AI seam as the Alert Brain above for the suggest-only triage.
+# Lambdas because ticket_facts and the socket rooms are defined further down this file.
+app.register_blueprint(create_tickets_blueprint(
+    DB_PATH, TICKET_ATTACHMENT_DIR, login_required, access,
+    facts_for=lambda machine: ticket_facts(machine),
+    emit=lambda event, payload, machine: _emit_fleet_event(event, payload, machine),
+    ai_config=lambda: _ai_config(),
+    api_key=lambda: os.environ.get("AI_API_KEY", ""),
+))
+
 # The console assistant (roadmap #26). Same provider seam again. Its tools run as internal
 # requests through THIS app's own routes with the operator's session (RouteDispatcher), so
 # every gate below applies to the assistant exactly as it does to a click -- see
@@ -3060,6 +3079,17 @@ FLEET_ROOM = "fleet:all"
 
 def machine_room(machine):
     return f"machine:{str(machine).strip()}"
+
+
+def _emit_fleet_event(event, payload, machine):
+    """Send one event to everybody who may see `machine`: the fleet room and its own room.
+
+    The same two-room rule as live telemetry above, so a scoped operator hears about their
+    machines and nobody else's. For blueprints that need to push (tickets_web.py, roadmap
+    #31), which cannot import `socketio` from here without a cycle.
+    """
+    socketio.emit(event, payload, room=FLEET_ROOM)
+    socketio.emit(event, payload, room=machine_room(machine))
 
 
 @socketio.on("connect")
@@ -3804,6 +3834,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # machine that no longer exists as the RELAY for its subnet, so every wake routed
     # through it would be queued at a name nothing answers to.
     wake.rename_machine(DB_PATH, dropped, survivor)
+    # Tickets follow (roadmap #31): "did anybody at this PC complain on Tuesday" is the same
+    # question after a merge as before it.
+    tickets.rename_machine(DB_PATH, dropped, survivor)
     # Sweep history follows the same name (roadmap #18). The HOSTS inside those scans are
     # deliberately untouched: they record what was on the wire, and a merge does not change
     # that. They reclassify themselves on the next read, against the merged machine's
@@ -4225,6 +4258,26 @@ def retention_pruner():
                     print(f"[retention] Pruned {dropped} decommissioned agent record(s).")
             except Exception as e:
                 print(f"[retention] Decommission prune failed: {e}")
+            # Tickets (roadmap #31): finished tickets past `tickets.retention_days`, and
+            # screenshots past their own, shorter window whatever state the ticket is in.
+            # Two tries, because the second is the privacy control -- a picture of somebody's
+            # screen -- and must not be skipped because the first failed.
+            try:
+                cutoff = int(time.time()) - (
+                    settings.get_int(DB_PATH, "tickets.retention_days") * 86400)
+                dropped = tickets.prune(DB_PATH, TICKET_ATTACHMENT_DIR, cutoff)
+                if dropped:
+                    print(f"[retention] Pruned {dropped} finished ticket(s).")
+            except Exception as e:
+                print(f"[retention] Ticket prune failed: {e}")
+            try:
+                cutoff = int(time.time()) - (
+                    settings.get_int(DB_PATH, "tickets.screenshot_retention_days") * 86400)
+                dropped = tickets.prune_attachments(DB_PATH, TICKET_ATTACHMENT_DIR, cutoff)
+                if dropped:
+                    print(f"[retention] Pruned {dropped} ticket screenshot(s).")
+            except Exception as e:
+                print(f"[retention] Ticket screenshot prune failed: {e}")
             # Location fixes (roadmap #23). Its own try, like its neighbours, and the one
             # prune here that is a PRIVACY control rather than a disk-space one: the table is
             # tiny and would never need pruning for size. What expires is the record of where
@@ -4653,6 +4706,13 @@ def sweep_worker():
             bios.expire_stale_changes(DB_PATH, BIOS_CHANGE_TIMEOUT_SECONDS)
         except Exception as e:
             print(f"[bios] Stale change sweep failed: {e}")
+        # Tickets whose "needed by" just passed (roadmap #31). Here rather than on the daily
+        # retention tick, because a ticket due at 9 that alerts at midnight has missed the
+        # point; tickets.scan_overdue raises once per ticket, so thirty seconds costs nothing.
+        try:
+            tickets.scan_overdue(DB_PATH)
+        except Exception as e:
+            print(f"[tickets] Overdue sweep failed: {e}")
         time.sleep(SWEEP_TICK_SECONDS)
 
 
@@ -5131,6 +5191,8 @@ rules.init_rules_db(DB_PATH)
 # After rules.init_rules_db: a watchdog's target is the rules engine's target grammar,
 # and its scope check reads the same custom fields (roadmap #20).
 watchdogs.init_watchdogs_db(DB_PATH)
+# After alerts: a ticket raises `ticket_new` / `ticket_overdue` rows (roadmap #31).
+tickets.init_tickets_db(DB_PATH)
 device_groups.init_device_groups_db(DB_PATH)
 ai.init_ai_db(DB_PATH)
 assistant.init_assistant_db(DB_PATH)
@@ -5911,6 +5973,70 @@ def machine_detail(machine):
     return result
 
 
+# How far back a ticket's snapshot looks for changes. Wider than the 48 hours
+# tickets.auto_labels turns into labels: the snapshot is read by a person, who can judge a
+# week-old install for themselves; the labels are filtered on, and must only claim "recent".
+TICKET_FACTS_LOOKBACK_SECONDS = 7 * 86400
+
+
+def ticket_facts(machine):
+    """The machine as it was at the moment somebody opened a ticket from it (roadmap #31).
+
+    Built here, in the composition root, because it reads five other modules' tables; the
+    result is frozen into the ticket by tickets.create_ticket and never refreshed -- see that
+    module's docstring for why the snapshot is the point. Everything in it is something the
+    hub OBSERVED: no AI, no inference, so auto_labels can trust it.
+    """
+    now = int(time.time())
+    since = now - TICKET_FACTS_LOOKBACK_SECONDS
+    detail = machine_detail(machine) or {}
+    low_disk_pct = settings.get_int(DB_PATH, "hub.low_disk_free_pct")
+    disks, low_disk = [], False
+    for volume in (detail.get("diagnostics") or {}).get("disks") or []:
+        total, used = volume.get("total_gb"), volume.get("used_gb")
+        if not isinstance(total, (int, float)) or not total or not isinstance(used, (int, float)):
+            continue
+        free_pct = round(100.0 * (total - used) / total, 1)
+        disks.append({"name": volume.get("name"), "total_gb": round(total, 1),
+                      "free_gb": round(total - used, 1), "free_pct": free_pct})
+        low_disk = low_disk or free_pct < low_disk_pct
+    open_alerts = []
+    for row in alerts.list_open(DB_PATH):
+        if row.get("machine") != machine and machine not in (row.get("machines") or []):
+            continue
+        if row.get("kind") in (alerts.KIND_TICKET_NEW, alerts.KIND_TICKET_OVERDUE):
+            continue  # a ticket's own alert is not a fact about the machine
+        info = row.get("detail") or {}
+        open_alerts.append({"kind": row.get("kind"),
+                            "text": str(info.get("text") or info.get("rule_name")
+                                        or info.get("watchdog_name") or "")[:200],
+                            "since": row.get("created_at")})
+    installed = []
+    for program in software.list_software(DB_PATH, machine):
+        stamp = tickets.parse_install_date(program.get("install_date"))
+        if stamp is not None and stamp + 86400 >= since:
+            installed.append({"name": program["name"], "version": program["version"],
+                              "install_date": program["install_date"]})
+    os_info = detail.get("os") or {}
+    return {
+        "machine": machine,
+        "captured_at": now,
+        "status": detail.get("status"),
+        "os": {"bucket": os_info.get("bucket"), "label": os_info.get("label"),
+               "build": detail.get("os_build")},
+        "manufacturer": detail.get("manufacturer"),
+        "model": detail.get("model"),
+        "serial_number": detail.get("serial_number"),
+        "agent_version": detail.get("companion_version"),
+        "uptime_seconds": detail.get("uptime_seconds"),
+        "disks": disks,
+        "low_disk": low_disk,
+        "open_alerts": open_alerts[:20],
+        "patches": patches.items_since(DB_PATH, machine, since),
+        "installed": sorted(installed, key=lambda p: p["install_date"], reverse=True)[:20],
+    }
+
+
 def _recent_sensors_for(machine_name):
     """This machine's freshest sensor block: the in-memory cache, falling back to the
     newest stored block so the picker still works right after a hub restart."""
@@ -6230,6 +6356,10 @@ def delete_machine(machine):
     # machine that left its NIC rows behind stays a candidate relay for its old subnet, and
     # every wake the hub routed through it would be queued at a hostname nothing answers to.
     wake.forget_machine(DB_PATH, machine_name)
+    # And its tickets with their screenshots on disk (roadmap #31). The files are the part
+    # that matters: a screenshot no row points at is a picture of somebody's screen that no
+    # retention would ever delete.
+    tickets.forget_machine(DB_PATH, TICKET_ATTACHMENT_DIR, machine_name)
     # And its sweep history (roadmap #18). Its rows inside OTHER machines' scans stay, and
     # quietly change verdict from 'managed' to 'unmanaged' on the next read -- which is the
     # truth about an address the hub no longer manages, and the one thing a shadow-IT list

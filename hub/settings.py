@@ -880,6 +880,21 @@ REGISTRY = (
     # default on purpose: a group nobody named is a finding until somebody names it, and a
     # default allowlist would be this product deciding who is trusted on a stranger's network.
     _s("security.posture_admin_allowlist", "security", "str_list", []),
+
+    # ---------------- Tickets (roadmap #31) ----------------
+    # Who may open a ticket from a PC. `any` takes one from whoever is signed in; `domain`
+    # refuses a local account, which on a shared PC is the kiosk login nobody can be phoned
+    # back on. A setting rather than a fixed rule because the owner left it to each helpdesk
+    # (2026-10-16). Enforced by the hub on every submit, not only by the tray hiding its icon.
+    _s("tickets.submitters", "tickets", "enum", "any", choices=["any", "domain"]),
+    # How long a FINISHED ticket is kept. Open tickets are never pruned, however old --
+    # a retention number must not be able to close somebody's problem for them.
+    _s("tickets.retention_days", "tickets", "int", 365, minimum=7, maximum=3650, unit="days"),
+    # Screenshots are a picture of somebody's screen, which is why they expire on a window of
+    # their own, shorter than the ticket's, and whatever state the ticket is in (owner,
+    # 2026-10-16: thirty days).
+    _s("tickets.screenshot_retention_days", "tickets", "int", 30, minimum=1, maximum=365,
+       unit="days"),
 )
 
 BY_KEY = {s.key: s for s in REGISTRY}
@@ -891,7 +906,8 @@ BY_KEY = {s.key: s for s in REGISTRY}
 # tests/test_settings.py asserts every registry key reaches the schema exactly once.
 SECTIONS = ("computer", "hub", "data", "metrics", "fleet", "deploy", "backup", "remote",
             "directory", "firmware", "patches", "wake", "discovery", "provisioning",
-            "location", "map", "policy", "rules", "sharing", "events", "ai", "security")
+            "location", "map", "policy", "rules", "sharing", "events", "ai", "security",
+            "tickets")
 
 # The subset backups_web.py is allowed to write on behalf of a `manage_backups` holder
 # who does not also hold `manage_settings`. Configuring backups IS managing backups;

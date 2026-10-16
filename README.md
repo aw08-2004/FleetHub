@@ -36,6 +36,10 @@ web console to monitor, support and manage the fleet.
 - **Android:** app blocking, screen-time schedules, lock, wipe and on-demand location.
 - **Assistant:** an optional AI assistant that can read the fleet and act with your
   permissions.
+- **Tickets:** a Tickets page for problems people report from their own PC, each with the
+  machine's facts frozen at that moment, automatic labels (OS, recent hub patches and
+  installs, low disk) and an optional suggest-only AI triage. Needs the `view_tickets` /
+  `manage_tickets` capabilities; the agent tray that files them is still to come.
 
 ## Quick start
 

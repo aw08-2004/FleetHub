@@ -5860,7 +5860,7 @@ there"**, ticked by default, and the PC removes its own agent.
 
 ---
 
-## 📋 31. Ticketing -- the person at the PC opens a ticket   ·   planned (issue #142)   ·   `tickets.py` / `tickets_web.py`, agent `--tray`
+## 🚧 31. Ticketing -- the person at the PC opens a ticket   ·   **hub half (B, C, C2) hub 1.152.0**; tray (A, D) planned (issue #142)   ·   `tickets.py` / `tickets_web.py`, agent `--tray`
 
 Today a person with a broken PC phones or writes to IT, and the first ten minutes of the call
 are spent finding out which machine it is, what it runs and what changed. The hub already
@@ -5868,7 +5868,9 @@ knows all of that. This item lets the person open a ticket **from the PC itself*
 description, an urgency, an optional "needed by" time and a screenshot -- and lands it in the
 console next to the machine's own facts, labelled before an operator reads it.
 
-Asked for in issue #142, "nice to have". Design only so far; nothing is built.
+Asked for in issue #142, "nice to have". **The hub half shipped in hub 1.152.0** -- see
+*Built* below. Nothing reaches it yet: no agent files a ticket until phase A's tray ships, which
+is deploy order working as intended rather than a gap.
 
 **The tray is the real new piece.** The Windows agent has no process that lives in the
 user's session. Every in-session helper it has is spawned for one command and exits, and the
@@ -5946,8 +5948,51 @@ when something changed and the tray never calls the hub itself.
 **Deploy order** is the usual one: hub (B, C, C2) first, then the agent (A, D). A tray that can
 send a ticket to a hub with no route for it loses the ticket and tells the person it was sent.
 
+### Built -- hub 1.152.0 (phases B, C, C2)
+- `hub/tickets.py` / `hub/tickets_web.py`, the tables as planned plus `ticket_triage`, and a
+  Tickets page and a ticket page under a new sidebar link.
+- Agent routes: `POST /api/agent/tickets` (JSON, returns the id and the screenshot limits),
+  `POST /api/agent/tickets/<id>/attachments` (one raw JPEG or PNG per request, **sniffed by its
+  first bytes**, 5 MB each, at most 6, only within 10 minutes of the ticket and only from the
+  agent that opened it -- 404 / 409 / 411 / 413 / 415), `GET /api/agent/tickets?sid=` for the
+  tray's "My tickets", without internal notes and empty for an empty SID.
+- **Two new capabilities, `view_tickets` and `manage_tickets`, not VIEW.** A ticket is somebody's
+  words and screen, not inventory. Id-keyed routes check scope inline (`require_machine` reads
+  the machine from the URL, and a ticket URL names a ticket); "missing" and "out of scope"
+  return the same 404 so ids cannot be walked to count another site's tickets. The one
+  machine-keyed route uses `require_machine`. Drafting the AI's script also needs
+  `issue_commands`, as correlate's draft route does.
+- Snapshot built in `app.ticket_facts`: OS, hardware, serial, agent version, uptime, disks,
+  open alerts, hub patch items and installs from the last 7 days. Auto labels use 48 hours.
+- Alerts `ticket_new` (high / critical still NEW) and `ticket_overdue` (from the 30-second
+  sweep, once per ticket via `overdue_alerted_at`). Socket events `ticket_new` /
+  `ticket_updated` carry ids only.
+- Settings section **Tickets**: `tickets.submitters` (`any` / `domain`, enforced by the hub on
+  every submit), `tickets.retention_days` (365, finished tickets only -- open ones are never
+  pruned), `tickets.screenshot_retention_days` (30). Rename, forget (files included) and both
+  prunes are wired. `capabilities.FEATURE_TICKETING` is declared for the tray to report.
+- Tests: `tests/test_tickets.py`, `tests/test_tickets_web.py`.
+
+### Not done
+- **Phase A, the tray**, and **phase D**, replies reaching it. The hub routes D needs exist; the
+  heartbeat "ticket updates" marker does not yet.
+- The tray's screen picker (owner, 2026-10-16: the person picks which screens to send). The hub
+  side is ready: up to six screenshots per ticket.
+- AI triage runs only from the button. Triage on arrival was left out on purpose -- a provider
+  bill per ticket is a decision, not a default -- and would be a setting if wanted.
+- A Tickets card on the machine page; `/api/tickets/machines/<machine>` already serves it.
+
 ### Decisions
 - **Tray icon** as the entry point, **suggest-only** AI, and **two-way** (owner, 2026-10-16).
+- **Who may submit is a fleet setting**, default any interactive user; **the person picks which
+  screens to send**; **screenshots are kept 30 days** (owner, 2026-10-16).
+- **One ticket alert per machine per kind, not one per ticket.** The open-alert unique index is
+  (kind, machine, rule_id, watchdog_id); a row per ticket needs a `ticket_id` column in that
+  index, a unique-index migration on the busiest table in the hub, for a card nobody wants
+  more than "PC-7 has two urgent tickets". Rejected for that reason.
+- **Screenshots are uploaded raw, one request each**, not multipart: the agent already has a
+  raw-body upload (`UploadDiskHistoryAsync`) and no multipart code, and a ticket that loses one
+  screenshot to a network error is still a ticket.
 - **The tray runs as the user, not as SYSTEM.** Its window holds a text box and, later, a file
   picker; a file picker in a SYSTEM process on the user's desktop is a SYSTEM shell.
 - **One upload route of its own**, not the heartbeat: a screenshot is megabytes, and the
@@ -7073,11 +7118,10 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     requires anyway, and the Software section says *waiting for a newer agent* until the
     release lands, which is the state the plan above designed the wording for.
 
-24. **#31 Ticketing** — planned, nothing built (issue #142). Hub first (model, console,
-    auto-labels, suggest-only AI triage), then one Windows agent MINOR for the tray. No
-    prerequisite on the board: every hub half copies something that exists. The agent half
-    is the first process this agent keeps running in the user's session, and its entry
-    spends most of its words on why that process runs as the user and not as SYSTEM.
+24. **#31 Ticketing** — **hub half shipped in hub 1.152.0** (model, console, auto-labels,
+    suggest-only AI triage); next is one Windows agent MINOR for the tray (phases A and D).
+    The agent half is the first process this agent keeps running in the user's session, and
+    its entry spends most of its words on why that process runs as the user and not as SYSTEM.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone

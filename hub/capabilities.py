@@ -92,8 +92,12 @@ FEATURE_DEVICE_OWNER = "device_owner"
 #: done this since 3.24.0 and never sends a capability report, which is why processes.js keeps
 #: its version gate for a machine that reports nothing and trusts this for one that does.
 FEATURE_PROCESSES = "processes"
+#: The PC runs the ticket tray (roadmap #31 phase A). Listed before any agent reports it so the
+#: report is not dropped by `clean_report` on the day one does -- the hub ships first. Nothing
+#: is gated on it yet: a PC without the tray simply never files a ticket.
+FEATURE_TICKETING = "ticketing"
 FEATURES = (FEATURE_LOCATE, FEATURE_APP_POLICY, FEATURE_TIME_POLICY, FEATURE_USAGE_ACCESS,
-            FEATURE_DEVICE_OWNER, FEATURE_PROCESSES)
+            FEATURE_DEVICE_OWNER, FEATURE_PROCESSES, FEATURE_TICKETING)
 
 # ---------------------------------------------------------------- ingest caps
 #: Bounds a misbehaving or hostile agent, not a real one. The largest honest report is the

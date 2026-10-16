@@ -67,6 +67,13 @@ KIND_WATCHDOG = "watchdog"
 # RETIRED: no code path raises this any more (see the module docstring). Kept because rows
 # an operator has not dismissed are still in the table and still have to render.
 KIND_HIGH_TEMP = "high_temperature"
+# Tickets opened from a PC (roadmap #31). ONE row per machine per kind, carrying the count and
+# the ticket ids in `detail`, rather than one per ticket: a row per ticket would need a
+# `ticket_id` column in the open-alert unique index below, and "PC-7 has two urgent tickets"
+# is the card an operator wants anyway. `ticket_new` is urgent tickets nobody has touched yet;
+# `ticket_overdue` is tickets whose "needed by" time has passed unresolved.
+KIND_TICKET_NEW = "ticket_new"
+KIND_TICKET_OVERDUE = "ticket_overdue"
 # What KIND_HIGH_TEMP was called before the rename. Only init_alerts_db()'s migration reads
 # it -- no other code path should ever match on it again.
 _LEGACY_KIND_HIGH_TEMP = "overheat"
@@ -78,7 +85,7 @@ _LEGACY_KIND_HIGH_TEMP = "overheat"
 # rule alert ended up both rendered as a duplicate-serial card and returned to operators
 # whose scope excluded its machine.
 PER_MACHINE_KINDS = frozenset({KIND_RULE, KIND_WATCHDOG, KIND_AD_UNMATCHED,
-                               KIND_HIGH_TEMP})
+                               KIND_HIGH_TEMP, KIND_TICKET_NEW, KIND_TICKET_OVERDUE})
 
 STATUS_OPEN = "open"
 STATUS_RESOLVED = "resolved"
@@ -402,6 +409,46 @@ def resolve_ad_unmatched(db_path, machine, now=None):
             (STATUS_RESOLVED, int(time.time() if now is None else now),
              KIND_AD_UNMATCHED, machine, STATUS_RESOLVED),
         )
+
+
+def sync_ticket_alert(db_path, kind, machine, ticket_ids, *, raise_new=False, now=None):
+    """Bring one machine's ticket alert of `kind` in line with `ticket_ids` (roadmap #31).
+
+    No ids: every unresolved row of that kind for the machine is resolved -- dismissed ones
+    too, for raise_ad_unmatched's reason, so an old dismissal cannot linger as the only row.
+    Some ids: an OPEN row has its count refreshed. A row is INSERTED only when `raise_new`,
+    which tickets.py passes only when a ticket has just become urgent-and-new or overdue;
+    without that rule, a dismissed card would come back on the next unrelated reply.
+    `updated_at` moves only on new evidence too, so a list sorted newest-first is not
+    reshuffled by bookkeeping.
+    """
+    machine = str(machine).strip()
+    now = int(time.time() if now is None else now)
+    ids = sorted({int(i) for i in ticket_ids or []})
+    with get_conn(db_path) as conn:
+        if not ids:
+            conn.execute(
+                "UPDATE alerts SET status=?, updated_at=? "
+                "WHERE kind=? AND machine=? AND status<>?",
+                (STATUS_RESOLVED, now, kind, machine, STATUS_RESOLVED))
+            return None
+        detail = json.dumps({"count": len(ids), "ticket_ids": ids})
+        row = conn.execute(
+            "SELECT id FROM alerts WHERE kind=? AND machine=? AND status=? "
+            "AND episode_ended_at IS NULL", (kind, machine, STATUS_OPEN)).fetchone()
+        if row:
+            if raise_new:
+                conn.execute("UPDATE alerts SET detail=?, updated_at=? WHERE id=?",
+                             (detail, now, row["id"]))
+            else:
+                conn.execute("UPDATE alerts SET detail=? WHERE id=?", (detail, row["id"]))
+            return row["id"]
+        if not raise_new:
+            return None
+        cur = conn.execute(
+            "INSERT INTO alerts(kind, machine, detail, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)", (kind, machine, detail, STATUS_OPEN, now, now))
+        return cur.lastrowid
 
 
 def dismiss(db_path, alert_id):

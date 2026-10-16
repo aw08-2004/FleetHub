@@ -42,7 +42,8 @@
     "assistant": "Asistente",
     "label": "Principal",
     "skip_to_content": "Saltar al contenido",
-    "onboarding": "Incorporación"
+    "onboarding": "Incorporación",
+    "tickets": "Tickets"
   },
   "hub_update": {
     "available": "Hub v{version} está disponible",
@@ -197,7 +198,9 @@
         "rule": "Regla cumplida",
         "watchdog": "Watchdog",
         "high_temperature": "Temperatura alta",
-        "other": "Alerta"
+        "other": "Alerta",
+        "ticket_new": "Ticket urgente",
+        "ticket_overdue": "Ticket vencido"
       }
     },
     "attention": {
@@ -409,6 +412,17 @@
       "anomaly_row": "{metric}: ahora {value}, lo habitual es en torno a {median}.",
       "events_title": "Registro de eventos, mismo periodo",
       "event_row": "{log} {event_id} ({level}), {count}x: {message}"
+    },
+    "ticket": {
+      "open": "Abrir el ticket más reciente"
+    },
+    "ticket_new": {
+      "title": "Ticket urgente de {machine}",
+      "body": "{count} ticket(s) de urgencia alta o crítica de {machine} que nadie ha atendido aún. Se resuelve cuando cada uno se haya respondido, asignado o avanzado."
+    },
+    "ticket_overdue": {
+      "title": "Ticket vencido en {machine}",
+      "body": "{count} ticket(s) de {machine} superaron la hora que la persona indicó y no están resueltos."
     }
   },
   "audit": {
@@ -708,6 +722,14 @@
       "manage_onboarding": {
         "label": "Gestionar códigos de incorporación",
         "description": "Crear y revocar códigos de un solo uso con los que un PC se registra a sí mismo desde la página pública de incorporación. Revocar un código ya usado también revoca el agente que registró."
+      },
+      "view_tickets": {
+        "label": "Ver tickets",
+        "description": "Leer los tickets que las personas abrieron desde sus PC, con sus capturas y los datos del equipo en ese momento, para los PC en el ámbito. Es un permiso propio porque un ticket son las palabras y la pantalla de alguien, no inventario."
+      },
+      "manage_tickets": {
+        "label": "Gestionar tickets",
+        "description": "Responder a tickets, cambiar su estado, asignarlos, editar etiquetas y pedir un triaje a la IA, para los PC en el ámbito. Redactar el script de la IA en la biblioteca requiere además 'Emitir comandos'."
       }
     }
   },
@@ -737,7 +759,8 @@
       "ai": "Asistencia con IA",
       "events": "Registros de eventos",
       "security": "Seguridad del endpoint",
-      "discovery": "Descubrimiento de red"
+      "discovery": "Descubrimiento de red",
+      "tickets": "Tickets"
     },
     "unit": {
       "celsius": "°C",
@@ -1356,6 +1379,18 @@
       "security.require_enrolled_telemetry": {
         "label": "Aceptar telemetría solo de agentes registrados",
         "help": "Rechazar la telemetría que no esté firmada por un agente registrado. Actívelo cuando la página de Incorporación ya no muestre equipos que informan sin registro; los agentes antiguos no firman. Incluso mientras esté desactivado, un equipo cuyo agente ya firma no puede ser suplantado."
+      },
+      "tickets.submitters": {
+        "label": "Quién puede abrir un ticket desde un PC",
+        "help": "Solo cuentas de dominio rechaza tickets de cuentas locales, como un inicio de sesión de quiosco compartido al que nadie puede devolver la llamada. El hub lo aplica en cada ticket, no solo la bandeja."
+      },
+      "tickets.retention_days": {
+        "label": "Conservar tickets terminados durante",
+        "help": "Los tickets resueltos y cerrados se eliminan este tiempo después de terminarse. Los tickets abiertos nunca se eliminan, por antiguos que sean."
+      },
+      "tickets.screenshot_retention_days": {
+        "label": "Conservar capturas de tickets durante",
+        "help": "Las capturas muestran la pantalla de alguien, por eso se eliminan tras estos días sea cual sea el estado del ticket. El texto del ticket se conserva."
       }
     },
     "ai": {
@@ -1414,6 +1449,10 @@
       "fleet.default_agent_channel": {
         "stable": "Estable",
         "beta": "Beta"
+      },
+      "tickets.submitters": {
+        "any": "Cualquier persona con sesión en el PC",
+        "domain": "Solo cuentas de dominio"
       }
     },
     "error": {
@@ -4788,5 +4827,86 @@
       "code_invalid": "Ese código no es válido o ha caducado.",
       "network_error": "No se pudo contactar con el hub. Compruebe la conexión y vuelva a intentarlo."
     }
+  },
+  "tickets": {
+    "heading": "Tickets",
+    "intro": "Tickets que las personas abrieron desde su propio PC, cada uno con los datos del equipo tal como estaban en ese momento. Solo se muestran tickets de equipos que puedes ver.",
+    "ticket_title": "Ticket #{id}",
+    "back": "← Todos los tickets",
+    "filter_status": "Mostrar",
+    "filter_open": "Sin terminar",
+    "filter_all": "Todos",
+    "search": "Buscar asunto, equipo, persona, etiqueta",
+    "count": "{count} mostrados",
+    "empty": "No hay tickets.",
+    "load_failed": "No se pudieron cargar los tickets: {error}",
+    "urgency": "Urgencia",
+    "subject": "Asunto",
+    "machine": "Equipo",
+    "reporter": "Informado por",
+    "reporter_local": "cuenta local",
+    "status": "Estado",
+    "assignee": "Asignado a",
+    "labels": "Etiquetas",
+    "due": "Necesario para",
+    "opened": "Abierto",
+    "overdue": "Vencido",
+    "screenshot_count": "{count} captura(s)",
+    "urgency_low": "Baja",
+    "urgency_normal": "Normal",
+    "urgency_high": "Alta",
+    "urgency_critical": "Crítica",
+    "status_new": "Nuevo",
+    "status_open": "Abierto",
+    "status_waiting": "En espera",
+    "status_resolved": "Resuelto",
+    "status_closed": "Cerrado",
+    "label_source_auto": "añadida por el hub a partir de los datos del equipo",
+    "label_source_ai": "sugerida por la IA",
+    "label_source_operator": "añadida por un operador",
+    "description": "Lo que escribió",
+    "no_description": "(sin descripción)",
+    "no_screenshots": "No se enviaron capturas.",
+    "screenshot_alt": "Captura {id}",
+    "assign_me": "Asignarme",
+    "unassign": "Quitar asignación",
+    "labels_help": "Las etiquetas del hub salen de los datos del equipo; las de la IA son sugerencias. Quita las que no compartas.",
+    "label_placeholder": "Añadir etiqueta",
+    "label_add": "Añadir",
+    "label_remove": "Quitar etiqueta {label}",
+    "no_labels": "Sin etiquetas.",
+    "facts": "El equipo al abrir el ticket",
+    "facts_help": "Se registra una vez, al enviar, y nunca se actualiza: muestra el PC tal como estaba cuando la persona se rindió, no tras un reinicio. La página del equipo muestra su estado actual.",
+    "fact_error": "Instantánea",
+    "fact_captured": "Capturado",
+    "fact_os": "Sistema operativo",
+    "fact_hardware": "Hardware",
+    "fact_serial": "Número de serie",
+    "fact_agent": "Versión del agente",
+    "fact_uptime": "Encendido desde hace",
+    "uptime_value": "{days} d {hours} h",
+    "fact_disks": "Discos",
+    "disk_value": "{name} {free} de {total} GB libres ({pct} %)",
+    "fact_alerts": "Alertas abiertas",
+    "fact_patches": "Parches del hub, últimos 7 días",
+    "fact_installed": "Instalado, últimos 7 días",
+    "ai_heading": "Triaje con IA",
+    "ai_help": "Envía el texto del ticket y los datos de arriba (nunca las capturas ni quién lo informó) al proveedor de IA configurado. Solo sugiere: un script redactado llega desactivado a la biblioteca de scripts, para que una persona lo lea y lo active.",
+    "ai_ask": "Preguntar a la IA",
+    "ai_ask_again": "Volver a preguntar",
+    "ai_draft": "Redactar script (desactivado)",
+    "ai_working": "Consultando al proveedor de IA...",
+    "ai_failed": "El triaje con IA falló: {error}",
+    "ai_cause": "Causa probable: {cause}",
+    "ai_meta": "De {model}, {when}.",
+    "ai_drafted": "Redactado como \"{name}\" en la biblioteca de scripts, desactivado.",
+    "thread": "Conversación",
+    "thread_empty": "Aún no hay respuestas.",
+    "reply_placeholder": "Escribe una respuesta",
+    "internal": "Nota interna (nunca se muestra a la persona)",
+    "internal_badge": "interna",
+    "reply_send": "Enviar",
+    "reply_help": "Las respuestas llegan a la bandeja de la persona cuando su PC tenga un agente con la bandeja de tickets.",
+    "label_short_ai": "IA"
   }
 }

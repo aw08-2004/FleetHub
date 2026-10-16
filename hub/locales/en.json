@@ -52,7 +52,8 @@
     "assistant": "Assistant",
     "label": "Main",
     "skip_to_content": "Skip to content",
-    "onboarding": "Onboarding"
+    "onboarding": "Onboarding",
+    "tickets": "Tickets"
   },
   "hub_update": {
     "_note": [
@@ -222,7 +223,9 @@
         "rule": "Rule matched",
         "watchdog": "Watchdog",
         "high_temperature": "High temperature",
-        "other": "Alert"
+        "other": "Alert",
+        "ticket_new": "Urgent ticket",
+        "ticket_overdue": "Overdue ticket"
       }
     },
     "attention": {
@@ -445,6 +448,17 @@
       "anomaly_row": "{metric}: {value} now, usually around {median}.",
       "events_title": "Event log, same period",
       "event_row": "{log} {event_id} ({level}), {count}x: {message}"
+    },
+    "ticket": {
+      "open": "Open newest ticket"
+    },
+    "ticket_new": {
+      "title": "Urgent ticket from {machine}",
+      "body": "{count} high or critical ticket(s) from {machine} that nobody has picked up yet. Resolves once each one has been answered, assigned or moved on."
+    },
+    "ticket_overdue": {
+      "title": "Overdue ticket on {machine}",
+      "body": "{count} ticket(s) from {machine} passed the time the person said they needed it by and are not resolved."
     }
   },
   "audit": {
@@ -767,6 +781,14 @@
       "manage_onboarding": {
         "label": "Manage onboarding codes",
         "description": "Create and revoke one-time codes that let a PC enrol itself through the public onboarding page. Revoking a spent code also revokes the agent it enrolled."
+      },
+      "view_tickets": {
+        "label": "View tickets",
+        "description": "Read tickets people opened from their PCs, including their screenshots and the machine's facts at that moment, for PCs in scope. Its own capability because a ticket is somebody's own words and screen, not inventory."
+      },
+      "manage_tickets": {
+        "label": "Manage tickets",
+        "description": "Reply to tickets, change their status, assign them, edit labels and ask the AI for a triage, for PCs in scope. Drafting the AI's script into the library additionally needs 'Issue commands'."
       }
     }
   },
@@ -796,7 +818,8 @@
       "ai": "AI Assistance",
       "events": "Event Logs",
       "security": "Endpoint Security",
-      "discovery": "Network discovery"
+      "discovery": "Network discovery",
+      "tickets": "Tickets"
     },
     "_unit": [
       "Rendered as a suffix after a number input, and inside the range messages",
@@ -1428,6 +1451,18 @@
       "security.require_enrolled_telemetry": {
         "label": "Only accept telemetry from enrolled agents",
         "help": "Refuse telemetry that is not signed by an enrolled agent. Turn this on once the Onboarding page lists no machines reporting without enrollment; older agents do not sign. Even while it is off, a machine whose agent already signs cannot be impersonated."
+      },
+      "tickets.submitters": {
+        "label": "Who may open a ticket from a PC",
+        "help": "Domain accounts only refuses tickets from local accounts, such as a shared kiosk login nobody can be called back on. The hub enforces this on every ticket, not only the tray."
+      },
+      "tickets.retention_days": {
+        "label": "Keep finished tickets for",
+        "help": "Resolved and closed tickets are deleted this long after they were finished. Open tickets are never deleted, however old."
+      },
+      "tickets.screenshot_retention_days": {
+        "label": "Keep ticket screenshots for",
+        "help": "Screenshots are a picture of somebody's screen, so they are deleted after this many days whatever state the ticket is in. The ticket's text stays."
       }
     },
     "_choice": [
@@ -1491,6 +1526,10 @@
       "fleet.default_agent_channel": {
         "stable": "Stable",
         "beta": "Beta"
+      },
+      "tickets.submitters": {
+        "any": "Anyone signed in to the PC",
+        "domain": "Domain accounts only"
       }
     },
     "_error": [
@@ -4906,5 +4945,86 @@
       "code_invalid": "That code is invalid or has expired.",
       "network_error": "Could not reach the hub. Check the connection and try again."
     }
+  },
+  "tickets": {
+    "heading": "Tickets",
+    "intro": "Tickets people opened from their own PC, each with the machine's facts as they were at that moment. Only tickets on machines you can see are listed.",
+    "ticket_title": "Ticket #{id}",
+    "back": "← All tickets",
+    "filter_status": "Show",
+    "filter_open": "Not finished",
+    "filter_all": "All",
+    "search": "Search subject, machine, person, label",
+    "count": "{count} shown",
+    "empty": "No tickets here.",
+    "load_failed": "Could not load tickets: {error}",
+    "urgency": "Urgency",
+    "subject": "Subject",
+    "machine": "Machine",
+    "reporter": "Reported by",
+    "reporter_local": "local account",
+    "status": "Status",
+    "assignee": "Assigned to",
+    "labels": "Labels",
+    "due": "Needed by",
+    "opened": "Opened",
+    "overdue": "Overdue",
+    "screenshot_count": "{count} screenshot(s)",
+    "urgency_low": "Low",
+    "urgency_normal": "Normal",
+    "urgency_high": "High",
+    "urgency_critical": "Critical",
+    "status_new": "New",
+    "status_open": "Open",
+    "status_waiting": "Waiting",
+    "status_resolved": "Resolved",
+    "status_closed": "Closed",
+    "label_source_auto": "added by the hub from the machine's facts",
+    "label_source_ai": "suggested by AI",
+    "label_source_operator": "added by an operator",
+    "description": "What they wrote",
+    "no_description": "(no description)",
+    "no_screenshots": "No screenshots were sent.",
+    "screenshot_alt": "Screenshot {id}",
+    "assign_me": "Assign to me",
+    "unassign": "Unassign",
+    "labels_help": "Labels the hub added come from the machine's facts; AI labels are suggestions. Remove any you disagree with.",
+    "label_placeholder": "Add a label",
+    "label_add": "Add",
+    "label_remove": "Remove label {label}",
+    "no_labels": "No labels.",
+    "facts": "The machine when the ticket was opened",
+    "facts_help": "Recorded once, at submit time, and never updated -- so this shows the PC as it was when the person gave up, not after a reboot. The machine's page shows it now.",
+    "fact_error": "Snapshot",
+    "fact_captured": "Captured",
+    "fact_os": "Operating system",
+    "fact_hardware": "Hardware",
+    "fact_serial": "Serial number",
+    "fact_agent": "Agent version",
+    "fact_uptime": "Up for",
+    "uptime_value": "{days} d {hours} h",
+    "fact_disks": "Disks",
+    "disk_value": "{name} {free} of {total} GB free ({pct}%)",
+    "fact_alerts": "Open alerts",
+    "fact_patches": "Hub patch runs, last 7 days",
+    "fact_installed": "Installed, last 7 days",
+    "ai_heading": "AI triage",
+    "ai_help": "Sends the ticket's text and the facts above -- never the screenshots or who reported it -- to the configured AI provider. It only suggests: a drafted script lands in the script library switched off, for a person to read and enable.",
+    "ai_ask": "Ask AI",
+    "ai_ask_again": "Ask again",
+    "ai_draft": "Draft script (switched off)",
+    "ai_working": "Asking the AI provider...",
+    "ai_failed": "AI triage failed: {error}",
+    "ai_cause": "Likely cause: {cause}",
+    "ai_meta": "From {model}, {when}.",
+    "ai_drafted": "Drafted as \"{name}\" in the script library, switched off.",
+    "thread": "Conversation",
+    "thread_empty": "No replies yet.",
+    "reply_placeholder": "Write a reply",
+    "internal": "Internal note (never shown to the person)",
+    "internal_badge": "internal",
+    "reply_send": "Send",
+    "reply_help": "Replies reach the person's tray once their PC runs an agent with the ticket tray.",
+    "label_short_ai": "AI"
   }
 }

@@ -171,6 +171,13 @@ MANAGE_RULES = "manage_rules"
 # READING a group, and USING one, is deliberately NOT gated here -- that is VIEW, and whoever
 # uses a group still needs every machine it resolves to in their own scope.
 MANAGE_DEVICE_GROUPS = "manage_device_groups"
+# Tickets opened from a PC (roadmap #31). READING them is its own capability rather than VIEW,
+# because a ticket is not inventory: it is somebody's own words about their work, often with a
+# picture of their screen, and an operator who may see that a PC exists has not thereby been
+# shown what its user wrote to IT. MANAGING them -- replying, status, assignment, labels, the
+# AI triage -- is a second one, so a group can watch the queue without answering it.
+VIEW_TICKETS = "view_tickets"
+MANAGE_TICKETS = "manage_tickets"
 
 CAPABILITIES = (
     VIEW,
@@ -188,6 +195,8 @@ CAPABILITIES = (
     WIPE_DEVICE,
     MANAGE_RULES,
     MANAGE_DEVICE_GROUPS,
+    VIEW_TICKETS,
+    MANAGE_TICKETS,
     MANAGE_ONBOARDING,
     MANAGE_SETTINGS,
     MANAGE_USERS,
