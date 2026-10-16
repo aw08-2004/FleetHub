@@ -785,9 +785,8 @@
             v.tabIndex = 0;   // make it focusable so it can receive key events
             let lastMove = 0;
 
-            // A phone gets a virtual cursor and pinch-zoom instead (remote-touch.js, issue
-            // #133). Every mouse handler below then has to ignore the mouse events iOS
-            // replays after a tap, or a tap would click at the cursor AND under the finger.
+            // The phone keyboard (remote-keyboard.js, issue #138), created first so the
+            // touch controller's first touch can show it.
             // One keyboard button per viewer, but one remembered position for all of them:
             // the operator moved it off the part of the screen they need, and that is the same
             // part on the next PC.
@@ -806,6 +805,10 @@
                     if (window.matchMedia('(pointer: coarse)').matches) keyboard.show();
                 } catch (e) { /* no matchMedia -- the first touch still shows it */ }
             }
+
+            // A phone gets a virtual cursor and pinch-zoom instead (remote-touch.js, issue
+            // #133). Every mouse handler below then has to ignore the mouse events iOS
+            // replays after a tap, or a tap would click at the cursor AND under the finger.
             if (window.RemoteTouch) {
                 touch = window.RemoteTouch.create({
                     stage: els.stage,
