@@ -128,7 +128,7 @@
      * opts: {
      *   stage, button, sink, strip   -- the elements (the partial's data-remote="kbd*")
      *   send(msg)                    -- remote.js's sendInput
- *   release(msg)                 -- remote.js's sendControl, which View-only does not stop
+     *   release(msg)                 -- remote.js's sendControl, which View-only does not stop
      *   storageKey                   -- where the button's position is remembered
      * }
      */
