@@ -104,6 +104,10 @@
     function inputTypeMessages(inputType, data, withModifier) {
         switch (inputType) {
             case 'insertText':
+            // A replacement is typed as new text: the box is always empty, so there is no
+            // word on the PC side we know how to select and overwrite. An autocorrect would
+            // therefore land AFTER the original word, not over it -- autocorrect="off" on
+            // the box is what keeps that rare. Owed on an iPhone (ROADMAP.MD, Owed locally).
             case 'insertReplacementText':
             case 'insertFromPaste':
             case 'insertCompositionText':
