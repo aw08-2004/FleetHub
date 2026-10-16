@@ -5860,6 +5860,123 @@ there"**, ticked by default, and the PC removes its own agent.
 
 ---
 
+## 📋 31. Ticketing -- the person at the PC opens a ticket   ·   planned (issue #142)   ·   `tickets.py` / `tickets_web.py`, agent `--tray`
+
+Today a person with a broken PC phones or writes to IT, and the first ten minutes of the call
+are spent finding out which machine it is, what it runs and what changed. The hub already
+knows all of that. This item lets the person open a ticket **from the PC itself** -- a
+description, an urgency, an optional "needed by" time and a screenshot -- and lands it in the
+console next to the machine's own facts, labelled before an operator reads it.
+
+Asked for in issue #142, "nice to have". Design only so far; nothing is built.
+
+**The tray is the real new piece.** The Windows agent has no process that lives in the
+user's session. Every in-session helper it has is spawned for one command and exits, and the
+one that shows UI -- `show_message`'s dialog -- runs as **SYSTEM** inside the session
+(`Remote/SessionInjector.cs`), which is acceptable for a dialog with four buttons and not for a
+form with a text box and a file picker. Everything else below copies something the hub
+already does.
+
+### Phases
+
+**A -- the tray (Windows agent, one MINOR, plus a `ticketing` capability).**
+- The agent exe gains a `--tray` mode. The service launches it **as the signed-in user**
+  through `Fleet/UserSessionLauncher.cs` (`CreateProcessAsUserW` with the user's own token)
+  on logon and unlock, one per session, and starts it again if it dies. It is off until a
+  fleet setting turns it on.
+- The tray talks only to the service, over a **named pipe the service owns**. The service
+  reads the caller's session and user from the pipe and uploads with its own bearer token.
+  The tray never holds the agent token, so a user who attaches a debugger to it gains nothing.
+- The screenshot is taken by the tray **before** its form opens, reusing `GdiScreenCapture`
+  from `Remote/ScreenCapture.cs`, and shown as a preview the person can remove. Downscaled and
+  size-capped before it leaves the PC.
+- The form: subject, description, urgency (low / normal / high / critical), optional
+  "needed by". "My tickets" and reply toasts are phase D.
+- Gated by the capability, through the hub 1.98.0 machinery, not a new `MIN_*_AGENT` constant:
+  a console that sees no `ticketing` capability simply has no tickets from that PC.
+
+**B -- the hub model and console (`tickets.py` / `tickets_web.py`).**
+- Tables:
+  - `tickets` -- machine, reporter (user name and SID), subject, body, urgency, `due_at`,
+    status (new / open / waiting / resolved / closed), assignee, timestamps, and a **facts
+    snapshot** taken at submit time (OS, uptime, free disk, open alerts, recent patch runs).
+    The snapshot is the point: a ticket read the next morning must show the machine as it was
+    when the person gave up, not as it is after a reboot fixed it.
+  - `ticket_messages` -- operator or reporter, with an `internal` flag for notes the reporter
+    never sees.
+  - `ticket_attachments` -- on disk, sha256, size-capped.
+  - `ticket_labels` -- label plus source: `auto`, `ai` or `operator`.
+- `POST /api/agent/tickets`: bearer auth, `Content-Length` required, 413 over the cap. Copy
+  `disk_usage_web.py`'s history upload; the hub sets no `MAX_CONTENT_LENGTH`, so a route that
+  forgets its own cap accepts anything. `GET /api/agent/tickets` serves the tray, filtered to
+  the reporter's SID so one user on a shared PC never sees another's tickets.
+- Console: a Tickets page (list through `access.filter_rows`), the detail through
+  `access.require_machine(VIEW_TICKETS)`, reply / status / assign through
+  `require_machine(MANAGE_TICKETS)`. Two new `permissions.CAPABILITIES` entries with en / de /
+  es labels. The screenshot is served only through the gated detail route -- it is a picture
+  of somebody's screen.
+- Operators hear about it through what exists: a `ticket_new` alert kind for high and
+  critical (mobile push then comes free from `push.scan`), a socket event on the fleet room,
+  and `ticket_overdue` when `due_at` passes unresolved.
+- Lifecycle: the rename, forget-machine and retention hooks every machine-keyed table has.
+  Screenshots get a retention of their own, shorter than the ticket's.
+
+**C -- labels the hub can put on by itself.** A pure function over the facts snapshot:
+- the OS bucket from `normalize_os()` (`app.py`) -- `Windows 11`, `Windows 10`, `Linux`;
+- `update:<KB>` for a hub patch run completed on that machine in the last 48 hours, and
+  `installed:<name>` from `machine_software.install_date` in the same window;
+- low disk, and vendor / model.
+
+**Known gap:** a Windows Update the PC installed **by itself** is recorded nowhere -- the
+hub knows pending updates and its own runs, not Windows' history. Labelling "the update that
+just broke it" in general needs the WindowsUpdateClient install events, which is a
+subscription for #16, not new collection here.
+
+**C2 -- AI triage, suggest-only.** Copy `correlate.recommend`: one `ai.complete` call over the
+ticket text and the facts snapshot, audited with `ai.record_request(kind="ticket_triage")`,
+stored per ticket. It produces a summary, labels (source `ai`), a likely cause, and a draft
+script through the `correlate.draft_script` pattern. Running that script is an operator's
+click through the existing script path and its `require_machine` gate -- **no new way to run
+anything on a machine**. Off unless AI is configured; the screenshot is not sent to the model.
+
+**D -- two-way.** An operator's non-internal reply reaches the tray's "My tickets" and raises
+a toast. The heartbeat answer carries a "ticket updates" marker, so the service fetches only
+when something changed and the tray never calls the hub itself.
+
+**Deploy order** is the usual one: hub (B, C, C2) first, then the agent (A, D). A tray that can
+send a ticket to a hub with no route for it loses the ticket and tells the person it was sent.
+
+### Decisions
+- **Tray icon** as the entry point, **suggest-only** AI, and **two-way** (owner, 2026-10-16).
+- **The tray runs as the user, not as SYSTEM.** Its window holds a text box and, later, a file
+  picker; a file picker in a SYSTEM process on the user's desktop is a SYSTEM shell.
+- **One upload route of its own**, not the heartbeat: a screenshot is megabytes, and the
+  heartbeat runs every ten seconds on every machine.
+
+### Rejected alternatives
+- **A ticket page on the hub that the person signs in to.** No machine identity and no
+  screenshot, which are the two things that make this better than an email.
+- **Launching the tray through `SessionInjector`** as `show_message` does -- see the SYSTEM
+  decision above.
+- **An HKLM Run key.** Nothing restarts the tray when it dies, the hub cannot turn it off, and
+  the key outlives an uninstall that misses it.
+- **Tickets through `/api/report`.** That route is unauthenticated by design.
+- **Letting the AI run its own fix**, even from an allow-list. Rejected by the owner: it would
+  be a new unattended path to run commands, outside the permission groups that are the whole
+  perimeter.
+- **An external helpdesk (osTicket, Jira) as the store.** The machine context lives in the
+  hub, and copying it out on every ticket is the work this item exists to remove. Forwarding a
+  new ticket by webhook through the `notify` outbox stays open as an add-on.
+
+### Open parameters
+- Who may submit: any interactive user, or domain users only.
+- Screenshot retention, and whether a multi-monitor PC sends every screen or the active one.
+- Email to the reporter on a reply -- needs #8's directory to know the address.
+- Linux and Android agents. Android could reuse the notification UI built for messages to
+  the person holding the device.
+
+---
+
 ## ✅ Vendored browser dependencies   ·   hub 1.97.0
 
 `hub/static/vendor/README.md` opens by saying the hub's pages "must work on an isolated LAN
@@ -6955,6 +7072,12 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     ship alone" was kept in substance rather than letter: the hub went first, as deploy order
     requires anyway, and the Software section says *waiting for a newer agent* until the
     release lands, which is the state the plan above designed the wording for.
+
+24. **#31 Ticketing** — planned, nothing built (issue #142). Hub first (model, console,
+    auto-labels, suggest-only AI triage), then one Windows agent MINOR for the tray. No
+    prerequisite on the board: every hub half copies something that exists. The agent half
+    is the first process this agent keeps running in the user's session, and its entry
+    spends most of its words on why that process runs as the user and not as SYSTEM.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone
