@@ -357,8 +357,8 @@ jobs:
             .gitattributes, signed manifests or their .sig files, sign_release.py or
             install.ps1's signing paths.
 
-            1. Investigate. Find the root cause in the code. Use ROADMAP.MD and README.md
-               to understand intended behaviour.
+            1. Investigate. Find the root cause in the code. Use ROADMAP.MD, README.md and
+               docs/ to understand intended behaviour.
             2. Decide. If the cause is unclear, the fix needs Windows to verify, it needs a
                design decision, or it touches authorization (hub/permissions*.py, any
                access.require* gate) -- STOP. Post one comment on the issue with what you
