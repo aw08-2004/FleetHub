@@ -905,6 +905,91 @@
     filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
 }
 
+/* The phone keyboard (remote-keyboard.js, issue #138). remote-keyboard.js positions the
+   button by left/top inside the stage and remembers where it was dragged. */
+.remote-kbd__fab[hidden],
+.remote-kbd__strip[hidden] { display: none; }
+
+.remote-kbd__fab {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    z-index: 2;
+    width: 44px;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 50%;
+    /* The drag is ours; left to the browser it would scroll the page instead. */
+    touch-action: none;
+    cursor: grab;
+}
+
+.remote-kbd__fab[aria-expanded="true"] {
+    background: var(--accent-fill);
+}
+
+/* Off-screen in effect but still RENDERED: a display:none or visibility:hidden box cannot
+   take focus, and focus is the only thing that opens a phone keyboard. 16px, because iOS
+   zooms the whole page into any input with a smaller font. user-select: text, because iOS
+   will not type into an input whose ancestor -- the stage -- has user-select: none. */
+.remote-kbd__sink {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    font-size: 16px;
+    caret-color: transparent;
+    -webkit-user-select: text;
+    user-select: text;
+    pointer-events: none;
+}
+
+.remote-kbd__strip {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 3;
+    display: flex;
+    /* Tight, because ten keys have to fit across a 375px phone without scrolling. */
+    gap: 2px;
+    padding: var(--space-1);
+    overflow-x: auto;
+    background: rgba(0, 0, 0, 0.75);
+    touch-action: pan-x;
+}
+
+.remote-kbd__key {
+    flex: 1 0 auto;
+    min-width: 32px;
+    min-height: 36px;
+    padding: 0 4px;
+    color: #fff;
+    font-size: var(--text-sm);
+    /* Opaque, not a translucent white: over a bright remote desktop a see-through key had
+       no contrast for its label at all. */
+    background: #3f3f46;
+    border: 1px solid #52525b;
+    border-radius: var(--radius-sm);
+}
+
+/* A held sticky modifier: the next key goes out with it. */
+.remote-kbd__key[aria-pressed="true"] {
+    background: var(--accent-fill);
+    border-color: var(--accent-fill);
+}
+
 /* [hidden] again -- and the worst of the three, because this one is painted ON the remote
    desktop: the overlay is only meant to exist in fullscreen (remote.js clears its `hidden`
    from the fullscreenchange handler), so without this every session ran with a status badge

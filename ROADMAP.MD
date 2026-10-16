@@ -373,6 +373,12 @@ events under node, but no real touch has reached it. On an iPhone, in Safari, on
   under the finger); two fingers tapped right-click; hold then drag moves a window.
 - The same on an iPad (which takes the native, prefixed fullscreen path), and a desktop
   browser's mouse is unchanged.
+- **Keyboard (hub 1.151.0, issue #138):** the keyboard button opens the iPhone's keyboard on
+  the first tap; typing `@`, `ä` and Backspace reaches the PC; the key strip sits **above** the
+  keyboard, not under it (the `visualViewport` lift -- emulation cannot open a real keyboard);
+  on a phone narrower than 375px the strip swipes sideways; Ctrl then a selects all;
+  autocorrect does not retype words (an `insertReplacementText` would be typed AFTER the word,
+  not over it); pasting text reaches the PC; and the same on Android with GBoard (the composition path).
 
 ---
 
@@ -1779,8 +1785,36 @@ phone size, and is unusable short of a zoom that means panning all session); tap
 drag (two quick taps must stay a double-click, and telling them apart costs every tap a third of
 a second); the `<video>`'s own `webkitEnterFullscreen` (the system player, with no input).
 The Sharing page keeps mouse input only: it loads neither `remote-touch.js` nor `machine.css`.
-**Not done:** scrolling the remote PC by touch, and a keyboard on a phone. **Owed on a phone:**
-see *Owed locally*, item 11.
+**Not done:** scrolling the remote PC by touch. **Owed on a phone:** see *Owed locally*,
+item 11.
+
+### A keyboard on a phone · hub 1.151.0 (issue #138)
+
+A phone could watch and click and never type: keys came only from keydown on the focused
+`<video>`, and no phone keyboard attaches to a `<video>`. Now a round keyboard button floats on
+the left edge of the picture (`remote-keyboard.js`); a tap focuses a hidden `<input>`, which is
+what opens the phone's own keyboard, and the button can be **dragged anywhere** -- wherever it
+sits it covers some of the desktop -- with the spot remembered per browser. While the keyboard
+is open a strip adds what a phone keyboard lacks: Esc, Tab, Ctrl, Alt, Win, the arrows, Del.
+Ctrl/Alt/Win are **one-shot sticky** (tap Ctrl, then c). A tap only latches the key in the
+browser, and it reaches the PC wrapped around the next key. So a latch dropped unused (tapped
+off, or the keyboard closed) sends nothing, and no modifier can be left down on the PC. An
+earlier version pressed it on the PC at tap time, and a lone Win press-and-release opened the
+Start menu. It shows on a coarse pointer or after the
+first touch, never for a mouse, and View-only hides it. Sharing loads it too.
+**Hub only, no agent release:** typed text goes out as a character (`code: ''`, `key: 'ä'`),
+which InputInjector already injects with `KEYEVENTF_UNICODE` -- so @, € and umlauts arrive
+whatever the PC's layout. A letter typed with a sticky modifier held goes out as `KeyC`
+instead, because a Unicode injection does not combine with Ctrl. The same goes for the unshifted
+punctuation keys (Ctrl+- zooms out, Ctrl+/ comments a line). **Not done:** a SHIFTED character
+with a modifier held -- Ctrl++ is really Ctrl+Shift+=, and the strip has no Shift -- still goes
+out as a plain character, not the shortcut.
+*Rejected:* a keyboard drawn in the page (a worse copy of the phone's own, without dictation,
+IME or swipe typing); sending every letter by key position (`KeyZ` types whatever the PC's
+layout has there, so a German phone's z arrives as y on a US PC); reading keydown alone (Android
+keyboards report nearly every key as `Unidentified`). Characters outside the BMP (emoji) are
+dropped: the agent injects one UTF-16 unit, so half a surrogate pair would arrive as garbage.
+Checked in Chromium's phone emulation; a real phone keyboard is owed (*Owed locally*, item 11).
 
 **Open, on-hardware follow-ups** (validate/tune together, as agreed): the **secure desktop**
 (capturing/injecting on Winlogon during UAC — the SYSTEM-in-session enabler is in place, the

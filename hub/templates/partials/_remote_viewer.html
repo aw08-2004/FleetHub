@@ -118,6 +118,37 @@
            first touch, so a mouse user never sees it. Its tip is the element's top-left
            corner, which is the point a tap clicks. #}
         <div class="remote-stage__cursor" data-remote="cursor" aria-hidden="true" hidden></div>
+        {# The phone keyboard (remote-keyboard.js, issue #138). The button summons the
+           phone's own keyboard by focusing the hidden box below it, and can be dragged off
+           whatever it covers. Hidden until a touch, so a mouse user never sees it. #}
+        <button type="button" class="remote-kbd__fab" data-remote="kbd"
+                title="{{ t('machine.remote.keyboard_title') }}"
+                aria-label="{{ t('machine.remote.keyboard') }}" aria-expanded="false" hidden>
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none"
+                 stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="6" width="20" height="12" rx="2"/>
+                <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>
+            </svg>
+        </button>
+        {# Not display:none and not [hidden]: a box that is not rendered cannot take focus,
+           and focus is the only thing that opens a phone keyboard. #}
+        <input type="text" class="remote-kbd__sink" data-remote="kbd-sink" tabindex="-1"
+               aria-label="{{ t('machine.remote.keyboard') }}"
+               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+               enterkeyhint="enter">
+        <div class="remote-kbd__strip" data-remote="kbd-strip" role="toolbar"
+             aria-label="{{ t('machine.remote.keyboard_keys') }}" hidden>
+            <button type="button" class="remote-kbd__key" data-kbd-key="Escape">{{ t('machine.remote.key_esc') }}</button>
+            <button type="button" class="remote-kbd__key" data-kbd-key="Tab">{{ t('machine.remote.key_tab') }}</button>
+            <button type="button" class="remote-kbd__key" data-kbd-mod="Control" aria-pressed="false">{{ t('machine.remote.key_ctrl') }}</button>
+            <button type="button" class="remote-kbd__key" data-kbd-mod="Alt" aria-pressed="false">{{ t('machine.remote.key_alt') }}</button>
+            <button type="button" class="remote-kbd__key" data-kbd-mod="Meta" aria-pressed="false">{{ t('machine.remote.key_win') }}</button>
+            <button type="button" class="remote-kbd__key" data-kbd-key="ArrowLeft" aria-label="{{ t('machine.remote.key_left') }}">&larr;</button>
+            <button type="button" class="remote-kbd__key" data-kbd-key="ArrowUp" aria-label="{{ t('machine.remote.key_up') }}">&uarr;</button>
+            <button type="button" class="remote-kbd__key" data-kbd-key="ArrowDown" aria-label="{{ t('machine.remote.key_down') }}">&darr;</button>
+            <button type="button" class="remote-kbd__key" data-kbd-key="ArrowRight" aria-label="{{ t('machine.remote.key_right') }}">&rarr;</button>
+            <button type="button" class="remote-kbd__key" data-kbd-key="Delete">{{ t('machine.remote.key_del') }}</button>
+        </div>
         <div class="remote-stage__overlay" data-remote="overlay" hidden>
             <span class="remote-stage__badge" data-remote="overlay-status">{{ t('machine.remote.live') }}</span>
             <button type="button" class="btn btn--ghost" data-remote="exit-fullscreen">{{ t('machine.remote.exit_fullscreen') }}</button>
