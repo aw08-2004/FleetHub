@@ -14,7 +14,7 @@ Four canonical docs already exist. Go to them by question, not by default:
 
 | Question | File |
 |---|---|
-| What a feature does, or how to operate it | `README.md` — grep it, don't read it |
+| What a feature does, or how to operate it | `docs/` — one file per area, grep it; `README.md` is the short overview |
 | Is this planned or shipped, and what was rejected | `ROADMAP.MD` — features `#1`–`#22` |
 | Anything about a version number | `VERSIONING.md` — 120 lines, read it whole |
 | Auth, capabilities, threat model | `SECURITY.MD` |
