@@ -242,7 +242,7 @@ public static class AgentConfig
     /// match `channels._AGENT_MANIFEST`: a mismatch is a fleet that silently never updates.
     /// </summary>
     public const string StableManifestUrl =
-        "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/"
+        "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/"
         + "agent-linux.manifest.json";
 
     /// <summary>The manifest URL, overridable so the update path can be exercised against a

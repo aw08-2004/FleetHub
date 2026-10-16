@@ -58,9 +58,11 @@ import sqlite3
 import capabilities
 
 #: The repository every channel resolves against. One constant rather than four copies of
-#: the same slug -- the pre-rename path is deliberate everywhere it appears (see
-#: AgentConfig.UpdateManifestUrl on the agent for why moving it early 404s the fleet).
-REPO = "aw08-2004/Temp_Monitor"
+#: the same slug. **The GitHub repo is now FleetHub**; it was Temp_Monitor until the rename,
+#: and the old slug still resolves through GitHub's redirect, which is what carries hubs
+#: still on an older build over until they take this one. The redirect dies the moment
+#: anybody creates a new repo called Temp_Monitor under this account -- don't.
+REPO = "aw08-2004/FleetHub"
 
 STABLE = "stable"
 BETA = "beta"

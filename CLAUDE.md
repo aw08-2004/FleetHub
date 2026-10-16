@@ -56,8 +56,10 @@ Four canonical docs already exist. Go to them by question, not by default:
 Each of these looks like leftover mess and is load-bearing.
 
 - **`Temp_Monitor` / `TempMonitorAgent` / `TempMonitorHub`** in code, paths, service names and
-  namespaces are **correct**. The product was renamed FleetHub; the GitHub repo rename was
-  cancelled. Do not rename them. **One exception:** the Windows agent's *service* is
+  namespaces are **correct**. The product was renamed FleetHub, and so was the GitHub repo
+  (`aw08-2004/FleetHub`) -- every URL and `owner/repo` slug uses the new name, but local
+  identifiers keep the old one. Do not rename them. Never create a new repo called
+  `Temp_Monitor`: field builds still fetch through GitHub's redirect from the old name. **One exception:** the Windows agent's *service* is
   `FleetHubAgent` since 2026-10-12, and `TempMonitorAgent` survives only as the legacy service
   name on un-migrated PCs -- so anything naming the service must accept both (ROADMAP.MD,
   *Agent service renamed to `FleetHubAgent`*). **The exe followed on 2026-10-13:** a fresh

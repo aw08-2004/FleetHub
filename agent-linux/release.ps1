@@ -39,7 +39,7 @@ param(
     [switch]$Push,
     [switch]$DryRun,
     [string]$SigningKey,
-    [string]$Repo = "aw08-2004/Temp_Monitor",
+    [string]$Repo = "aw08-2004/FleetHub",
     # Roadmap #21's channels apply here too: beta writes agent-linux.manifest.beta.json and
     # tags the release -beta, and only machines pinned to beta in the console read it.
     #

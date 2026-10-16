@@ -2,7 +2,7 @@
 #
 # FleetHub Linux agent -- web installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh \
 #     | sudo bash -s -- --secret 'THE-SECRET'
 #
 # The Linux counterpart of `irm .../install.ps1 | iex`. It finds the binary the way the agent's
@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-REPO="aw08-2004/Temp_Monitor"
+REPO="aw08-2004/FleetHub"
 BRANCH="main"
 ASSET_NAME="fleethub-agent"
 
@@ -64,11 +64,11 @@ usage() {
     cat <<'USAGE'
 FleetHub Linux agent installer
 
-  curl -fsSL https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh \
+  curl -fsSL https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh \
     | sudo bash -s -- --secret 'THE-SECRET'
 
   # Debian minimal, OpenMediaVault and other images without curl:
-  wget -qO- https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh \
+  wget -qO- https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh \
     | sudo bash -s -- --secret 'THE-SECRET'
 
   # If your account is not in sudoers (common on appliance distros), become root first:

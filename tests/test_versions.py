@@ -328,11 +328,11 @@ def test_hub_self_update():
             for name, body in files.items():
                 if name in omit:
                     continue
-                z.writestr(f"Temp_Monitor-main/hub/{name}", body)
+                z.writestr(f"FleetHub-main/hub/{name}", body)
             for d in dirs:
                 if d in omit:
                     continue
-                z.writestr(f"Temp_Monitor-main/hub/{d}/keep.txt", "x")
+                z.writestr(f"FleetHub-main/hub/{d}/keep.txt", "x")
         return buf.getvalue()
 
     class _Resp:
@@ -614,9 +614,9 @@ def test_hub_update_restart_gates():
     def _archive(version):
         buf = _io.BytesIO()
         with _zf.ZipFile(buf, "w") as z:
-            z.writestr("Temp_Monitor-main/hub/app.py", f'HUB_VERSION = "{version}"\n')
-            z.writestr("Temp_Monitor-main/hub/wsgi.py", "")
-            z.writestr("Temp_Monitor-main/hub/requirements.txt", "")
+            z.writestr("FleetHub-main/hub/app.py", f'HUB_VERSION = "{version}"\n')
+            z.writestr("FleetHub-main/hub/wsgi.py", "")
+            z.writestr("FleetHub-main/hub/requirements.txt", "")
         return buf.getvalue()
 
     orig_get, orig_install = app.requests.get, app._install_requirements

@@ -7,7 +7,7 @@ body:
       value: |
         **This repository is public.** Redact hostnames, IPs, operator emails, user names,
         device tokens, invite links, BitLocker recovery keys and backup keys before pasting
-        anything. A security hole goes through [SECURITY.MD](https://github.com/aw08-2004/Temp_Monitor/blob/main/SECURITY.MD), not here.
+        anything. A security hole goes through [SECURITY.MD](https://github.com/aw08-2004/FleetHub/blob/main/SECURITY.MD), not here.
 
   - type: dropdown
     id: component

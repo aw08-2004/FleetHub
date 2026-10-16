@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/aw08-2004/Temp_Monitor/blob/main/SECURITY.MD#reporting-a-vulnerability
+    url: https://github.com/aw08-2004/FleetHub/blob/main/SECURITY.MD#reporting-a-vulnerability
     about: Do not open a public issue. Issues are public and FleetHub runs as LocalSystem on every managed PC -- follow SECURITY.MD instead.
   - name: Is it planned already?
-    url: https://github.com/aw08-2004/Temp_Monitor/blob/main/ROADMAP.MD
+    url: https://github.com/aw08-2004/FleetHub/blob/main/ROADMAP.MD
     about: Features #1-#23, what is shipped, partial or planned, and what was rejected and why.
   - name: How does a feature work?
-    url: https://github.com/aw08-2004/Temp_Monitor/blob/main/README.md
+    url: https://github.com/aw08-2004/FleetHub/blob/main/README.md
     about: Operating docs for the console, the agent and the installer.

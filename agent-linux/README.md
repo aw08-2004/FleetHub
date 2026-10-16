@@ -145,14 +145,14 @@ rolling file log exists because Windows has nowhere to put a service's stdout.
 The Linux counterpart of `irm .../install.ps1 | iex`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'
+curl -fsSL https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'
 ```
 
 `curl` or `wget`, whichever the box has — Debian's minimal images and appliance distros built
 on them (OpenMediaVault, for one) ship `wget` and no `curl`:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'
+wget -qO- https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'
 ```
 
 If the account is not in sudoers — also common on appliance distros, which manage their own

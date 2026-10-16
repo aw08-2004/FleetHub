@@ -49,7 +49,7 @@ automatically if not already run as admin.
 **From the web:**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1)))"
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/FleetHub/main/install.ps1)))"
 ```
 
 **Non-interactive**, pass `-Component` plus the relevant parameters (`iex`
@@ -59,7 +59,7 @@ prompted for again, so a fully-specified invocation runs start to finish
 without input:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/install.ps1))) `
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aw08-2004/FleetHub/main/install.ps1))) `
     -Component Agent -HubUrl https://hub.example.com -EnrollmentSecret <secret> -AddDefenderExclusion"
 ```
 
