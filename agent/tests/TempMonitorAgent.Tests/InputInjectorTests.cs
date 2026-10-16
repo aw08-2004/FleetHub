@@ -46,4 +46,45 @@ public class InputInjectorTests
     {
         Assert.Equal((ushort)0, InputInjector.MapCodeToVk("F25"));
     }
+
+    // Issue #138: a 2 - 1 - 3 desk, listed by EnumDisplayMonitors in an order that is neither
+    // the physical layout nor DXGI's. Input used to pick the monitor by its position in this
+    // list, so the operator watched one screen and clicked on its neighbour.
+    private static readonly InputInjector.Monitor[] TwoOneThree =
+    {
+        new(@"\\.\DISPLAY2", false, -1920, 0, 1920, 1080),
+        new(@"\\.\DISPLAY1", true, 0, 0, 2560, 1440),
+        new(@"\\.\DISPLAY3", false, 2560, 0, 1920, 1080),
+    };
+
+    [Theory]
+    [InlineData(@"\\.\DISPLAY1", 0)]
+    [InlineData(@"\\.\DISPLAY2", -1920)]
+    [InlineData(@"\\.\DISPLAY3", 2560)]
+    public void Pick_FindsTheCapturedMonitorByNameWhateverItsPositionInTheList(string device, int left)
+    {
+        Assert.Equal(left, InputInjector.Pick(TwoOneThree, device)!.Value.Left);
+    }
+
+    [Fact]
+    public void Pick_ComparesDeviceNamesCaseInsensitively()
+    {
+        Assert.Equal(2560, InputInjector.Pick(TwoOneThree, @"\\.\display3")!.Value.Left);
+    }
+
+    [Theory]
+    [InlineData(null)]               // GDI fallback: it only ever captures the primary
+    [InlineData(@"\\.\DISPLAY9")]    // unplugged since the capture opened
+    public void Pick_FallsBackToThePrimaryNotTheFirstEntry(string? device)
+    {
+        var m = InputInjector.Pick(TwoOneThree, device)!.Value;
+        Assert.True(m.Primary);
+        Assert.Equal(@"\\.\DISPLAY1", m.Device);
+    }
+
+    [Fact]
+    public void Pick_ReturnsNullWithNoMonitorsSoTheCallerUsesTheScreenMetrics()
+    {
+        Assert.Null(InputInjector.Pick(Array.Empty<InputInjector.Monitor>(), @"\\.\DISPLAY1"));
+    }
 }

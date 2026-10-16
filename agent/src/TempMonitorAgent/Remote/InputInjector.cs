@@ -22,12 +22,26 @@ namespace TempMonitorAgent.Remote;
 public sealed class InputInjector
 {
     private MonitorRect _monitor;
-    private int _monitorIndex;
+    private string? _outputDevice;
 
-    public InputInjector(int monitorIndex)
+    /// <summary>Starts on the primary monitor. Nothing useful can arrive before the capture's
+    /// first geometry names the real target, since the viewer has no picture to click on yet.</summary>
+    public InputInjector() => _monitor = MonitorRect.ForDevice(null);
+
+    /// <summary>
+    /// Aim input at the monitor the capture is showing, by its GDI device name
+    /// (<see cref="IScreenCapture.OutputDevice"/>; null = the primary), and resolve its rectangle.
+    ///
+    /// <b>By name, never by index</b> (issue #138). This used to take the viewer's monitor index
+    /// and look it up in <c>EnumDisplayMonitors</c> order, assuming that matched the DXGI order
+    /// the picture came from. It does not have to, and on a 2 - 1 - 3 desk it did not: every
+    /// click landed on the neighbour of the screen being watched. The device name is the one
+    /// identifier DXGI and GDI share, so it cannot drift.
+    /// </summary>
+    public void Target(string? outputDevice)
     {
-        _monitorIndex = monitorIndex;
-        _monitor = MonitorRect.ForIndex(monitorIndex);
+        _outputDevice = outputDevice;
+        RefreshGeometry();
     }
 
     /// <summary>
@@ -39,13 +53,10 @@ public sealed class InputInjector
     /// ends up hundreds of pixels from where the operator aimed.
     ///
     /// Call after a desktop switch (Default -> Winlogon can change the resolution, especially on
-    /// a headless box driven by a virtual display) and whenever the capture geometry changes.
+    /// a headless box driven by a virtual display); a new capture geometry goes through
+    /// <see cref="Target"/> instead.
     /// </summary>
-    public void RefreshGeometry(int? monitorIndex = null)
-    {
-        if (monitorIndex is { } index) _monitorIndex = index;
-        _monitor = MonitorRect.ForIndex(_monitorIndex);
-    }
+    public void RefreshGeometry() => _monitor = MonitorRect.ForDevice(_outputDevice);
 
     /// <summary>Apply one control message. Shapes (JSON):
     /// <list type="bullet">
@@ -256,23 +267,64 @@ public sealed class InputInjector
             return (Math.Clamp(ax, 0, 65535), Math.Clamp(ay, 0, 65535));
         }
 
-        /// <summary>Bounds of the monitor at <paramref name="index"/> (DXGI/enumeration order),
-        /// falling back to the primary if the index is out of range.</summary>
-        public static MonitorRect ForIndex(int index)
+        /// <summary>Bounds of the monitor named <paramref name="device"/>, falling back to the
+        /// primary when it is null or no longer attached (unplugged mid-session, or a desktop
+        /// switch that has not settled -- the capture rebuilds and names it again).</summary>
+        public static MonitorRect ForDevice(string? device)
         {
-            var monitors = new List<(int l, int t, int w, int h)>();
+            var monitors = new List<Monitor>();
             MonitorEnumProc cb = (IntPtr h, IntPtr dc, ref RECT r, IntPtr d) =>
             {
-                monitors.Add((r.left, r.top, r.right - r.left, r.bottom - r.top));
+                var info = new MonitorInfoEx { cbSize = Marshal.SizeOf<MonitorInfoEx>() };
+                if (GetMonitorInfoW(h, ref info))
+                    monitors.Add(new Monitor(info.szDevice,
+                        (info.dwFlags & MONITORINFOF_PRIMARY) != 0,
+                        info.rcMonitor.left, info.rcMonitor.top,
+                        info.rcMonitor.right - info.rcMonitor.left,
+                        info.rcMonitor.bottom - info.rcMonitor.top));
                 return true;
             };
             EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, cb, IntPtr.Zero);
-            if (index < 0 || index >= monitors.Count)
-                return new MonitorRect(0, 0,
-                    GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-            var m = monitors[index];
-            return new MonitorRect(m.l, m.t, m.w, m.h);
+            if (Pick(monitors, device) is { } m)
+                return new MonitorRect(m.Left, m.Top, m.Width, m.Height);
+            return new MonitorRect(0, 0,
+                GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
         }
+
+        // GetMonitorInfoW and its MONITORINFOEXW live here, not in the P/Invoke block below:
+        // ForDevice is their only caller.
+        private const uint MONITORINFOF_PRIMARY = 0x00000001;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct MonitorInfoEx
+        {
+            public int cbSize;
+            public RECT rcMonitor, rcWork;
+            public uint dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MonitorInfoEx info);
+    }
+
+    /// <summary>One entry of <c>EnumDisplayMonitors</c>, reduced to what input mapping needs.</summary>
+    internal readonly record struct Monitor(
+        string Device, bool Primary, int Left, int Top, int Width, int Height);
+
+    /// <summary>The monitor input should land on: the one named <paramref name="device"/>, else
+    /// the primary, else null. Device names compare case-insensitively, as Windows treats them.
+    /// <b>Position in the list never matters</b> -- that was the bug (issue #138). Internal and
+    /// pure so the choice can be tested without a multi-monitor machine.</summary>
+    internal static Monitor? Pick(IReadOnlyList<Monitor> monitors, string? device)
+    {
+        if (device is not null)
+            foreach (var m in monitors)
+                if (string.Equals(m.Device, device, StringComparison.OrdinalIgnoreCase))
+                    return m;
+        foreach (var m in monitors)
+            if (m.Primary) return m;
+        return null;
     }
 
     // ------------------------------------------------------------------ P/Invoke

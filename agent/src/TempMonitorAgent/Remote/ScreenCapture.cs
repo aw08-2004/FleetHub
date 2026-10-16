@@ -22,6 +22,12 @@ public interface IScreenCapture : IDisposable
     /// false is overwhelmingly "the screen has not changed", and the screen we most need to
     /// capture (the logon screen) never changes on its own.</summary>
     bool HasFrame { get; }
+    /// <summary>GDI device name (<c>\\.\DISPLAY2</c>) of the monitor this capture is actually
+    /// showing, or null for "the primary". <b>Input is mapped onto this monitor and no other</b>
+    /// (issue #138): the viewer's clicks are fractions of the picture, so the only rectangle
+    /// they can be applied to is the one the picture came from -- not whichever monitor some
+    /// other enumeration happens to list at the same index.</summary>
+    string? OutputDevice => null;
     /// <summary>Capture the next frame. Returns false on a timeout with no screen change
     /// (nothing new to send) so the caller can hold the previous frame.</summary>
     bool TryCapture(int timeoutMs);
@@ -64,6 +70,10 @@ public sealed class DxgiScreenCapture : IScreenCapture
     /// Distinct from <see cref="HasFrame"/>: a duplication of a perfectly static desktop is
     /// working and will simply time out until something moves.</summary>
     public bool IsDuplicating => _duplication is not null;
+
+    /// <summary>Set when the duplication is built, from the output it was built on -- the
+    /// fallback included, which is the case an index lookup elsewhere would get wrong.</summary>
+    public string? OutputDevice { get; private set; }
 
     public DxgiScreenCapture(int monitorIndex) => _monitorIndex = monitorIndex;
 
@@ -124,7 +134,17 @@ public sealed class DxgiScreenCapture : IScreenCapture
         try
         {
             using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
-            if (factory.EnumAdapters1(0, out var adapter).Failure || adapter is null)
+            // Pick the requested monitor, falling back to the first if it's gone. The index is
+            // into DxgiOutputs' list, the same list the viewer's dropdown was sized from.
+            var outputs = DxgiOutputs.List(factory);
+            if (outputs.Count == 0) return false;
+            var pick = _monitorIndex >= 0 && _monitorIndex < outputs.Count
+                ? outputs[_monitorIndex] : outputs[0];
+
+            // The device must live on the adapter that owns the output: DuplicateOutput refuses
+            // a device from any other one, which is why a second GPU's monitors used to be
+            // offered and then silently replaced by output 0.
+            if (factory.EnumAdapters1(pick.Adapter, out var adapter).Failure || adapter is null)
                 return false;
 
             using (adapter)
@@ -136,11 +156,13 @@ public sealed class DxgiScreenCapture : IScreenCapture
                 if (hr.Failure || _device is null)
                     return false;
 
-                // Pick the requested monitor, falling back to the primary if it's gone.
-                IDXGIOutput? output = null;
-                if (adapter.EnumOutputs((uint)_monitorIndex, out output).Failure || output is null)
-                    adapter.EnumOutputs(0, out output);
-                if (output is null) return false;
+                // Gone between the listing and now (unplugged, desktop switch): drop the device
+                // so the retry next tick does not leak it.
+                if (adapter.EnumOutputs(pick.Output, out var output).Failure || output is null)
+                {
+                    Teardown();
+                    return false;
+                }
 
                 using (output)
                 using (var output1 = output.QueryInterface<IDXGIOutput1>())
@@ -148,6 +170,7 @@ public sealed class DxgiScreenCapture : IScreenCapture
                     _duplication = output1.DuplicateOutput(_device);
                 }
             }
+            OutputDevice = pick.DeviceName;
             return _duplication is not null;
         }
         catch
@@ -188,6 +211,62 @@ public sealed class DxgiScreenCapture : IScreenCapture
     }
 
     public void Dispose() => Teardown();
+}
+
+/// <summary>
+/// The one numbering of monitors the remote view uses (issue #138). The viewer's monitor index,
+/// the count its dropdown offers and the screen the capture opens all come from this list, and
+/// the capture hands input the chosen entry's <see cref="Entry.DeviceName"/> rather than the
+/// index -- so nothing downstream has to re-enumerate and hope for the same order.
+///
+/// That hope is the bug this exists to close. Input used to resolve the index through
+/// <c>EnumDisplayMonitors</c> and the dropdown through <c>EnumDisplayDevices</c>, while the
+/// picture came from DXGI. Nothing makes those three orders agree, and on a 2 - 1 - 3 desk they
+/// did not: the operator watched one screen and clicked on its neighbour, from a phone and a
+/// desktop browser alike.
+///
+/// Order is adapter by adapter, outputs in DXGI order within each, desktop-attached outputs only.
+/// On a single-GPU machine that is exactly the old <c>EnumOutputs(index)</c> numbering, so a
+/// monitor choice an operator already made still means the same screen.
+///
+/// Session-scoped like every display API (see <see cref="DisplayProbe"/>): call it on a thread
+/// attached to the input desktop.
+/// </summary>
+internal static class DxgiOutputs
+{
+    internal readonly record struct Entry(uint Adapter, uint Output, string DeviceName);
+
+    /// <summary>Every capturable output, or an empty list when DXGI is unavailable.</summary>
+    internal static List<Entry> List()
+    {
+        try
+        {
+            using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
+            return List(factory);
+        }
+        catch { return new List<Entry>(); }
+    }
+
+    internal static List<Entry> List(IDXGIFactory1 factory)
+    {
+        var entries = new List<Entry>();
+        for (uint a = 0; factory.EnumAdapters1(a, out var adapter).Success && adapter is not null; a++)
+        {
+            using (adapter)
+            {
+                for (uint o = 0; adapter.EnumOutputs(o, out var output).Success && output is not null; o++)
+                {
+                    using (output)
+                    {
+                        var desc = output.Description;
+                        if (desc.AttachedToDesktop)
+                            entries.Add(new Entry(a, o, desc.DeviceName));
+                    }
+                }
+            }
+        }
+        return entries;
+    }
 }
 
 /// <summary>

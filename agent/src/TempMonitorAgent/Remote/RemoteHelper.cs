@@ -562,16 +562,19 @@ public static class RemoteHelper
         InputDesktopWatcher desktops, CancellationToken ct)
     {
         using var binder = new ThreadDesktopBinder("input", m => Log.Information("{Msg}", m));
-        var input = new InputInjector(settings.Current.Monitor);
+        var input = new InputInjector();
 
         while (!ct.IsCancellationRequested)
         {
             // Re-resolve geometry after a desktop switch: EnumDisplayMonitors reports the
             // CALLING thread's desktop, and the lock screen can be a different resolution.
+            // A new capture geometry retargets by the screen the capture actually opened, not
+            // by g.Monitor -- that is only what the viewer asked for (issue #138).
             bool switched = binder.SyncTo(desktops);
-            bool moved = geometry.TryTake(out var g);
-            if (switched || moved)
-                input.RefreshGeometry(moved ? g.Monitor : null);
+            if (geometry.TryTake(out var g))
+                input.Target(g.OutputDevice);
+            else if (switched)
+                input.RefreshGeometry();
 
             if (!queue.TryTake(out var msg, 100)) continue;
             try
