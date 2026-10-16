@@ -1795,8 +1795,11 @@ the left edge of the picture (`remote-keyboard.js`); a tap focuses a hidden `<in
 what opens the phone's own keyboard, and the button can be **dragged anywhere** -- wherever it
 sits it covers some of the desktop -- with the spot remembered per browser. While the keyboard
 is open a strip adds what a phone keyboard lacks: Esc, Tab, Ctrl, Alt, Win, the arrows, Del.
-Ctrl/Alt/Win are **one-shot sticky** (tap Ctrl, then c), and are let go when the keyboard
-closes, so no modifier is ever left down on the PC. It shows on a coarse pointer or after the
+Ctrl/Alt/Win are **one-shot sticky** (tap Ctrl, then c). A tap only latches the key in the
+browser, and it reaches the PC wrapped around the next key. So a latch dropped unused (tapped
+off, or the keyboard closed) sends nothing, and no modifier can be left down on the PC. An
+earlier version pressed it on the PC at tap time, and a lone Win press-and-release opened the
+Start menu. It shows on a coarse pointer or after the
 first touch, never for a mouse, and View-only hides it. Sharing loads it too.
 **Hub only, no agent release:** typed text goes out as a character (`code: ''`, `key: 'ä'`),
 which InputInjector already injects with `KEYEVENTF_UNICODE` -- so @, € and umlauts arrive

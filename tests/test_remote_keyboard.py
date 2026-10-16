@@ -200,10 +200,13 @@ out.sinkCleared = sink.value === '';
 
 // Ctrl (sticky) then c: Ctrl down, KeyC down/up, Ctrl up -- Ctrl+C, not a Unicode 'c'.
 sent.length = 0;
+released.length = 0;
 tapStrip(mods.Control);
 out.ctrlPressed = mods.Control.attrs['aria-pressed'];
+out.latchSendsNothing = sent.length === 0;
 beforeinput('insertText', 'c');
 out.ctrlC = brief();
+out.ctrlUpViaRelease = released.map((m) => [m.code, m.down]);
 out.ctrlReleased = mods.Control.attrs['aria-pressed'];
 
 // Ctrl then '-': Ctrl+Minus (zoom out), by key position like a letter.
@@ -221,12 +224,17 @@ sent.length = 0;
 tapStrip(stripKey('Escape'));
 out.esc = brief();
 
-// Blur with Alt held: the Alt is let go, never left down on the PC.
+// Win latched and then let go unused -- tapped twice, or the keyboard closed: nothing at all
+// reaches the PC. A lone Win down-up there opens the Start menu.
 sent.length = 0;
-tapStrip(mods.Alt);
+tapStrip(mods.Meta);
+tapStrip(mods.Meta);
+out.winToggled = brief();
+tapStrip(mods.Meta);
 pe('pointerdown', 20, 400); pe('pointerup', 20, 400);   // second tap closes the keyboard
 out.closed = document.activeElement === null && strip.hidden === true;
 out.blurRelease = brief();
+out.blurUnlatched = mods.Meta.attrs['aria-pressed'];
 
 // Drag: moves, does not toggle the keyboard, and is remembered.
 pe('pointerdown', 20, 400); pe('pointermove', 200, 400); pe('pointerup', 200, 400);
@@ -234,15 +242,16 @@ out.dragNoFocus = document.activeElement === null;
 out.saved = store.kbd ? JSON.parse(store.kbd) : null;
 out.dragLeft = button.style.left;
 
-// View-only ticked with Ctrl held: the box is checked BEFORE setEnabled(false) runs, so
-// send is already silenced -- the key-up must still reach the PC through release.
+// View-only ticked with Ctrl latched: the box is checked BEFORE setEnabled(false) runs.
+// Nothing was ever pressed on the PC, so nothing can be stranded there.
 pe('pointerdown', 200, 400); pe('pointerup', 200, 400);
 tapStrip(mods.Control);
-released.length = 0;
+sent.length = 0;
 viewOnly = true;
 kb.setEnabled(false);
 out.viewOnlyHidden = button.hidden === true;
-out.viewOnlyRelease = released.map((m) => [m.code, m.down]);
+out.viewOnlySent = sent.length;
+out.viewOnlyUnlatched = mods.Control.attrs['aria-pressed'];
 
 console.log(JSON.stringify(out));
 """
@@ -281,6 +290,9 @@ def test_behaviour():
           == [["", "x", True], ["", "x", False]])
     check("the hidden box is emptied after every event", r["sinkCleared"])
     check("Ctrl on the strip latches", r["ctrlPressed"] == "true")
+    check("latching sends nothing to the PC until the next key", r["latchSendsNothing"])
+    check("the modifier's key-up goes through release, which View-only does not stop",
+          r["ctrlUpViaRelease"] == [["ControlLeft", False]])
     check("Ctrl then c is Ctrl+C by key position, and Ctrl is let go after",
           r["ctrlC"] == [["ControlLeft", "Control", True],
                          ["KeyC", "c", True], ["KeyC", "c", False],
@@ -295,15 +307,17 @@ def test_behaviour():
     check("Esc on the strip sends Escape",
           r["esc"] == [["Escape", "Escape", True], ["Escape", "Escape", False]])
     check("a second tap closes the keyboard and hides the strip", r["closed"])
-    check("closing the keyboard lets go of a held Alt",
-          r["blurRelease"] == [["AltLeft", "Alt", True], ["AltLeft", "Alt", False]])
+    check("Win tapped on and off again sends nothing (no Start menu)", r["winToggled"] == [])
+    check("closing the keyboard with Win latched sends nothing (no Start menu)",
+          r["blurRelease"] == [])
+    check("closing the keyboard clears the latch", r["blurUnlatched"] == "false")
     check("dragging the button does not toggle the keyboard", r["dragNoFocus"])
     check("the dragged position is remembered as fractions",
           r["saved"] is not None and 0 < r["saved"]["x"] <= 1)
     check("the button follows the drag", r["dragLeft"] == "180px")
     check("view-only hides the button", r["viewOnlyHidden"])
-    check("ticking View-only with Ctrl held still lets go of Ctrl on the PC",
-          r["viewOnlyRelease"] == [["ControlLeft", False]])
+    check("ticking View-only with Ctrl latched sends nothing and clears the latch",
+          r["viewOnlySent"] == 0 and r["viewOnlyUnlatched"] == "false")
 
 
 def main():

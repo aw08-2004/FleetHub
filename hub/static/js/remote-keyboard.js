@@ -173,15 +173,13 @@
         }
 
         // ---- modifiers ----
-        // A key-UP goes through `release`, not `send`: View-only is ticked BEFORE its change
-        // handler hides the keyboard, so by the time the blur lets go of a held Ctrl,
-        // sendInput already drops everything -- and the Ctrl stayed down on the PC, turning
-        // the operator's next click there into a Ctrl+click. Letting go of a key the viewer
-        // itself pressed is not input View-only exists to stop.
+        // A tap on Ctrl/Alt/Win only LATCHES it here; nothing reaches the PC until the next
+        // key, which goes out wrapped in the modifier's down and up. Pressing it on the PC at
+        // tap time was the first version, and a latch then let go unused -- tapped twice, or
+        // the keyboard closed -- sent a lone Win down-up, which opens the Start menu. It also
+        // left a window in which a modifier could be stranded down on the PC.
         function setHeld(name, on) {
             if (on === held.has(name)) return;
-            const m = MODIFIERS[name];
-            (on ? send : release)({ t: 'k', code: m.code, key: m.key, down: on });
             if (on) held.add(name); else held.delete(name);
             const el = strip.querySelector(`[data-kbd-mod="${name}"]`);
             if (el) el.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -191,10 +189,21 @@
             for (const name of Array.from(held)) setHeld(name, false);
         }
 
-        /** Send a run of key messages, then let go of any sticky modifier: one-shot. */
+        const modMessage = (name, down) => {
+            const m = MODIFIERS[name];
+            return { t: 'k', code: m.code, key: m.key, down };
+        };
+
+        /** Send a run of key messages inside any latched modifiers, then unlatch: one-shot.
+         *  The ups go through `release`, not `send`: should View-only be ticked in between,
+         *  sendInput drops everything, and a modifier pressed on the PC must still be let go
+         *  of -- releasing a key the viewer itself pressed is not input View-only stops. */
         function emit(messages) {
             if (!messages.length) return;
+            const mods = Array.from(held);
+            for (const name of mods) send(modMessage(name, true));
             for (const m of messages) send(m);
+            for (const name of mods.reverse()) release(modMessage(name, false));
             releaseAll();
         }
 
@@ -239,8 +248,8 @@
             button.setAttribute('aria-expanded', 'false');
             composing = false;
             sink.value = '';
-            // A Ctrl left down on the PC turns the operator's next click there into a
-            // Ctrl+click and their next keystroke into a shortcut.
+            // A latch outliving the keyboard would turn the operator's first keystroke next
+            // time into a shortcut they never saw being armed.
             releaseAll();
         }
 
