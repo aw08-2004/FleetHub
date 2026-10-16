@@ -206,6 +206,16 @@ beforeinput('insertText', 'c');
 out.ctrlC = brief();
 out.ctrlReleased = mods.Control.attrs['aria-pressed'];
 
+// Ctrl then '-': Ctrl+Minus (zoom out), by key position like a letter.
+sent.length = 0;
+tapStrip(mods.Control);
+beforeinput('insertText', '-');
+out.ctrlMinus = brief();
+// Without a modifier the same '-' is just a character.
+sent.length = 0;
+beforeinput('insertText', '-');
+out.plainMinus = brief();
+
 // A strip key.
 sent.length = 0;
 tapStrip(stripKey('Escape'));
@@ -276,6 +286,12 @@ def test_behaviour():
                          ["KeyC", "c", True], ["KeyC", "c", False],
                          ["ControlLeft", "Control", False]])
     check("the latch clears after one key", r["ctrlReleased"] == "false")
+    check("Ctrl then - is Ctrl+Minus by key position, not a Unicode '-'",
+          r["ctrlMinus"] == [["ControlLeft", "Control", True],
+                             ["Minus", "-", True], ["Minus", "-", False],
+                             ["ControlLeft", "Control", False]])
+    check("a plain - with no modifier still goes out as a character",
+          r["plainMinus"] == [["", "-", True], ["", "-", False]])
     check("Esc on the strip sends Escape",
           r["esc"] == [["Escape", "Escape", True], ["Escape", "Escape", False]])
     check("a second tap closes the keyboard and hides the strip", r["closed"])

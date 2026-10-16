@@ -58,6 +58,17 @@
 
     // ---- Translation (pure) ----------------------------------------------------------------
 
+    // The unshifted punctuation keys, by the character a US layout prints on them, for a
+    // shortcut typed with a sticky modifier held: Ctrl+- zooms out, Ctrl+/ comments a line.
+    // Every code here is one MapCodeToVk in InputInjector.cs knows. A SHIFTED character
+    // (Ctrl++ is Ctrl+Shift+=) is not here: that needs a Shift the strip does not offer,
+    // and it still goes out as a plain character.
+    const PUNCT_CODES = {
+        '-': 'Minus', '=': 'Equal', '[': 'BracketLeft', ']': 'BracketRight',
+        '\\': 'Backslash', ';': 'Semicolon', "'": 'Quote', '`': 'Backquote',
+        ',': 'Comma', '.': 'Period', '/': 'Slash', ' ': 'Space',
+    };
+
     /** The key messages (down then up) for one typed character, or [] for one the agent
      *  cannot inject. `withModifier` asks for the key position instead of the character. */
     function charMessages(ch, withModifier) {
@@ -66,6 +77,7 @@
         if (withModifier) {
             if (/^[a-zA-Z]$/.test(ch)) return press({ code: 'Key' + ch.toUpperCase(), key: ch });
             if (/^\d$/.test(ch)) return press({ code: 'Digit' + ch, key: ch });
+            if (PUNCT_CODES[ch]) return press({ code: PUNCT_CODES[ch], key: ch });
         }
         // The agent injects key[0] only, so a character outside the BMP (an emoji) would
         // arrive as half a surrogate pair -- garbage. Dropped instead.
@@ -353,6 +365,6 @@
 
     window.RemoteKeyboard = {
         create,
-        keys: { charMessages, textMessages, inputTypeMessages },
+        keys: { charMessages, textMessages, inputTypeMessages, PUNCT_CODES },
     };
 })();

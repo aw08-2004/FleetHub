@@ -1801,7 +1801,10 @@ first touch, never for a mouse, and View-only hides it. Sharing loads it too.
 **Hub only, no agent release:** typed text goes out as a character (`code: ''`, `key: 'ä'`),
 which InputInjector already injects with `KEYEVENTF_UNICODE` -- so @, € and umlauts arrive
 whatever the PC's layout. A letter typed with a sticky modifier held goes out as `KeyC`
-instead, because a Unicode injection does not combine with Ctrl.
+instead, because a Unicode injection does not combine with Ctrl. The same goes for the unshifted
+punctuation keys (Ctrl+- zooms out, Ctrl+/ comments a line). **Not done:** a SHIFTED character
+with a modifier held -- Ctrl++ is really Ctrl+Shift+=, and the strip has no Shift -- still goes
+out as a plain character, not the shortcut.
 *Rejected:* a keyboard drawn in the page (a worse copy of the phone's own, without dictation,
 IME or swipe typing); sending every letter by key position (`KeyZ` types whatever the PC's
 layout has there, so a German phone's z arrives as y on a US PC); reading keydown alone (Android
