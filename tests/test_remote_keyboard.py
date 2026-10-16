@@ -224,6 +224,12 @@ sent.length = 0;
 tapStrip(stripKey('Escape'));
 out.esc = brief();
 
+// A swipe along the strip must not reach the stage, whose touchmove refuser would stop it
+// scrolling on a narrow phone.
+let stopped = false;
+strip.fire('touchmove', { stopPropagation() { stopped = true; }, preventDefault() {} });
+out.stripSwipeKept = stopped;
+
 // Win latched and then let go unused -- tapped twice, or the keyboard closed: nothing at all
 // reaches the PC. A lone Win down-up there opens the Start menu.
 sent.length = 0;
@@ -304,6 +310,8 @@ def test_behaviour():
                              ["ControlLeft", "Control", False]])
     check("a plain - with no modifier still goes out as a character",
           r["plainMinus"] == [["", "-", True], ["", "-", False]])
+    check("a swipe on the strip is kept from the stage's touchmove refuser",
+          r["stripSwipeKept"])
     check("Esc on the strip sends Escape",
           r["esc"] == [["Escape", "Escape", True], ["Escape", "Escape", False]])
     check("a second tap closes the keyboard and hides the strip", r["closed"])

@@ -376,7 +376,7 @@ events under node, but no real touch has reached it. On an iPhone, in Safari, on
 - **Keyboard (hub 1.151.0, issue #138):** the keyboard button opens the iPhone's keyboard on
   the first tap; typing `@`, `ä` and Backspace reaches the PC; the key strip sits **above** the
   keyboard, not under it (the `visualViewport` lift -- emulation cannot open a real keyboard);
-  Ctrl then a selects all; autocorrect does not retype words; and the same on Android with GBoard
+  on a phone narrower than 375px the strip swipes sideways; Ctrl then a selects all; autocorrect does not retype words; and the same on Android with GBoard
   (the composition path).
 
 ---

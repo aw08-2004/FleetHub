@@ -342,6 +342,11 @@
         sink.addEventListener('focus', onFocus);
         sink.addEventListener('blur', onBlur);
         strip.addEventListener('pointerdown', onStripDown);
+        // remote-touch.js cancels every touchmove on the stage so a pinch cannot zoom the
+        // page -- and the strip sits on the stage, so on a phone narrower than its ten keys
+        // it could not be swiped sideways at all. Kept from bubbling that far, the strip's
+        // own touch-action: pan-x scrolls it.
+        strip.addEventListener('touchmove', (e) => e.stopPropagation(), { passive: true });
         if (vv) {
             vv.addEventListener('resize', liftStrip);
             vv.addEventListener('scroll', liftStrip);
