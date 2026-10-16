@@ -65,7 +65,7 @@
         if (ch === '\t') return press(NAMED.Tab);
         if (withModifier) {
             if (/^[a-zA-Z]$/.test(ch)) return press({ code: 'Key' + ch.toUpperCase(), key: ch });
-            if (/^[0-9]$/.test(ch)) return press({ code: 'Digit' + ch, key: ch });
+            if (/^\d$/.test(ch)) return press({ code: 'Digit' + ch, key: ch });
         }
         // The agent injects key[0] only, so a character outside the BMP (an emoji) would
         // arrive as half a surrogate pair -- garbage. Dropped instead.
@@ -116,11 +116,13 @@
      * opts: {
      *   stage, button, sink, strip   -- the elements (the partial's data-remote="kbd*")
      *   send(msg)                    -- remote.js's sendInput
+ *   release(msg)                 -- remote.js's sendControl, which View-only does not stop
      *   storageKey                   -- where the button's position is remembered
      * }
      */
     function create(opts) {
         const { stage, button, sink, strip, send } = opts;
+        const release = opts.release || send;
         const held = new Set();          // 'Control' | 'Alt' | 'Meta'
         let pos = loadPos();
         let drag = null;
@@ -132,7 +134,7 @@
         function loadPos() {
             try {
                 const saved = JSON.parse(window.localStorage.getItem(opts.storageKey) || 'null');
-                if (saved && isFinite(saved.x) && isFinite(saved.y)) {
+                if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
                     return { x: clamp01(saved.x), y: clamp01(saved.y) };
                 }
             } catch (e) { /* private mode, blocked storage, junk -- the default will do */ }
@@ -159,10 +161,15 @@
         }
 
         // ---- modifiers ----
+        // A key-UP goes through `release`, not `send`: View-only is ticked BEFORE its change
+        // handler hides the keyboard, so by the time the blur lets go of a held Ctrl,
+        // sendInput already drops everything -- and the Ctrl stayed down on the PC, turning
+        // the operator's next click there into a Ctrl+click. Letting go of a key the viewer
+        // itself pressed is not input View-only exists to stop.
         function setHeld(name, on) {
             if (on === held.has(name)) return;
             const m = MODIFIERS[name];
-            send({ t: 'k', code: m.code, key: m.key, down: on });
+            (on ? send : release)({ t: 'k', code: m.code, key: m.key, down: on });
             if (on) held.add(name); else held.delete(name);
             const el = strip.querySelector(`[data-kbd-mod="${name}"]`);
             if (el) el.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -274,9 +281,9 @@
             if (!el) return;
             e.preventDefault();
             e.stopPropagation();
-            const mod = el.getAttribute('data-kbd-mod');
+            const mod = el.dataset.kbdMod;
             if (mod) { setHeld(mod, !held.has(mod)); return; }
-            const named = NAMED[el.getAttribute('data-kbd-key')];
+            const named = NAMED[el.dataset.kbdKey];
             if (named) emit(press(named));
         }
 

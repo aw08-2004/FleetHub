@@ -798,6 +798,7 @@
                     sink: els.kbdSink,
                     strip: els.kbdStrip,
                     send: sendInput,
+                    release: sendControl,
                     storageKey: 'fleethub.remote.kbdPos',
                 });
                 // A phone or tablet gets it up front; anything else after its first touch.

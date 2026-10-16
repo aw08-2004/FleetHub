@@ -19,17 +19,20 @@ Two halves, as in test_remote_touch.py:
     keyboard is still owed (ROADMAP.MD, Owed locally).
 """
 import json
-import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
+
+HUB = Path(__file__).resolve().parent.parent / "hub"
+KBD_JS = HUB / "static" / "js" / "remote-keyboard.js"
 
 PASS = 0
 FAIL = 0
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HUB = os.path.join(ROOT, "hub")
-STATIC = os.path.join(HUB, "static")
+
+def read(*parts):
+    return HUB.joinpath(*parts).read_text(encoding="utf-8")
 
 
 def check(name, cond):
@@ -40,11 +43,6 @@ def check(name, cond):
     else:
         FAIL += 1
         print(f"  [XX] {name}")
-
-
-def read(*parts):
-    with open(os.path.join(HUB, *parts), encoding="utf-8") as fh:
-        return fh.read()
 
 
 def test_joins():
@@ -104,7 +102,7 @@ function target(extra) {
     const handlers = {};
     const attrs = {};
     return Object.assign({
-        handlers, attrs, style: {}, hidden: false,
+        handlers, attrs, dataset: {}, style: {}, hidden: false,
         addEventListener(type, fn) { (handlers[type] = handlers[type] || []).push(fn); },
         removeEventListener() {},
         fire(type, e) { (handlers[type] || []).forEach((fn) => fn(e)); },
@@ -136,7 +134,7 @@ sink.blur = () => { document.activeElement = null; sink.fire('blur', {}); };
 const mods = {};
 for (const m of ['Control', 'Alt', 'Meta']) {
     mods[m] = target({ closest: null });
-    mods[m].attrs['data-kbd-mod'] = m;
+    mods[m].dataset.kbdMod = m;
 }
 const strip = target({
     querySelector: (sel) => {
@@ -144,17 +142,21 @@ const strip = target({
         return m ? mods[m[1]] : null;
     },
 });
-const stripKey = (attr, value) => {
+const stripKey = (value) => {
     const el = target();
-    el.attrs[attr] = value;
+    el.dataset.kbdKey = value;
     el.closest = () => el;
     return el;
 };
 for (const m of Object.values(mods)) m.closest = () => m;
 
+// send is remote.js's sendInput, which View-only silences; release is its sendControl.
+let viewOnly = false;
 const sent = [];
-const kb = RK.create({ stage, button, sink, strip, send: (m) => sent.push(m),
-    storageKey: 'kbd' });
+const released = [];
+const kb = RK.create({ stage, button, sink, strip, storageKey: 'kbd',
+    send: (m) => { if (!viewOnly) sent.push(m); },
+    release: (m) => { released.push(m); sent.push(m); } });
 const pe = (type, x, y) => button.fire(type, { type, pointerId: 1, clientX: x, clientY: y,
     preventDefault() {}, stopPropagation() {} });
 const beforeinput = (inputType, data) => {
@@ -206,7 +208,7 @@ out.ctrlReleased = mods.Control.attrs['aria-pressed'];
 
 // A strip key.
 sent.length = 0;
-tapStrip(stripKey('data-kbd-key', 'Escape'));
+tapStrip(stripKey('Escape'));
 out.esc = brief();
 
 // Blur with Alt held: the Alt is let go, never left down on the PC.
@@ -222,9 +224,15 @@ out.dragNoFocus = document.activeElement === null;
 out.saved = store.kbd ? JSON.parse(store.kbd) : null;
 out.dragLeft = button.style.left;
 
-// View-only hides it.
+// View-only ticked with Ctrl held: the box is checked BEFORE setEnabled(false) runs, so
+// send is already silenced -- the key-up must still reach the PC through release.
+pe('pointerdown', 200, 400); pe('pointerup', 200, 400);
+tapStrip(mods.Control);
+released.length = 0;
+viewOnly = true;
 kb.setEnabled(false);
 out.viewOnlyHidden = button.hidden === true;
+out.viewOnlyRelease = released.map((m) => [m.code, m.down]);
 
 console.log(JSON.stringify(out));
 """
@@ -236,7 +244,7 @@ def test_behaviour():
         print("  [--] node not on PATH: behaviour half SKIPPED, joins only")
         return
     proc = subprocess.run(
-        [node, "-e", NODE_DRIVER, "--", os.path.join(STATIC, "js", "remote-keyboard.js")],
+        [node, "-e", NODE_DRIVER, "--", str(KBD_JS)],
         capture_output=True, text=True, encoding="utf-8", timeout=30,
     )
     if proc.returncode != 0:
@@ -278,6 +286,8 @@ def test_behaviour():
           r["saved"] is not None and 0 < r["saved"]["x"] <= 1)
     check("the button follows the drag", r["dragLeft"] == "180px")
     check("view-only hides the button", r["viewOnlyHidden"])
+    check("ticking View-only with Ctrl held still lets go of Ctrl on the PC",
+          r["viewOnlyRelease"] == [["ControlLeft", False]])
 
 
 def main():

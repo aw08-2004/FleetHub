@@ -977,8 +977,10 @@
     padding: 0 4px;
     color: #fff;
     font-size: var(--text-sm);
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    /* Opaque, not a translucent white: over a bright remote desktop a see-through key had
+       no contrast for its label at all. */
+    background: #3f3f46;
+    border: 1px solid #52525b;
     border-radius: var(--radius-sm);
 }
 
