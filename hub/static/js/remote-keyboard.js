@@ -203,7 +203,9 @@
             const mods = Array.from(held);
             for (const name of mods) send(modMessage(name, true));
             for (const m of messages) send(m);
-            for (const name of mods.reverse()) release(modMessage(name, false));
+            // Let go innermost first, as fingers would. An index loop, not toReversed(): that
+            // is Safari 16+, and an older iPhone is exactly who this module is for.
+            for (let i = mods.length - 1; i >= 0; i--) release(modMessage(mods[i], false));
             releaseAll();
         }
 
