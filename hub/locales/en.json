@@ -5025,6 +5025,8 @@
     "internal_badge": "internal",
     "reply_send": "Send",
     "reply_help": "Replies reach the person's tray once their PC runs an agent with the ticket tray.",
-    "label_short_ai": "AI"
+    "label_short_ai": "AI",
+    "fact_name": "Fact",
+    "fact_value": "As recorded"
   }
 }

@@ -6,7 +6,7 @@
 </p>
 
 <div id="ticket-root" data-ticket-id="{{ ticket_id }}">
-    <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-3);" id="ticket-subject"></h1>
+    <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-3);" id="ticket-subject">{{ t('tickets.ticket_title', id=ticket_id) }}</h1>
     <div class="toolbar" style="margin-bottom: var(--space-5);" id="ticket-meta"></div>
     <p class="banner banner--warn" id="ticket-error" hidden></p>
 
@@ -34,7 +34,8 @@
         <div id="ticket-labels" style="display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0;"></div>
         <form class="toolbar" id="ticket-label-form" hidden>
             <input class="input" id="ticket-label-input" type="text" maxlength="64"
-                   placeholder="{{ t('tickets.label_placeholder') }}">
+                   placeholder="{{ t('tickets.label_placeholder') }}"
+                   aria-label="{{ t('tickets.label_placeholder') }}">
             <button type="submit" class="btn btn--ghost">{{ t('tickets.label_add') }}</button>
         </form>
     </div>
@@ -43,7 +44,12 @@
         <h2 class="section-title">{{ t('tickets.facts') }}</h2>
         <p class="stat-card__meta">{{ t('tickets.facts_help') }}</p>
         <div class="table-scroll">
-            <table class="data-table"><tbody id="ticket-facts"></tbody></table>
+            <table class="data-table">
+                <thead>
+                    <tr><th scope="col">{{ t('tickets.fact_name') }}</th><th scope="col">{{ t('tickets.fact_value') }}</th></tr>
+                </thead>
+                <tbody id="ticket-facts"></tbody>
+            </table>
         </div>
     </div>
 
@@ -72,7 +78,8 @@
         <p class="stat-card__meta" id="ticket-messages-empty" hidden>{{ t('tickets.thread_empty') }}</p>
         <form id="ticket-reply-form" hidden style="margin-top: var(--space-4);">
             <textarea class="input" id="ticket-reply" rows="4" style="width: 100%;"
-                      placeholder="{{ t('tickets.reply_placeholder') }}"></textarea>
+                      placeholder="{{ t('tickets.reply_placeholder') }}"
+                      aria-label="{{ t('tickets.reply_placeholder') }}"></textarea>
             <div class="toolbar" style="margin-top: var(--space-2);">
                 <label class="stat-card__meta">
                     <input type="checkbox" id="ticket-internal"> {{ t('tickets.internal') }}

@@ -4907,6 +4907,8 @@
     "internal_badge": "intern",
     "reply_send": "Senden",
     "reply_help": "Antworten erreichen das Tray der Person, sobald auf ihrem PC ein Agent mit Ticket-Tray läuft.",
-    "label_short_ai": "KI"
+    "label_short_ai": "KI",
+    "fact_name": "Angabe",
+    "fact_value": "Erfasster Wert"
   }
 }

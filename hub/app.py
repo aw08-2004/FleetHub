@@ -5990,33 +5990,8 @@ def ticket_facts(machine):
     now = int(time.time())
     since = now - TICKET_FACTS_LOOKBACK_SECONDS
     detail = machine_detail(machine) or {}
+    disks = _ticket_disks(detail)
     low_disk_pct = settings.get_int(DB_PATH, "hub.low_disk_free_pct")
-    disks, low_disk = [], False
-    for volume in (detail.get("diagnostics") or {}).get("disks") or []:
-        total, used = volume.get("total_gb"), volume.get("used_gb")
-        if not isinstance(total, (int, float)) or not total or not isinstance(used, (int, float)):
-            continue
-        free_pct = round(100.0 * (total - used) / total, 1)
-        disks.append({"name": volume.get("name"), "total_gb": round(total, 1),
-                      "free_gb": round(total - used, 1), "free_pct": free_pct})
-        low_disk = low_disk or free_pct < low_disk_pct
-    open_alerts = []
-    for row in alerts.list_open(DB_PATH):
-        if row.get("machine") != machine and machine not in (row.get("machines") or []):
-            continue
-        if row.get("kind") in (alerts.KIND_TICKET_NEW, alerts.KIND_TICKET_OVERDUE):
-            continue  # a ticket's own alert is not a fact about the machine
-        info = row.get("detail") or {}
-        open_alerts.append({"kind": row.get("kind"),
-                            "text": str(info.get("text") or info.get("rule_name")
-                                        or info.get("watchdog_name") or "")[:200],
-                            "since": row.get("created_at")})
-    installed = []
-    for program in software.list_software(DB_PATH, machine):
-        stamp = tickets.parse_install_date(program.get("install_date"))
-        if stamp is not None and stamp + 86400 >= since:
-            installed.append({"name": program["name"], "version": program["version"],
-                              "install_date": program["install_date"]})
     os_info = detail.get("os") or {}
     return {
         "machine": machine,
@@ -6030,11 +6005,52 @@ def ticket_facts(machine):
         "agent_version": detail.get("companion_version"),
         "uptime_seconds": detail.get("uptime_seconds"),
         "disks": disks,
-        "low_disk": low_disk,
-        "open_alerts": open_alerts[:20],
+        "low_disk": any(d["free_pct"] < low_disk_pct for d in disks),
+        "open_alerts": _ticket_open_alerts(machine)[:20],
         "patches": patches.items_since(DB_PATH, machine, since),
-        "installed": sorted(installed, key=lambda p: p["install_date"], reverse=True)[:20],
+        "installed": _ticket_installs(machine, since)[:20],
     }
+
+
+def _ticket_disks(detail):
+    """Each volume with a usable size, as free space -- what a person short of disk sees."""
+    disks = []
+    for volume in (detail.get("diagnostics") or {}).get("disks") or []:
+        total, used = volume.get("total_gb"), volume.get("used_gb")
+        if not isinstance(total, (int, float)) or not total or not isinstance(used, (int, float)):
+            continue
+        disks.append({"name": volume.get("name"), "total_gb": round(total, 1),
+                      "free_gb": round(total - used, 1),
+                      "free_pct": round(100.0 * (total - used) / total, 1)})
+    return disks
+
+
+def _ticket_open_alerts(machine):
+    """The machine's open alerts, minus the tickets' own -- a ticket's alert is not a fact
+    about the machine it was opened from."""
+    out = []
+    for row in alerts.list_open(DB_PATH):
+        if row.get("machine") != machine and machine not in (row.get("machines") or []):
+            continue
+        if row.get("kind") in (alerts.KIND_TICKET_NEW, alerts.KIND_TICKET_OVERDUE):
+            continue
+        info = row.get("detail") or {}
+        out.append({"kind": row.get("kind"),
+                    "text": str(info.get("text") or info.get("rule_name")
+                                or info.get("watchdog_name") or "")[:200],
+                    "since": row.get("created_at")})
+    return out
+
+
+def _ticket_installs(machine, since):
+    """Programs installed on a day overlapping the window, newest first."""
+    installed = []
+    for program in software.list_software(DB_PATH, machine):
+        stamp = tickets.parse_install_date(program.get("install_date"))
+        if stamp is not None and stamp + 86400 >= since:
+            installed.append({"name": program["name"], "version": program["version"],
+                              "install_date": program["install_date"]})
+    return sorted(installed, key=lambda p: p["install_date"], reverse=True)
 
 
 def _recent_sensors_for(machine_name):

@@ -19,12 +19,14 @@ The silent failures this file exists to catch:
   * **The AI reaching further than a suggestion**: a drafted script must land disabled, and the
     screenshot and the reporter's identity must never be in the prompt.
 """
+import contextlib
 import io
 import json
 import os
 import sys
 import tempfile
 import time
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 
@@ -329,36 +331,37 @@ def test_triage():
                          "steps": ["Check the OST size"],
                          "script": {"label": "Check OST", "shell": "powershell",
                                     "body": "Get-ChildItem $env:LOCALAPPDATA"}})
-    real_enabled, real_complete = ai.is_enabled, ai.complete
-    ai.is_enabled = lambda config: True
-    ai.complete = lambda config, messages, api_key="": (None, "```json\n" + answer + "\n```")
-    try:
+    def provider(reply):
+        """ai switched on, answering `reply`; undone when the block ends."""
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(ai, "is_enabled", return_value=True))
+        stack.enter_context(mock.patch.object(ai, "complete", return_value=(None, reply)))
+        return stack
+
+    with provider("```json\n" + answer + "\n```"):
         error, saved = tickets.triage(db, {"provider": "test", "model": "m"}, ticket, actor="op")
-        check("a fenced answer is read", error is None and saved["summary"].startswith("Outlook"))
-        labels = {l["label"]: l["source"] for l in tickets.get_ticket(db, ticket_id)["labels"]}
-        check("AI labels are lower-cased, de-duplicated and marked ai",
-              labels.get("outlook") == "ai" and labels.get("mail") == "ai")
-        check("operator labels survive a triage", labels.get("kept-by-operator") == "operator")
-        ai.complete = lambda config, messages, api_key="": (None, "not json")
+    check("a fenced answer is read", error is None and saved["summary"].startswith("Outlook"))
+    labels = {l["label"]: l["source"] for l in tickets.get_ticket(db, ticket_id)["labels"]}
+    check("AI labels are lower-cased, de-duplicated and marked ai",
+          labels.get("outlook") == "ai" and labels.get("mail") == "ai")
+    check("operator labels survive a triage", labels.get("kept-by-operator") == "operator")
+    with provider("```json\n" + answer):
         error, _ = tickets.triage(db, {"provider": "test"}, ticket, actor="op")
-        check("an unreadable answer is refused, not stored", error == tickets.UNREADABLE)
-        check("...and the earlier triage is kept",
-              tickets.get_ticket(db, ticket_id)["triage"]["summary"].startswith("Outlook"))
-        ai.complete = lambda config, messages, api_key="": (None, json.dumps(
-            {"summary": "x", "script": {"shell": "powershell", "body": "Write {{secret}}"}}))
+    check("a fence that never closes is still read", error is None)
+    with provider("not json"):
+        error, _ = tickets.triage(db, {"provider": "test"}, ticket, actor="op")
+    check("an unreadable answer is refused, not stored", error == tickets.UNREADABLE)
+    check("...and the earlier triage is kept",
+          tickets.get_ticket(db, ticket_id)["triage"]["summary"].startswith("Outlook"))
+    with provider(json.dumps({"summary": "x",
+                              "script": {"shell": "powershell", "body": "Write {{secret}}"}})):
         _, saved = tickets.triage(db, {"provider": "test"}, ticket, actor="op")
-        check("a templated script body is dropped", saved["script"] is None)
-    finally:
-        ai.is_enabled, ai.complete = real_enabled, real_complete
+    check("a templated script body is dropped", saved["script"] is None)
 
     error, _ = tickets.draft_script(db, ticket_id, actor="op")
     check("no script, no draft", error is not None)
-    ai.is_enabled = lambda config: True
-    ai.complete = lambda config, messages, api_key="": (None, answer)
-    try:
+    with provider(answer):
         tickets.triage(db, {"provider": "test"}, ticket, actor="op")
-    finally:
-        ai.is_enabled, ai.complete = real_enabled, real_complete
     error, script = tickets.draft_script(db, ticket_id, actor="op")
     check("a drafted script lands in the library", error is None
           and script["name"] == tickets.suggested_script_name(ticket_id))

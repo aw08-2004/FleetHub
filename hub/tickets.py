@@ -116,6 +116,13 @@ RECENT_CHANGE_SECONDS = 48 * 3600
 
 KIND_TICKET_TRIAGE = "ticket_triage"
 
+NO_SUCH_TICKET = "no such ticket"
+# Statements used from more than one function, named once so a column rename is one edit.
+_SQL_TICKET_MACHINE = "SELECT machine FROM tickets WHERE id = ?"
+_SQL_INSERT_LABEL = ("INSERT OR IGNORE INTO ticket_labels (ticket_id, label, source, created_at) "
+                     "VALUES (?,?,?,?)")
+_SQL_TRIAGE = "SELECT * FROM ticket_triage WHERE ticket_id = ?"
+
 #: Upper bounds on what a model answer may put into a stored triage.
 MAX_SUMMARY_CHARS = 1200
 MAX_CAUSE_CHARS = 600
@@ -232,7 +239,7 @@ def clean_label(value):
     return text or None
 
 
-def parse_due(value, now=None):
+def parse_due(value):
     """A `due_at` from the tray -- epoch seconds -- or None. A time in the past is kept: the
     person said "by 9" at 9:05, and the ticket is overdue rather than undated."""
     if value in (None, ""):
@@ -321,40 +328,56 @@ def auto_labels(facts, now=None):
     since = now - RECENT_CHANGE_SECONDS
     facts = facts or {}
     labels = []
-
-    os_info = facts.get("os") or {}
-    bucket = os_info.get("bucket")
+    bucket = (facts.get("os") or {}).get("bucket")
     if bucket in _OS_LABELS:
         labels.append(_OS_LABELS[bucket])
-
-    for item in facts.get("patches") or []:
-        resolved = item.get("resolved_at") or item.get("attempted_at") or 0
-        kb = str(item.get("kb") or "").strip()
-        if kb and item.get("status") == "applied" and int(resolved) >= since:
-            labels.append(f"update:{kb if kb.upper().startswith('KB') else 'KB' + kb}")
-
-    for program in facts.get("installed") or []:
-        installed_at = parse_install_date(program.get("install_date"))
-        # A day, not an instant: yyyymmdd says "some time on the 14th", so the 14th counts
-        # for the whole 48 hours from its midnight -- erring towards labelling, which an
-        # operator can remove, over missing the install that broke it.
-        if installed_at is not None and installed_at + 86400 >= since and program.get("name"):
-            labels.append(f"installed:{program['name']}")
-
+    labels += _update_labels(facts.get("patches"), since)
+    labels += _install_labels(facts.get("installed"), since)
     if facts.get("low_disk"):
         labels.append("low-disk")
     if facts.get("manufacturer"):
         labels.append(f"vendor:{facts['manufacturer']}")
     if facts.get("model"):
         labels.append(f"model:{facts['model']}")
+    return _dedupe_labels(labels)[:MAX_LABELS]
 
+
+def _update_labels(patches, since):
+    """`update:KB...` for each hub patch APPLIED since `since`. A failed one is not labelled:
+    "the update that broke it" is the one that went on."""
+    out = []
+    for item in patches or []:
+        resolved = item.get("resolved_at") or item.get("attempted_at") or 0
+        kb = str(item.get("kb") or "").strip()
+        if kb and item.get("status") == "applied" and int(resolved) >= since:
+            out.append(f"update:{kb if kb.upper().startswith('KB') else 'KB' + kb}")
+    return out
+
+
+def _install_labels(programs, since):
+    """`installed:<name>` for each program installed on a day overlapping the window.
+
+    A day, not an instant: yyyymmdd says "some time on the 14th", so the 14th counts for the
+    whole window from its midnight -- erring towards labelling, which an operator can remove,
+    over missing the install that broke it.
+    """
+    out = []
+    for program in programs or []:
+        installed_at = parse_install_date(program.get("install_date"))
+        if installed_at is not None and installed_at + 86400 >= since and program.get("name"):
+            out.append(f"installed:{program['name']}")
+    return out
+
+
+def _dedupe_labels(labels):
+    """Cleaned labels, first spelling wins, compared without case."""
     seen, out = set(), []
     for label in labels:
         cleaned = clean_label(label)
         if cleaned and cleaned.lower() not in seen:
             seen.add(cleaned.lower())
             out.append(cleaned)
-    return out[:MAX_LABELS]
+    return out
 
 
 # ================================
@@ -389,8 +412,7 @@ def create_ticket(db_path, machine, agent_id, cleaned, facts, now=None):
              json.dumps(facts or {}, sort_keys=True, default=str), now, now))
         ticket_id = cur.lastrowid
         for label in auto_labels(facts, now=now):
-            conn.execute("INSERT OR IGNORE INTO ticket_labels (ticket_id, label, source, "
-                         "created_at) VALUES (?,?,?,?)", (ticket_id, label, LABEL_AUTO, now))
+            conn.execute(_SQL_INSERT_LABEL, (ticket_id, label, LABEL_AUTO, now))
     if cleaned["urgency"] in ALERTING_URGENCIES:
         sync_alerts(db_path, machine, raise_new=True, now=now)
     return ticket_id
@@ -414,7 +436,7 @@ def get_ticket(db_path, ticket_id, *, include_internal=True):
         ticket["attachments"] = [dict(r) for r in conn.execute(
             "SELECT id, content_type, size, created_at FROM ticket_attachments "
             "WHERE ticket_id = ? ORDER BY id", (ticket["id"],))]
-        triage = conn.execute("SELECT * FROM ticket_triage WHERE ticket_id = ?",
+        triage = conn.execute(_SQL_TRIAGE,
                               (ticket["id"],)).fetchone()
     ticket["triage"] = _decode_triage(triage) if triage else None
     return ticket
@@ -498,7 +520,7 @@ def machine_of(db_path, ticket_id):
     """The machine a ticket belongs to, or None -- what the console's scope check needs
     before it may read anything else about the ticket."""
     with get_conn(db_path) as conn:
-        row = conn.execute("SELECT machine FROM tickets WHERE id = ?",
+        row = conn.execute(_SQL_TICKET_MACHINE,
                            (int(ticket_id),)).fetchone()
     return row["machine"] if row else None
 
@@ -520,10 +542,10 @@ def add_message(db_path, ticket_id, author, body, *, internal=False,
         return "a reply needs some text", None
     now = int(time.time() if now is None else now)
     with get_conn(db_path) as conn:
-        machine = conn.execute("SELECT machine FROM tickets WHERE id = ?",
+        machine = conn.execute(_SQL_TICKET_MACHINE,
                                (int(ticket_id),)).fetchone()
         if machine is None:
-            return "no such ticket", None
+            return NO_SUCH_TICKET, None
         cur = conn.execute(
             "INSERT INTO ticket_messages (ticket_id, author, author_kind, body, internal, "
             "created_at) VALUES (?,?,?,?,?,?)",
@@ -539,10 +561,10 @@ def set_status(db_path, ticket_id, status, now=None):
         return "status must be one of " + ", ".join(STATUSES), None
     now = int(time.time() if now is None else now)
     with get_conn(db_path) as conn:
-        row = conn.execute("SELECT machine FROM tickets WHERE id = ?",
+        row = conn.execute(_SQL_TICKET_MACHINE,
                            (int(ticket_id),)).fetchone()
         if row is None:
-            return "no such ticket", None
+            return NO_SUCH_TICKET, None
         conn.execute(
             "UPDATE tickets SET status = ?, updated_at = ?, "
             "closed_at = CASE WHEN ? IN (?, ?) THEN COALESCE(closed_at, ?) ELSE NULL END "
@@ -559,9 +581,9 @@ def assign(db_path, ticket_id, assignee, now=None):
         cur = conn.execute("UPDATE tickets SET assignee = ? WHERE id = ?",
                            (_clean(assignee, MAX_NAME_CHARS), int(ticket_id)))
         if cur.rowcount == 0:
-            return "no such ticket"
+            return NO_SUCH_TICKET
         _touch(conn, int(ticket_id), now)
-        machine = conn.execute("SELECT machine FROM tickets WHERE id = ?",
+        machine = conn.execute(_SQL_TICKET_MACHINE,
                                (int(ticket_id),)).fetchone()["machine"]
     sync_alerts(db_path, machine, now=now)
     return None
@@ -579,13 +601,12 @@ def add_label(db_path, ticket_id, label, source=LABEL_OPERATOR, now=None):
     with get_conn(db_path) as conn:
         if conn.execute("SELECT 1 FROM tickets WHERE id = ?", (int(ticket_id),)).fetchone() \
                 is None:
-            return "no such ticket"
+            return NO_SUCH_TICKET
         count = conn.execute("SELECT COUNT(*) AS c FROM ticket_labels WHERE ticket_id = ?",
                              (int(ticket_id),)).fetchone()["c"]
         if count >= MAX_LABELS:
             return "this ticket already has as many labels as it can hold"
-        conn.execute("INSERT OR IGNORE INTO ticket_labels (ticket_id, label, source, "
-                     "created_at) VALUES (?,?,?,?)", (int(ticket_id), cleaned, source, now))
+        conn.execute(_SQL_INSERT_LABEL, (int(ticket_id), cleaned, source, now))
     return None
 
 
@@ -623,41 +644,18 @@ def accept_attachment(db_path, root, ticket_id, agent_id, stream, length, now=No
     stops a sender that declared 1 KB and kept going.
     """
     now = int(time.time() if now is None else now)
-    with get_conn(db_path) as conn:
-        row = conn.execute("SELECT agent_id, created_at FROM tickets WHERE id = ?",
-                           (int(ticket_id),)).fetchone()
-        if row is None:
-            return "no_ticket", None
-        if row["agent_id"] != str(agent_id or ""):
-            return "not_yours", None
-        if now - int(row["created_at"]) > ATTACHMENT_WINDOW_SECONDS:
-            return "window_closed", None
-        count = conn.execute("SELECT COUNT(*) AS c FROM ticket_attachments "
-                             "WHERE ticket_id = ?", (int(ticket_id),)).fetchone()["c"]
-        if count >= MAX_ATTACHMENTS:
-            return "too_many", None
-    if length is None:
-        return "no_length", None
-    if int(length) > MAX_ATTACHMENT_BYTES or int(length) <= 0:
-        return "too_large", None
+    refusal = _attachment_refusal(db_path, ticket_id, agent_id, length, now)
+    if refusal:
+        return refusal, None
 
     folder = _ticket_dir(root, ticket_id)
     os.makedirs(folder, exist_ok=True)
     temp_path = os.path.join(folder, f".upload-{os.getpid()}-{time.monotonic_ns()}")
-    digest, size, head = hashlib.sha256(), 0, b""
     try:
-        with open(temp_path, "wb") as out:
-            while True:
-                chunk = stream.read(64 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > MAX_ATTACHMENT_BYTES:
-                    return "too_large", None
-                if len(head) < 16:
-                    head += chunk[:16 - len(head)]
-                digest.update(chunk)
-                out.write(chunk)
+        spooled = _spool(stream, temp_path)
+        if spooled is None:
+            return "too_large", None
+        size, digest, head = spooled
         content_type, ext = sniff_image(head)
         if content_type is None:
             return "not_image", None
@@ -665,7 +663,7 @@ def accept_attachment(db_path, root, ticket_id, agent_id, stream, length, now=No
             cur = conn.execute(
                 "INSERT INTO ticket_attachments (ticket_id, filename, content_type, size, "
                 "sha256, created_at) VALUES (?,?,?,?,?,?)",
-                (int(ticket_id), "", content_type, size, digest.hexdigest(), now))
+                (int(ticket_id), "", content_type, size, digest, now))
             attachment_id = cur.lastrowid
             filename = f"{attachment_id}.{ext}"
             conn.execute("UPDATE ticket_attachments SET filename = ? WHERE id = ?",
@@ -675,6 +673,43 @@ def accept_attachment(db_path, root, ticket_id, agent_id, stream, length, now=No
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+def _attachment_refusal(db_path, ticket_id, agent_id, length, now):
+    """Why this upload may not be taken, before a byte of it is read -- or None."""
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT agent_id, created_at FROM tickets WHERE id = ?",
+                           (int(ticket_id),)).fetchone()
+        if row is None:
+            return "no_ticket"
+        if row["agent_id"] != str(agent_id or ""):
+            return "not_yours"
+        if now - int(row["created_at"]) > ATTACHMENT_WINDOW_SECONDS:
+            return "window_closed"
+        count = conn.execute("SELECT COUNT(*) AS c FROM ticket_attachments "
+                             "WHERE ticket_id = ?", (int(ticket_id),)).fetchone()["c"]
+    if count >= MAX_ATTACHMENTS:
+        return "too_many"
+    if length is None:
+        return "no_length"
+    if int(length) > MAX_ATTACHMENT_BYTES or int(length) <= 0:
+        return "too_large"
+    return None
+
+
+def _spool(stream, path):
+    """Copy the upload to `path`. Returns (size, sha256 hex, first 16 bytes), or None the
+    moment it passes the cap -- the running count, for a sender whose Content-Length lied."""
+    digest, size, head = hashlib.sha256(), 0, b""
+    with open(path, "wb") as out:
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            size += len(chunk)
+            if size > MAX_ATTACHMENT_BYTES:
+                return None
+            head = (head + chunk[:16])[:16]
+            digest.update(chunk)
+            out.write(chunk)
+    return size, digest.hexdigest(), head
 
 
 def attachment_path(db_path, root, ticket_id, attachment_id):
@@ -853,7 +888,6 @@ Answer with one JSON object and nothing else:
 
 `script` is optional -- use null when no script would help. Never include `{{` in the body."""
 
-_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
 UNREADABLE = "the AI provider did not answer with a triage this hub could read"
 
 
@@ -877,12 +911,8 @@ def triage_prompt(ticket):
 def parse_triage(text):
     """Model text -> (error, triage). Nothing here trusts the payload's shape -- the same
     discipline, and the same reasons, as correlate.parse_recommendation."""
-    body = str(text or "").strip()
-    fenced = _FENCE_RE.match(body)
-    if fenced:
-        body = fenced.group(1).strip()
     try:
-        payload = json.loads(body)
+        payload = json.loads(_strip_fence(text))
     except ValueError:
         return UNREADABLE, None
     if not isinstance(payload, dict):
@@ -891,25 +921,44 @@ def parse_triage(text):
     if not summary:
         return UNREADABLE, None
     steps = [s for s in (_clean(x, MAX_STEP_CHARS) for x in payload.get("steps") or []) if s]
-    labels = []
-    for raw in payload.get("labels") or []:
-        cleaned = clean_label(raw)
-        if cleaned and cleaned.lower() not in {l.lower() for l in labels}:
-            labels.append(cleaned.lower())
-    script = None
-    raw_script = payload.get("script")
-    if isinstance(raw_script, dict):
-        script_body = str(raw_script.get("body") or "").strip()
-        shell = str(raw_script.get("shell") or scripts.DEFAULT_SHELL).strip().lower()
-        # Refused outright rather than escaped -- see correlate.parse_recommendation: a
-        # template binds a value at run time that nobody reviewed at read time.
-        if script_body and "{{" not in script_body and shell in scripts.SHELLS:
-            script = {"label": _clean(raw_script.get("label"), scripts.MAX_LABEL_CHARS),
-                      "shell": shell, "body": script_body[:MAX_SCRIPT_CHARS]}
+    labels = [l.lower() for l in _dedupe_labels(payload.get("labels") or [])]
     return None, {"summary": summary,
                   "likely_cause": _clean(payload.get("likely_cause"), MAX_CAUSE_CHARS),
                   "steps": steps[:MAX_STEPS], "labels": labels[:MAX_AI_LABELS],
-                  "script": script}
+                  "script": _parse_script(payload.get("script"))}
+
+
+def _strip_fence(text):
+    """A model answer with any ```json ... ``` fence taken off.
+
+    String handling rather than correlate's regex: a lazy `(.*?)` between two `\\s*` runs
+    backtracks badly on a long answer that has no closing fence, and this input is whatever a
+    provider chose to send.
+    """
+    body = str(text or "").strip()
+    if not body.startswith("```"):
+        return body
+    first_newline = body.find("\n")
+    if first_newline == -1:
+        return body
+    inner = body[first_newline + 1:]
+    if inner.rstrip().endswith("```"):
+        inner = inner.rstrip()[:-3]
+    return inner.strip()
+
+
+def _parse_script(raw_script):
+    """The suggested script, or None when there is none or it is refused."""
+    if not isinstance(raw_script, dict):
+        return None
+    body = str(raw_script.get("body") or "").strip()
+    shell = str(raw_script.get("shell") or scripts.DEFAULT_SHELL).strip().lower()
+    # Refused outright rather than escaped -- see correlate.parse_recommendation: a template
+    # binds a value at run time that nobody reviewed at read time.
+    if not body or "{{" in body or shell not in scripts.SHELLS:
+        return None
+    return {"label": _clean(raw_script.get("label"), scripts.MAX_LABEL_CHARS),
+            "shell": shell, "body": body[:MAX_SCRIPT_CHARS]}
 
 
 def _decode_triage(row):
@@ -975,9 +1024,8 @@ def triage(db_path, config, ticket, *, api_key="", actor="", now=None):
              json.dumps(result["script"]) if result["script"] else None,
              stamp["provider"], stamp["model"], str(actor or ""), now))
         for label in result["labels"]:
-            conn.execute("INSERT OR IGNORE INTO ticket_labels (ticket_id, label, source, "
-                         "created_at) VALUES (?,?,?,?)", (ticket_id, label, LABEL_AI, now))
-        row = conn.execute("SELECT * FROM ticket_triage WHERE ticket_id = ?",
+            conn.execute(_SQL_INSERT_LABEL, (ticket_id, label, LABEL_AI, now))
+        row = conn.execute(_SQL_TRIAGE,
                            (ticket_id,)).fetchone()
     return None, _decode_triage(row)
 
@@ -994,9 +1042,15 @@ def draft_script(db_path, ticket_id, *, known_variable=None, actor="", now=None)
     Drafted, never executed -- exactly correlate.draft_script: `enabled=False`, through the
     same `scripts.save_script` validation a hand-written script gets. Running it is an
     operator enabling it and running it on the Scripts path, behind that path's own gate.
+
+    **Drafting again overwrites the earlier draft, on purpose** -- including one an operator
+    has since edited or enabled, which goes back to disabled. The name is fixed per ticket
+    (suggested_script_name), as correlate's is per bundle, so the library holds one
+    suggestion per ticket rather than a pile of them; whoever presses Draft again is asking
+    for the new suggestion in place of the old.
     """
     with get_conn(db_path) as conn:
-        row = conn.execute("SELECT * FROM ticket_triage WHERE ticket_id = ?",
+        row = conn.execute(_SQL_TRIAGE,
                            (int(ticket_id),)).fetchone()
         subject = conn.execute("SELECT subject, machine FROM tickets WHERE id = ?",
                                (int(ticket_id),)).fetchone()

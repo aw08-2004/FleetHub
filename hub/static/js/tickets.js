@@ -88,7 +88,7 @@
         var hay = [row.subject, row.machine, row.reporter_name, row.assignee]
             .concat((row.labels || []).map(function (l) { return l.label; }))
             .join(' ').toLowerCase();
-        return hay.indexOf(needle) !== -1;
+        return hay.includes(needle);
     }
 
     function render() {
@@ -146,28 +146,35 @@
 
     async function load() {
         var status = statusSelect.value;
-        var query = status === 'open' ? '?open=1' : (status ? '?status=' + encodeURIComponent(status) : '');
-        if (!vocabularyLoaded) query = '?open=1';
-        try {
-            var resp = await fetch('/api/tickets' + query);
-            var data = await resp.json();
-            if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-            fillStatuses(data.statuses || []);
-            rows = data.tickets || [];
-            errorBox.hidden = true;
-            render();
-        } catch (e) {
-            errorBox.textContent = t('tickets.load_failed', { error: e.message });
-            errorBox.hidden = false;
+        // The first load has no select to read yet and asks for what it will show selected.
+        var query = '?open=1';
+        if (vocabularyLoaded && status !== 'open') {
+            query = status ? '?status=' + encodeURIComponent(status) : '';
         }
+        var resp = await fetch('/api/tickets' + query);
+        var data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+        fillStatuses(data.statuses || []);
+        rows = data.tickets || [];
+        errorBox.hidden = true;
+        render();
+    }
+
+    function showError(e) {
+        errorBox.textContent = t('tickets.load_failed', { error: e.message });
+        errorBox.hidden = false;
+    }
+
+    function reload() {
+        load().catch(showError);
     }
 
     function scheduleReload() {
         clearTimeout(reloadTimer);
-        reloadTimer = setTimeout(load, 500);
+        reloadTimer = setTimeout(reload, 500);
     }
 
-    statusSelect.addEventListener('change', load);
+    statusSelect.addEventListener('change', reload);
     search.addEventListener('input', render);
 
     if (typeof io === 'function' && typeof connectSocketWithStatus === 'function') {
@@ -176,5 +183,5 @@
         socket.on('ticket_updated', scheduleReload);
     }
 
-    load();
+    reload();
 }());

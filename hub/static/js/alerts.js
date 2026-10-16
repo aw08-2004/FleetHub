@@ -276,7 +276,7 @@ function ticketAlertParams(alert) {
 }
 
 function renderTicketAlert(alert, title, body) {
-    const ids = (alert.detail || {}).ticket_ids || [];
+    const ids = alert.detail?.ticket_ids || [];
     const card = alertCard(title, body);
     const actions = alertActions(alert, card);
     if (ids.length) {

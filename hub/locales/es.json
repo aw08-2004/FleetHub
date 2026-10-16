@@ -4907,6 +4907,8 @@
     "internal_badge": "interna",
     "reply_send": "Enviar",
     "reply_help": "Las respuestas llegan a la bandeja de la persona cuando su PC tenga un agente con la bandeja de tickets.",
-    "label_short_ai": "IA"
+    "label_short_ai": "IA",
+    "fact_name": "Dato",
+    "fact_value": "Valor registrado"
   }
 }

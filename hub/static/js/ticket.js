@@ -9,7 +9,7 @@
     'use strict';
 
     var root = document.getElementById('ticket-root');
-    var ticketId = root.getAttribute('data-ticket-id');
+    var ticketId = root.dataset.ticketId;
     var base = '/api/tickets/' + encodeURIComponent(ticketId);
 
     var errorBox = document.getElementById('ticket-error');
@@ -31,7 +31,7 @@
         var resp = await fetch(path, options);
         var data = null;
         try { data = await resp.json(); } catch (e) { /* an empty body is fine */ }
-        if (!resp.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));
+        if (!resp.ok) throw new Error(data?.error || ('HTTP ' + resp.status));
         return data;
     }
 
@@ -139,7 +139,7 @@
                 remove.type = 'button';
                 remove.setAttribute('aria-label', t('tickets.label_remove', { label: l.label }));
                 remove.addEventListener('click', function () {
-                    api(base + '/labels', json('DELETE', { label: l.label })).then(load, showError);
+                    api(base + '/labels', json('DELETE', { label: l.label })).then(load).catch(showError);
                 });
                 badge.appendChild(remove);
             }
@@ -151,7 +151,9 @@
 
     function factRow(tbody, label, value) {
         var tr = el('tr');
-        tr.appendChild(el('th', null, label));
+        var header = el('th', null, label);
+        header.scope = 'row';
+        tr.appendChild(header);
         tr.appendChild(el('td', null, value === null || value === undefined || value === '' ? '--' : String(value)));
         tbody.appendChild(tr);
     }
@@ -172,7 +174,7 @@
             return;
         }
         factRow(tbody, t('tickets.fact_captured'), epoch(f.captured_at));
-        factRow(tbody, t('tickets.fact_os'), [f.os && f.os.label, f.os && f.os.build].filter(Boolean).join(' · '));
+        factRow(tbody, t('tickets.fact_os'), [f.os?.label, f.os?.build].filter(Boolean).join(' · '));
         factRow(tbody, t('tickets.fact_hardware'), [f.manufacturer, f.model].filter(Boolean).join(' '));
         factRow(tbody, t('tickets.fact_serial'), f.serial_number);
         factRow(tbody, t('tickets.fact_agent'), f.agent_version);
@@ -199,7 +201,7 @@
         askButton.textContent = triage ? t('tickets.ai_ask_again') : t('tickets.ai_ask');
         var result = document.getElementById('ticket-triage-result');
         result.hidden = !triage;
-        draftButton.hidden = !(triage && triage.script && ticket.can_draft);
+        draftButton.hidden = !(triage?.script && ticket.can_draft);
         if (!triage) return;
         document.getElementById('ticket-triage-summary').textContent = triage.summary;
         document.getElementById('ticket-triage-cause').textContent =
@@ -266,13 +268,13 @@
     }
 
     statusSelect.addEventListener('change', function () {
-        api(base + '/status', json('POST', { status: statusSelect.value })).then(load, showError);
+        api(base + '/status', json('POST', { status: statusSelect.value })).then(load).catch(showError);
     });
     document.getElementById('ticket-assign-me').addEventListener('click', function () {
-        api(base + '/assign', json('POST', { assignee: 'me' })).then(load, showError);
+        api(base + '/assign', json('POST', { assignee: 'me' })).then(load).catch(showError);
     });
     document.getElementById('ticket-unassign').addEventListener('click', function () {
-        api(base + '/assign', json('POST', { assignee: '' })).then(load, showError);
+        api(base + '/assign', json('POST', { assignee: '' })).then(load).catch(showError);
     });
     document.getElementById('ticket-label-form').addEventListener('submit', function (ev) {
         ev.preventDefault();
@@ -281,8 +283,8 @@
         if (!label) return;
         api(base + '/labels', json('POST', { label: label })).then(function () {
             input.value = '';
-            load();
-        }, showError);
+            return load();
+        }).catch(showError);
     });
     document.getElementById('ticket-reply-form').addEventListener('submit', function (ev) {
         ev.preventDefault();
@@ -293,18 +295,18 @@
             .then(function () {
                 text.value = '';
                 internal.checked = false;
-                load();
-            }, showError);
+                return load();
+            }).catch(showError);
     });
-    document.getElementById('ticket-triage').addEventListener('click', function () {
+    document.getElementById('ticket-triage').addEventListener('click', function (ev) {
         var status = document.getElementById('ticket-ai-status');
-        var button = this;
+        var button = ev.currentTarget;
         button.disabled = true;
         status.textContent = t('tickets.ai_working');
         api(base + '/triage', json('POST', {})).then(function () {
             status.textContent = '';
-            load();
-        }, function (e) {
+            return load();
+        }).catch(function (e) {
             status.textContent = t('tickets.ai_failed', { error: e.message });
         }).finally(function () { button.disabled = false; });
     });
@@ -312,11 +314,11 @@
         var status = document.getElementById('ticket-ai-status');
         api(base + '/script', json('POST', {})).then(function (script) {
             status.textContent = t('tickets.ai_drafted', { name: script.name });
-            load();
-        }, function (e) {
+            return load();
+        }).catch(function (e) {
             status.textContent = t('tickets.ai_failed', { error: e.message });
         });
     });
 
-    load();
+    load().catch(showError);
 }());

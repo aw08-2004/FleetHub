@@ -87,6 +87,9 @@ _LEGACY_KIND_HIGH_TEMP = "overheat"
 PER_MACHINE_KINDS = frozenset({KIND_RULE, KIND_WATCHDOG, KIND_AD_UNMATCHED,
                                KIND_HIGH_TEMP, KIND_TICKET_NEW, KIND_TICKET_OVERDUE})
 
+# Refreshing an open alert in place -- shared by every upsert below.
+_SQL_SET_DETAIL = "UPDATE alerts SET detail=?, updated_at=? WHERE id=?"
+
 STATUS_OPEN = "open"
 STATUS_RESOLVED = "resolved"
 STATUS_DISMISSED = "dismissed"
@@ -261,7 +264,7 @@ def upsert_rule(db_path, machine, rule_id, rule_name, text, now=None):
         detail = json.dumps({"rule_id": rule_id, "rule_name": str(rule_name or ""),
                              "text": str(text or ""), "count": count})
         if row:
-            conn.execute("UPDATE alerts SET detail=?, updated_at=? WHERE id=?",
+            conn.execute(_SQL_SET_DETAIL,
                          (detail, now, row["id"]))
             return row["id"]
         cur = conn.execute(
@@ -328,7 +331,7 @@ def upsert_watchdog(db_path, machine, watchdog_id, watchdog_name, service, statu
                               "status": str(status or ""),
                               "text": str(detail or ""), "count": count})
         if row:
-            conn.execute("UPDATE alerts SET detail=?, updated_at=? WHERE id=?",
+            conn.execute(_SQL_SET_DETAIL,
                          (payload, now, row["id"]))
             return row["id"]
         cur = conn.execute(
@@ -438,7 +441,7 @@ def sync_ticket_alert(db_path, kind, machine, ticket_ids, *, raise_new=False, no
             "AND episode_ended_at IS NULL", (kind, machine, STATUS_OPEN)).fetchone()
         if row:
             if raise_new:
-                conn.execute("UPDATE alerts SET detail=?, updated_at=? WHERE id=?",
+                conn.execute(_SQL_SET_DETAIL,
                              (detail, now, row["id"]))
             else:
                 conn.execute("UPDATE alerts SET detail=? WHERE id=?", (detail, row["id"]))
