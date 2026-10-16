@@ -401,7 +401,6 @@ This project applies the following security principles:
 ## Security Contact
 
 - **Email:** wiensfriesena@gmail.com
-- **GPG Key:** (Optional — provide if you have one; see [GitHub docs](https://docs.github.com/en/code-security/repository-security-advisories/publishing-a-repository-security-advisory) for guidance)
 
 ## Acknowledgments
 
