@@ -133,8 +133,9 @@ Read these before you deploy. [SECURITY.MD](SECURITY.MD) has the full model.
 - Contributor rules for versions, translations and code style: [CLAUDE.md](CLAUDE.md) and
   [VERSIONING.md](VERSIONING.md)
 
-The repository and some internal names still use `Temp_Monitor` and `TempMonitorAgent`.
-These names are intentional; the product name is FleetHub.
+Some paths, namespaces and download URLs still use `Temp_Monitor` and `TempMonitorAgent`.
+These names are intentional. GitHub redirects the old `Temp_Monitor` URLs to this
+repository.
 
 ## License
 
