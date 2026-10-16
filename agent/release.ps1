@@ -33,7 +33,7 @@ param(
     [switch]$Push,
     [switch]$DryRun,
     [string]$SigningKey,           # default: ~/.temp_monitor_signing_key (sign_release.py's own default)
-    [string]$Repo = "aw08-2004/Temp_Monitor",
+    [string]$Repo = "aw08-2004/FleetHub",
     # Release channel (roadmap #21). "beta" writes agent.manifest.beta.json instead, tags the
     # release agent-v<version>-beta, and marks it a prerelease. Only machines pinned to beta
     # in the console read that manifest; everything else is untouched.

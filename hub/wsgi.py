@@ -16,7 +16,7 @@ _WORKTREE_ROOT = os.path.dirname(_HERE)
 # Branch archive + the subdir the hub's code lives under, both duplicated from app.py's
 # HUB_ARCHIVE_URL / HUB_ARCHIVE_SUBDIR rather than imported -- see the module docstring for
 # why this file must not depend on app.py.
-HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/Temp_Monitor/zip/refs/heads/main"
+HUB_ARCHIVE_URL = "https://codeload.github.com/aw08-2004/FleetHub/zip/refs/heads/main"
 HUB_ARCHIVE_SUBDIR = "hub"
 
 

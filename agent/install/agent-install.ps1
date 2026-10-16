@@ -1,6 +1,6 @@
 <#
     FleetHub - C#/.NET Fleet Agent Installer
-    https://github.com/aw08-2004/Temp_Monitor
+    https://github.com/aw08-2004/FleetHub
 
     Installs the fleet agent as a Windows Service running under LocalSystem:
       - PawnIO kernel driver (needed by the in-process LibreHardwareMonitorLib for
@@ -138,7 +138,7 @@ $UpdatePublicKeyHex = "9a4f433e0eb82fae121fdeede7d2ce881d50bc80021236f24fdfa4494
 
 # AgentConfig.StableManifestUrl -- the same file, so a machine is installed from exactly what
 # it would later update from. Stable, never beta: a first install is not where to opt in.
-$StableManifestUrl = "https://raw.githubusercontent.com/aw08-2004/Temp_Monitor/main/agent/agent.manifest.json"
+$StableManifestUrl = "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent/agent.manifest.json"
 
 $Ed25519Source = @'
 using System;
