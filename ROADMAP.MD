@@ -378,7 +378,7 @@ events under node, but no real touch has reached it. On an iPhone, in Safari, on
   keyboard, not under it (the `visualViewport` lift -- emulation cannot open a real keyboard);
   on a phone narrower than 375px the strip swipes sideways; Ctrl then a selects all;
   autocorrect does not retype words (an `insertReplacementText` would be typed AFTER the word,
-  not over it); and the same on Android with GBoard (the composition path).
+  not over it); pasting text reaches the PC; and the same on Android with GBoard (the composition path).
 
 ---
 

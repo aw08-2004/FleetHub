@@ -216,7 +216,13 @@
         // ---- the hidden input ----
         function onBeforeInput(e) {
             if (composing) return;   // Android composition: the input event settles it
-            const messages = inputTypeMessages(e.inputType, e.data, held.size > 0);
+            // A paste, and Safari's autocorrect replacement, carry their text in dataTransfer
+            // with data null. Read from data alone, both were swallowed without a trace.
+            let data = e.data;
+            if (data == null && e.dataTransfer) {
+                try { data = e.dataTransfer.getData('text/plain'); } catch (err) { data = null; }
+            }
+            const messages = inputTypeMessages(e.inputType, data, held.size > 0);
             if (messages === null) return;
             e.preventDefault();
             emit(messages);

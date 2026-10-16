@@ -186,6 +186,13 @@ out.typed = brief();
 sent.length = 0;
 beforeinput('insertText', '\u{1F600}');
 out.emoji = sent.length;
+
+// A paste carries its text in dataTransfer with data null (Safari's autocorrect does too).
+sent.length = 0;
+sink.fire('beforeinput', { inputType: 'insertFromPaste', data: null,
+    dataTransfer: { getData: (t) => (t === 'text/plain' ? 'ok' : '') },
+    preventDefault() {} });
+out.paste = brief();
 sent.length = 0;
 beforeinput('deleteContentBackward', null);
 beforeinput('insertLineBreak', null);
@@ -287,6 +294,8 @@ def test_behaviour():
     check("typed text is taken over from the browser", r["prevented"])
     check("typed characters go out as characters (Unicode path), not key positions",
           r["typed"] == [["", "@", True], ["", "@", False], ["", "ä", True], ["", "ä", False]])
+    check("a paste is read from dataTransfer when data is null",
+          r["paste"] == [["", "o", True], ["", "o", False], ["", "k", True], ["", "k", False]])
     check("an emoji the agent cannot inject is dropped, not sent as half a pair",
           r["emoji"] == 0)
     check("backspace and return become Backspace and Enter",
