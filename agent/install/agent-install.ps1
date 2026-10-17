@@ -502,6 +502,20 @@ if ($signedSha256) {
 Stop-AgentService $ServiceName
 Stop-AgentService $LegacyServiceName
 
+# A ticket tray (roadmap #31) runs from the same exe, as the signed-in user, and closes when
+# the service does -- unless somebody has a ticket window open, which keeps it alive on
+# purpose so their text survives an agent update. A reinstall has to replace the exe, which a
+# running tray holds open, so stop any that is still there. Both exe names, and only processes
+# running from this install, never a FleetHubAgent.exe somebody runs from elsewhere.
+foreach ($name in @($ExeName, $LegacyExeName)) {
+    foreach ($dir in @($InstallDir, $LegacyInstall)) {
+        $path = Join-Path $dir $name
+        Get-Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq $path } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Pre-rename installs live at C:\Program Files\TempMonitorAgent. Move them under the
 # shared FleetHub root so hub and agent sit together, and point the existing service
 # registration at the new path (below) rather than leaving a second copy behind.

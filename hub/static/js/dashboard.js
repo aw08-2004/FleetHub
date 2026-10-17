@@ -230,6 +230,8 @@
             case 'rule': return t('dashboard.activity.kind.rule');
             case 'watchdog': return t('dashboard.activity.kind.watchdog');
             case 'high_temperature': return t('dashboard.activity.kind.high_temperature');
+            case 'ticket_new': return t('dashboard.activity.kind.ticket_new');
+            case 'ticket_overdue': return t('dashboard.activity.kind.ticket_overdue');
             default: return t('dashboard.activity.kind.other');
         }
     }

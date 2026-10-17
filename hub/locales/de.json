@@ -42,7 +42,8 @@
     "assistant": "Assistent",
     "label": "Hauptnavigation",
     "skip_to_content": "Zum Inhalt springen",
-    "onboarding": "Onboarding"
+    "onboarding": "Onboarding",
+    "tickets": "Tickets"
   },
   "hub_update": {
     "available": "Hub v{version} ist verfügbar",
@@ -197,7 +198,9 @@
         "rule": "Regel ausgelöst",
         "watchdog": "Watchdog",
         "high_temperature": "Hohe Temperatur",
-        "other": "Warnung"
+        "other": "Warnung",
+        "ticket_new": "Dringendes Ticket",
+        "ticket_overdue": "Überfälliges Ticket"
       }
     },
     "attention": {
@@ -409,6 +412,17 @@
       "anomaly_row": "{metric}: jetzt {value}, üblich sind etwa {median}.",
       "events_title": "Ereignisprotokoll, gleicher Zeitraum",
       "event_row": "{log} {event_id} ({level}), {count}x: {message}"
+    },
+    "ticket": {
+      "open": "Neuestes Ticket öffnen"
+    },
+    "ticket_new": {
+      "title": "Dringendes Ticket von {machine}",
+      "body": "{count} hohe(s) oder kritische(s) Ticket(s) von {machine}, die noch niemand übernommen hat. Löst sich, sobald jedes beantwortet, zugewiesen oder weiterbearbeitet wurde."
+    },
+    "ticket_overdue": {
+      "title": "Überfälliges Ticket auf {machine}",
+      "body": "{count} Ticket(s) von {machine} haben den von der Person genannten Termin überschritten und sind nicht gelöst."
     }
   },
   "audit": {
@@ -708,6 +722,14 @@
       "manage_onboarding": {
         "label": "Onboarding-Codes verwalten",
         "description": "Einmalcodes erstellen und widerrufen, mit denen sich ein PC über die öffentliche Onboarding-Seite selbst registriert. Das Widerrufen eines verwendeten Codes widerruft auch den damit registrierten Agenten."
+      },
+      "view_tickets": {
+        "label": "Tickets ansehen",
+        "description": "Tickets lesen, die Benutzer an ihren PCs eröffnet haben, einschließlich Screenshots und Rechnerdaten zu diesem Zeitpunkt, für PCs im Geltungsbereich. Eine eigene Berechtigung, weil ein Ticket die eigenen Worte und der Bildschirm einer Person ist, kein Inventar."
+      },
+      "manage_tickets": {
+        "label": "Tickets bearbeiten",
+        "description": "Auf Tickets antworten, Status ändern, zuweisen, Labels bearbeiten und eine KI-Triage anfordern, für PCs im Geltungsbereich. Das Übernehmen des KI-Skripts in die Bibliothek erfordert zusätzlich 'Befehle ausführen'."
       }
     }
   },
@@ -737,7 +759,8 @@
       "ai": "KI-Unterstützung",
       "events": "Ereignisprotokolle",
       "security": "Endgerätesicherheit",
-      "discovery": "Netzwerkerkennung"
+      "discovery": "Netzwerkerkennung",
+      "tickets": "Tickets"
     },
     "unit": {
       "celsius": "°C",
@@ -1356,6 +1379,22 @@
       "security.require_enrolled_telemetry": {
         "label": "Telemetrie nur von registrierten Agenten annehmen",
         "help": "Telemetrie ablehnen, die nicht von einem registrierten Agenten signiert ist. Einschalten, sobald die Onboarding-Seite keine Rechner mehr ohne Registrierung auflistet; ältere Agenten signieren nicht. Auch solange dies aus ist, kann ein Rechner, dessen Agent bereits signiert, nicht nachgeahmt werden."
+      },
+      "tickets.submitters": {
+        "label": "Wer an einem PC ein Ticket eröffnen darf",
+        "help": "Nur Domänenkonten lehnt Tickets von lokalen Konten ab, etwa einem gemeinsamen Kiosk-Login, bei dem niemand zurückgerufen werden kann. Der Hub prüft das bei jedem Ticket, nicht nur das Tray."
+      },
+      "tickets.tray_enabled": {
+        "label": "Ticket-Symbol auf den PCs ausführen",
+        "help": "Zeigt jedem angemeldeten Benutzer ein FleetHub-Symbol im Infobereich, über das er ein Ticket mit Bildschirmfoto eröffnen und Ihre Antworten lesen kann. Erfordert einen Agent neuer als 3.44.0; ältere Agents ignorieren diese Einstellung."
+      },
+      "tickets.retention_days": {
+        "label": "Erledigte Tickets aufbewahren für",
+        "help": "Gelöste und geschlossene Tickets werden so lange nach dem Abschluss gelöscht. Offene Tickets werden nie gelöscht, egal wie alt."
+      },
+      "tickets.screenshot_retention_days": {
+        "label": "Ticket-Screenshots aufbewahren für",
+        "help": "Screenshots zeigen den Bildschirm einer Person und werden daher nach so vielen Tagen gelöscht, unabhängig vom Ticketstatus. Der Tickettext bleibt erhalten."
       }
     },
     "ai": {
@@ -1414,6 +1453,10 @@
       "fleet.default_agent_channel": {
         "stable": "Stabil",
         "beta": "Beta"
+      },
+      "tickets.submitters": {
+        "any": "Jeder am PC angemeldete Benutzer",
+        "domain": "Nur Domänenkonten"
       }
     },
     "error": {
@@ -4788,5 +4831,88 @@
       "code_invalid": "Dieser Code ist ungültig oder abgelaufen.",
       "network_error": "Der Hub ist nicht erreichbar. Prüfen Sie die Verbindung und versuchen Sie es erneut."
     }
+  },
+  "tickets": {
+    "heading": "Tickets",
+    "intro": "Tickets, die Benutzer direkt an ihrem PC eröffnet haben, jeweils mit dem Zustand des Rechners zu diesem Zeitpunkt. Es werden nur Tickets von Rechnern angezeigt, die du sehen darfst.",
+    "ticket_title": "Ticket #{id}",
+    "back": "← Alle Tickets",
+    "filter_status": "Anzeigen",
+    "filter_open": "Nicht erledigt",
+    "filter_all": "Alle",
+    "search": "Betreff, Rechner, Person, Label suchen",
+    "count": "{count} angezeigt",
+    "empty": "Keine Tickets vorhanden.",
+    "load_failed": "Tickets konnten nicht geladen werden: {error}",
+    "urgency": "Dringlichkeit",
+    "subject": "Betreff",
+    "machine": "Rechner",
+    "reporter": "Gemeldet von",
+    "reporter_local": "lokales Konto",
+    "status": "Status",
+    "assignee": "Zugewiesen an",
+    "labels": "Labels",
+    "due": "Benötigt bis",
+    "opened": "Eröffnet",
+    "overdue": "Überfällig",
+    "screenshot_count": "{count} Screenshot(s)",
+    "urgency_low": "Niedrig",
+    "urgency_normal": "Normal",
+    "urgency_high": "Hoch",
+    "urgency_critical": "Kritisch",
+    "status_new": "Neu",
+    "status_open": "Offen",
+    "status_waiting": "Wartend",
+    "status_resolved": "Gelöst",
+    "status_closed": "Geschlossen",
+    "label_source_auto": "vom Hub aus den Rechnerdaten gesetzt",
+    "label_source_ai": "von der KI vorgeschlagen",
+    "label_source_operator": "von einem Operator gesetzt",
+    "description": "Beschreibung",
+    "no_description": "(keine Beschreibung)",
+    "no_screenshots": "Es wurden keine Screenshots gesendet.",
+    "screenshot_alt": "Screenshot {id}",
+    "assign_me": "Mir zuweisen",
+    "unassign": "Zuweisung entfernen",
+    "labels_help": "Labels des Hubs stammen aus den Rechnerdaten, KI-Labels sind Vorschläge. Entferne, was nicht passt.",
+    "label_placeholder": "Label hinzufügen",
+    "label_add": "Hinzufügen",
+    "label_remove": "Label {label} entfernen",
+    "no_labels": "Keine Labels.",
+    "facts": "Der Rechner beim Eröffnen des Tickets",
+    "facts_help": "Einmal beim Absenden erfasst und nie aktualisiert -- es zeigt den PC so, wie er war, als die Person aufgegeben hat, nicht nach einem Neustart. Die Rechnerseite zeigt den aktuellen Zustand.",
+    "fact_error": "Momentaufnahme",
+    "fact_captured": "Erfasst",
+    "fact_os": "Betriebssystem",
+    "fact_hardware": "Hardware",
+    "fact_serial": "Seriennummer",
+    "fact_agent": "Agent-Version",
+    "fact_uptime": "Läuft seit",
+    "uptime_value": "{days} T {hours} Std",
+    "fact_disks": "Laufwerke",
+    "disk_value": "{name} {free} von {total} GB frei ({pct} %)",
+    "fact_alerts": "Offene Alarme",
+    "fact_patches": "Hub-Patchläufe, letzte 7 Tage",
+    "fact_installed": "Installiert, letzte 7 Tage",
+    "ai_heading": "KI-Triage",
+    "ai_help": "Sendet den Tickettext und die obigen Daten -- nie die Screenshots oder wer gemeldet hat -- an den konfigurierten KI-Anbieter. Er macht nur Vorschläge: Ein entworfenes Skript landet deaktiviert in der Skriptbibliothek, wo es jemand lesen und aktivieren muss.",
+    "ai_ask": "KI fragen",
+    "ai_ask_again": "Erneut fragen",
+    "ai_draft": "Skript entwerfen (deaktiviert)",
+    "ai_working": "KI-Anbieter wird gefragt...",
+    "ai_failed": "KI-Triage fehlgeschlagen: {error}",
+    "ai_cause": "Wahrscheinliche Ursache: {cause}",
+    "ai_meta": "Von {model}, {when}.",
+    "ai_drafted": "Als \"{name}\" deaktiviert in der Skriptbibliothek angelegt.",
+    "thread": "Verlauf",
+    "thread_empty": "Noch keine Antworten.",
+    "reply_placeholder": "Antwort schreiben",
+    "internal": "Interne Notiz (wird der Person nie angezeigt)",
+    "internal_badge": "intern",
+    "reply_send": "Senden",
+    "reply_help": "Antworten erreichen das Tray der Person, sobald auf ihrem PC ein Agent mit Ticket-Tray läuft.",
+    "label_short_ai": "KI",
+    "fact_name": "Angabe",
+    "fact_value": "Erfasster Wert"
   }
 }

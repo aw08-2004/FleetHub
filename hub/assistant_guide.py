@@ -47,6 +47,8 @@ PAGES = (
      "the rules engine: conditions that raise alerts or run actions"),
     ("watchdogs", "/watchdogs", "nav.watchdogs", permissions.VIEW,
      "self-healing watchdogs that restart services on the machine itself"),
+    ("tickets", "/tickets", "nav.tickets", permissions.VIEW_TICKETS,
+     "tickets people opened from their own PC, with the machine's facts at that moment"),
     ("device_groups", "/device-groups", "nav.device_groups", permissions.VIEW,
      "saved target filters used by rules, deployments and reports"),
     ("policy", "/policy", "nav.policy", permissions.VIEW,

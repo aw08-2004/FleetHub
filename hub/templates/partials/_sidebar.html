@@ -186,6 +186,15 @@
             <span class="sidebar__link-label">{{ t('nav.watchdogs') }}</span>
         </a>
         {% endif %}
+        {# Tickets opened from a PC (roadmap #31). Gated on view_tickets, matching the route:
+           a ticket is somebody's own words and screen, not inventory, so VIEW alone does not
+           show this link. #}
+        {% if cap.VIEW_TICKETS in user_capabilities %}
+        <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('tickets.tickets_page', 'tickets.ticket_page') else '' }}" data-nav-prefix="/tickets" href="{{ url_for('tickets.tickets_page') }}">
+            <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4V8z"/><path d="M9 6v12" stroke-dasharray="2 2"/></svg>
+            <span class="sidebar__link-label">{{ t('nav.tickets') }}</span>
+        </a>
+        {% endif %}
         {# Device groups (hub 1.114.0): the saved filters Rules, Packages and Devices aim at.
            Beside Rules, because a group is a rule's target spec with a name. Gated on VIEW,
            matching the route; the page hides its editor without manage_device_groups. #}

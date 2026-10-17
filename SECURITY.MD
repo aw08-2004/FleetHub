@@ -243,6 +243,23 @@ itself. Only the real token holder is told; any other caller hears `unknown`.
 A compromised hub could uninstall agents this way. That is far less than the remote code
 execution the same hub already holds over every agent.
 
+## Tickets from the PC (roadmap #31)
+
+The ticket tray runs as the signed-in user and holds no secret. It hands a ticket to the agent
+service over a local named pipe, and the service files it with its own token.
+- **Who filed it.** The service reads the reporter's SID and account by impersonating the pipe
+  connection, never from what the tray sends. The pipe admits interactive users only, refuses
+  network logons, and gives users no right to create a second server under its name; the tray
+  refuses a server outside session 0.
+- **The hub trusts the agent for the person.** `POST /api/agent/tickets` takes `reporter_sid`
+  from the agent, and `GET /api/agent/tickets?sid=` and the reply route take the SID the same
+  way. So whoever holds a machine's agent token can file as, and read the tickets of, anybody on
+  that machine -- and only that machine, because the machine always comes from the token. That
+  token already runs commands as SYSTEM there, so this is not a new privilege.
+- **Limits.** Five tickets per person per ten minutes in the service; twenty per machine per hour
+  on the hub, which a stolen token cannot skip. Screenshots are capped in size and count, sniffed
+  by their first bytes, and served only through the gated console route with `no-store`.
+
 ## Device tokens (the native client)
 
 The FleetHub desktop/mobile client authenticates with a **long-lived bearer token** rather

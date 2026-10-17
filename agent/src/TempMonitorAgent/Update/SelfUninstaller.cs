@@ -124,6 +124,12 @@ public sealed class SelfUninstaller(ILogger<SelfUninstaller> log)
         sb.AppendLine("    if (-not (Get-Process | Where-Object { $_.Path -eq $exe })) { break }");
         sb.AppendLine("    Start-Sleep -Seconds 1");
         sb.AppendLine("}");
+        // Whatever still runs from the exe now is a ticket tray (roadmap #31) somebody left a
+        // half-written ticket open in -- it outlives the service on purpose, so the person's
+        // text survives an agent update. An uninstall is not an update: stop it, or the exe
+        // is held open and the install folder below survives the Remove-Item.
+        sb.AppendLine("Get-Process | Where-Object { $_.Path -eq $exe } | Stop-Process -Force -ErrorAction SilentlyContinue");
+        sb.AppendLine("Start-Sleep -Seconds 1");
         if (IsSafeInstallDir(installDir))
         {
             sb.AppendLine($"Remove-Item -LiteralPath {Q(installDir!)} -Recurse -Force -ErrorAction SilentlyContinue");

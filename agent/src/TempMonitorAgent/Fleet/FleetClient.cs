@@ -59,7 +59,8 @@ public interface IPackageDownloader
 /// reports results — all authenticated with
 /// "Authorization: Bearer &lt;agent_id&gt;:&lt;token&gt;".
 /// </summary>
-public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, IPtyChannel
+public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, IPtyChannel,
+                                  TempMonitorAgent.Tickets.ITicketUplink
 {
     private readonly ILogger<FleetClient> _log;
     private readonly AgentState _state;
@@ -108,6 +109,12 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// "uninstall the agent" ticked (roadmap #30). Handed over after construction for the
     /// reason <see cref="Watchdogs"/> is. Null means the reason is heard and nothing happens.</summary>
     public TempMonitorAgent.Update.SelfUninstaller? Uninstaller { get; set; }
+
+    /// <summary>The ticket tray's supervisor (roadmap #31), handed over after construction
+    /// for the reason <see cref="Watchdogs"/> is -- it reaches the hub through this client, so
+    /// a constructor argument would close a cycle. Null means no marker is sent and none is
+    /// acted on, which is exactly an agent with the tray switched off.</summary>
+    public TempMonitorAgent.Tickets.TraySupervisor? Tickets { get; set; }
 
     /// <summary>How many heartbeats in a row the hub has answered "decommissioned". The
     /// uninstall starts at <see cref="DecommissionStrikes"/>, not on the first: one odd 401 --
@@ -288,6 +295,25 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
                 var states = WatchdogReporter.TakeIfChanged();
                 if (states is not null) body["watchdog"] = states;
             }
+            // What this build can do (roadmap #23), the first capabilities block a Windows agent
+            // has sent. **Features only, never `commands`**: the hub reads an absent command
+            // list as "can run anything" and a present one as the whole truth, so listing
+            // commands here would make every executor this list forgot unreachable from the
+            // console the day it shipped. `processes` is in it because the console trusts a
+            // report over its version gate for a machine that sends one, and this build has
+            // sampled processes since 3.24.0 -- leaving it out would hide the Processes card.
+            // Every heartbeat, not change-only: the hub does the comparing (see
+            // capabilities.record_capabilities), so a restored hub database re-learns it.
+            body["capabilities"] = new JsonObject
+            {
+                ["platform"] = "windows",
+                ["features"] = new JsonArray("processes", "ticketing"),
+            };
+            // The ticket marker (roadmap #31 phase D), only while the tray is on: its presence
+            // is what makes the hub compute one for this machine, and a fleet without the tray
+            // should cost the hub nothing for it.
+            if (Tickets is { } tray && RuntimeConfigStore.Current.TrayEnabled)
+                body["tickets_marker"] = tray.Marker;
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8,
                                             "application/json");
 
@@ -320,6 +346,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             ApplyChannelFromHeartbeat(text);
             ApplyEventSubscriptionsFromHeartbeat(text);
             ApplyWatchdogsFromHeartbeat(text);
+            ApplyTicketMarkerFromHeartbeat(text, ct);
             return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -1426,6 +1453,122 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             _log.LogDebug("Sweep POST failed: {Msg}", e.Message);
         }
         return false;
+    }
+
+    /// <summary>Hand a moved ticket marker to the tray supervisor (roadmap #31 phase D). Its
+    /// own try/catch like every Apply* here: a malformed answer costs a delayed reply in the
+    /// tray, never the rest of the heartbeat.</summary>
+    private void ApplyTicketMarkerFromHeartbeat(string body, CancellationToken ct)
+    {
+        if (Tickets is not { } tray) return;
+        try
+        {
+            if (JsonNode.Parse(body)?["tickets_marker"] is JsonValue v
+                && v.TryGetValue<string>(out var marker) && marker.Length > 0)
+                tray.OnMarker(marker, ct);
+        }
+        catch (Exception e)
+        {
+            _log.LogDebug(e, "Ignoring an unreadable ticket marker: {Msg}", e.Message);
+        }
+    }
+
+    // ---------------------------------------------------------------- tickets (#31)
+
+    /// <summary>File one ticket the service has already checked (see Tickets/TicketRules).
+    /// The machine is the token's; the reporter fields are the ones the pipe server read off
+    /// the tray's connection.</summary>
+    public async Task<TempMonitorAgent.Tickets.TicketSubmitResult> SubmitTicketAsync(
+        JsonObject payload, CancellationToken ct)
+    {
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, $"{AgentConfig.HubBase}/api/agent/tickets");
+            req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            var answer = await ReadJsonObjectAsync(resp, ct);
+            long id = answer?["id"] is JsonValue v && v.TryGetValue<long>(out var n) ? n : 0;
+            return new((int)resp.StatusCode, id, answer?["error"]?.ToString(), answer?["code"]?.ToString());
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug(e, "Ticket submit failed: {Msg}", e.Message);
+            return new(0, 0, null, null);
+        }
+    }
+
+    /// <summary>One screenshot for a ticket this agent just opened, raw, on the long-timeout
+    /// client: a few megabytes on a slow branch-office link outlasts the 10-second one.</summary>
+    public async Task<bool> UploadTicketScreenshotAsync(long ticketId, byte[] image,
+                                                        string contentType, CancellationToken ct)
+    {
+        try
+        {
+            using var req = Authorized(HttpMethod.Post,
+                $"{AgentConfig.HubBase}/api/agent/tickets/{ticketId}/attachments");
+            req.Content = new ByteArrayContent(image);
+            req.Content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+            req.Content.Headers.ContentLength = image.Length;
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode) return true;
+            _log.LogWarning("Hub refused a ticket screenshot ({Status})", (int)resp.StatusCode);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug(e, "Ticket screenshot upload failed: {Msg}", e.Message);
+        }
+        return false;
+    }
+
+    /// <summary>One person's tickets on this PC, for their tray. Null when the hub could not
+    /// be asked -- distinct from an empty list, because only a real answer may move the
+    /// marker on.</summary>
+    public async Task<JsonArray?> FetchMyTicketsAsync(string sid, CancellationToken ct)
+    {
+        try
+        {
+            using var req = Authorized(HttpMethod.Get,
+                $"{AgentConfig.HubBase}/api/agent/tickets?sid={Uri.EscapeDataString(sid)}");
+            using var resp = await _http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode) return null;
+            return (await ReadJsonObjectAsync(resp, ct))?["tickets"] is JsonArray list
+                ? (JsonArray)list.DeepClone() : null;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug(e, "Fetching tickets for a tray failed: {Msg}", e.Message);
+            return null;
+        }
+    }
+
+    /// <summary>The person answering their own ticket. The SID is the connection's, so the
+    /// hub's ownership check is against who is really at the PC.</summary>
+    public async Task<TempMonitorAgent.Tickets.TicketSubmitResult> ReplyToTicketAsync(
+        long ticketId, string sid, string body, CancellationToken ct)
+    {
+        try
+        {
+            using var req = Authorized(HttpMethod.Post,
+                $"{AgentConfig.HubBase}/api/agent/tickets/{ticketId}/messages");
+            req.Content = new StringContent(new JsonObject { ["sid"] = sid, ["body"] = body }.ToJsonString(),
+                                            Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            var answer = await ReadJsonObjectAsync(resp, ct);
+            return new((int)resp.StatusCode, ticketId, answer?["error"]?.ToString(), answer?["code"]?.ToString());
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug(e, "Ticket reply failed: {Msg}", e.Message);
+            return new(0, ticketId, null, null);
+        }
+    }
+
+    /// <summary>A response body as a JSON object, or null for anything else -- a proxy's HTML
+    /// error page must not throw out of a ticket call.</summary>
+    private static async Task<JsonObject?> ReadJsonObjectAsync(HttpResponseMessage resp, CancellationToken ct)
+    {
+        try { return JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct)) as JsonObject; }
+        catch (JsonException) { return null; }
     }
 
     /// <summary>

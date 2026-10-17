@@ -398,6 +398,27 @@ checked with a real session. On a PC with three monitors in a non-default order:
 - Lock the PC (Win+L) and repeat on the lock screen, then sign back in.
 - A PC with two GPUs: every screen the dropdown offers opens, and none silently shows another.
 
+**13. The ticket tray (#31), owed on Windows as SYSTEM.** Built 2026-10-16 on PR #146 beside
+the hub half: hub 1.152.0 first, then the next agent MINOR after 3.44.0. 672/672 agent tests pass
+on Windows, including a real named-pipe round trip (`TicketPipeTests`: the SID on a filed ticket
+is the connecting process's, never the frame's) and the two windows built on an STA thread. **Not
+yet run as a service:** the pipe server has only ever been the test process, never LocalSystem
+in session 0, and the tray has never been started by `UserSessionLauncher`. The screen-capture
+test skipped itself, because the desktop was locked during the run (BitBlt answers access denied
+then, correctly). On one PC, after the release:
+- Settings -> Tickets -> *Keep the ticket tray running on PCs* on; within ~10 s an icon appears
+  for the signed-in user, `companion.log` says *Started the ticket tray*, and Task Manager shows
+  `FleetHubAgent.exe` under **that user**, not SYSTEM.
+- Report a problem on a two-monitor desk: both screens previewed, untick one, send; the ticket
+  arrives with one screenshot and the reporter is the signed-in account.
+- Reply from the console (one internal note, one not): only the second reaches *My tickets*, with
+  a notification; answer from the tray and see the ticket go back to Open.
+- Switch user to a second account: it gets its own tray and sees none of the first one's tickets.
+- Set *domain accounts only*, sign in with a local account: no *Report a problem*.
+- Switch the tray off: every icon goes within a heartbeat. Switch on, then let a self-update
+  run: the tray comes back on the new build, and `.old` is gone after the next boot.
+- Re-run `agent-install.ps1` with a ticket window open: the install succeeds (it stops the tray).
+
 ---
 
 ## ✅ Agent service renamed to `FleetHubAgent`   ·   hub 1.145.0 + agent 3.44.0
@@ -5860,7 +5881,7 @@ there"**, ticked by default, and the PC removes its own agent.
 
 ---
 
-## 📋 31. Ticketing -- the person at the PC opens a ticket   ·   planned (issue #142)   ·   `tickets.py` / `tickets_web.py`, agent `--tray`
+## 🚧 31. Ticketing -- the person at the PC opens a ticket   ·   **hub half (B, C, C2) hub 1.152.0**; tray (A, D) built, waits on the next agent MINOR (issue #142)   ·   `tickets.py` / `tickets_web.py`, agent `--tray`
 
 Today a person with a broken PC phones or writes to IT, and the first ten minutes of the call
 are spent finding out which machine it is, what it runs and what changed. The hub already
@@ -5868,7 +5889,10 @@ knows all of that. This item lets the person open a ticket **from the PC itself*
 description, an urgency, an optional "needed by" time and a screenshot -- and lands it in the
 console next to the machine's own facts, labelled before an operator reads it.
 
-Asked for in issue #142, "nice to have". Design only so far; nothing is built.
+Asked for in issue #142, "nice to have". **The hub half is hub 1.152.0 and the tray is built
+beside it** on the same branch (PR #146) -- see the two *Built* sections below. The tray ships in
+the next agent MINOR after 3.44.0, after the hub, and is off until Settings -> Tickets turns it
+on; what is owed on a real PC is item 13 of *Owed locally*.
 
 **The tray is the real new piece.** The Windows agent has no process that lives in the
 user's session. Every in-session helper it has is spawned for one command and exits, and the
@@ -5946,8 +5970,100 @@ when something changed and the tray never calls the hub itself.
 **Deploy order** is the usual one: hub (B, C, C2) first, then the agent (A, D). A tray that can
 send a ticket to a hub with no route for it loses the ticket and tells the person it was sent.
 
+### Built -- hub 1.152.0 (phases B, C, C2)
+- `hub/tickets.py` / `hub/tickets_web.py`, the tables as planned plus `ticket_triage`, and a
+  Tickets page and a ticket page under a new sidebar link.
+- Agent routes: `POST /api/agent/tickets` (JSON, returns the id and the screenshot limits),
+  `POST /api/agent/tickets/<id>/attachments` (one raw JPEG or PNG per request, **sniffed by its
+  first bytes**, 5 MB each, at most 6, only within 10 minutes of the ticket and only from the
+  agent that opened it -- 404 / 409 / 411 / 413 / 415), `GET /api/agent/tickets?sid=` for the
+  tray's "My tickets", without internal notes and empty for an empty SID.
+- **Two new capabilities, `view_tickets` and `manage_tickets`, not VIEW.** A ticket is somebody's
+  words and screen, not inventory. Id-keyed routes check scope inline (`require_machine` reads
+  the machine from the URL, and a ticket URL names a ticket); "missing" and "out of scope"
+  return the same 404 so ids cannot be walked to count another site's tickets. The one
+  machine-keyed route uses `require_machine`. Drafting the AI's script also needs
+  `issue_commands`, as correlate's draft route does.
+- Snapshot built in `app.ticket_facts`: OS, hardware, serial, agent version, uptime, disks,
+  open alerts, hub patch items and installs from the last 7 days. Auto labels use 48 hours.
+- Alerts `ticket_new` (high / critical still NEW) and `ticket_overdue` (from the 30-second
+  sweep, once per ticket via `overdue_alerted_at`). Socket events `ticket_new` /
+  `ticket_updated` carry ids only.
+- Settings section **Tickets**: `tickets.submitters` (`any` / `domain`, enforced by the hub on
+  every submit), `tickets.retention_days` (365, finished tickets only -- open ones are never
+  pruned), `tickets.screenshot_retention_days` (30). Rename, forget (files included) and both
+  prunes are wired. `capabilities.FEATURE_TICKETING` is declared for the tray to report.
+- Tests: `tests/test_tickets.py`, `tests/test_tickets_web.py`.
+
+### Built -- the tray, agent (phases A and D), plus its hub half in 1.152.0
+- **Agent, `Tickets/`:** `TrayApp` (`FleetHubAgent.exe --tray`, a notification-area icon with
+  *Report a problem* and *My tickets*), `TicketForm` (subject, description, urgency, optional
+  "needed by", one tick box per captured screen), `MyTicketsForm` (the thread and a reply box),
+  `ScreenGrabber`, `TrayPipeClient`; in the service, `TicketPipeServer` and `TraySupervisor`.
+- **Started as the user** through `UserSessionLauncher` (now able to start without a console
+  window), one per Active session, by a supervisor pass every 10 s. "Has a tray" means "has a
+  tray **connected** to the pipe", so a service restart, a crashed tray and a new sign-in are one
+  case with no pid bookkeeping. At most five starts per session per hour (`TrayLaunchBudget`).
+- **The pipe** `FleetHub.Tickets`: length-prefixed JSON frames capped at 34 MiB before the body
+  is read (lines were rejected -- `ReadLineAsync` has no bound in a SYSTEM process), INTERACTIVE
+  read/write without CreateNewInstance, NETWORK denied, two connections per session, hello within
+  15 s, every service write bounded at 15 s (a tray that stops reading is dropped rather than
+  stalling pushes to everybody -- found by the pipe test). The tray refuses a server outside
+  session 0. **The reporter's SID, account and domain-or-local come from impersonating the
+  connection**, never from the frame; `TicketRules.Check` ignores anything the tray says about
+  who it is. Five submits per person per ten minutes (`SubmitLimiter`).
+- **Screenshots:** every screen, taken **before** the form opens, BitBlt with CAPTUREBLT per
+  `Screen.Bounds` in a per-monitor-DPI process. Not `GdiScreenCapture` as planned: that blits
+  the primary display only, and the owner decided the person picks screens. Not
+  `Graphics.CopyFromScreen` either: .NET throws on SourceCopy | CaptureBlt, and without
+  CAPTUREBLT layered windows -- many error pop-ups -- are missing (found by the UI test).
+  Downscaled to 1920 on the long side and re-encoded until under 4 MiB, below the hub's 5 MB.
+- **Lifetime:** the tray closes when its pipe does, so a self-update replaces it with the new
+  build and no stale tray holds the old exe across the next rename -- except while a ticket
+  window is open, which keeps a half-written ticket alive through an update (a Send then
+  reconnects first). The uninstall script and `agent-install.ps1` stop a tray still running
+  from the install folder.
+- **Phase D:** the heartbeat sends `tickets_marker` while the tray is on; the hub answers a new
+  one (`tickets.reporter_marker`: each ticket's status and newest non-internal message, so an
+  internal note, a label or an assignment does not move it) and the service then fetches *My
+  tickets* for each connected person and pushes it, adopting the marker only when every fetch
+  worked. The tray announces a new helpdesk reply, or a ticket being solved, once -- what it has
+  told the person lives in their `%LOCALAPPDATA%\FleetHub\tickets-seen.json`, so a reply that
+  arrived overnight is still announced after the morning's sign-in.
+- **Two-way, hub side (in 1.152.0):** `POST /api/agent/tickets/<id>/messages`
+  (`tickets.add_reporter_message`): only the reporter's SID on that PC, else the same 404 as a
+  missing id; re-opens a WAITING or RESOLVED ticket; a CLOSED one answers 409 and the tray says
+  to open a new one.
+- **Settings:** `tickets.tray_enabled` (off) and `tickets.submitters` now ride the agent config
+  channel, so the tray hides *Report a problem* from a local account under the domain policy.
+- **Capabilities:** the first block a Windows agent sends -- `platform: windows`,
+  `features: [processes, ticketing]`, and **no `commands`**, which would otherwise become the
+  whole truth about what the console may send. `processes` is in it so processes.js, which trusts
+  a report over its version gate, keeps showing the card.
+- Tests: `TicketTrayTests`, `TicketPipeTests`, `TicketTrayUiTests` (agent); phase D and reply
+  checks in `test_tickets.py` / `test_tickets_web.py`.
+
+### Not done
+- **The tray has not run on a real PC as a service** -- *Owed locally*, item 13.
+- The tray is English only. Its strings are not in the hub's catalog because the tray never
+  talks to the hub; localising it means a catalog of its own in the agent.
+- AI triage runs only from the button. Triage on arrival was left out on purpose -- a provider
+  bill per ticket is a decision, not a default -- and would be a setting if wanted.
+- A Tickets card on the machine page; `/api/tickets/machines/<machine>` already serves it.
+- Attaching a file other than a screenshot. The design kept the tray out of SYSTEM partly for a
+  file picker; it was left out of the first cut because the hub accepts images only.
+
 ### Decisions
 - **Tray icon** as the entry point, **suggest-only** AI, and **two-way** (owner, 2026-10-16).
+- **Who may submit is a fleet setting**, default any interactive user; **the person picks which
+  screens to send**; **screenshots are kept 30 days** (owner, 2026-10-16).
+- **One ticket alert per machine per kind, not one per ticket.** The open-alert unique index is
+  (kind, machine, rule_id, watchdog_id); a row per ticket needs a `ticket_id` column in that
+  index, a unique-index migration on the busiest table in the hub, for a card nobody wants
+  more than "PC-7 has two urgent tickets". Rejected for that reason.
+- **Screenshots are uploaded raw, one request each**, not multipart: the agent already has a
+  raw-body upload (`UploadDiskHistoryAsync`) and no multipart code, and a ticket that loses one
+  screenshot to a network error is still a ticket.
 - **The tray runs as the user, not as SYSTEM.** Its window holds a text box and, later, a file
   picker; a file picker in a SYSTEM process on the user's desktop is a SYSTEM shell.
 - **One upload route of its own**, not the heartbeat: a screenshot is megabytes, and the
@@ -7073,11 +7189,12 @@ USB debugging, which it dropped. Wipe (phase H) is still scratch-device only.
     requires anyway, and the Software section says *waiting for a newer agent* until the
     release lands, which is the state the plan above designed the wording for.
 
-24. **#31 Ticketing** — planned, nothing built (issue #142). Hub first (model, console,
-    auto-labels, suggest-only AI triage), then one Windows agent MINOR for the tray. No
-    prerequisite on the board: every hub half copies something that exists. The agent half
-    is the first process this agent keeps running in the user's session, and its entry
-    spends most of its words on why that process runs as the user and not as SYSTEM.
+24. **#31 Ticketing** — **hub half in hub 1.152.0** (model, console, auto-labels,
+    suggest-only AI triage, the reply route and the heartbeat marker) and **the tray built**
+    (phases A and D) on the same PR; it ships as the next Windows agent MINOR after 3.44.0,
+    hub first. The tray is the first process this agent keeps running in the user's session,
+    and its entry spends most of its words on why that process runs as the user and not as
+    SYSTEM.
 
 > Note: this file tracked hub releases closely up to 1.40.0 and then fell behind — the
 > interactive terminal, pluggable OIDC sign-in, searchable dropdowns and the standalone

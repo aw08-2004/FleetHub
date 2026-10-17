@@ -35,6 +35,7 @@ const panels = {
     events: document.getElementById('tab-events'),
     ai: document.getElementById('tab-ai'),
     security: document.getElementById('tab-security'),
+    tickets: document.getElementById('tab-tickets'),
 };
 
 // NOTE: a registry section with no entry here renders NOWHERE, silently -- `applySchema`

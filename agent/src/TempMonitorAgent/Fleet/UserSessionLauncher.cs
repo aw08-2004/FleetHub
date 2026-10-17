@@ -41,9 +41,14 @@ internal static class UserSessionLauncher
     /// escaped by the caller. It exists for open_item, which cannot always launch the thing
     /// the operator clicked: a document has to be handed to explorer.exe and a .ps1 to
     /// powershell.exe, and both need the path as an argument. A restart, the original
-    /// caller, still passes nothing.</summary>
+    /// caller, still passes nothing.
+    ///
+    /// <paramref name="noWindow"/> is for the ticket tray (roadmap #31), which is this agent's
+    /// own exe: a console-subsystem binary, so the default new console would put a black
+    /// window on the person's desktop for as long as the tray runs.</summary>
     internal static LaunchResult LaunchAsSessionUser(
-        string applicationPath, string workingDirectory, uint session, string arguments = "")
+        string applicationPath, string workingDirectory, uint session, string arguments = "",
+        bool noWindow = false)
     {
         // No user token means nobody is signed in there any more -- the session is at the
         // logon screen, or it ended between the sample and the click. There is nothing to
@@ -82,7 +87,7 @@ internal static class UserSessionLauncher
             if (!string.IsNullOrWhiteSpace(arguments))
                 commandLine.Append(' ').Append(arguments);
 
-            uint flags = CreateUnicodeEnvironment | CreateNewConsole;
+            uint flags = CreateUnicodeEnvironment | (noWindow ? CreateNoWindow : CreateNewConsole);
 
             if (!CreateProcessAsUserW(
                     primaryToken, applicationPath, commandLine,
@@ -116,6 +121,7 @@ internal static class UserSessionLauncher
     // it either way, and a console program that IS restarted should land somewhere visible
     // in the user's session rather than writing into a handle nobody holds.
     private const uint CreateNewConsole = 0x00000010;
+    private const uint CreateNoWindow = 0x08000000;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct STARTUPINFO

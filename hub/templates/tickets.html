@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.tickets') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
+{% endblock %}
+{% block content %}
+<h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('tickets.heading') }}</h1>
+
+{# Tickets the person at a PC opened from the tray (roadmap #31). The list is the caller's
+   machines only -- tickets_web.py filters it -- and a ticket opens on a page of its own,
+   because the frozen facts, the screenshots and the thread do not fit a row. #}
+<p class="stat-card__meta" style="margin-bottom: var(--space-5);">{{ t('tickets.intro') }}</p>
+
+<div class="toolbar" style="margin-bottom: var(--space-4);">
+    <label class="stat-card__meta">{{ t('tickets.filter_status') }}
+        <select class="input" id="tickets-status"></select>
+    </label>
+    <input class="input" id="tickets-search" type="search" placeholder="{{ t('tickets.search') }}"
+           aria-label="{{ t('tickets.search') }}"
+           style="min-width: 240px;">
+    <span class="stat-card__meta" id="tickets-count"></span>
+</div>
+
+<div class="card">
+    <div class="table-scroll">
+        <table class="data-table" id="tickets-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>{{ t('tickets.urgency') }}</th>
+                    <th>{{ t('tickets.subject') }}</th>
+                    <th>{{ t('tickets.machine') }}</th>
+                    <th>{{ t('tickets.reporter') }}</th>
+                    <th>{{ t('tickets.status') }}</th>
+                    <th>{{ t('tickets.assignee') }}</th>
+                    <th>{{ t('tickets.labels') }}</th>
+                    <th>{{ t('tickets.due') }}</th>
+                    <th>{{ t('tickets.opened') }}</th>
+                </tr>
+            </thead>
+            <tbody id="tickets-body"></tbody>
+        </table>
+    </div>
+    <p class="stat-card__meta" id="tickets-empty" hidden>{{ t('tickets.empty') }}</p>
+    <p class="banner banner--warn" id="tickets-error" hidden></p>
+</div>
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/tickets.js') }}?v={{ hub_version }}"></script>
+{% endblock %}

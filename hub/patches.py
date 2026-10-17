@@ -1275,6 +1275,23 @@ def list_runs(db_path, limit=100, machine=None, machines=None):
     return out
 
 
+def items_since(db_path, machine, since):
+    """Every update a hub patch run tried on `machine` since `since`, newest first.
+
+    For a ticket's facts snapshot (roadmap #31): "an update went on just before it broke" is
+    the first question a helpdesk asks, and this answers it for the updates THIS hub ran. It
+    knows nothing of what Windows Update installed by itself -- see tickets.auto_labels.
+    """
+    with get_conn(db_path) as conn:
+        return [{
+            "kb": r["kb"] or "", "title": r["title"] or "", "status": r["status"],
+            "attempted_at": r["attempted_at"], "resolved_at": r["resolved_at"],
+        } for r in conn.execute(
+            "SELECT kb, title, status, attempted_at, resolved_at FROM patch_run_items "
+            "WHERE machine = ? AND attempted_at >= ? ORDER BY attempted_at DESC LIMIT 50",
+            (_clean(machine, 63), int(since)))]
+
+
 def list_run_items(db_path, run_id, machine=None):
     args, where = [run_id], ""
     if machine:
