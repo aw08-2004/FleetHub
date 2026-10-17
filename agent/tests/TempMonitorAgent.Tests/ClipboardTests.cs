@@ -70,6 +70,37 @@ public class ClipboardTests
     }
 
     [Fact]
+    public void EchoGuard_SwallowsOnlyTheEchoOfOurOwnPaste()
+    {
+        var g = new ClipboardEchoGuard();
+        g.Set("pasted");
+        Assert.False(g.ShouldSend("pasted"));
+        // Consumed: the PC user copying the same text afterwards is a real copy.
+        Assert.True(g.ShouldSend("pasted"));
+    }
+
+    [Fact]
+    public void EchoGuard_ARecopyAfterAPasteInBetweenIsSent()
+    {
+        // The sequence found in review of #150: copy X, viewer pastes Y, copy X again.
+        var g = new ClipboardEchoGuard();
+        Assert.True(g.ShouldSend("X"));
+        g.Set("Y");
+        Assert.False(g.ShouldSend("Y"));
+        Assert.True(g.ShouldSend("X"));
+    }
+
+    [Fact]
+    public void EchoGuard_ACopyThatOvertakesTheEchoIsSent()
+    {
+        // The user copied something else before the debounced read saw our paste.
+        var g = new ClipboardEchoGuard();
+        g.Set("Y");
+        Assert.True(g.ShouldSend("Z"));
+        Assert.True(g.ShouldSend("Y"));
+    }
+
+    [Fact]
     public void Truncate_NeverSplitsASurrogatePair()
     {
         // "a" + one emoji (two code units): a cut at 2 would leave half the emoji.

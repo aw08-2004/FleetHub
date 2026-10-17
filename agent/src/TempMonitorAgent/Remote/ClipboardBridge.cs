@@ -53,8 +53,7 @@ internal sealed class ClipboardBridge : IDisposable
     private SynchronizationContext? _context;
 
     // Touched only on the clipboard thread.
-    private string? _lastSet;
-    private string? _lastSent;
+    private readonly ClipboardEchoGuard _echo = new();
 
     /// <summary>Text someone copied on the PC, after the session started. Raised on the
     /// clipboard thread; the bool is true when the text was cut to <see cref="MaxChars"/>.</summary>
@@ -86,9 +85,9 @@ internal sealed class ClipboardBridge : IDisposable
             try
             {
                 Clipboard.SetText(text, TextDataFormat.UnicodeText);
-                // Remembered so the update this causes is not echoed straight back to the
-                // viewer that sent it.
-                _lastSet = text;
+                // So the update this causes is not echoed straight back to the viewer that
+                // sent it -- that one update, and nothing after it.
+                _echo.Set(text);
                 done.TrySetResult(true);
             }
             catch (Exception e)
@@ -163,8 +162,7 @@ internal sealed class ClipboardBridge : IDisposable
             _log($"clipboard: could not read ({e.Message})");
             return;
         }
-        if (text.Length == 0 || text == _lastSet || text == _lastSent) return;
-        _lastSent = text;
+        if (text.Length == 0 || !_echo.ShouldSend(text)) return;
         string sent = Truncate(text, MaxChars);
         try { TextCopied?.Invoke(sent, sent.Length < text.Length); }
         catch (Exception e) { _log($"clipboard: send failed ({e.Message})"); }
@@ -208,6 +206,37 @@ internal sealed class ClipboardBridge : IDisposable
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
+}
+
+/// <summary>
+/// Decides whether a clipboard update on the PC is someone's copy, to send to the viewer, or
+/// the echo of a paste the viewer just sent.
+///
+/// <b>Only the one update our own paste causes is suppressed, and then forgotten.</b> The first
+/// version remembered the last text set and the last text sent, and dropped anything equal to
+/// either -- which also dropped a genuine re-copy: the PC user copies X (sent), the operator
+/// pastes Y, the user copies X again, and the viewer never hears of it, because X is still "the
+/// last text sent". Found in review of #150. Bursts of updates from one copy do not need a
+/// dedupe here; <see cref="ClipboardBridge"/> already debounces them into one read.
+///
+/// Pure on purpose: the bridge needs a real clipboard, this does not, so this is what the
+/// tests pin.
+/// </summary>
+internal sealed class ClipboardEchoGuard
+{
+    private string? _pending;
+
+    /// <summary>We just put <paramref name="text"/> on the clipboard for the viewer.</summary>
+    public void Set(string text) => _pending = text;
+
+    /// <summary>The clipboard now holds <paramref name="text"/>. True if it should go to the
+    /// viewer; false only for the echo of our own <see cref="Set"/>, which is consumed.</summary>
+    public bool ShouldSend(string text)
+    {
+        string? pending = _pending;
+        _pending = null;
+        return !string.Equals(text, pending, StringComparison.Ordinal);
+    }
 }
 
 /// <summary>
