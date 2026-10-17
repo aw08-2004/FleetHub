@@ -380,6 +380,11 @@ We take security seriously for:
   by that -- it already holds every agent's bearer token and can start a session on any PC an
   operator has in scope -- but frames are kept in memory only, the switch is audited, it is
   never offered for a machine borrowed from another hub, and `remote.relay_fallback` turns it off.
+- **Remote clipboard (agent `ClipboardBridge.cs`, `remote-clipboard.js`)** -- while a session
+  is open, text copied on the PC is sent to the operator's browser. It rides on
+  `remote_control` by the owner's decision: whoever can drive the PC could already read the
+  clipboard by pasting it into Notepad. It is text only, starts with the session, and never
+  reads what was copied before it. Pasting into the PC is input, so View only blocks it.
 - **Session recordings (`hub/recordings.py`, `recordings_web.py`, agent `RecordingBadge.cs`)** --
   recording without the PC's badge on screen, video readable by anyone but its owner and the
   people it is shared with, a share changed by anyone but the owner, or the recordings folder

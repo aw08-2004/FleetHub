@@ -131,6 +131,29 @@ the operator's scope; every session start/stop is in the audit log.
   involved. `encoder` (auto / hardware / software) pins the H.264 MFT flavour, which separates a
   hardware encoder that will not run on this machine from a broken capture pipeline.
 
+### Clipboard
+
+Plain text crosses between the remote PC and your own machine, in both directions (hub 1.153.0
++ agent 3.46.0, issue #148). Anyone who may remote-control a PC may use it; there is no separate
+permission.
+
+- **From the PC.** Copy as usual on the PC. Chrome and Edge put the text straight onto your
+  own clipboard. Safari and Firefox only allow that on a click, so the **Copy from PC** button
+  lights up instead; click it. This works in View only too.
+- **To the PC.** Click the picture and press **Ctrl+V**: your clipboard is sent first, then the
+  keystroke, so the PC pastes what you copied here. The first time, the browser may ask to allow
+  clipboard access. **Paste to PC** sends your clipboard without a keystroke, for when the
+  browser will not let a keystroke read it. Pasting is input, so View only blocks it.
+- **Limits.** Text only, about 64,000 characters each way. Longer text is cut short, and the
+  viewer says so. Files go through the Files tool.
+- **On a Mac.** ⌘ is the Windows key on a PC, so ⌘C would arrive as Win+C. Apple keyboards get
+  **Send ⌘ as Ctrl**, on by default: ⌘C and ⌘V then copy and paste on the PC. Untick it to use ⌘
+  as the Windows key.
+- **Copy and paste between two programs on the PC** never needed any of this; Windows does it.
+  If that fails, check View only first, then that you are on the Windows session the user is
+  working in.
+- An agent older than 3.46.0 does not offer clipboard sync, and the buttons stay hidden.
+
 ### Session recording
 
 Record what you are seeing in a remote session, from the **Record** button in the Remote

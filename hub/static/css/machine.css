@@ -799,6 +799,10 @@
     align-self: center;
 }
 
+/* The [hidden] caveat once more: "Send Cmd as Ctrl" (issue #148) is a .remote-toggle hidden
+   on anything but an Apple keyboard, and the display below would show it everywhere. */
+.remote-toggle[hidden] { display: none; }
+
 .remote-toggle {
     display: flex;
     align-items: center;

@@ -205,13 +205,23 @@ public sealed class RemotePeer : IRemoteMediaSink, IDisposable
     /// (<see cref="HubRelayClient"/>) if the offer never connects. It rides in the offer because
     /// that is the first thing the console reads from this helper, and a viewer that has not
     /// seen it -- an agent older than the relay -- must keep the old behaviour and report the
-    /// failure rather than ask for a fallback nothing will answer.</summary>
-    public async Task<object> CreateOfferAsync(bool relayCapable)
+    /// failure rather than ask for a fallback nothing will answer.
+    ///
+    /// <c>clipboard</c> is the same kind of promise for text clipboard sync
+    /// (<see cref="ClipboardBridge"/>, issue #148): the console shows its clipboard controls only
+    /// when the offer carries it, so an agent older than the feature -- or one whose clipboard
+    /// thread did not start -- is never offered a paste it would silently drop.</summary>
+    public async Task<object> CreateOfferAsync(bool relayCapable, bool clipboardCapable)
     {
         var offer = _pc.createOffer(null);
         await _pc.setLocalDescription(offer);
-        return new { type = "offer", sdp = offer.sdp, relay = relayCapable };
+        return OfferPayload(offer.sdp, relayCapable, clipboardCapable);
     }
+
+    /// <summary>The offer's signaling payload, apart from the peer so a test can pin which
+    /// capability flags it carries.</summary>
+    internal static object OfferPayload(string sdp, bool relayCapable, bool clipboardCapable) =>
+        new { type = "offer", sdp, relay = relayCapable, clipboard = clipboardCapable };
 
     /// <summary>Apply the console's answer SDP. Any ICE candidates that arrived before the
     /// answer are flushed now -- SIPSorcery rejects candidates before the remote description
