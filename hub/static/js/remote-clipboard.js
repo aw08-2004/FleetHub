@@ -112,14 +112,9 @@
 
         async function write(text) {
             if (!clip?.writeText) return false;
-            try {
-                await clip.writeText(text);
-                return true;
-            } catch (e) {
-                // A refusal is the expected answer in Safari and Firefox without a click, not an
-                // error: the caller lights up Copy from PC instead.
-                return false;
-            }
+            // A refusal is the expected answer in Safari and Firefox without a click, not an
+            // error: it resolves to false, and the caller lights up Copy from PC instead.
+            return clip.writeText(text).then(() => true, () => false);
         }
 
         /** {t:'clip', s, trunc} from the agent: someone copied on the PC. */
