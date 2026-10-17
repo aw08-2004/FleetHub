@@ -6068,6 +6068,14 @@ send a ticket to a hub with no route for it loses the ticket and tells the perso
   picker; a file picker in a SYSTEM process on the user's desktop is a SYSTEM shell.
 - **One upload route of its own**, not the heartbeat: a screenshot is megabytes, and the
   heartbeat runs every ten seconds on every machine.
+- **The heartbeat's config version is per machine, salted with its agent build** (hub
+  1.152.1, PR #147). On the first pilot (2026-10-17) the tray never started on FCOM1109 or
+  OPENCLAW: `tickets.tray_enabled` went on while both still ran the stable build, which skipped
+  the key but stored the payload's version, and 3.45.0 inherited that version with the tray
+  off, so the hub never sent the config again. A build change is now a version change. Fixing
+  only the agent (forget the version on a new build) was rejected as the whole fix: it reaches
+  nobody until a release and cannot unstick machines already holding a wrong version.
+  `settings.agent_config_version_for` has the full reasoning.
 
 ### Rejected alternatives
 - **A ticket page on the hub that the person signs in to.** No machine identity and no
