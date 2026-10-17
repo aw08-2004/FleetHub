@@ -1384,6 +1384,10 @@
         "label": "Quién puede abrir un ticket desde un PC",
         "help": "Solo cuentas de dominio rechaza tickets de cuentas locales, como un inicio de sesión de quiosco compartido al que nadie puede devolver la llamada. El hub lo aplica en cada ticket, no solo la bandeja."
       },
+      "tickets.tray_enabled": {
+        "label": "Mantener el icono de tickets en los PC",
+        "help": "Muestra un icono de FleetHub en el área de notificación de cada usuario con sesión iniciada, desde el que puede abrir un ticket con una captura de pantalla y leer sus respuestas. Requiere un agente posterior a 3.44.0; los agentes anteriores ignoran este ajuste."
+      },
       "tickets.retention_days": {
         "label": "Conservar tickets terminados durante",
         "help": "Los tickets resueltos y cerrados se eliminan este tiempo después de terminarse. Los tickets abiertos nunca se eliminan, por antiguos que sean."

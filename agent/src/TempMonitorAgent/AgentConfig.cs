@@ -427,6 +427,17 @@ public static class AgentConfig
     public const string ShowMessageArg = "--show-message";
     public static string MessageStateDir => Path.Combine(ProgramDataDir, "messages");
 
+    // --- The ticket tray (roadmap #31 phase A) -----------------------------
+    // The same binary again, but NOT session-injected: the service starts it AS THE SIGNED-IN
+    // USER (Fleet/UserSessionLauncher), because this one has a text box and a file picker's
+    // worth of reach, and a SYSTEM window holding those on somebody's desktop is a SYSTEM
+    // shell. It keeps running for the whole session, which nothing else here does.
+    public const string TrayArg = "--tray";
+    // The service's end of the tray's only channel. The tray never holds the agent token: it
+    // hands the ticket to the service over this pipe, and the service reads who is asking off
+    // the connection itself and uploads with its own bearer token.
+    public const string TicketPipeName = "FleetHub.Tickets";
+
     public static string AgentIdentityPath => Path.Combine(ProgramDataDir, "agent.json");
     /// <summary>Hub-delivered operational config (see RuntimeConfig). Persisted so a
     /// restart or self-update doesn't fall back to compiled defaults until the next

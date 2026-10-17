@@ -1384,6 +1384,10 @@
         "label": "Wer an einem PC ein Ticket eröffnen darf",
         "help": "Nur Domänenkonten lehnt Tickets von lokalen Konten ab, etwa einem gemeinsamen Kiosk-Login, bei dem niemand zurückgerufen werden kann. Der Hub prüft das bei jedem Ticket, nicht nur das Tray."
       },
+      "tickets.tray_enabled": {
+        "label": "Ticket-Symbol auf den PCs ausführen",
+        "help": "Zeigt jedem angemeldeten Benutzer ein FleetHub-Symbol im Infobereich, über das er ein Ticket mit Bildschirmfoto eröffnen und Ihre Antworten lesen kann. Erfordert einen Agent neuer als 3.44.0; ältere Agents ignorieren diese Einstellung."
+      },
       "tickets.retention_days": {
         "label": "Erledigte Tickets aufbewahren für",
         "help": "Gelöste und geschlossene Tickets werden so lange nach dem Abschluss gelöscht. Offene Tickets werden nie gelöscht, egal wie alt."

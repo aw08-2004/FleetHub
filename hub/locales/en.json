@@ -1456,6 +1456,10 @@
         "label": "Who may open a ticket from a PC",
         "help": "Domain accounts only refuses tickets from local accounts, such as a shared kiosk login nobody can be called back on. The hub enforces this on every ticket, not only the tray."
       },
+      "tickets.tray_enabled": {
+        "label": "Keep the ticket tray running on PCs",
+        "help": "Shows a FleetHub icon in the notification area of every signed-in user, from which they can open a ticket with a screenshot and read your replies. Needs an agent newer than 3.44.0; older agents ignore this."
+      },
       "tickets.retention_days": {
         "label": "Keep finished tickets for",
         "help": "Resolved and closed tickets are deleted this long after they were finished. Open tickets are never deleted, however old."

@@ -198,6 +198,26 @@ class _TicketRoutes:
         return jsonify({"tickets": tickets.tickets_for_reporter(
             self.db_path, machine, request.args.get("sid", ""))}), 200
 
+    def agent_reply(self, ticket_id):
+        """The person answering their own ticket from the tray (phase D). The SID is the
+        service's, read off the pipe like the one on `agent_mine`; a ticket that is not this
+        person's on this PC is the same 404 as one that does not exist."""
+        agent_id, machine = auth_helpers.bearer_agent(self.db_path)
+        if agent_id is None:
+            return jsonify({"error": AGENT_AUTH_REQUIRED}), 401
+        body = request.get_json(silent=True) or {}
+        try:
+            error, _message_id = tickets.add_reporter_message(
+                self.db_path, machine, ticket_id, body.get("sid", ""), body.get("body", ""))
+        except Exception:
+            return jsonify({"error": _log_generic("storing a reply from a PC")}), 500
+        if error == tickets.NO_SUCH_TICKET:
+            return jsonify({"error": NO_SUCH_TICKET}), 404
+        if error:
+            return jsonify({"error": error}), 409 if "closed" in error else 400
+        self._emit("ticket_updated", ticket_id, machine)
+        return jsonify({"ok": True}), 201
+
     # ---------------- console pages ----------------
     def tickets_page(self):
         return render_template("tickets.html")
@@ -391,6 +411,7 @@ def create_tickets_blueprint(db_path, attachment_root, login_required, access, *
         ("/api/agent/tickets/<int:ticket_id>/attachments", "agent_attachment", ["POST"],
          agent),
         ("/api/agent/tickets", "agent_mine", ["GET"], agent),
+        ("/api/agent/tickets/<int:ticket_id>/messages", "agent_reply", ["POST"], agent),
         ("/tickets", "tickets_page", ["GET"], (login_required, view)),
         ("/tickets/<int:ticket_id>", "ticket_page", ["GET"], (login_required, view)),
         ("/api/tickets", "list_all", ["GET"], (login_required, view)),

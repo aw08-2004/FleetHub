@@ -370,6 +370,65 @@ def test_triage():
           tickets.get_ticket(db, ticket_id)["triage"]["script_name"] == script["name"])
 
 
+def test_reporter_marker():
+    print("\n-- the phase D marker: moves on what the person can see, and only that --")
+    db, root = fresh_db()
+    empty = tickets.reporter_marker(db, "PC-1")
+    check("a PC with no tickets still has a marker", isinstance(empty, str) and len(empty) == 16)
+    ticket_id = tickets.create_ticket(db, "PC-1", "agent-1", submission(), {})
+    opened = tickets.reporter_marker(db, "PC-1")
+    check("a new ticket moves it", opened != empty)
+    tickets.add_message(db, ticket_id, "op", "Note to self", internal=True)
+    after_note = tickets.reporter_marker(db, "PC-1")
+    # The note moved the ticket NEW -> OPEN, which the person does see; a second note must not.
+    tickets.add_message(db, ticket_id, "op", "Another note", internal=True)
+    check("an internal note does not move it", tickets.reporter_marker(db, "PC-1") == after_note)
+    tickets.add_label(db, ticket_id, "printer")
+    tickets.assign(db, ticket_id, "op@example.com")
+    check("a label or an assignment does not move it",
+          tickets.reporter_marker(db, "PC-1") == after_note)
+    tickets.add_message(db, ticket_id, "op", "Please reboot")
+    replied = tickets.reporter_marker(db, "PC-1")
+    check("a visible reply moves it", replied != after_note)
+    tickets.set_status(db, ticket_id, tickets.STATUS_RESOLVED)
+    check("a status change moves it", tickets.reporter_marker(db, "PC-1") != replied)
+    check("another PC's marker is untouched by all of this",
+          tickets.reporter_marker(db, "PC-2") == empty)
+
+
+def test_reporter_reply():
+    print("\n-- the person answering from the tray --")
+    db, root = fresh_db()
+    ticket_id = tickets.create_ticket(db, "PC-1", "agent-1", submission(), {})
+    error, _ = tickets.add_reporter_message(db, "PC-1", ticket_id, "S-1-5-21-1", "Still broken")
+    check("the reporter can answer their own ticket", error is None)
+    ticket = tickets.get_ticket(db, ticket_id)
+    check("it is stored as the reporter's",
+          ticket["messages"][-1]["author_kind"] == tickets.AUTHOR_REPORTER)
+    check("a reply on a NEW ticket leaves it NEW for the queue", ticket["status"] == "new")
+    for name, args in (("another person's SID", ("PC-1", "S-1-5-21-2")),
+                       ("an empty SID", ("PC-1", "")),
+                       ("the right SID from another PC", ("PC-2", "S-1-5-21-1"))):
+        error, _ = tickets.add_reporter_message(db, args[0], ticket_id, args[1], "hi")
+        check(f"{name} gets the same answer as a missing ticket",
+              error == tickets.NO_SUCH_TICKET)
+    check("a missing ticket is NO_SUCH_TICKET",
+          tickets.add_reporter_message(db, "PC-1", 9999, "S-1-5-21-1", "hi")[0]
+          == tickets.NO_SUCH_TICKET)
+    tickets.set_status(db, ticket_id, tickets.STATUS_WAITING)
+    tickets.add_reporter_message(db, "PC-1", ticket_id, "S-1-5-21-1", "Tried it, no luck")
+    check("answering a WAITING ticket re-opens it",
+          tickets.get_ticket(db, ticket_id)["status"] == "open")
+    tickets.set_status(db, ticket_id, tickets.STATUS_RESOLVED)
+    tickets.add_reporter_message(db, "PC-1", ticket_id, "S-1-5-21-1", "It is back")
+    check("answering a RESOLVED ticket re-opens it",
+          tickets.get_ticket(db, ticket_id)["status"] == "open")
+    tickets.set_status(db, ticket_id, tickets.STATUS_CLOSED)
+    error, _ = tickets.add_reporter_message(db, "PC-1", ticket_id, "S-1-5-21-1", "hello?")
+    check("a CLOSED ticket refuses, and says so", error == "this ticket is closed")
+    check("...and stays closed", tickets.get_ticket(db, ticket_id)["status"] == "closed")
+
+
 def main():
     test_validation()
     test_auto_labels()
@@ -381,6 +440,8 @@ def main():
     test_attachments()
     test_lifecycle()
     test_triage()
+    test_reporter_marker()
+    test_reporter_reply()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

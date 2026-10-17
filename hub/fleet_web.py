@@ -55,6 +55,7 @@ import remote
 import settings
 import software
 import terminal
+import tickets
 import usage
 import wake
 import watchdogs
@@ -511,6 +512,20 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                     payload["watchdog_version"] = document["version"]
             except Exception as e:
                 print(f"[watchdogs] Could not resolve watchdogs for {machine}: {e}")
+        # Whether anything the people at this PC can see of their tickets has changed
+        # (roadmap #31 phase D). Same presence rule as `watchdog_version` directly above: only
+        # an agent that sends `tickets_marker` runs a tray, and only that agent is answered --
+        # the rest of the fleet pays nothing for this. Sent back only when it differs, so the
+        # agent's service fetches "My tickets" for its trays on a reply or a status change and
+        # never on a quiet tick. See tickets.reporter_marker for what moves it and what does
+        # not.
+        if "tickets_marker" in data:
+            try:
+                marker = tickets.reporter_marker(db_path, machine)
+                if data.get("tickets_marker") != marker:
+                    payload["tickets_marker"] = marker
+            except Exception as e:
+                print(f"[tickets] Could not resolve the ticket marker for {machine}: {e}")
         return jsonify(payload), 200
 
     @bp.route("/api/agent/processes/wanted", methods=["GET"])

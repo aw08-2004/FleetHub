@@ -516,6 +516,64 @@ def tickets_for_reporter(db_path, machine, reporter_sid, limit=50):
     return out
 
 
+def reporter_marker(db_path, machine):
+    """A short hash of what the people at this PC can see of their tickets (phase D).
+
+    The heartbeat answers with it, and the agent's service fetches "My tickets" for its trays
+    only when the hash moves -- which is how a reply reaches a tray with no tray, and no
+    service, polling the hub. **It covers exactly what `tickets_for_reporter` shows**: each
+    ticket's status and its newest non-internal message. An internal note, a label or an
+    assignment changes nothing the person can see, so it must not move the hash either, or
+    every operator keystroke on a ticket would cost the PC a fetch for nothing.
+
+    Content-derived rather than a counter, like `settings.agent_config_version`: nothing to
+    keep in step across a hub restart or a restore, and a pruned ticket moves it on its own.
+    Rejected: `MAX(updated_at)`, which `_touch` bumps for internal notes too.
+    """
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT t.id, t.status, COALESCE(MAX(m.id), 0) AS last_visible "
+            "FROM tickets t LEFT JOIN ticket_messages m "
+            "  ON m.ticket_id = t.id AND m.internal = 0 "
+            "WHERE t.machine = ? GROUP BY t.id ORDER BY t.id",
+            (str(machine or ""),)).fetchall()
+    blob = ";".join(f"{r['id']}:{r['status']}:{r['last_visible']}" for r in rows)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def add_reporter_message(db_path, machine, ticket_id, reporter_sid, body, now=None):
+    """The person at the PC answering their own ticket from the tray (phase D, owner
+    2026-10-16: replies flow both ways). Returns (error, message_id).
+
+    **Only the reporter, only on that PC.** The SID is the one the agent's service read off
+    the tray's pipe connection, never one the tray typed, and it must match the ticket's
+    `reporter_sid` on the machine the agent's token belongs to. Any mismatch -- another
+    person's ticket, another PC's, an empty SID -- is the same NO_SUCH_TICKET a missing id
+    gets, so a tray cannot walk ids to learn whose tickets exist.
+
+    A reply re-opens a ticket that was WAITING on the person or RESOLVED without them: that
+    answer is the person saying it is not done. A CLOSED ticket refuses, because closed is
+    the helpdesk's "this conversation is over" and a reply there would land where nobody
+    looks; the tray tells the person to open a new one instead.
+    """
+    sid = str(reporter_sid or "").strip()
+    if not sid:
+        return NO_SUCH_TICKET, None
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT machine, reporter_sid, reporter_name, status FROM tickets WHERE id = ?",
+            (int(ticket_id),)).fetchone()
+    if row is None or row["machine"] != machine or row["reporter_sid"] != sid:
+        return NO_SUCH_TICKET, None
+    if row["status"] == STATUS_CLOSED:
+        return "this ticket is closed", None
+    error, message_id = add_message(db_path, ticket_id, row["reporter_name"], body,
+                                    author_kind=AUTHOR_REPORTER, now=now)
+    if error is None and row["status"] in (STATUS_WAITING, STATUS_RESOLVED):
+        set_status(db_path, ticket_id, STATUS_OPEN, now=now)
+    return error, message_id
+
+
 def machine_of(db_path, ticket_id):
     """The machine a ticket belongs to, or None -- what the console's scope check needs
     before it may read anything else about the ticket."""

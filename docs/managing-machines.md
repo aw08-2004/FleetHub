@@ -431,5 +431,57 @@ the console has always offered stays offered by a machine that has reported noth
 new one (locking, wiping) waits for an explicit claim. It is a courtesy either way; every route
 re-decides.
 
-Only the Android agent reports capabilities today. The Windows and Linux agents send
-nothing and are treated as unknown by design, so nothing on their pages changes.
+The Android agent reports a full report. The Windows agent, from the first release after
+3.44.0, reports `features` only -- `processes` and `ticketing` -- and **never a command
+list**, so by the absent-report rule every command button on a Windows page stays exactly
+as it was. A Windows agent at 3.44.0 or older sends nothing and is treated as unknown.
+
+## Tickets from the PC
+
+The person at a managed PC opens a ticket from an icon in the notification area -- what is
+wrong, how urgent, an optional "needed by", and screenshots of their screens -- and it
+lands on the hub's **Tickets** page next to the machine's facts as they were at that
+moment (roadmap #31). Replies go both ways: an operator's reply, unless it is marked
+internal, appears under **My tickets** in the same icon with a notification, and the
+person can answer there.
+
+**Turning it on.** Settings -> Tickets -> *Keep the ticket tray running on PCs*. Off by
+default. Within one heartbeat of switching it on, every Windows agent newer than 3.44.0
+starts the tray in each signed-in session; switching it off closes them. Deploy order is
+the usual one: the hub first, then the agent.
+
+**Who may open one.** *Who may open a ticket from a PC*: anyone signed in, or domain
+accounts only. With domain only, a local account's tray offers *My tickets* and no
+*Report a problem*, and the hub refuses such a ticket anyway.
+
+**What leaves the PC.** The screenshots are taken a moment before the form opens, one per
+screen, and each has a tick box: the person decides which are sent. They are downscaled
+to at most 1920 pixels on the long side and kept on the hub for *Keep ticket screenshots
+for* (30 days by default).
+
+**How it is built, and why it is safe to leave on.**
+
+- The tray is the agent's own exe run with `--tray`, started by the service **as the
+  signed-in user**, never as SYSTEM: a SYSTEM window with a text box on somebody's desktop
+  would be a SYSTEM shell for whoever sits there.
+- It holds **no agent token** and never talks to the hub. It hands the ticket to the
+  service over a local named pipe (`FleetHub.Tickets`, interactive users only, no network
+  access), and the service reads who is asking off the connection and uploads with its
+  own token. A ticket is always filed as the person actually signed in.
+- At most five tickets per person per ten minutes, counted by the service.
+- The service restarts a tray that died, but stops after five starts in an hour for the
+  same session and logs a warning naming that user's
+  `%LOCALAPPDATA%\FleetHub\tray.log`, where the tray writes why it stopped.
+- A tray closes when the service stops, so an agent update replaces it with the new
+  build within a minute -- except while the person has a ticket window open, so a
+  half-written ticket survives the update.
+
+**Endpoints** (agent-facing, bearer auth, the machine from the token):
+`POST /api/agent/tickets`, `POST /api/agent/tickets/<id>/attachments`,
+`GET /api/agent/tickets?sid=`, `POST /api/agent/tickets/<id>/messages` (the person's reply;
+only to their own ticket on that PC, and a closed ticket answers 409). The heartbeat
+carries a `tickets_marker` while the tray is on; the hub answers with a new one only
+when something the person can see has changed, which is when the service fetches.
+
+**Not yet:** the tray is in English only; Linux and Android agents have no tray.
+

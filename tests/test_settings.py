@@ -447,7 +447,13 @@ def test_agent_config():
     check("only agent=True keys are shipped",
           set(config) == {"computer.primary_sensor_preference", "metrics.collect_network",
                           "metrics.report_interval_seconds",
-                          "metrics.sensor_interval_seconds"})
+                          "metrics.sensor_interval_seconds",
+                          # The ticket tray (roadmap #31 phase A): whether it runs, and whom
+                          # it may offer "Report a problem" to. Off by default -- a fleet gets
+                          # the tray when a helpdesk turns it on, not when an agent updates.
+                          "tickets.tray_enabled", "tickets.submitters"})
+    check("the ticket tray is off until somebody turns it on",
+          config["tickets.tray_enabled"] is False)
     check("the network collection toggle ships to agents",
           config["metrics.collect_network"] is True)
     # The two telemetry cadences (roadmap #3). Their defaults are the agent's compiled

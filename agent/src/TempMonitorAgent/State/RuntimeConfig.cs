@@ -111,6 +111,24 @@ public sealed record RuntimeConfig
     /// </summary>
     public string Channel { get; init; } = Channels.Stable;
 
+    /// <summary>
+    /// Keep the ticket tray running in every signed-in session (roadmap #31 phase A), mirroring
+    /// the hub's <c>tickets.tray_enabled</c>. **Off until the hub says otherwise**, and off
+    /// again the moment a payload says "false": the tray is the first process this agent keeps
+    /// alive in a user's session, so it appears because a helpdesk asked for tickets, never
+    /// because an agent update happened to land. Persisted with the rest, so a reboot does not
+    /// spend ten seconds without the tray on a fleet that has it on.
+    /// </summary>
+    public bool TrayEnabled { get; init; }
+
+    /// <summary>Who may open a ticket, mirroring <c>tickets.submitters</c>: <c>"any"</c> or
+    /// <c>"domain"</c>. Used ONLY to hide the tray's "Report a problem" from a local account
+    /// when the hub would refuse it -- the hub enforces the policy on every submit, so a tray
+    /// that got this wrong costs a refusal, never a ticket that should not exist. Anything
+    /// unrecognised reads as "any", because hiding the button wrongly is the worse mistake: the
+    /// person is the one with the broken PC.</summary>
+    public string TicketSubmitters { get; init; } = "any";
+
     public static RuntimeConfig Default { get; } = new();
 
     /// <summary>
@@ -146,10 +164,25 @@ public sealed record RuntimeConfig
             if (text is "true" or "false") collectNetwork = text == "true";
         }
 
+        // Same string booleans as collect_network above. A hub older than the setting sends
+        // no key, which leaves the tray exactly as it was -- off, on a fresh agent.
+        var trayEnabled = TrayEnabled;
+        if (payload.TryGetValue("tickets.tray_enabled", out var trayRaw) && trayRaw is not null)
+        {
+            var text = trayRaw.ToString()?.Trim().ToLowerInvariant();
+            if (text is "true" or "false") trayEnabled = text == "true";
+        }
+        var submitters = TicketSubmitters;
+        if (payload.TryGetValue("tickets.submitters", out var submittersRaw))
+            submitters = submittersRaw?.ToString()?.Trim().ToLowerInvariant() == "domain"
+                ? "domain" : "any";
+
         return this with
         {
             PreferredSensors = preferred,
             CollectNetwork = collectNetwork,
+            TrayEnabled = trayEnabled,
+            TicketSubmitters = submitters,
             ReportIntervalSeconds = Seconds(
                 payload, "metrics.report_interval_seconds", ReportIntervalSeconds,
                 MaxReportIntervalSeconds),

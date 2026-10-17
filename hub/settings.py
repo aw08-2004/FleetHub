@@ -886,7 +886,17 @@ REGISTRY = (
     # refuses a local account, which on a shared PC is the kiosk login nobody can be phoned
     # back on. A setting rather than a fixed rule because the owner left it to each helpdesk
     # (2026-10-16). Enforced by the hub on every submit, not only by the tray hiding its icon.
-    _s("tickets.submitters", "tickets", "enum", "any", choices=["any", "domain"]),
+    # agent=True so the tray CAN hide its icon for a local account: a person offered a button
+    # whose every press is refused learns the helpdesk is broken, not that the policy exists.
+    _s("tickets.submitters", "tickets", "enum", "any", choices=["any", "domain"],
+       agent=True),
+    # Whether the agent keeps the ticket tray running in every signed-in session (phase A).
+    # Off by default, as the design says: the tray is the first process this agent keeps
+    # alive in a USER's session, so a fleet gets it when a helpdesk decides to have tickets,
+    # not on the morning an agent update lands. Turning it off closes every running tray
+    # within one heartbeat; an agent older than the tray ignores the key (RuntimeConfig's
+    # allow-list), which is the right silent failure -- nothing appears, nothing breaks.
+    _s("tickets.tray_enabled", "tickets", "bool", False, agent=True),
     # How long a FINISHED ticket is kept. Open tickets are never pruned, however old --
     # a retention number must not be able to close somebody's problem for them.
     _s("tickets.retention_days", "tickets", "int", 365, minimum=7, maximum=3650, unit="days"),

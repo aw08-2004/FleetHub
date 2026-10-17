@@ -240,11 +240,56 @@ def test_console_gates(pc1_ticket, shot_id, pc2):
           {pc1_ticket, pc2_ticket} <= {t["id"] for t in root.get("/api/tickets").get_json()["tickets"]})
 
 
+def test_phase_d(pc1, pc2, ticket_id):
+    print("\n-- phase D: the heartbeat marker and the reporter's reply --")
+    c = app.app.test_client()
+    beat = c.post("/api/agent/heartbeat", json={}, headers=pc1).get_json()
+    check("an agent that sends no marker is never answered one", "tickets_marker" not in beat)
+    beat = c.post("/api/agent/heartbeat", json={"tickets_marker": ""}, headers=pc1).get_json()
+    marker = beat.get("tickets_marker")
+    check("a tray agent holding nothing is told the current marker", bool(marker))
+    beat = c.post("/api/agent/heartbeat", json={"tickets_marker": marker},
+                  headers=pc1).get_json()
+    check("...and is told nothing while it matches", "tickets_marker" not in beat)
+
+    url = f"/api/agent/tickets/{ticket_id}/messages"
+    r = c.post(url, json={"sid": "S-1-5-21-9", "body": "Tray 2 jams too"}, headers=pc1)
+    check("the reporter answers from the tray", r.status_code == 201)
+    beat = c.post("/api/agent/heartbeat", json={"tickets_marker": marker},
+                  headers=pc1).get_json()
+    check("...which moves the marker", beat.get("tickets_marker") not in (None, marker))
+    mine = c.get("/api/agent/tickets?sid=S-1-5-21-9", headers=pc1).get_json()["tickets"]
+    check("...and the answer is in My tickets",
+          any(m["body"] == "Tray 2 jams too" and m["author_kind"] == "reporter"
+              for t in mine for m in t["messages"]))
+    check("no bearer, no reply",
+          app.app.test_client().post(url, json={"sid": "S-1-5-21-9", "body": "x"}
+                                     ).status_code == 401)
+    check("another PC's agent cannot answer it",
+          c.post(url, json={"sid": "S-1-5-21-9", "body": "x"}, headers=pc2).status_code == 404)
+    check("another person's SID cannot answer it",
+          c.post(url, json={"sid": "S-1-5-21-8", "body": "x"}, headers=pc1).status_code == 404)
+    check("an empty reply is a 400",
+          c.post(url, json={"sid": "S-1-5-21-9", "body": "  "}, headers=pc1).status_code == 400)
+    tickets.set_status(app.DB_PATH, ticket_id, tickets.STATUS_CLOSED)
+    r = c.post(url, json={"sid": "S-1-5-21-9", "body": "hello?"}, headers=pc1)
+    check("a closed ticket is a 409 the tray can explain", r.status_code == 409)
+    tickets.set_status(app.DB_PATH, ticket_id, tickets.STATUS_OPEN)
+
+    config = c.post("/api/agent/heartbeat", json={"config_version": "stale"},
+                    headers=pc1).get_json().get("config", {})
+    check("the tray switch rides the agent config channel, off by default",
+          config.get("tickets.tray_enabled") is False)
+    check("...beside the submitter policy the tray hides its icon by",
+          config.get("tickets.submitters") in ("any", "domain"))
+
+
 def main():
     setup()
     pc1 = _enroll("PC-1")
     pc2 = _enroll("PC-2")
     ticket_id, shot_id = test_agent_routes(pc1, pc2)
+    test_phase_d(pc1, pc2, ticket_id)
     test_console_gates(ticket_id, shot_id, pc2)
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0

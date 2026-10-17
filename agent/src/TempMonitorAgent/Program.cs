@@ -10,6 +10,7 @@ using TempMonitorAgent.Network;
 using TempMonitorAgent.Remote;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
+using TempMonitorAgent.Tickets;
 using TempMonitorAgent.Update;
 using TempMonitorAgent.UserMessage;
 using TempMonitorAgent.Watchdog;
@@ -27,6 +28,12 @@ if (RemoteHelper.TryGetSessionFileArg(args) is { } remoteSessionFile)
 // the dialog and writes the answer beside the request.
 if (MessageHelper.TryGetRequestFileArg(args) is { } messageRequestFile)
     return MessageHelper.Run(messageRequestFile);
+
+// The ticket tray (roadmap #31). Started by the service AS THE SIGNED-IN USER, not injected,
+// and it lives for the whole session -- see Tickets/TrayApp. Branched here, before the logger
+// and the %ProgramData% hardening below, because a user can write neither and must not.
+if (TrayApp.IsTrayLaunch(args))
+    return TrayApp.Run();
 
 // Standalone capture+encode self-test (roadmap #2, phase 2): writes an Annex-B .h264 file so
 // the DXGI/GDI capture and H.264 encoder can be validated on real hardware with no hub.
@@ -205,6 +212,15 @@ try
     // secure-attention pipe -- SendSAS is only honoured for a real service, which this is and
     // the session-injected helper is not.
     builder.Services.AddHostedService<RemoteSessionSupervisor>();
+    // The ticket tray (roadmap #31): the pipe the trays talk to, and the loop that keeps one
+    // running in every signed-in session while the hub has the tray switched on. The pipe
+    // server reaches the hub through the SAME FleetClient singleton that holds the token --
+    // the tray never sees it. A singleton as well as a hosted service, because FleetClient
+    // hands it the heartbeat's ticket marker (wired below).
+    builder.Services.AddSingleton<ITicketUplink>(sp => sp.GetRequiredService<FleetClient>());
+    builder.Services.AddSingleton<TicketPipeServer>();
+    builder.Services.AddSingleton<TraySupervisor>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<TraySupervisor>());
 
     var host = builder.Build();
     // Hand the watchdog runner to the heartbeat, which is where documents arrive (roadmap #20).
@@ -216,6 +232,9 @@ try
     // The self-uninstall (roadmap #30), handed over the same way and for the same reason.
     host.Services.GetRequiredService<FleetClient>().Uninstaller =
         host.Services.GetRequiredService<TempMonitorAgent.Update.SelfUninstaller>();
+    // And the tray supervisor (roadmap #31), which the heartbeat's ticket marker goes to.
+    host.Services.GetRequiredService<FleetClient>().Tickets =
+        host.Services.GetRequiredService<TraySupervisor>();
     host.Run();
 }
 catch (Exception ex)
