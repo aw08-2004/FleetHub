@@ -102,6 +102,13 @@ MAX_ATTACHMENTS = 6
 #: is what stops a stolen agent token being used to keep adding pictures to an old ticket.
 ATTACHMENT_WINDOW_SECONDS = 10 * 60
 
+#: Tickets one machine may open per hour. The agent's service already limits each PERSON to
+#: five per ten minutes, but that check lives on the PC, and a check the PC owns is one a
+#: stolen agent token skips. This is the hub's own ceiling: a shared PC with a bad morning
+#: stays well under it, and a token in a loop fills neither the queue nor every phone on the
+#: helpdesk with `ticket_new` pushes. Found in review on PR #146.
+MAX_TICKETS_PER_MACHINE_HOUR = 20
+
 #: Sniffed, not trusted from Content-Type. The served type comes from here too, so a file
 #: that starts like a JPEG is served as one whatever the sender said it was.
 _IMAGE_SIGNATURES = (
@@ -390,6 +397,17 @@ def _decode_ticket(row):
     except (TypeError, ValueError):
         ticket["facts"] = {}
     return ticket
+
+
+def over_hourly_cap(db_path, machine, now=None):
+    """Whether this machine has already opened MAX_TICKETS_PER_MACHINE_HOUR tickets in the
+    last hour. Counted from the table itself, so a hub restart cannot reset it."""
+    now = int(time.time() if now is None else now)
+    with get_conn(db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM tickets WHERE machine = ? AND created_at > ?",
+            (str(machine or ""), now - 3600)).fetchone()[0]
+    return count >= MAX_TICKETS_PER_MACHINE_HOUR
 
 
 def create_ticket(db_path, machine, agent_id, cleaned, facts, now=None):

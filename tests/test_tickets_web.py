@@ -284,6 +284,18 @@ def test_phase_d(pc1, pc2, ticket_id):
           config.get("tickets.submitters") in ("any", "domain"))
 
 
+def test_hourly_cap(pc1, pc2):
+    print("\n-- the hub's per-machine ceiling --")
+    # The hub's own per-machine ceiling, which a stolen token cannot skip the way it can skip
+    # the service's per-person limit. PC-2 so PC-1's tickets above do not count toward it.
+    for _ in range(tickets.MAX_TICKETS_PER_MACHINE_HOUR):
+        submit(pc2, urgency="low", reporter_sid="S-1-5-21-77")
+    r = submit(pc2, urgency="low", reporter_sid="S-1-5-21-77")
+    check("past the hourly cap a machine is refused with 429", r.status_code == 429
+          and r.get_json().get("code") == "rate_limited")
+    check("...and another machine is not", submit(pc1, urgency="low").status_code == 201)
+
+
 def main():
     setup()
     pc1 = _enroll("PC-1")
@@ -291,6 +303,7 @@ def main():
     ticket_id, shot_id = test_agent_routes(pc1, pc2)
     test_phase_d(pc1, pc2, ticket_id)
     test_console_gates(ticket_id, shot_id, pc2)
+    test_hourly_cap(pc1, pc2)
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

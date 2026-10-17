@@ -159,6 +159,12 @@ class _TicketRoutes:
             # it believes was sent.
             return jsonify({"error": "this hub only takes tickets from domain accounts",
                             "code": "submitter_not_allowed"}), 403
+        if tickets.over_hourly_cap(self.db_path, machine):
+            # A sentence the tray shows as it is: the person is told to call, not that the
+            # ticket went.
+            return jsonify({"error": "This PC has opened a lot of tickets in the last hour. "
+                                     "Please call IT instead.",
+                            "code": "rate_limited"}), 429
         try:
             ticket_id = tickets.create_ticket(self.db_path, machine, agent_id, cleaned,
                                               self._facts(machine))

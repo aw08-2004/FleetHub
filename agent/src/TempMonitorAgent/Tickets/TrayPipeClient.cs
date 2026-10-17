@@ -48,7 +48,7 @@ internal sealed class TrayPipeClient : IDisposable
                 if (!GetNamedPipeServerSessionId(pipe.SafePipeHandle, out uint session) || session != 0)
                 {
                     TrayLog.Write($"Refusing a ticket pipe served from session {session}, not the agent service.");
-                    pipe.Dispose();
+                    await pipe.DisposeAsync();
                     return false;
                 }
                 _pipe = pipe;
@@ -58,12 +58,12 @@ internal sealed class TrayPipeClient : IDisposable
             }
             catch (Exception e) when (e is TimeoutException or IOException)
             {
-                pipe.Dispose();
+                await pipe.DisposeAsync();
                 try { await Task.Delay(1000, ct); } catch (OperationCanceledException) { break; }
             }
             catch (OperationCanceledException)
             {
-                pipe.Dispose();
+                await pipe.DisposeAsync();
                 break;
             }
         }
@@ -122,7 +122,7 @@ internal sealed class TrayPipeClient : IDisposable
             TrayLog.Write($"Ticket pipe closed: {e.Message}");
         }
         foreach (var waiter in _pending.Values) waiter.TrySetResult(null);
-        _pipe?.Dispose();
+        if (_pipe is { } closing) await closing.DisposeAsync();
         _pipe = null;
         Disconnected?.Invoke();
     }

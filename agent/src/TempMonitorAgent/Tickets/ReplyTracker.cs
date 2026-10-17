@@ -45,7 +45,7 @@ public static class ReplyTracker
             if (node is not JsonObject ticket || Id(ticket) is not { } id) continue;
             var subject = Str(ticket, "subject");
             var status = Str(ticket, "status");
-            var operatorMessages = OperatorMessages(ticket);
+            var operatorMessages = HelpdeskMessages(ticket);
             now[id] = new Seen(operatorMessages.Count, status);
             if (seen is null) continue;
 
@@ -90,7 +90,7 @@ public static class ReplyTracker
         }
     }
 
-    private static List<string> OperatorMessages(JsonObject ticket) =>
+    private static List<string> HelpdeskMessages(JsonObject ticket) =>
         ticket["messages"] is JsonArray messages
             ? messages.OfType<JsonObject>()
                       .Where(m => Str(m, "author_kind") == "operator")

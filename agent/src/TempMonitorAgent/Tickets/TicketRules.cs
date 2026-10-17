@@ -63,26 +63,8 @@ public static class TicketRules
         if (urgency.Length == 0) urgency = "normal";
         if (!Urgencies.Contains(urgency)) return ("That urgency is not one the helpdesk uses.", null);
 
-        var screenshots = new List<byte[]>();
-        if (frame["screenshots"] is JsonArray shots)
-        {
-            if (shots.Count > TrayProtocol.MaxScreenshots)
-                return ($"At most {TrayProtocol.MaxScreenshots} screenshots can be sent.", null);
-            foreach (var shot in shots)
-            {
-                byte[] bytes;
-                try { bytes = Convert.FromBase64String(shot?.GetValue<string>() ?? ""); }
-                catch (Exception e) when (e is FormatException or InvalidOperationException)
-                {
-                    return ("One of the screenshots could not be read.", null);
-                }
-                if (bytes.Length == 0 || bytes.Length > TrayProtocol.MaxScreenshotBytes)
-                    return ("One of the screenshots is too large to send.", null);
-                if (ImageType(bytes) is null)
-                    return ("One of the screenshots is not a picture.", null);
-                screenshots.Add(bytes);
-            }
-        }
+        var (shotError, screenshots) = Screenshots(frame["screenshots"] as JsonArray);
+        if (shotError is not null) return (shotError, null);
 
         var payload = new JsonObject
         {
@@ -95,6 +77,31 @@ public static class TicketRules
         };
         if (DueAt(frame) is { } due) payload["due_at"] = due;
         return (null, new CheckedTicket(payload, screenshots));
+    }
+
+    /// <summary>The frame's screenshots, decoded and checked: a sentence for the person, or
+    /// the images. No array at all is no screenshots, which is a ticket like any other.</summary>
+    private static (string? Error, List<byte[]> Images) Screenshots(JsonArray? shots)
+    {
+        var images = new List<byte[]>();
+        if (shots is null) return (null, images);
+        if (shots.Count > TrayProtocol.MaxScreenshots)
+            return ($"At most {TrayProtocol.MaxScreenshots} screenshots can be sent.", images);
+        foreach (var shot in shots)
+        {
+            byte[] bytes;
+            try { bytes = Convert.FromBase64String(shot?.GetValue<string>() ?? ""); }
+            catch (Exception e) when (e is FormatException or InvalidOperationException)
+            {
+                return ("One of the screenshots could not be read.", images);
+            }
+            if (bytes.Length == 0 || bytes.Length > TrayProtocol.MaxScreenshotBytes)
+                return ("One of the screenshots is too large to send.", images);
+            if (ImageType(bytes) is null)
+                return ("One of the screenshots is not a picture.", images);
+            images.Add(bytes);
+        }
+        return (null, images);
     }
 
     /// <summary>The content type of a screenshot by its first bytes -- the hub's

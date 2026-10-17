@@ -142,7 +142,7 @@ internal sealed class MyTicketsForm : Form
         _status.Text = "Sending...";
         var answer = await _reply(id, body);
         if (IsDisposed) return;
-        if (answer?["ok"]?.GetValue<bool>() == true)
+        if (answer?["ok"]?.GetValue<bool>() ?? false)
         {
             _answer.Clear();
             _status.Text = "Sent.";

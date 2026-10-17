@@ -46,7 +46,12 @@ public static class TrayApp
                 Application.SetCompatibleTextRenderingDefault(false);
                 // Per-monitor: screen bounds in real pixels, or a scaled laptop screen would be
                 // captured as a corner of itself (see ScreenGrabber).
-                try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { }
+                try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); }
+                catch (InvalidOperationException)
+                {
+                    // Already set (a window exists): the tray still works, only a scaled screen
+                    // may be captured at its scaled size.
+                }
                 using var context = new TrayContext();
                 Application.Run(context);
             }
@@ -124,7 +129,11 @@ public static class TrayApp
         private void OnUi(Action action)
         {
             if (_closing || _ui.IsDisposed) return;
-            try { _ui.BeginInvoke(action); } catch (InvalidOperationException) { }
+            try { _ui.BeginInvoke(action); }
+            catch (InvalidOperationException)
+            {
+                // The UI thread is already shutting down; there is nobody left to tell.
+            }
         }
 
         private void OnPush(JsonObject frame)
@@ -266,7 +275,10 @@ public static class TrayApp
                 if (Environment.ProcessPath is { } exe && Icon.ExtractAssociatedIcon(exe) is { } icon)
                     return icon;
             }
-            catch (ArgumentException) { }
+            catch (ArgumentException)
+            {
+                // No icon in the exe: fall through to the system one below.
+            }
             return SystemIcons.Information;
         }
 

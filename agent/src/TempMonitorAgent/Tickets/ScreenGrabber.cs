@@ -64,8 +64,9 @@ public static class ScreenGrabber
                     TrayLog.Write($"Screen {i + 1} could not be made small enough to send.");
                     continue;
                 }
-                var label = screens.Length == 1 ? "Your screen"
-                          : $"Screen {i + 1}" + (screen.Primary ? " (main)" : "");
+                var label = "Your screen";
+                if (screens.Length > 1)
+                    label = $"Screen {i + 1}" + (screen.Primary ? " (main)" : "");
                 result.Add(new CapturedScreen(label, screen.Primary, jpeg, Scale(full, PreviewEdge)));
             }
             catch (Exception e) when (e is ArgumentException or System.ComponentModel.Win32Exception

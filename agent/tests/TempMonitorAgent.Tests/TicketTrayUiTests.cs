@@ -96,14 +96,21 @@ public class TicketTrayUiTests
         {
             var screens = ScreenGrabber.CaptureAll();
             using (var form = new TicketForm(screens, _ => Task.FromResult<JsonObject?>(null)))
-                form.CreateControl();
+            {
+                _ = form.Handle;   // forces the native window, which CreateControl skips while hidden
+                Assert.True(form.IsHandleCreated);
+            }
             foreach (var s in screens) s.Dispose();
             using (var empty = new TicketForm([], _ => Task.FromResult<JsonObject?>(null)))
-                empty.CreateControl();
+            {
+                _ = empty.Handle;
+                Assert.True(empty.IsHandleCreated);
+            }
 
             using var mine = new MyTicketsForm(() => Task.CompletedTask,
                                                (_, _) => Task.FromResult<JsonObject?>(null));
-            mine.CreateControl();
+            _ = mine.Handle;
+            Assert.True(mine.IsHandleCreated);
             mine.ShowTickets([]);
             mine.ShowTickets(
             [

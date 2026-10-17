@@ -101,7 +101,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
             }
             finally
             {
-                server?.Dispose();
+                if (server is not null) await server.DisposeAsync();
             }
         }
     }
@@ -175,7 +175,11 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
                 await HandleAsync(connection, frame, ct);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // The service is stopping, or the hello did not come in time: either way the
+            // connection simply ends, which the finally below records.
+        }
         catch (Exception e) when (e is IOException or InvalidDataException or ObjectDisposedException)
         {
             log.LogInformation("Ticket tray connection ended: {Msg}", e.Message);
@@ -187,7 +191,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         finally
         {
             if (connection is not null) lock (_lock) _connections.Remove(connection);
-            pipe.Dispose();
+            await pipe.DisposeAsync();
         }
     }
 
@@ -386,7 +390,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                pipe.Dispose();   // ends the read loop, which removes this connection
+                await pipe.DisposeAsync();   // ends the read loop, which removes this connection
                 return false;
             }
             catch (Exception e) when (e is IOException or ObjectDisposedException

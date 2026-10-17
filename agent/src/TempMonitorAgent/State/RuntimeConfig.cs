@@ -155,23 +155,10 @@ public sealed record RuntimeConfig
             if (parsed.Length > 0) preferred = parsed;
         }
 
-        // Booleans arrive as the strings "true"/"false" (see FleetClient's payload build,
-        // which ToString()s every non-array value). Anything else leaves the flag untouched.
-        var collectNetwork = CollectNetwork;
-        if (payload.TryGetValue("metrics.collect_network", out var netRaw) && netRaw is not null)
-        {
-            var text = netRaw.ToString()?.Trim().ToLowerInvariant();
-            if (text is "true" or "false") collectNetwork = text == "true";
-        }
-
-        // Same string booleans as collect_network above. A hub older than the setting sends
-        // no key, which leaves the tray exactly as it was -- off, on a fresh agent.
-        var trayEnabled = TrayEnabled;
-        if (payload.TryGetValue("tickets.tray_enabled", out var trayRaw) && trayRaw is not null)
-        {
-            var text = trayRaw.ToString()?.Trim().ToLowerInvariant();
-            if (text is "true" or "false") trayEnabled = text == "true";
-        }
+        // Booleans arrive as the strings "true"/"false" -- see Flag. A hub older than the tray
+        // setting sends no key, which leaves the tray exactly as it was: off, on a fresh agent.
+        var collectNetwork = Flag(payload, "metrics.collect_network", CollectNetwork);
+        var trayEnabled = Flag(payload, "tickets.tray_enabled", TrayEnabled);
         var submitters = TicketSubmitters;
         if (payload.TryGetValue("tickets.submitters", out var submittersRaw))
             submitters = submittersRaw?.ToString()?.Trim().ToLowerInvariant() == "domain"
@@ -191,6 +178,16 @@ public sealed record RuntimeConfig
                 MaxSensorIntervalSeconds),
             ConfigVersion = version,
         };
+    }
+
+    /// <summary>One boolean off the payload. They arrive as the strings "true"/"false" (see
+    /// FleetClient's payload build, which ToString()s every non-array value); anything else,
+    /// and an absent key, leaves <paramref name="fallback"/> untouched.</summary>
+    private static bool Flag(IReadOnlyDictionary<string, object?> payload, string key, bool fallback)
+    {
+        if (!payload.TryGetValue(key, out var raw) || raw is null) return fallback;
+        var text = raw.ToString()?.Trim().ToLowerInvariant();
+        return text is "true" or "false" ? text == "true" : fallback;
     }
 
     /// <summary>One cadence off the payload, clamped, or <paramref name="fallback"/> when the

@@ -110,32 +110,32 @@ public sealed class TraySupervisor(ILogger<TraySupervisor> log, TicketPipeServer
         {
             // Active only: a disconnected session (fast user switching, a dropped RDP link) has
             // nobody looking at it, and its tray -- if it has one -- is still running there.
-            if (session.SessionId == 0 || session.State != SessionProbe.WtsActive
-                || string.IsNullOrEmpty(session.User) || withTray.Contains(session.SessionId))
-                continue;
-            switch (_budget.Decide(session.SessionId, now))
-            {
-                case TrayLaunchBudget.Decision.Wait:
-                    continue;
-                case TrayLaunchBudget.Decision.GiveUp:
-                    if (_budget.TakeGiveUpNotice(session.SessionId))
-                        log.LogWarning(
-                            "The ticket tray in session {Session} ({Account}) keeps exiting; not " +
-                            "starting it again for an hour. tray.log in that user's " +
-                            "%LOCALAPPDATA%\\FleetHub says why.", session.SessionId, session.Account);
-                    continue;
-            }
-            _budget.Record(session.SessionId, now);
-            var result = UserSessionLauncher.LaunchAsSessionUser(
-                exePath, Path.GetDirectoryName(exePath) ?? "", session.SessionId,
-                AgentConfig.TrayArg, noWindow: true);
-            if (result.Ok)
-                log.LogInformation("Started the ticket tray for {Account} in session {Session} (pid {Pid}).",
-                                   session.Account, session.SessionId, result.Pid);
-            else
-                log.LogInformation("Could not start the ticket tray in session {Session}: {Error}",
-                                   session.SessionId, result.Error);
+            if (session.SessionId != 0 && session.State == SessionProbe.WtsActive
+                && !string.IsNullOrEmpty(session.User) && !withTray.Contains(session.SessionId))
+                StartTrayIn(session, exePath, now);
         }
+    }
+
+    /// <summary>Start a tray in one session that has none, within the launch budget.</summary>
+    private void StartTrayIn(SessionProbe.SessionInfo session, string exePath, DateTimeOffset now)
+    {
+        var decision = _budget.Decide(session.SessionId, now);
+        if (decision == TrayLaunchBudget.Decision.GiveUp && _budget.TakeGiveUpNotice(session.SessionId))
+            log.LogWarning(
+                "The ticket tray in session {Session} ({Account}) keeps exiting; not " +
+                "starting it again for an hour. tray.log in that user's " +
+                "%LOCALAPPDATA%\\FleetHub says why.", session.SessionId, session.Account);
+        if (decision != TrayLaunchBudget.Decision.Launch) return;
+        _budget.Record(session.SessionId, now);
+        var result = UserSessionLauncher.LaunchAsSessionUser(
+            exePath, Path.GetDirectoryName(exePath) ?? "", session.SessionId,
+            AgentConfig.TrayArg, noWindow: true);
+        if (result.Ok)
+            log.LogInformation("Started the ticket tray for {Account} in session {Session} (pid {Pid}).",
+                               session.Account, session.SessionId, result.Pid);
+        else
+            log.LogInformation("Could not start the ticket tray in session {Session}: {Error}",
+                               session.SessionId, result.Error);
     }
 }
 
