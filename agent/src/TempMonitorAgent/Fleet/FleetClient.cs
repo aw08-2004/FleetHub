@@ -1469,7 +1469,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e)
         {
-            _log.LogDebug("Ignoring an unreadable ticket marker: {Msg}", e.Message);
+            _log.LogDebug(e, "Ignoring an unreadable ticket marker: {Msg}", e.Message);
         }
     }
 
@@ -1492,7 +1492,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
-            _log.LogDebug("Ticket submit failed: {Msg}", e.Message);
+            _log.LogDebug(e, "Ticket submit failed: {Msg}", e.Message);
             return new(0, 0, null, null);
         }
     }
@@ -1515,7 +1515,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
-            _log.LogDebug("Ticket screenshot upload failed: {Msg}", e.Message);
+            _log.LogDebug(e, "Ticket screenshot upload failed: {Msg}", e.Message);
         }
         return false;
     }
@@ -1536,7 +1536,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
-            _log.LogDebug("Fetching tickets for a tray failed: {Msg}", e.Message);
+            _log.LogDebug(e, "Fetching tickets for a tray failed: {Msg}", e.Message);
             return null;
         }
     }
@@ -1558,7 +1558,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
-            _log.LogDebug("Ticket reply failed: {Msg}", e.Message);
+            _log.LogDebug(e, "Ticket reply failed: {Msg}", e.Message);
             return new(0, ticketId, null, null);
         }
     }

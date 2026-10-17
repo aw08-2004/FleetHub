@@ -16,6 +16,7 @@ namespace TempMonitorAgent.Tickets;
 /// </summary>
 internal sealed class MyTicketsForm : Form
 {
+    private const string StatusKey = "status";
     private readonly Func<Task> _refresh;
     private readonly Func<long, string, Task<JsonObject?>> _reply;
     private readonly ListView _list;
@@ -94,7 +95,7 @@ internal sealed class MyTicketsForm : Form
         {
             var id = Long(ticket, "id");
             var item = new ListViewItem([
-                "#" + id, Str(ticket, "subject"), StatusLabel(Str(ticket, "status")),
+                "#" + id, Str(ticket, "subject"), StatusLabel(Str(ticket, StatusKey)),
                 When(Long(ticket, "updated_at")),
             ]) { Tag = id };
             _list.Items.Add(item);
@@ -110,13 +111,13 @@ internal sealed class MyTicketsForm : Form
     private void ShowSelected()
     {
         var ticket = Selected();
-        _send.Enabled = ticket is not null && Str(ticket, "status") != "closed";
+        _send.Enabled = ticket is not null && Str(ticket, StatusKey) != "closed";
         _answer.Enabled = _send.Enabled;
         if (ticket is null) return;
         var text = new StringBuilder();
         text.Append(Str(ticket, "subject")).Append("\r\n");
         text.Append("Opened ").Append(When(Long(ticket, "created_at")))
-            .Append(" -- ").Append(StatusLabel(Str(ticket, "status"))).Append("\r\n\r\n");
+            .Append(" -- ").Append(StatusLabel(Str(ticket, StatusKey))).Append("\r\n\r\n");
         var messages = ticket["messages"] as JsonArray ?? [];
         if (messages.Count == 0) text.Append("No answer from IT yet.");
         foreach (var message in messages.OfType<JsonObject>())
@@ -126,7 +127,7 @@ internal sealed class MyTicketsForm : Form
                 .Append(Str(message, "body").Replace("\r\n", "\n").Replace("\n", "\r\n"))
                 .Append("\r\n\r\n");
         }
-        if (Str(ticket, "status") == "closed")
+        if (Str(ticket, StatusKey) == "closed")
             text.Append("This ticket is closed. If the problem is back, please report it again.");
         _thread.Text = text.ToString();
         _thread.SelectionStart = _thread.TextLength;

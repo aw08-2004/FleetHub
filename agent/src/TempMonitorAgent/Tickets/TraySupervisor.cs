@@ -67,7 +67,7 @@ public sealed class TraySupervisor(ILogger<TraySupervisor> log, TicketPipeServer
             {
                 if (await server.PushTicketsAsync(ct)) Volatile.Write(ref _marker, marker);
             }
-            catch (Exception e) { log.LogDebug("Ticket push failed: {Msg}", e.Message); }
+            catch (Exception e) { log.LogDebug(e, "Ticket push failed: {Msg}", e.Message); }
             finally { Volatile.Write(ref _pushing, 0); }
         }, CancellationToken.None);
     }

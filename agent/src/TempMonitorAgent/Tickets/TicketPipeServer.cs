@@ -75,6 +75,9 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
 
     private readonly List<TrayConnection> _connections = [];
     private readonly object _lock = new();
+    /// <summary>The code a tray reads as "slow down", from the service or the hub.</summary>
+    private const string RateLimited = "rate_limited";
+
     private readonly SubmitLimiter _limiter = new();
     /// <summary>Replies and "My tickets" requests, per person. Looser than submits -- a
     /// conversation is several messages -- but bounded for the same reason: each one is a hub
@@ -109,7 +112,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
             catch (OperationCanceledException) { break; }
             catch (Exception e)
             {
-                log.LogWarning("Ticket pipe could not accept a tray ({Msg}); retrying.", e.Message);
+                log.LogWarning(e, "Ticket pipe could not accept a tray ({Msg}); retrying.", e.Message);
                 try { await Task.Delay(TimeSpan.FromSeconds(5), ct); }
                 catch (OperationCanceledException) { break; }
             }
@@ -196,7 +199,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         }
         catch (Exception e) when (e is IOException or InvalidDataException or ObjectDisposedException)
         {
-            log.LogInformation("Ticket tray connection ended: {Msg}", e.Message);
+            log.LogInformation(e, "Ticket tray connection ended: {Msg}", e.Message);
         }
         catch (Exception e)
         {
@@ -223,7 +226,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
                 if (_fetchLimiter.TryTake(c.Caller.Sid, DateTimeOffset.UtcNow))
                     await SendTicketsAsync(c, req, ct);
                 else
-                    await c.TrySendAsync(WithReq(Failure("Please wait a moment.", "rate_limited"), req), ct);
+                    await c.TrySendAsync(WithReq(Failure("Please wait a moment.", RateLimited), req), ct);
                 break;
             case TrayProtocol.Reply:
                 await c.TrySendAsync(WithReq(await ReplyAsync(c.Caller, frame, ct), req), ct);
@@ -245,7 +248,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         if (ticket is null) return Failure(error!, "invalid");
         if (!_limiter.TryTake(caller.Sid, DateTimeOffset.UtcNow))
             return Failure("You have sent several tickets in the last few minutes. Please wait a "
-                           + "little before sending another.", "rate_limited");
+                           + "little before sending another.", RateLimited);
 
         var sent = await uplink.SubmitTicketAsync(ticket.HubPayload, ct);
         if (!sent.Ok)
@@ -282,7 +285,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         if (text.Length == 0 || id == 0) return Failure("Please write a reply first.", "invalid");
         if (!_replyLimiter.TryTake(caller.Sid, DateTimeOffset.UtcNow))
             return Failure("You have sent a lot of replies in the last few minutes. Please wait a "
-                           + "little, or call IT.", "rate_limited");
+                           + "little, or call IT.", RateLimited);
         // The SID is the CONNECTION's: a tray naming another person's ticket gets the hub's 404.
         var sent = await uplink.ReplyToTicketAsync(id, caller.Sid, text, ct);
         if (sent.Ok) return new JsonObject { ["type"] = TrayProtocol.Result, ["ok"] = true };
@@ -290,7 +293,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         {
             0 => Failure("The helpdesk could not be reached. Your reply was NOT sent.", "unreachable"),
             409 => Failure("This ticket is closed. Please open a new one.", "closed"),
-            429 => Failure(sent.Error ?? "Too many replies on this ticket. Please call IT.", "rate_limited"),
+            429 => Failure(sent.Error ?? "Too many replies on this ticket. Please call IT.", RateLimited),
             _ => Failure(sent.Error ?? "The helpdesk did not accept this reply.", "refused"),
         };
     }
@@ -344,7 +347,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         }
         catch (Exception e)
         {
-            log.LogWarning("Ticket pipe: could not read who connected ({Msg}).", e.Message);
+            log.LogWarning(e, "Ticket pipe: could not read who connected ({Msg}).", e.Message);
             return null;
         }
         // S-1-5-18/19/20 are SYSTEM, LOCAL SERVICE and NETWORK SERVICE: no person to ring back.
