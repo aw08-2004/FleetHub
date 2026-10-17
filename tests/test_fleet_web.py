@@ -3,6 +3,7 @@ Avoids app.py's Google-OAuth boot requirement by wiring the blueprint directly.
 """
 import functools
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -441,6 +442,42 @@ def main():
         r = c.post("/api/agent/heartbeat", json={"config_version": "x"})
         check("heartbeat without a bearer token -> 401", r.status_code == 401)
         settings.reset(db_path, ["data.retention_days"])
+
+        print("\n== Heartbeat config survives an agent update ==")
+        # The 3.45.0 tray pilot: the tray setting went on while the agent was a build that
+        # skipped the key, it stored the version anyway, updated, and the hub never spoke
+        # again. An agent update must make the version it holds stale. machine_info belongs
+        # to app.py's init_db, so the slice the hub reads is made here.
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS machine_info "
+                         "(machine TEXT PRIMARY KEY, companion_version TEXT)")
+            conn.execute("INSERT OR REPLACE INTO machine_info VALUES ('PC-01', '3.44.0')")
+        r = c.post("/api/agent/heartbeat", json={"config_version": version}, headers=hdr)
+        check("a known build is re-sent config once", "config" in r.get_json())
+        old_build_version = r.get_json()["config_version"]
+        check("its version is not the plain fleet hash", old_build_version != version)
+        r = c.post("/api/agent/heartbeat", json={"config_version": old_build_version},
+                   headers=hdr)
+        check("and then stays quiet", "config" not in r.get_json())
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("UPDATE machine_info SET companion_version = '3.45.0' "
+                         "WHERE machine = 'PC-01'")
+        r = c.post("/api/agent/heartbeat", json={"config_version": old_build_version},
+                   headers=hdr)
+        check("the updated build is re-sent config with no setting changed",
+              "config" in r.get_json())
+        check("the re-sent config carries the tray switch",
+              "tickets.tray_enabled" in r.get_json()["config"])
+        r = c.post("/api/agent/heartbeat", json={"config_version": r.get_json()["config_version"]},
+                   headers=hdr)
+        check("the updated build then stays quiet too", "config" not in r.get_json())
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("DELETE FROM machine_info WHERE machine = 'PC-01'")
+        r = c.post("/api/agent/heartbeat", json={"config_version": version}, headers=hdr)
+        check("a machine with no reported build still gets the plain fleet hash",
+              "config" not in r.get_json())
 
         print("\n== Status & result isolation ==")
         r = c.get("/api/fleet/status")
