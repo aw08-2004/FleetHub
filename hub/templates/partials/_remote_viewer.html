@@ -103,6 +103,17 @@
             <input type="checkbox" data-remote="viewonly">
             <span>{{ t('machine.remote.view_only') }}</span>
         </label>
+        {# Shown on Apple keyboards only, where Cmd is the copy/paste key (issue #148). #}
+        <label class="remote-toggle" data-remote="cmd-ctrl-wrap" title="{{ t('machine.remote.cmd_as_ctrl_title') }}" hidden>
+            <input type="checkbox" data-remote="cmd-ctrl">
+            <span>{{ t('machine.remote.cmd_as_ctrl') }}</span>
+        </label>
+        {# Clipboard sync (issue #148). Hidden until the agent's offer says it can answer, so
+           an older agent is never offered a paste it would drop. #}
+        <button type="button" class="btn btn--ghost" data-remote="clip-copy" hidden disabled
+                title="{{ t('machine.remote.copy_from_pc_title') }}">{{ t('machine.remote.copy_from_pc') }}</button>
+        <button type="button" class="btn btn--ghost" data-remote="clip-paste" hidden
+                title="{{ t('machine.remote.paste_to_pc_title') }}">{{ t('machine.remote.paste_to_pc') }}</button>
         <button type="button" class="btn btn--ghost" data-remote="fullscreen"
                 title="{{ t('machine.remote.fullscreen_title') }}">{{ t('machine.remote.fullscreen') }}</button>
     </div>

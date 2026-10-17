@@ -419,6 +419,22 @@ then, correctly). On one PC, after the release:
   run: the tray comes back on the new build, and `.old` is gone after the next boot.
 - Re-run `agent-install.ps1` with a ticket window open: the install succeeds (it stops the tray).
 
+**14. Clipboard over Remote Desktop (issue #148), owed on Windows and a Mac.** Built
+2026-10-17: hub 1.153.0 first, then the next agent MINOR (3.46.0). Agent unit tests and
+`tests/test_remote_clipboard.py` (node) pass; no real clipboard has crossed a session yet. After
+the release, on one PC:
+- Copy in Notepad on the PC: in Chrome it is on the local clipboard at once; in Firefox
+  **Copy from PC** lights up and the click puts it there.
+- Copy locally, click the picture, Ctrl+V: it pastes on the PC. Again with about 50 KB of German
+  text over a **forced relay** (block UDP): it arrives whole.
+- View only: Ctrl+V pastes the PC's own clipboard, and **Paste to PC** is greyed out.
+- Start a recording during a clipboard session: the badge still comes up. The clipboard thread
+  must have initialised WinForms first, or the badge's own initialisation throws.
+- From a Mac: ⌘C / ⌘V copy and paste inside the session, ⌘Tab stays on the Mac, and nothing is
+  left held down on the PC afterwards (type afterwards and check no letter repeats or shortcut
+  fires). Untick the box: ⌘ is the Windows key again.
+- An agent at 3.45.0 shows no clipboard buttons.
+
 ---
 
 ## ✅ Agent service renamed to `FleetHubAgent`   ·   hub 1.145.0 + agent 3.44.0
@@ -1854,6 +1870,39 @@ layout has there, so a German phone's z arrives as y on a US PC); reading keydow
 keyboards report nearly every key as `Unidentified`). Characters outside the BMP (emoji) are
 dropped: the agent injects one UTF-16 unit, so half a surrogate pair would arrive as garbage.
 Checked in Chromium's phone emulation; a real phone keyboard is owed (*Owed locally*, item 11).
+
+### Clipboard, and ⌘ as Ctrl · hub 1.153.0 + agent 3.46.0 (issue #148)
+
+Reported as "Copy Data does nothing over Remote Desktop". Two different things were behind it.
+**Between the PC and the operator's machine there was no clipboard at all**: the session carried
+video down and input up, nothing else. Now plain text goes both ways. A copy on the PC is pushed
+to the viewer (`ClipboardBridge.cs`, a `WM_CLIPBOARDUPDATE` listener on its own STA thread with
+a message-only window) and written to the local clipboard. Where the browser refuses a write
+without a click (Safari, Firefox), **Copy from PC** lights up instead. **Ctrl+V on the picture**
+reads the local clipboard and sends it before the V, holding the keys behind it so the PC
+pastes the new text. **Paste to PC** does the same without a keystroke. **Inside the session**
+copy and paste always worked, since Windows does that and we only deliver keys. Except from a
+Mac: Cmd arrives as `MetaLeft`, which the PC reads as **Win**+C. So Apple keyboards get **Send ⌘
+as Ctrl**, on by default there and remembered per browser. macOS sends no keyup for a key
+released under Cmd, so the viewer releases those keys itself when Cmd comes up.
+- **Gate: `remote_control`, no new capability** (owner's decision). Whoever can drive the PC
+  can already open Notepad and read the clipboard off the screen. Pasting is input, so View
+  only blocks it; reading what the PC copied is not, and works in View only.
+- **Text only, about 64K characters each way**, cut short with a note rather than refused.
+  **Always chunked**, because the relay refuses an upload batch holding a message over 4096
+  bytes as `json.dumps` counts it (non-ASCII is six bytes there). A paste sent whole would work
+  on WebRTC and vanish on the relay. `tests/test_remote_clipboard.py` pushes real chunks through
+  `push_up`. PC to viewer is one message, capped at 64 KB encoded, under a data channel's limit.
+- **Gated by the offer, not a version.** The agent says `clipboard: true` in its offer only once
+  its clipboard thread is up, as it says `relay`. remote.js never learns the agent's version, so
+  a `MIN_CLIPBOARD_AGENT` constant would have nothing to compare against. Older agents simply
+  never show the buttons, and deploy order is safe both ways.
+- *Rejected:* a separate `remote_clipboard` capability (it would gate nothing that
+  `remote_control` does not already give); paste-only, never reading the PC (it leaves the case
+  that was reported, copying a value off the PC, unsolved); files and images (no one asked, and
+  a file transfer already exists in the Files tool); syncing silently on a timer (the browser
+  only lets a page read the clipboard on a gesture, so a keystroke or a click is the trigger).
+  **Owed:** see *Owed locally*, item 14.
 
 **Open, on-hardware follow-ups** (validate/tune together, as agreed): the **secure desktop**
 (capturing/injecting on Winlogon during UAC — the SYSTEM-in-session enabler is in place, the

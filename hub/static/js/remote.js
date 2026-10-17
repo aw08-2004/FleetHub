@@ -52,6 +52,8 @@
     // for the hub relay. SIPSorcery's own ICE timeout is about sixteen seconds; this is a
     // little longer so that a slow-but-working relay candidate still wins.
     const RELAY_AFTER_MS = 20000;
+    // Where the "Send Cmd as Ctrl" choice is remembered (issue #148).
+    const CMD_AS_CTRL_KEY = 'fleethub.remote.cmdAsCtrl';
 
     // Presets exist because "15fps / 4000kbps / 100%" means nothing to someone who just wants
     // the screen to stop stuttering. Custom reveals the raw numbers for when it does matter.
@@ -144,6 +146,10 @@
             bitrate: q('bitrate'),
             scale: q('scale'),
             viewOnly: q('viewonly'),
+            cmdCtrl: q('cmd-ctrl'),
+            cmdCtrlWrap: q('cmd-ctrl-wrap'),
+            clipCopy: q('clip-copy'),
+            clipPaste: q('clip-paste'),
             fullscreen: q('fullscreen'),
             vdd: q('vdd'),
             vddText: q('vdd-text'),
@@ -193,6 +199,23 @@
         let touch = null;
         // The phone keyboard (remote-keyboard.js, issue #138). Created in wireInput.
         let keyboard = null;
+        // Text clipboard sync (remote-clipboard.js, issue #148), where the page loaded it. Its
+        // buttons stay hidden until the agent's offer says it can answer -- the offer flag, not
+        // a MIN_*_AGENT version, because this viewer never learns the agent's version and the
+        // offer is already how it learns the agent can relay.
+        const clipboard = window.RemoteClipboard ? window.RemoteClipboard.create({
+            send: sendControl,
+            viewOnly: () => els.viewOnly.checked,
+            hint,
+            copyButton: els.clipCopy,
+            pasteButton: els.clipPaste,
+        }) : null;
+        // Input held back while a Ctrl+V's paste is read and sent, so the V reaches the PC
+        // after the text it is meant to paste (see sendInput). Null when nothing is held.
+        let heldInput = null;
+        // Keys pressed while a remapped Cmd is down. macOS sends no keyup for them, so they
+        // are released by hand when Cmd comes up -- or C stays held down on the PC.
+        const metaChord = new Set();
 
         // The last setStatus kind: a recording continuing after a session switch waits for
         // 'ok' (a picture is arriving again) before asking the PC for its badge.
@@ -554,6 +577,28 @@
             return true;
         }
 
+        /** The agent's `geom` report: the capture size clicks are mapped against, which desktop
+         *  it is on, and how many monitors there are. Its own function so the status switch
+         *  below stays a switch. */
+        function applyGeometry(msg) {
+            captured = { w: msg.w || 0, h: msg.h || 0 };
+            const secure = msg.desktop && msg.desktop.toLowerCase() !== 'default';
+            els.desktopBadge.hidden = !secure;
+            if (secure) {
+                // 'Winlogon' is the desktop OBJECT's name, not prose -- any other value is
+                // shown verbatim because it came from Windows.
+                els.desktopBadge.lastChild.textContent =
+                    msg.desktop === 'Winlogon'
+                        ? t('machine.remote.logon_screen_desktop') : msg.desktop;
+            }
+            populateMonitors(msg.monitors, msg.monitor);
+            meta(t('machine.remote.geom', {
+                width: msg.w, height: msg.h, encoder: msg.encoder || '',
+                desktop: msg.desktop || t('machine.remote.desktop_unknown'),
+            }));
+            hint('');
+        }
+
         // Status the agent pushes down the control channel. Without this, "the screen went
         // black" is unguessable from here -- and the agent already knows why.
         function handleAgentStatus(raw) {
@@ -562,22 +607,7 @@
             if (!msg || typeof msg !== 'object') return;
 
             if (msg.t === 'geom') {
-                captured = { w: msg.w || 0, h: msg.h || 0 };
-                const secure = msg.desktop && msg.desktop.toLowerCase() !== 'default';
-                els.desktopBadge.hidden = !secure;
-                if (secure) {
-                    // 'Winlogon' is the desktop OBJECT's name, not prose -- any other value is
-                    // shown verbatim because it came from Windows.
-                    els.desktopBadge.lastChild.textContent =
-                        msg.desktop === 'Winlogon'
-                            ? t('machine.remote.logon_screen_desktop') : msg.desktop;
-                }
-                populateMonitors(msg.monitors, msg.monitor);
-                meta(t('machine.remote.geom', {
-                    width: msg.w, height: msg.h, encoder: msg.encoder || '',
-                    desktop: msg.desktop || t('machine.remote.desktop_unknown'),
-                }));
-                hint('');
+                applyGeometry(msg);
             } else if (msg.t === 'capture' && msg.state === 'stalled'
                        && msg.reason === 'no_display') {
                 // Neither capture path can see a screen: the helper is in a Windows session with
@@ -593,6 +623,9 @@
                 hint(msg.desktop
                     ? t('machine.remote.stalled_on_desktop', { desktop: msg.desktop })
                     : t('machine.remote.stalled'));
+            } else if (msg.t === 'clip' && clipboard) {
+                // Someone copied text on the PC (issue #148).
+                clipboard.received(msg);
             }
         }
 
@@ -651,6 +684,7 @@
             try {
                 if (sig.kind === 'offer') {
                     relayCapable = !!sig.payload?.relay;
+                    if (clipboard) clipboard.setCapable(!!sig.payload?.clipboard);
                     await pc.setRemoteDescription({ type: 'offer', sdp: sig.payload.sdp });
                     remoteSet = true;
                     for (const ice of pendingIce) await pc.addIceCandidate(ice).catch(() => {});
@@ -709,6 +743,9 @@
             if (relay) { relay.stop(); relay = null; }
             relaySwitching = false;
             relayCapable = false;
+            if (clipboard) clipboard.setCapable(false);
+            heldInput = null;
+            metaChord.clear();
             if (pc) { try { pc.close(); } catch (e) {} pc = null; }
             controlChannel = null;
             if (els.video.srcObject) {
@@ -751,7 +788,47 @@
             // channel, so anyone who can open a session can drive the machine. If you need that
             // to be untrue, it has to be enforced at the hub and the agent, not here.
             if (els.viewOnly.checked) return;
+            if (heldInput) { heldInput.push(obj); return; }
             sendControl(obj);
+        }
+
+        /** Ctrl+V on the picture (issue #148): send this computer's clipboard to the PC first,
+         *  holding every input event behind it, then release them in order. Without the hold
+         *  the V would race the clipboard read -- which waits on the browser, sometimes on a
+         *  permission prompt -- and paste whatever the PC had before. */
+        function pasteThenRelease() {
+            if (heldInput || !clipboard?.isCapable() || els.viewOnly.checked) return;
+            const hold = heldInput = [];
+            clipboard.pasteBeforeKeys().finally(() => {
+                // Not ours any more: the session was torn down (and maybe restarted) while the
+                // read was pending, and these keys belong to a picture that is gone.
+                if (heldInput !== hold) return;
+                heldInput = null;
+                hold.forEach(sendControl);
+            });
+        }
+
+        /** Cmd as Ctrl (issue #148): on a Mac, Cmd+C arrives as MetaLeft + KeyC, which the PC
+         *  reads as Win+C. With the box ticked, Cmd is sent as Ctrl instead. */
+        function remapCode(code) {
+            if (!els.cmdCtrl.checked) return code;
+            if (code === 'MetaLeft') return 'ControlLeft';
+            if (code === 'MetaRight') return 'ControlRight';
+            return code;
+        }
+
+        function sendKey(e, down) {
+            const isMeta = e.code === 'MetaLeft' || e.code === 'MetaRight';
+            const remapping = els.cmdCtrl.checked;
+            if (remapping && !isMeta && e.metaKey) {
+                if (down) metaChord.add(e.code); else metaChord.delete(e.code);
+            }
+            if (remapping && isMeta && !down) {
+                // macOS never sends keyup for a key released while Cmd is held.
+                metaChord.forEach((code) => sendInput({ t: 'k', code, key: '', down: false }));
+                metaChord.clear();
+            }
+            sendInput({ t: 'k', code: remapCode(e.code), key: e.key, down });
         }
 
         // Normalised (0..1) position within the CAPTURED IMAGE, not the video element.
@@ -854,11 +931,17 @@
             // rest of the page normally -- and, with several screens open, so a keystroke goes
             // to the PC whose picture was last clicked rather than to all of them.
             v.addEventListener('keydown', (e) => {
-                sendInput({ t: 'k', code: e.code, key: e.key, down: true });
+                // A paste: Ctrl+V, or Cmd+V where Cmd is sent as Ctrl. Not on auto-repeat,
+                // or holding V would re-read the clipboard for every repeat.
+                if (e.code === 'KeyV' && !e.repeat && !e.altKey
+                        && (e.ctrlKey || (e.metaKey && els.cmdCtrl.checked))) {
+                    pasteThenRelease();
+                }
+                sendKey(e, true);
                 e.preventDefault();
             });
             v.addEventListener('keyup', (e) => {
-                sendInput({ t: 'k', code: e.code, key: e.key, down: false });
+                sendKey(e, false);
                 e.preventDefault();
             });
         }
@@ -1112,6 +1195,22 @@
         els.viewOnly.addEventListener('change', () => {
             hint(els.viewOnly.checked ? t('machine.remote.view_only_note') : '');
             if (keyboard) keyboard.setEnabled(!els.viewOnly.checked);
+            if (clipboard) clipboard.refresh();
+        });
+
+        // Cmd as Ctrl is offered on Apple keyboards only, where Cmd is the copy/paste key, and
+        // starts ticked there. Remembered per browser: it is the operator's keyboard, not the PC.
+        const appleKeyboard = /Mac|iPhone|iPad/i.test(
+            navigator.userAgentData?.platform || navigator.platform || '');
+        els.cmdCtrlWrap.hidden = !appleKeyboard;
+        let cmdPref = null;
+        try { cmdPref = window.localStorage.getItem(CMD_AS_CTRL_KEY); } catch (e) { /* none */ }
+        els.cmdCtrl.checked = appleKeyboard && cmdPref !== '0';
+        els.cmdCtrl.addEventListener('change', () => {
+            metaChord.clear();
+            try {
+                window.localStorage.setItem(CMD_AS_CTRL_KEY, els.cmdCtrl.checked ? '1' : '0');
+            } catch (e) { /* private window: the box still works for this page */ }
         });
 
         document.addEventListener('fullscreenchange', onFullscreenChange);

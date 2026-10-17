@@ -410,8 +410,17 @@ public static class RemoteHelper
         };
         await peer.EnableControlChannelAsync();
 
+        // Text clipboard sync (issue #148). Started before the offer because the offer is where
+        // the console learns whether to show its clipboard controls at all; a bridge that failed
+        // to start says no there, and the session goes on without it. A copy on the PC goes
+        // through the router, like geometry, so it reaches a relayed viewer too.
+        using var clipboard = new ClipboardBridge(m => Log.Information("{Msg}", m));
+        clipboard.TextCopied += (text, truncated) =>
+            router.SendControl(ClipboardMessages.Clip(text, truncated));
+
         // Offer first, then start streaming, then poll for the answer + remote ICE.
-        var offer = await peer.CreateOfferAsync(relayCapable: true);
+        var offer = await peer.CreateOfferAsync(relayCapable: true,
+                                                clipboardCapable: clipboard.IsReady);
         int offerSeq = 0;
         SessionSupersededException? superseded = null;
         try { offerSeq = await signaling.PostSignalAsync("offer", offer, cts.Token); }
@@ -463,7 +472,8 @@ public static class RemoteHelper
         }, cts);
 
         var inputThread = StartThread("remote-input",
-            () => RunInputLoop(inputQueue, settings, pendingGeometry, desktops, cts.Token), cts);
+            () => RunInputLoop(inputQueue, settings, pendingGeometry, desktops, clipboard, cts.Token),
+            cts);
 
         // The console gave up on WebRTC and asked for the hub relay (remote_relay.py). Move the
         // stream across: the relay becomes the sink, input starts arriving from the hub into the
@@ -559,10 +569,11 @@ public static class RemoteHelper
     /// </summary>
     private static void RunInputLoop(
         InputQueue queue, LiveStreamSettings settings, GeometrySignal geometry,
-        InputDesktopWatcher desktops, CancellationToken ct)
+        InputDesktopWatcher desktops, ClipboardBridge clipboard, CancellationToken ct)
     {
         using var binder = new ThreadDesktopBinder("input", m => Log.Information("{Msg}", m));
         var input = new InputInjector();
+        var paste = new ClipboardAssembler();
 
         while (!ct.IsCancellationRequested)
         {
@@ -580,6 +591,7 @@ public static class RemoteHelper
             try
             {
                 if (TryApplyConfig(msg, settings)) continue;
+                if (TryApplyClipboard(msg, paste, clipboard)) continue;
                 input.Apply(msg);
             }
             catch (Exception e) { Log.Warning("input event failed: {Msg}", e.Message); }
@@ -650,6 +662,28 @@ public static class RemoteHelper
         Log.Information("Viewer changed stream settings: monitor={Monitor} {Fps}fps " +
                         "{Kbps}kbps scale={Scale}%",
                         applied.Monitor, applied.Fps, applied.BitrateBps / 1000, applied.ScalePercent);
+        return true;
+    }
+
+    /// <summary>Handle one <c>{"t":"clip", ...}</c> chunk of a paste from the viewer (issue
+    /// #148). Returns true if the message was one (and therefore not input).
+    ///
+    /// <b>Here, on the input thread, and synchronously</b>, because the viewer sends a paste
+    /// immediately followed by the Ctrl+V that uses it. Handling both on one thread in arrival
+    /// order, and waiting for the clipboard to take the text before moving on, is what makes
+    /// that Ctrl+V paste the new text instead of whatever was on the PC's clipboard before.
+    /// The prefix test keeps every other message from paying for a parse; the viewer builds
+    /// the object with "t" first, as every message on this channel does.</summary>
+    private static bool TryApplyClipboard(string json, ClipboardAssembler paste, ClipboardBridge clipboard)
+    {
+        if (!json.StartsWith("{\"t\":\"clip\"", StringComparison.Ordinal)) return false;
+        JsonElement e;
+        try { e = JsonDocument.Parse(json).RootElement; }
+        catch { return true; }
+        string? text = paste.Accept(e);
+        if (text is not null && !clipboard.SetText(text))
+            Log.Warning("Viewer paste of {Chars} characters could not be put on the clipboard.",
+                        text.Length);
         return true;
     }
 
