@@ -1376,8 +1376,69 @@ def agent_config_version(db_path):
     across a hub restart or a DB restore), and a change that is made and then reverted
     hashes back to the original, so agents that never observed the intermediate state
     don't re-apply anything. A counter would tick twice and churn the whole fleet.
+
+    Fleet-wide, and so NOT what the heartbeat compares against any more -- see
+    agent_config_version_for(), which folds in the build each machine is running.
     """
     return _current(db_path)["agent_version"]
+
+
+def agent_config_version_for(db_path, machine):
+    """The config version ONE machine should hold: agent_config_version() salted with the
+    agent build that machine last reported. What the heartbeat compares against.
+
+    **An agent records the version of a payload, not of the keys it understood.** An
+    agent's RuntimeConfig reads its fields off an allow-list, so a key newer than its build
+    is skipped -- and the version is stored anyway. When that agent then updates, the new
+    build loads the saved config, finds the new field absent (its compiled default), and
+    sends a version that still matches. The hub stays silent, for good. This bit roadmap
+    #31 on its first pilot (2026-10-17): `tickets.tray_enabled` went on while FCOM1109 and
+    OPENCLAW were still on the stable build, they moved to the beta with the tray a minute
+    later, and neither ever started one -- through reboots, because the config is on disk.
+    Any agent=True key turned on before the fleet that understands it has updated does the
+    same thing.
+
+    Salting with the build makes an update a version change: the first heartbeat after the
+    hub learns the new build re-sends the whole payload, which the new build reads in full.
+    The build is `machine_info.companion_version`, from /api/report. It can trail the
+    heartbeat by one report after a restart, which costs a tick -- the old salt still
+    matches the old saved version, and the push lands as soon as the report does.
+
+    A machine that never reported a version gets the plain fleet hash, exactly as before.
+    Deploying this makes every agent's held version stale once, so the fleet re-applies an
+    unchanged payload one time. That is a log line per machine, not a behaviour change.
+
+    Rejected: fixing it only in the agent (clear the saved version when the build changes).
+    Right as well, but it reaches nobody until an agent release does, and it cannot unstick
+    the machines that already hold a wrong version -- this works from the next hub deploy,
+    for every build in the field. Also rejected: a per-machine "build we last sent config
+    to" column -- state to migrate and keep in sync, for what a stateless salt answers.
+    """
+    base = agent_config_version(db_path)
+    build = _running_agent_build(db_path, machine)
+    if not build:
+        return base
+    blob = f"{base}|{build}".encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def _running_agent_build(db_path, machine):
+    """The agent version a machine last reported, or None. Tolerant of machine_info not
+    existing yet, like channels.override_for, because this is read on every heartbeat and
+    a hub mid-migration must keep answering them."""
+    name = str(machine or "").strip()
+    if not name:
+        return None
+    try:
+        with get_conn(db_path) as conn:
+            row = conn.execute(
+                "SELECT companion_version FROM machine_info WHERE machine = ?",
+                (name,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not row or not row["companion_version"]:
+        return None
+    return str(row["companion_version"]).strip() or None
 
 
 def _agent_version_for(values):

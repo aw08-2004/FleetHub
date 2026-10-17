@@ -186,7 +186,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         # authenticate_agent already refreshed last_seen.
         data = request.get_json(silent=True) or {}
         payload = {"status": "ok", "machine": machine}
-        current_version = settings.agent_config_version(db_path)
+        # Per machine, salted with its agent build: an agent that updated would otherwise
+        # keep a version stored by a build that skipped the newer keys. See the function.
+        current_version = settings.agent_config_version_for(db_path, machine)
         if data.get("config_version") != current_version:
             payload["config"] = settings.agent_config(db_path)
             payload["config_version"] = current_version

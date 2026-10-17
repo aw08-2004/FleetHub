@@ -868,6 +868,30 @@ def test_version_format_policy():
     check("README points at it", "VERSIONING.md" in read("README.md"))
 
 
+def test_config_version_follows_reported_build():
+    """The heartbeat's config version, salted with the build a machine reported, against
+    app.py's REAL machine_info schema.
+
+    tests/test_fleet_web.py drives the heartbeat end to end, but over a two-column table it
+    builds by hand, because it cannot import app. settings._running_agent_build swallows
+    OperationalError so a mid-migration hub keeps answering heartbeats -- which means a
+    renamed column would quietly drop every machine back to the fleet-wide hash, and an
+    agent that updated would again never be re-sent the keys its old build skipped (the
+    3.45.0 tray pilot). This is the check that would notice.
+    """
+    import settings as _settings
+    print("\n-- config version follows the reported agent build --")
+    base = _settings.agent_config_version(app.DB_PATH)
+    check("an unreported machine gets the fleet hash",
+          _settings.agent_config_version_for(app.DB_PATH, "cfg-build-box") == base)
+    app.save_machine_info("cfg-build-box", None, None, None, companion_version="3.44.0")
+    old = _settings.agent_config_version_for(app.DB_PATH, "cfg-build-box")
+    check("a reported build salts the version", old != base)
+    app.save_machine_info("cfg-build-box", None, None, None, companion_version="3.45.0")
+    check("an agent update changes the version",
+          _settings.agent_config_version_for(app.DB_PATH, "cfg-build-box") not in (base, old))
+
+
 def test_channel_wiring():
     """The app.py half of release channels (roadmap #21).
 
@@ -984,6 +1008,7 @@ if __name__ == "__main__":
     test_unknown_train()
     test_report_endpoint()
     test_channel_wiring()
+    test_config_version_follows_reported_build()
     test_hub_self_update()
     test_hub_update_archive_swap()
     test_hub_update_restart_gates()
