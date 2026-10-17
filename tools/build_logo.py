@@ -18,7 +18,7 @@ The console's own copies of the mark (sidebar, mobile topbar, login, invite, onb
 **not** written here: they are inline SVG in `hub/templates/partials/_logo.html`, coloured by
 `currentColor` and `var(--accent)` so they follow the light/dark theme, which an `<img>` cannot.
 If the geometry below changes, change that partial in the same commit -- the two are the same
-four numbers and nothing compares them.
+four numbers, and tests/test_logo.py fails until they agree again.
 
 **No Pillow, no cairosvg, no browser.** The PNGs are rasterised here from signed distance
 functions with analytic anti-aliasing, and written with zlib. The rejected alternatives were
@@ -113,7 +113,7 @@ def render_tile(size):
         for i in range(size):
             x, y = (i + 0.5) * unit, (j + 0.5) * unit
             alpha = cov(sd_round_rect(x, y, 32, TILE_RADIUS))
-            if alpha == 0.0:
+            if alpha <= 0.0:
                 continue
             mx, my, mp = (x - o) / s, (y - o) / s, unit / s     # into mark space
             d = min(sd_segment(mx, my, 16, 16, nx, ny, SPOKE_W / 2) for nx, ny in NODES)
