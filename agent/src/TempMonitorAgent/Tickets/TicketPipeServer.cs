@@ -56,7 +56,15 @@ public readonly record struct TicketSubmitResult(int Status, long TicketId, stri
 public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplink uplink)
 {
     /// <summary>Two, not one: a tray that is restarting overlaps its successor for a moment,
-    /// and refusing the new one would leave a session trayless until the next pass.</summary>
+    /// and refusing the new one would leave a session trayless until the next pass.
+    ///
+    /// Counted from the moment a connection is accepted, before its hello, so another process
+    /// in the same session can hold both slots -- idle until <see cref="HelloTimeout"/>, or
+    /// indefinitely after sending a hello -- and keep the real tray out. Accepted: that process
+    /// already runs as the person it is locking out, so it can only deny them a ticket button
+    /// they could equally lose to it killing the tray, and never touches another session.
+    /// Counting only after hello was rejected because it would let one session open
+    /// unbounded pre-hello connections against a SYSTEM process. Raised in review on PR #146.</summary>
     public const int MaxConnectionsPerSession = 2;
     private const int MaxInstances = 32;
     private static readonly TimeSpan HelloTimeout = TimeSpan.FromSeconds(15);
