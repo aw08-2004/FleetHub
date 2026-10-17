@@ -51,9 +51,8 @@
     /** Cut to at most `max` code units without splitting a surrogate pair. */
     function truncate(text, max) {
         if (text.length <= max) return text;
-        let cut = max;
-        const last = text.charCodeAt(cut - 1);
-        if (last >= 0xd800 && last <= 0xdbff) cut--;
+        // A code point above U+FFFF starting at the last unit kept is a pair the cut would split.
+        const cut = text.codePointAt(max - 1) > 0xffff ? max - 1 : max;
         return text.slice(0, cut);
     }
 
@@ -65,8 +64,9 @@
         let current = '';
         let cost = 0;
         for (const ch of text) {
-            let c = 0;
-            for (let k = 0; k < ch.length; k++) c += unitCost(ch.charCodeAt(k));
+            // Outside the BMP, json.dumps writes the two halves of the pair as two escapes.
+            const point = ch.codePointAt(0);
+            const c = point > 0xffff ? 12 : unitCost(point);
             if (cost + c > budget && current) {
                 parts.push(current);
                 current = '';
@@ -112,9 +112,14 @@
 
         async function write(text) {
             if (!clip?.writeText) return false;
-            // A refusal is the expected answer in Safari and Firefox without a click, not an
-            // error: the caller lights up Copy from PC instead.
-            try { await clip.writeText(text); return true; } catch (e) { return false; }
+            try {
+                await clip.writeText(text);
+                return true;
+            } catch (e) {
+                // A refusal is the expected answer in Safari and Firefox without a click, not an
+                // error: the caller lights up Copy from PC instead.
+                return false;
+            }
         }
 
         /** {t:'clip', s, trunc} from the agent: someone copied on the PC. */
