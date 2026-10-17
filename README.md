@@ -1,3 +1,5 @@
+<img src="hub/static/favicon.svg" width="64" height="64" alt="FleetHub logo">
+
 # FleetHub
 
 FleetHub is a self-hosted remote monitoring and management (RMM) tool for small IT teams.

@@ -14,6 +14,10 @@
          with until agent-install.ps1 runs on it again, because self-update writes the new
          build over whatever path is running. See ROADMAP.MD, "Agent exe renamed". -->
     <AssemblyName>FleetHubAgent</AssemblyName>
+    <!-- The FleetHub mark, written by tools/build_logo.py. It is more than Explorer cosmetics:
+         the ticket tray (Tickets/TrayApp.cs) takes its icon from this exe, and without one
+         it falls back to the generic system information icon. -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
 
     <!-- WinForms is here for exactly one screen: the attended-consent prompt the remote helper
          shows on the end user's desktop (Remote/ConsentDialog.cs). The service itself stays

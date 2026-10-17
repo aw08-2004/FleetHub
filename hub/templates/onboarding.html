@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ t('onboarding.wizard.title') }} - FleetHub</title>
-<link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
 {# Standalone rather than {% extends "base.html" %}, exactly like invite.html: this page is
    opened on a PC that is not enrolled, by somebody who is not signed in. It says nothing
    about the hub beyond its name -- see onboarding_web.py. #}
@@ -27,7 +28,7 @@
 <body class="login-body">
     <div class="login-card onboarding-card">
         <div class="login-card__brand">
-            <img src="{{ url_for('static', filename='thermometer.png') }}" alt="">
+            {% include "partials/_logo.html" %}
             <h1>FleetHub</h1>
         </div>
 
