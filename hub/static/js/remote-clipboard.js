@@ -111,7 +111,9 @@
         }
 
         async function write(text) {
-            if (!clip || !clip.writeText) return false;
+            if (!clip?.writeText) return false;
+            // A refusal is the expected answer in Safari and Firefox without a click, not an
+            // error: the caller lights up Copy from PC instead.
             try { await clip.writeText(text); return true; } catch (e) { return false; }
         }
 
@@ -148,7 +150,7 @@
         async function paste(quiet) {
             if (!capable || opts.viewOnly()) return false;
             let text;
-            try { text = clip && clip.readText ? await clip.readText() : null; }
+            try { text = clip?.readText ? await clip.readText() : null; }
             catch (e) { text = null; }
             if (text === null) {
                 opts.hint(t('machine.remote.clip_read_denied'));
@@ -157,7 +159,7 @@
             if (!text || (quiet && text === lastSynced)) return false;
             const sent = truncate(text, MAX_CHARS);
             const id = nextId++;
-            chunks(sent, id).forEach(opts.send);
+            chunks(sent, id).forEach((message) => opts.send(message));
             lastSynced = text;
             opts.hint(t('machine.remote.clip_sent')
                 + (sent.length < text.length ? ' ' + t('machine.remote.clip_truncated') : ''));

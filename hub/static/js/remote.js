@@ -577,6 +577,28 @@
             return true;
         }
 
+        /** The agent's `geom` report: the capture size clicks are mapped against, which desktop
+         *  it is on, and how many monitors there are. Its own function so the status switch
+         *  below stays a switch. */
+        function applyGeometry(msg) {
+            captured = { w: msg.w || 0, h: msg.h || 0 };
+            const secure = msg.desktop && msg.desktop.toLowerCase() !== 'default';
+            els.desktopBadge.hidden = !secure;
+            if (secure) {
+                // 'Winlogon' is the desktop OBJECT's name, not prose -- any other value is
+                // shown verbatim because it came from Windows.
+                els.desktopBadge.lastChild.textContent =
+                    msg.desktop === 'Winlogon'
+                        ? t('machine.remote.logon_screen_desktop') : msg.desktop;
+            }
+            populateMonitors(msg.monitors, msg.monitor);
+            meta(t('machine.remote.geom', {
+                width: msg.w, height: msg.h, encoder: msg.encoder || '',
+                desktop: msg.desktop || t('machine.remote.desktop_unknown'),
+            }));
+            hint('');
+        }
+
         // Status the agent pushes down the control channel. Without this, "the screen went
         // black" is unguessable from here -- and the agent already knows why.
         function handleAgentStatus(raw) {
@@ -585,22 +607,7 @@
             if (!msg || typeof msg !== 'object') return;
 
             if (msg.t === 'geom') {
-                captured = { w: msg.w || 0, h: msg.h || 0 };
-                const secure = msg.desktop && msg.desktop.toLowerCase() !== 'default';
-                els.desktopBadge.hidden = !secure;
-                if (secure) {
-                    // 'Winlogon' is the desktop OBJECT's name, not prose -- any other value is
-                    // shown verbatim because it came from Windows.
-                    els.desktopBadge.lastChild.textContent =
-                        msg.desktop === 'Winlogon'
-                            ? t('machine.remote.logon_screen_desktop') : msg.desktop;
-                }
-                populateMonitors(msg.monitors, msg.monitor);
-                meta(t('machine.remote.geom', {
-                    width: msg.w, height: msg.h, encoder: msg.encoder || '',
-                    desktop: msg.desktop || t('machine.remote.desktop_unknown'),
-                }));
-                hint('');
+                applyGeometry(msg);
             } else if (msg.t === 'capture' && msg.state === 'stalled'
                        && msg.reason === 'no_display') {
                 // Neither capture path can see a screen: the helper is in a Windows session with
@@ -790,7 +797,7 @@
          *  the V would race the clipboard read -- which waits on the browser, sometimes on a
          *  permission prompt -- and paste whatever the PC had before. */
         function pasteThenRelease() {
-            if (heldInput || !clipboard || !clipboard.isCapable() || els.viewOnly.checked) return;
+            if (heldInput || !clipboard?.isCapable() || els.viewOnly.checked) return;
             const hold = heldInput = [];
             clipboard.pasteBeforeKeys().finally(() => {
                 // Not ours any more: the session was torn down (and maybe restarted) while the
