@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ t('login.title') }} - FleetHub</title>
-<link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
 <script>
 // A session that expires while the console is open leaves the app shell's frame pointed at a
 // page that redirects here (see app.py's _shell_mode) -- and a login form wrapped in the
@@ -32,7 +33,7 @@ if (window.top !== window.self) window.top.location.replace(window.location.href
 <body class="login-body">
     <div class="login-card">
         <div class="login-card__brand">
-            <img src="{{ url_for('static', filename='thermometer.png') }}" alt="">
+            {% include "partials/_logo.html" %}
             <h1>FleetHub</h1>
         </div>
         {# Which buttons appear is decided by what is configured in .env; the hub refuses

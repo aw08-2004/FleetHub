@@ -4,7 +4,7 @@
     <button type="button" id="nav-toggle" class="btn btn--icon nav-toggle" aria-label="{{ t('nav.open') }}" aria-controls="app-sidebar" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
-    <span class="topbar__brand">FleetHub</span>
+    <span class="topbar__brand">{% include "partials/_logo.html" %}FleetHub</span>
     {# Device and page search (hub 1.114.0, command-palette.js). Only with a session: the
        palette's device half is /api/machines, which a login page cannot call, and its page
        half is the sidebar, which the login page does not have. #}

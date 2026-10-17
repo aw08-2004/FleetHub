@@ -109,9 +109,10 @@
     padding: 0 var(--space-2);
 }
 
-.sidebar__brand img {
+.sidebar__brand .brand-mark {
     width: 24px;
     height: 24px;
+    flex-shrink: 0;
 }
 
 .sidebar__brand-name {
@@ -1717,8 +1718,16 @@ label.checkbox input {
     display: none;
 }
 
+.topbar__brand .brand-mark {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
 .topbar__brand {
     display: none;
+    align-items: center;
+    gap: var(--space-2);
     margin-right: auto;
     font-weight: 600;
     font-size: var(--text-md);
@@ -1742,7 +1751,7 @@ label.checkbox input {
         flex-shrink: 0;
     }
 
-    .topbar__brand { display: block; }
+    .topbar__brand { display: flex; }
 
     .nav-toggle { order: -1; }
 }

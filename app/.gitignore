@@ -8,7 +8,7 @@ pubspec.lock
 # see README.md. Kept out of the repo so a Flutter SDK upgrade does not arrive as a
 # thousand-line diff nobody reviews.
 #
-# The five Windows runner files below are the exception. They carry the single-instance
+# The Windows runner files below are the exception. They carry the single-instance
 # guard and the version resource, and neither can live in lib/: the guard has to run
 # before the Flutter engine starts, and the VERSIONINFO block is compiled into the exe.
 # Untracked, a fresh checkout would silently rebuild the client without both. A
@@ -27,6 +27,11 @@ windows/runner/*
 !windows/runner/main.cpp
 !windows/runner/single_instance.cpp
 !windows/runner/single_instance.h
+# The FleetHub icon, compiled in by Runner.rc and loaded by the tray in main.dart. Written
+# by tools/build_logo.py; untracked, every checkout built with Flutter's default logo.
+!windows/runner/resources/
+windows/runner/resources/*
+!windows/runner/resources/app_icon.ico
 android/
 ios/
 linux/

@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ t('invite.title') }} - FleetHub</title>
-<link rel="icon" href="{{ url_for('static', filename='thermometer.png') }}">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
 {# Standalone rather than {% extends "base.html" %}, exactly like login.html: base.html
    renders the sidebar and the signed-in user's chrome, and this page is seen by somebody
    who by definition has no session yet. #}
@@ -29,7 +30,7 @@
 <body class="login-body">
     <div class="login-card">
         <div class="login-card__brand">
-            <img src="{{ url_for('static', filename='thermometer.png') }}" alt="">
+            {% include "partials/_logo.html" %}
             <h1>FleetHub</h1>
         </div>
 

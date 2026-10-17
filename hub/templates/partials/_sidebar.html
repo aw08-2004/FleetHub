@@ -3,7 +3,7 @@
    common.js initMobileNav() owns .sidebar--open / .nav-scrim[hidden]. #}
 <aside class="sidebar" id="app-sidebar">
     <div class="sidebar__brand">
-        <img src="{{ url_for('static', filename='thermometer.png') }}" alt="">
+        {% include "partials/_logo.html" %}
         <span class="sidebar__brand-name">FleetHub</span>
         {# Desktop only (the drawer has its own close button below, and a rail makes no
            sense on a phone). Chevron direction is CSS, driven by the collapsed attribute on
