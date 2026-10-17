@@ -108,6 +108,14 @@ ATTACHMENT_WINDOW_SECONDS = 10 * 60
 #: stays well under it, and a token in a loop fills neither the queue nor every phone on the
 #: helpdesk with `ticket_new` pushes. Found in review on PR #146.
 MAX_TICKETS_PER_MACHINE_HOUR = 20
+#: Replies the reporter may add to ONE ticket from the tray, per hour and in all. The same
+#: argument as the cap above, applied to the reply route: each reply is an 8000-character row,
+#: an alert refresh and possibly a re-open, and the service's per-person limit lives on the PC.
+#: Ten an hour is a lively conversation; two hundred in all is a ticket that should have been
+#: a phone call long ago. Found in review on PR #146.
+MAX_REPORTER_REPLIES_PER_HOUR = 10
+MAX_REPORTER_REPLIES = 200
+TOO_MANY_REPLIES = "too many replies on this ticket; please call IT"
 
 #: Sniffed, not trusted from Content-Type. The served type comes from here too, so a file
 #: that starts like a JPEG is served as one whatever the sender said it was.
@@ -585,11 +593,26 @@ def add_reporter_message(db_path, machine, ticket_id, reporter_sid, body, now=No
         return NO_SUCH_TICKET, None
     if row["status"] == STATUS_CLOSED:
         return "this ticket is closed", None
+    if _reporter_replies_capped(db_path, ticket_id, now):
+        return TOO_MANY_REPLIES, None
     error, message_id = add_message(db_path, ticket_id, row["reporter_name"], body,
                                     author_kind=AUTHOR_REPORTER, now=now)
     if error is None and row["status"] in (STATUS_WAITING, STATUS_RESOLVED):
         set_status(db_path, ticket_id, STATUS_OPEN, now=now)
     return error, message_id
+
+
+def _reporter_replies_capped(db_path, ticket_id, now=None):
+    """Whether this ticket has had its reporter's share of replies -- see
+    MAX_REPORTER_REPLIES_PER_HOUR. Counted from the table, so a restart resets nothing."""
+    now = int(time.time() if now is None else now)
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total, "
+            "       COALESCE(SUM(CASE WHEN created_at > ? THEN 1 ELSE 0 END), 0) AS recent "
+            "FROM ticket_messages WHERE ticket_id = ? AND author_kind = ?",
+            (now - 3600, int(ticket_id), AUTHOR_REPORTER)).fetchone()
+    return row["recent"] >= MAX_REPORTER_REPLIES_PER_HOUR or row["total"] >= MAX_REPORTER_REPLIES
 
 
 def machine_of(db_path, ticket_id):

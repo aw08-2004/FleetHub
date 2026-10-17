@@ -428,6 +428,19 @@ def test_reporter_reply():
     check("a CLOSED ticket refuses, and says so", error == "this ticket is closed")
     check("...and stays closed", tickets.get_ticket(db, ticket_id)["status"] == "closed")
 
+    other = tickets.create_ticket(db, "PC-1", "agent-1", submission(), {})
+    for n in range(tickets.MAX_REPORTER_REPLIES_PER_HOUR):
+        tickets.add_reporter_message(db, "PC-1", other, "S-1-5-21-1", f"reply {n}", now=5000)
+    error, _ = tickets.add_reporter_message(db, "PC-1", other, "S-1-5-21-1", "one more", now=5000)
+    check("a reporter looping replies is stopped at the hourly cap",
+          error == tickets.TOO_MANY_REPLIES)
+    check("...and is let in again an hour later",
+          tickets.add_reporter_message(db, "PC-1", other, "S-1-5-21-1", "later",
+                                       now=5000 + 3601)[0] is None)
+    tickets.add_message(db, other, "op", "an operator is never capped", now=5000)
+    check("the cap counts the reporter's messages only",
+          tickets.get_ticket(db, other)["messages"][-1]["author_kind"] == tickets.AUTHOR_OPERATOR)
+
 
 def main():
     test_validation()

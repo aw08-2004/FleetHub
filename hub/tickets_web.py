@@ -219,6 +219,8 @@ class _TicketRoutes:
             return jsonify({"error": _log_generic("storing a reply from a PC")}), 500
         if error == tickets.NO_SUCH_TICKET:
             return jsonify({"error": NO_SUCH_TICKET}), 404
+        if error == tickets.TOO_MANY_REPLIES:
+            return jsonify({"error": error, "code": "rate_limited"}), 429
         if error:
             return jsonify({"error": error}), 409 if "closed" in error else 400
         self._emit("ticket_updated", ticket_id, machine)

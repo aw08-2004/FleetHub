@@ -68,6 +68,12 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
     private readonly List<TrayConnection> _connections = [];
     private readonly object _lock = new();
     private readonly SubmitLimiter _limiter = new();
+    /// <summary>Replies and "My tickets" requests, per person. Looser than submits -- a
+    /// conversation is several messages -- but bounded for the same reason: each one is a hub
+    /// request, and a reply is a row and an alert refresh, so a script looping them from a
+    /// standard account must not cost the hub without limit. Found in review on PR #146.</summary>
+    private readonly SubmitLimiter _replyLimiter = new(perWindow: 20);
+    private readonly SubmitLimiter _fetchLimiter = new(perWindow: 60);
 
     /// <summary>The Windows sessions that currently have a tray connected -- what the
     /// supervisor checks before starting another.</summary>
@@ -204,7 +210,12 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
                 await c.TrySendAsync(WithReq(await SubmitAsync(c.Caller, frame, ct), req), ct);
                 break;
             case TrayProtocol.Mine:
-                await SendTicketsAsync(c, req, ct);
+                // Over the limit the request is answered with a refusal, not with an empty
+                // list: an empty list would wipe the person's view of their own tickets.
+                if (_fetchLimiter.TryTake(c.Caller.Sid, DateTimeOffset.UtcNow))
+                    await SendTicketsAsync(c, req, ct);
+                else
+                    await c.TrySendAsync(WithReq(Failure("Please wait a moment.", "rate_limited"), req), ct);
                 break;
             case TrayProtocol.Reply:
                 await c.TrySendAsync(WithReq(await ReplyAsync(c.Caller, frame, ct), req), ct);
@@ -261,6 +272,9 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         var text = TicketRules.ReplyText(frame);
         var id = TicketRules.TicketId(frame);
         if (text.Length == 0 || id == 0) return Failure("Please write a reply first.", "invalid");
+        if (!_replyLimiter.TryTake(caller.Sid, DateTimeOffset.UtcNow))
+            return Failure("You have sent a lot of replies in the last few minutes. Please wait a "
+                           + "little, or call IT.", "rate_limited");
         // The SID is the CONNECTION's: a tray naming another person's ticket gets the hub's 404.
         var sent = await uplink.ReplyToTicketAsync(id, caller.Sid, text, ct);
         if (sent.Ok) return new JsonObject { ["type"] = TrayProtocol.Result, ["ok"] = true };
@@ -268,6 +282,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         {
             0 => Failure("The helpdesk could not be reached. Your reply was NOT sent.", "unreachable"),
             409 => Failure("This ticket is closed. Please open a new one.", "closed"),
+            429 => Failure(sent.Error ?? "Too many replies on this ticket. Please call IT.", "rate_limited"),
             _ => Failure(sent.Error ?? "The helpdesk did not accept this reply.", "refused"),
         };
     }
