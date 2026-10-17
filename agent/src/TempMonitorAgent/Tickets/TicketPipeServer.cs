@@ -74,6 +74,15 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
     internal string PipeName { get; init; } = AgentConfig.TicketPipeName;
 
     private readonly List<TrayConnection> _connections = [];
+
+    /// <summary>Pipe instances this service holds right now, listening or connected. At zero
+    /// the next instance is created with FirstPipeInstance, so a process that squatted the name
+    /// before the service started makes the create FAIL -- logged and retried by RunAsync --
+    /// instead of the service quietly joining the squatter's pipe as one more instance. The
+    /// tray's session-0 check already refuses such a pipe; this makes the squat visible in
+    /// companion.log too. A count that is briefly stale only costs one retry. Raised in review
+    /// on PR #146.</summary>
+    private int _liveInstances;
     private readonly object _lock = new();
     /// <summary>The code a tray reads as "slow down", from the service or the hub.</summary>
     private const string RateLimited = "rate_limited";
@@ -118,7 +127,11 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
             }
             finally
             {
-                if (server is not null) await server.DisposeAsync();
+                if (server is not null)
+                {
+                    await server.DisposeAsync();
+                    Interlocked.Decrement(ref _liveInstances);
+                }
             }
         }
     }
@@ -209,6 +222,7 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         {
             if (connection is not null) lock (_lock) _connections.Remove(connection);
             await pipe.DisposeAsync();
+            Interlocked.Decrement(ref _liveInstances);
         }
     }
 
@@ -377,11 +391,15 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(WellKnownSidType.NetworkSid, null),
             PipeAccessRights.FullControl, AccessControlType.Deny));
-        return NamedPipeServerStreamAcl.Create(
+        var options = PipeOptions.Asynchronous;
+        if (Volatile.Read(ref _liveInstances) == 0) options |= PipeOptions.FirstPipeInstance;
+        var server = NamedPipeServerStreamAcl.Create(
             PipeName, PipeDirection.InOut, MaxInstances,
             // A small out-buffer so a policy or a short list does not wait on the tray; the
             // in-buffer stays 0 because the reader is this process and frames are length-checked.
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 64 * 1024, security);
+            PipeTransmissionMode.Byte, options, 0, 64 * 1024, security);
+        Interlocked.Increment(ref _liveInstances);
+        return server;
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
