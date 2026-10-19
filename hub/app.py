@@ -163,7 +163,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.153.2"
+HUB_VERSION = "1.154.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -6675,9 +6675,13 @@ def get_hub_version_info():
     """What the sidebar notice polls. Cheap and side-effect free: it reports the version
     the watcher last saw on main, and never goes to GitHub itself."""
     state = get_hub_update_state()
+    latest = get_latest_hub_version()
     return jsonify({
         "current": HUB_VERSION,
-        "latest": get_latest_hub_version(),
+        "latest": latest,
+        # Where the notice's "Release notes" link points. Built, not fetched: nothing here
+        # checks the file exists, which is why CLAUDE.md makes writing it part of the bump.
+        "release_notes_url": channels.hub_release_notes_url(latest, hub_update_channel()),
         "update_available": hub_update_available(),
         # The notice stays out of the way when the hub will install this by itself.
         "auto_update": hub_auto_update_enabled(),
@@ -6686,6 +6690,11 @@ def get_hub_version_info():
         "update_mode": HUB_UPDATE_MODE,
         "status": state["status"],
         "error": state["error"],
+        # The new-agent notice rides the same poll rather than a second timer. A notice, not
+        # a gate: agents install this on their own within ~15 minutes of the heartbeat hint
+        # (and on their weekly check regardless), so the box can only say so and link the
+        # notes -- holding a release back would need an agent change (rejected, 2026-10-19).
+        "agent": _fleet_agent_release(),
     }), 200
 
 
@@ -6954,6 +6963,29 @@ def _frame_policy(response):
     return response
 
 
+def _fleet_agent_release():
+    """The newest Windows agent on the fleet's default channel, for the sidebar notice.
+
+    The fleet default rather than per machine: the notice speaks for the fleet, and a pilot
+    ring on beta is the exception the operator already chose. `latest` is None until the
+    version watcher has read the manifest once -- the notice stays hidden rather than
+    announcing nothing. Never raises; the nav context renders on the login page too."""
+    try:
+        channel = agent_channel_for(None)
+        latest = get_latest_agent_version(channel, capabilities.PLATFORM_WINDOWS)
+        return {"latest": latest, "channel": channel,
+                "release_notes_url": channels.agent_release_notes_url(latest, channel)}
+    except Exception:
+        return {"latest": None, "channel": channels.DEFAULT, "release_notes_url": None}
+
+
+def _hub_release_notes_url():
+    try:
+        return channels.hub_release_notes_url(get_latest_hub_version(), hub_update_channel())
+    except Exception:
+        return None
+
+
 def _hub_update_notice_visible():
     """Whether the sidebar should announce an update: one is available AND the hub is not
     going to install it unattended. Never raises -- hub_auto_update_enabled() reads the
@@ -7001,6 +7033,9 @@ def inject_nav_context():
                "hub_update_available": _hub_update_notice_visible(),
                # "image": the notice names the image to pull and offers no button.
                "hub_update_mode": HUB_UPDATE_MODE,
+               "hub_release_notes_url": _hub_release_notes_url(),
+               # First paint for the new-agent notice beside it; same poller afterwards.
+               "fleet_agent_release": _fleet_agent_release(),
                # CSRF token for the meta tag; _get_or_create_csrf_token is safe to
                # call on every render -- it only creates a token when the session
                # does not already carry one.

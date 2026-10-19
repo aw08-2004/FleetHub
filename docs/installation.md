@@ -212,7 +212,13 @@ endpoints behind it (`GET /api/hub/version`, `POST /api/hub/update`) are gated o
 `manage_settings` — the same grant that can flip `hub.auto_update`, since it is the same
 decision — and every manual update is written to the audit log at security level. The
 notice can be dismissed per-browser; it comes back for the next release, and it stays out
-of the way entirely while `hub.auto_update` is on.
+of the way entirely while `hub.auto_update` is on. Its **Release notes** link opens
+`deploy/docker/release-notes/<version>.md` on the channel's branch.
+
+Under it, a second notice announces each new **agent** release on the fleet's default
+channel, with a link to that version's GitHub release. It is only a notice: agents install
+the release themselves within about 15 minutes, whether or not anyone reads it. It is
+dismissed the same way and comes back for the next agent release.
 
 How it updates depends on the layout, decided by whether a `.git` directory is present:
 
@@ -254,6 +260,12 @@ like the repository it is built from, so the hub host needs no `docker login`. I
 Docker Engine (Linux) or Docker Desktop (Windows). Agents need no change as long as the
 public `HUB_URL` stays the same: they know only that URL and pin no certificate.
 
+Start from the template beside the compose file, fill in the required values, then start:
+
+```bash
+cp deploy/docker/example.env deploy/docker/.env
+```
+
 ```bash
 docker compose -f deploy/docker/compose.yaml up -d
 ```
@@ -282,10 +294,16 @@ docker compose -f deploy/docker/compose.yaml up -d
 ```
 
 **All state is one volume**, `/state`: `.env`, `logs/` (the database, file spool, disk
-history, packages, firmware and the encrypted secret store) and `data/` (recordings). The
-`.env` lives on the volume rather than in compose's `environment:` because the hub **writes**
-to it: it adds `BACKUP_MASTER_KEY`, and the Settings pages save sign-in, TURN and AI values
-there. Don't set `HUB_STATE_DIR`, `HUB_LOG_DIR` or `HUB_RECORDINGS_DIR`; the image owns them.
+history, packages, firmware and the encrypted secret store) and `data/` (recordings).
+
+**Two `.env` files, with different jobs.** `deploy/docker/.env` on the host is passed in via
+`env_file:` and holds the bootstrap values: `FLASK_SECRET_KEY`, `ALLOWED_EMAILS`, `HUB_URL`,
+the agent secrets, SMTP. `/state/.env` on the volume is the one the hub **writes**: it adds
+`BACKUP_MASTER_KEY`, and the Settings pages save sign-in, TURN, AI and directory values there.
+**Keep those console-managed keys out of the host file.** The hub never lets `/state/.env`
+override a variable that is already set, so a host value wins: a console change looks saved,
+then reverts on the next recreate. `example.env` lists them. Don't set `HUB_STATE_DIR`,
+`HUB_LOG_DIR` or `HUB_RECORDINGS_DIR` either; the image owns them.
 
 - **Named volume by default.** SQLite on a Docker Desktop bind mount is slow and its locking
   is unreliable. On a Linux host a bind mount is fine, owned by uid `10001`.
@@ -313,7 +331,8 @@ there. Don't set `HUB_STATE_DIR`, `HUB_LOG_DIR` or `HUB_RECORDINGS_DIR`; the ima
 2. Create the volume, and copy `.env`, `logs\` and `data\` from
    `C:\Program Files\FleetHub\Hub` into it with a one-off container. Then `chown -R
    10001:10001 /state` from that container, and remove any `HUB_*_DIR` lines from the copied
-   `.env`.
+   `.env`. It keeps working as the hub's own store. `deploy/docker/.env` must still exist for
+   compose: copy the bootstrap keys into it, or leave it as just `HUB_TAG`.
 3. Run `docker compose up -d`, and point the tunnel or proxy origin at port 3001 on the
    container host.
 4. Check that agents keep checking in. They need no reconfiguration.

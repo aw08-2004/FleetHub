@@ -305,6 +305,9 @@
        alerts badge above: common.js has to have something to find when the poller
        discovers an update on a shell document that never reloads. #}
     {% if cap.MANAGE_SETTINGS in user_capabilities %}
+    {# One wrapper owns the bottom pin: two notices each carrying margin-top:auto would split
+       the free space between them and float the first one into the middle of the sidebar. #}
+    <div class="sidebar__updates">
     <div class="sidebar__update banner banner--warn" id="hub-update-notice"
          data-hub-latest="{{ latest_hub_version or '' }}" {% if not hub_update_available %}hidden{% endif %}>
         <button type="button" class="sidebar__update-dismiss" id="hub-update-dismiss"
@@ -322,6 +325,27 @@
                 {% if hub_update_mode == 'image' %}hidden{% endif %}>
             {{ t('hub_update.update_now') }}
         </button>
+        <a class="sidebar__update-link" id="hub-update-notes" target="_blank" rel="noopener noreferrer"
+           href="{{ hub_release_notes_url or '' }}" {% if not hub_release_notes_url %}hidden{% endif %}>
+            {{ t('hub_update.release_notes') }}
+        </a>
+    </div>
+    {# New agent release. A notice, not a gate: agents install it on their own within about
+       15 minutes, so all this can do is say so and point at the notes before it lands.
+       Dismissed per version in localStorage, like the hub notice above. #}
+    {% set agent_rel = fleet_agent_release or {} %}
+    <div class="sidebar__update banner banner--warn" id="agent-update-notice"
+         data-agent-latest="{{ agent_rel.latest or '' }}" {% if not agent_rel.latest %}hidden{% endif %}>
+        <button type="button" class="sidebar__update-dismiss" id="agent-update-dismiss"
+                aria-label="{{ t('agent_update.dismiss') }}" title="{{ t('agent_update.dismiss') }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+        <p class="sidebar__update-text" id="agent-update-text">{{ t('agent_update.available', version=agent_rel.latest or '') }}</p>
+        <a class="sidebar__update-link" id="agent-update-notes" target="_blank" rel="noopener noreferrer"
+           href="{{ agent_rel.release_notes_url or '' }}" {% if not agent_rel.release_notes_url %}hidden{% endif %}>
+            {{ t('agent_update.release_notes') }}
+        </a>
+    </div>
     </div>
     {% endif %}
 </aside>

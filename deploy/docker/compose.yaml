@@ -19,6 +19,17 @@ services:
     container_name: fleethub-hub
     # Exactly one replica, ever: the schedulers, db_writer and Socket.IO state are in-process.
     restart: unless-stopped
+    # Bootstrap config from the host: `cp example.env .env` next to this file, then edit. The
+    # path resolves relative to this file, and the same .env feeds compose's own ${HUB_TAG}.
+    # Required on purpose -- a hub with no FLASK_SECRET_KEY refuses to start anyway, so a
+    # missing file is better caught here than in a crash loop.
+    #
+    # **Keep console-managed keys out of it.** The hub still reads /state/.env, but
+    # load_dotenv never overrides a variable already set, so anything injected here shadows
+    # what the Settings pages write there: the save looks applied, then reverts on the next
+    # recreate. example.env lists the keys that belong to the volume.
+    env_file:
+      - .env
     volumes:
       # A named volume rather than a bind mount by default: SQLite on a Docker Desktop bind
       # mount (Windows or macOS host paths) is slow and its file locking is not reliable.

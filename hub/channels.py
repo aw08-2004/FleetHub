@@ -184,6 +184,22 @@ def agent_manifest_url(channel=DEFAULT, platform=capabilities.PLATFORM_WINDOWS):
     return f"https://raw.githubusercontent.com/{REPO}/main/{directory}/{filename}"
 
 
+def agent_release_notes_url(version, channel=DEFAULT):
+    """The GitHub release page for a Windows agent version, or None for no version.
+
+    The tag is the one agent/release.ps1 cuts: `agent-v<version>`, with `-beta` on the beta
+    train (`agent-v3.46.1-beta`). The sidebar's new-agent notice links here, so a tag scheme
+    change in the release script has to change this too or every notice opens a 404.
+    Windows only on purpose -- the Linux and Android trains tag under their own prefixes, and
+    the notice only ever describes the fleet's Windows train.
+    """
+    version = str(version or "").strip()
+    if not version:
+        return None
+    suffix = "-beta" if normalize(channel) == BETA else ""
+    return f"https://github.com/{REPO}/releases/tag/agent-v{version}{suffix}"
+
+
 # ================================
 # CLIENT
 # ================================
@@ -207,6 +223,20 @@ def hub_source_url(channel=DEFAULT):
 def hub_archive_url(channel=DEFAULT):
     """The branch zip the files-only self-update path downloads."""
     return f"https://codeload.github.com/{REPO}/zip/refs/heads/{hub_ref(channel)}"
+
+
+def hub_release_notes_url(version, channel=DEFAULT):
+    """The release notes for a hub version, on the ref this hub's channel tracks, or None.
+
+    The hub has no GitHub releases -- a hub release is a HUB_VERSION bump on a branch -- so
+    the notes are a file, `deploy/docker/release-notes/<version>.md`, written in the same
+    change as the bump (CLAUDE.md makes that a rule). Read from the channel's ref rather than
+    from main, because a beta hub is announcing a version that only exists on beta.
+    """
+    version = str(version or "").strip()
+    if not version:
+        return None
+    return f"https://github.com/{REPO}/blob/{hub_ref(channel)}/deploy/docker/release-notes/{version}.md"
 
 
 # ================================

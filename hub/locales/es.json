@@ -51,7 +51,13 @@
     "update_now": "Actualizar ahora",
     "dismiss": "Descartar",
     "updating": "Actualizando… el hub se reiniciará en breve.",
-    "failed": "Error al actualizar. Consulta el registro del hub."
+    "failed": "Error al actualizar. Consulta el registro del hub.",
+    "release_notes": "Notas de la versión"
+  },
+  "agent_update": {
+    "available": "Se ha publicado el agente v{version}. Los equipos lo instalarán en unos 15 minutos.",
+    "release_notes": "Notas de la versión",
+    "dismiss": "Descartar"
   },
   "topbar": {
     "hub_version": "Hub v{version}",
