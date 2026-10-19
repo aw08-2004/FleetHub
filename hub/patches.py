@@ -2009,16 +2009,26 @@ def reconcile_control(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_S
         reported = [dict(r) for r in conn.execute(
             "SELECT machine, control_state FROM machine_patch_state "
             "WHERE control_state IN (?, ?)", (CONTROL_FLEETHUB, CONTROL_WINDOWS))]
-        recent = {r["machine"].lower() for r in conn.execute(
-            "SELECT machine FROM commands WHERE type = ? AND (status IN (?, ?) "
-            "  OR created_at > ?)",
-            (CONTROL_COMMAND_TYPE, fleet.STATUS_PENDING, fleet.STATUS_CLAIMED,
-             now - CONTROL_COOLDOWN_SECONDS))}
+        # (machine, own) pairs already sent recently. Keyed on the VALUE as well as the
+        # machine, so an operator who switches a window back off a minute after switching
+        # it on is not made to wait out the cooldown of the command they just reversed --
+        # the agent runs commands in order, so the later one is the state it ends in.
+        recent = set()
+        for r in conn.execute(
+                "SELECT machine, params_json FROM commands WHERE type = ? AND "
+                "(status IN (?, ?) OR created_at > ?)",
+                (CONTROL_COMMAND_TYPE, fleet.STATUS_PENDING, fleet.STATUS_CLAIMED,
+                 now - CONTROL_COOLDOWN_SECONDS)):
+            try:
+                own = bool(json.loads(r["params_json"] or "{}").get("own"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            recent.add((r["machine"].lower(), own))
     queued = 0
     for row in reported:
         want = control_desired(windows, row["machine"])
         have = row["control_state"] == CONTROL_FLEETHUB
-        if want == have or row["machine"].lower() in recent:
+        if want == have or (row["machine"].lower(), want) in recent:
             continue
         fleet.create_command(
             db_path, machine=row["machine"], command_type=CONTROL_COMMAND_TYPE,

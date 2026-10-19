@@ -257,6 +257,17 @@ def main():
 
         check("the next pass does not repeat it while it is outstanding",
               patches.reconcile_control(db_path, now=now + 60) == 0)
+        # Reversal inside the cooldown: the operator switches the window off a minute after
+        # switching it on. The owned PC must be handed back NOW, not after the cooldown of an
+        # unrelated command; PC1, still reporting `windows`, now matches and gets nothing.
+        patches.update_window(db_path, wid, actor="op@x.com", own_windows_update=False)
+        check("switching off a minute later hands an owned PC back at once",
+              patches.reconcile_control(db_path, now=now + 70) == 1
+              and '"own": false' in control_commands(db_path, "PC4")[-1]["params_json"]
+              and len(control_commands(db_path, "PC1")) == 1)
+        patches.update_window(db_path, wid, actor="op@x.com", own_windows_update=True)
+        check("...and switching back on does not resend PC1's identical command",
+              patches.reconcile_control(db_path, now=now + 80) == 0)
         fleet.claim_commands(db_path, "agent-PC1", "PC1")
         fleet.complete_command(db_path, commands[0]["id"], "agent-PC1", True, "fleethub")
         check("...nor inside the cooldown after it was answered",
@@ -271,12 +282,14 @@ def main():
         check("drift is repaired after the cooldown",
               patches.reconcile_control(db_path, now=later) == 1)
 
-        # Hand-back: the window stops owning, and an owned PC is released.
+        # Hand-back again, with PC4's earlier own=false still unanswered: the outstanding
+        # command already says it, so nothing is queued on top however long it waits.
         patches.update_window(db_path, wid, actor="op@x.com", own_windows_update=False)
-        released = patches.reconcile_control(db_path, now=later)
+        released = patches.reconcile_control(
+            db_path, now=later + patches.CONTROL_COOLDOWN_SECONDS)
         pc4 = control_commands(db_path, "PC4")
-        check("turning the switch off hands an owned PC back to Windows",
-              released == 1 and pc4 and '"own": false' in pc4[-1]["params_json"])
+        check("an unanswered hand-back is not queued twice",
+              released == 0 and len(pc4) == 1 and '"own": false' in pc4[-1]["params_json"])
 
         patches.update_window(db_path, wid, actor="op@x.com", own_windows_update=True,
                               enabled=False)
