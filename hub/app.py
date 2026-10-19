@@ -4556,57 +4556,63 @@ def patch_scheduler():
     """
     while True:
         interval = settings.get_int(DB_PATH, "patches.scheduler_interval_seconds")
-        try:
-            # Approve what policy already decided, before dispatch resolves the approved
-            # set. Doing it in this order means an update discovered on this heartbeat is
-            # installable in this same tick rather than the next one.
-            approved = patches.apply_auto_approvals(
-                DB_PATH,
-                settings.get_list(DB_PATH, "patches.auto_approve_classifications"))
-            if approved:
-                print(f"[patches] Auto-approved {approved} update(s).")
-            # Windows that install approved updates by themselves (issue #140). Before the
-            # tick, so a run created as a window opens is dispatched in the same pass.
-            created = patches.open_window_runs(
-                DB_PATH,
-                max_attempts=settings.get_int(DB_PATH, "patches.default_max_attempts"),
-                retry_backoff_seconds=settings.get_int(
-                    DB_PATH, "patches.default_retry_backoff_seconds"),
-                confirm_timeout_seconds=settings.get_int(
-                    DB_PATH, "patches.confirm_timeout_seconds"))
-            if created:
-                print(f"[patches] Opened {len(created)} window run(s).")
-            reconciled, dispatched = patches.tick(
-                DB_PATH,
-                ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
-                machine_facts=patch_machine_facts(),
-            )
-            if reconciled or dispatched:
-                print(f"[patches] Reconciled {reconciled}, dispatched {dispatched}.")
-        except Exception as e:
-            print(f"[patches] Scheduler pass failed: {e}")
-        # Take Windows Update away from Windows where a window says so (issue #140). Its own
-        # try block: a failure here must not stop runs advancing, and the reverse.
-        try:
-            controlled = patches.reconcile_control(
-                DB_PATH, ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"))
-            if controlled:
-                print(f"[patches] Queued {controlled} update-control change(s).")
-        except Exception as e:
-            print(f"[patches] Update-control pass failed: {e}")
-        # Switch on the PCs a window is waiting for (roadmap #10). Its own try block for
-        # the same reason the deploy scheduler's is: opting into auto-wake must never stop
-        # patch runs advancing, and a wake with no relay is a normal outcome here.
-        try:
-            online = {entry["machine"] for entry in backup_machine_roster()
-                      if entry["online"]}
-            woke = wake_pending_targets(patches.pending_target_machines(DB_PATH), online,
-                                        reason="patch window")
-            if woke:
-                print(f"[patches] Requested a wake for {woke} offline target(s).")
-        except Exception as e:
-            print(f"[patches] Target wake pass failed: {e}")
+        # Three passes, each in its own try block so one failing never stops the others:
+        # a broken update-control pass must not stop runs advancing, and the reverse.
+        for name, step in (("Scheduler", _patch_run_pass),
+                           ("Update-control", _patch_control_pass),
+                           ("Target wake", _patch_wake_pass)):
+            try:
+                step()
+            except Exception as e:
+                print(f"[patches] {name} pass failed: {e}")
         time.sleep(interval)
+
+
+def _patch_run_pass():
+    """Approve, open window runs, then reconcile and dispatch."""
+    # Approve what policy already decided, before dispatch resolves the approved set. Doing
+    # it in this order means an update discovered on this heartbeat is installable in this
+    # same tick rather than the next one.
+    approved = patches.apply_auto_approvals(
+        DB_PATH, settings.get_list(DB_PATH, "patches.auto_approve_classifications"))
+    if approved:
+        print(f"[patches] Auto-approved {approved} update(s).")
+    # Windows that install approved updates by themselves (issue #140). Before the tick, so
+    # a run created as a window opens is dispatched in the same pass.
+    created = patches.open_window_runs(
+        DB_PATH,
+        max_attempts=settings.get_int(DB_PATH, "patches.default_max_attempts"),
+        retry_backoff_seconds=settings.get_int(
+            DB_PATH, "patches.default_retry_backoff_seconds"),
+        confirm_timeout_seconds=settings.get_int(DB_PATH, "patches.confirm_timeout_seconds"))
+    if created:
+        print(f"[patches] Opened {len(created)} window run(s).")
+    reconciled, dispatched = patches.tick(
+        DB_PATH,
+        ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
+        machine_facts=patch_machine_facts(),
+    )
+    if reconciled or dispatched:
+        print(f"[patches] Reconciled {reconciled}, dispatched {dispatched}.")
+
+
+def _patch_control_pass():
+    """Take Windows Update away from Windows where a window says so (issue #140)."""
+    controlled = patches.reconcile_control(
+        DB_PATH, ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"))
+    if controlled:
+        print(f"[patches] Queued {controlled} update-control change(s).")
+
+
+def _patch_wake_pass():
+    """Switch on the PCs a window is waiting for (roadmap #10). Separate for the reason the
+    deploy scheduler's is: opting into auto-wake must never stop patch runs advancing, and a
+    wake with no relay is a normal outcome here."""
+    online = {entry["machine"] for entry in backup_machine_roster() if entry["online"]}
+    woke = wake_pending_targets(patches.pending_target_machines(DB_PATH), online,
+                                reason="patch window")
+    if woke:
+        print(f"[patches] Requested a wake for {woke} offline target(s).")
 
 
 def start_patch_scheduler():

@@ -1046,7 +1046,8 @@ def update_window(db_path, window_id, *, actor, enabled=None, auto_run=None,
         now = int(time.time())
     flag = existing["enabled"] if enabled is None else bool(enabled)
     auto = existing["auto_run"] if auto_run is None else bool(auto_run)
-    own = existing["own_windows_update"] if own_windows_update is None         else bool(own_windows_update)
+    own = (existing["own_windows_update"] if own_windows_update is None
+           else bool(own_windows_update))
     with get_conn(db_path) as conn:
         try:
             conn.execute(
@@ -1842,9 +1843,14 @@ def open_window_runs(db_path, now=None, *, max_attempts=DEFAULT_MAX_ATTEMPTS,
             continue
         start, end = occurrence
         with get_conn(db_path) as conn:
+            # This occurrence's run, or any run of this window still covering `now`. The
+            # second half is for an operator who moves the start time mid-occurrence: the
+            # key changes, and without it the next tick would create a second run for the
+            # same night.
             exists = conn.execute(
-                "SELECT 1 FROM patch_runs WHERE window_id = ? AND window_start = ? LIMIT 1",
-                (window["id"], start)).fetchone()
+                "SELECT 1 FROM patch_runs WHERE window_id = ? AND (window_start = ? "
+                "  OR (window_start <= ? AND window_end > ?)) LIMIT 1",
+                (window["id"], start, now, now)).fetchone()
             busy = {r["machine"].lower() for r in conn.execute(
                 "SELECT t.machine FROM patch_run_targets t "
                 "JOIN patch_runs r ON r.id = t.run_id "

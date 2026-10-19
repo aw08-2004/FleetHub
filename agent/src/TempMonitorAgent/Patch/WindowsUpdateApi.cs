@@ -61,7 +61,10 @@ public static class WindowsUpdateApi
     {
         try { Set(wuaObject, "ClientApplicationID", ClientId); }
         catch (Exception e) when (e is COMException or TargetInvocationException
-                                       or MissingMethodException) { }
+                                       or MissingMethodException)
+        {
+            // Deliberately swallowed: an untagged install still installs, see above.
+        }
     }
 
     /// <summary>The newest history entries, at most <paramref name="limit"/>, mapped for

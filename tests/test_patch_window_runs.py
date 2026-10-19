@@ -158,6 +158,12 @@ def main():
         check("...nor does the spill past midnight",
               patches.open_window_runs(db_path, monday_0100) == [])
         check("one run for the whole night", len(window_runs(db_path, wid)) == 1)
+        # Moving the start mid-occurrence changes the dedupe key; the run already covering
+        # this moment must still count, or the edit creates a second run for the night.
+        patches.update_window(db_path, wid, actor="op@x.com", start_minute=23 * 60 + 15)
+        check("editing the start time mid-occurrence creates no second run",
+              patches.open_window_runs(db_path, sunday_2330 + 120) == [])
+        patches.update_window(db_path, wid, actor="op@x.com", start_minute=23 * 60)
 
         # PC1 is still pending in Sunday's open run when the next Sunday comes around (it
         # never came online). It must not be put into a second run alongside.
