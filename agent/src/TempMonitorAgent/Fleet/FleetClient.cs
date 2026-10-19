@@ -1520,7 +1520,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             // with a status. The base exception carries the socket-level cause ("connection
             // reset" from a proxy that refused the body); the outer one only says "an error
             // occurred while sending the request".
-            _log.LogWarning("Ticket screenshot upload failed ({Kind}): {Msg}",
+            _log.LogWarning(e, "Ticket screenshot upload failed ({Kind}): {Msg}",
                             e.GetType().Name, e.GetBaseException().Message);
         }
         return false;
@@ -1639,7 +1639,10 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
         {
-            // Warning for the same reason as the ticket screenshot above (issue #153).
+            // Warning for the same reason as the ticket screenshot above (issue #153). Without
+            // the exception's stack, unlike that one: this retries every five minutes per
+            // volume for as long as the hub is unreachable, and a trace each time would bury
+            // the rest of the log. The one-line cause is what tells the failures apart.
             _log.LogWarning("Disk usage history upload failed ({Kind}): {Msg}",
                             e.GetType().Name, e.GetBaseException().Message);
         }
