@@ -66,7 +66,18 @@
     "update_now": "Update now",
     "dismiss": "Dismiss",
     "updating": "Updating… the hub will restart shortly.",
-    "failed": "Update failed. Check the hub log."
+    "failed": "Update failed. Check the hub log.",
+    "release_notes": "Release notes"
+  },
+  "agent_update": {
+    "_note": [
+      "The sidebar notice under the hub one, shown when the fleet's agent channel publishes a",
+      "release. A notice, not a gate: agents install it on their own within ~15 minutes, so",
+      "the sentence says so and the link opens the GitHub release. manage_settings only."
+    ],
+    "available": "Agent v{version} was released. Machines install it within about 15 minutes.",
+    "release_notes": "Release notes",
+    "dismiss": "Dismiss"
   },
   "topbar": {
     "hub_version": "Hub v{version}",

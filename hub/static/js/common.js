@@ -251,10 +251,11 @@ function initSidebarCollapse() {
                 else link.removeAttribute('title');
             }
         }
-        // Same trick for the update notice, which shrinks to a bare "!" on the rail.
-        const notice = document.getElementById('hub-update-notice');
-        const noticeText = document.getElementById('hub-update-text');
-        if (notice && noticeText) {
+        // Same trick for the update notices (hub and agent), which shrink to a bare "!" on
+        // the rail.
+        for (const notice of document.querySelectorAll('.sidebar__update')) {
+            const noticeText = notice.querySelector('.sidebar__update-text');
+            if (!noticeText) continue;
             if (collapsed) notice.title = (noticeText.textContent || '').trim();
             else notice.removeAttribute('title');
         }
@@ -272,9 +273,8 @@ function initSidebarCollapse() {
 
     // On the rail the notice is a warning square with nothing to click inside it, so the
     // click means "show me what this is about". Capture, because the real notice carries
-    // its own buttons and we must not let a hidden Update-now be activated blind.
-    const notice = document.getElementById('hub-update-notice');
-    if (notice) {
+    // its own buttons and links, and we must not let a hidden Update-now be activated blind.
+    for (const notice of document.querySelectorAll('.sidebar__update')) {
         notice.addEventListener('click', (e) => {
             if (!isCollapsed()) return;
             e.preventDefault();
@@ -501,6 +501,7 @@ const HUB_UPDATE_POLL_MS = 5 * 60 * 1000;
 // back on the new version. Poll fast through that window so the notice clears promptly.
 const HUB_UPDATE_RESTART_POLL_MS = 3000;
 const HUB_UPDATE_DISMISS_KEY = 'tempmonitor:hubUpdateDismissed';
+const AGENT_UPDATE_DISMISS_KEY = 'tempmonitor:agentUpdateDismissed';
 
 // Same reach-through as alertBadgeEl(): in shell mode the sidebar lives in the OUTER
 // document. Kept separate rather than generalised because only the owning document ever
@@ -513,7 +514,39 @@ function hubUpdateEls() {
         text: document.getElementById('hub-update-text'),
         action: document.getElementById('hub-update-action'),
         dismiss: document.getElementById('hub-update-dismiss'),
+        notes: document.getElementById('hub-update-notes'),
     };
+}
+
+// The new-agent notice beside it. Notice only -- agents install the release on their own
+// within ~15 minutes -- so it has no action, just the release-notes link and a dismiss.
+// Painted from the same /api/hub/version poll as the hub notice rather than a timer of its
+// own; null when the template did not render it (no manage_settings, or a framed page).
+function agentUpdateEls() {
+    const notice = document.getElementById('agent-update-notice');
+    if (!notice) return null;
+    return {
+        notice,
+        text: document.getElementById('agent-update-text'),
+        dismiss: document.getElementById('agent-update-dismiss'),
+        notes: document.getElementById('agent-update-notes'),
+    };
+}
+
+function storedDismissal(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch (e) {
+        return null;  // storage disabled: the notice simply is not dismissible
+    }
+}
+
+// Point a release-notes link at `url`, or hide it when there is none to point at.
+function setNotesLink(link, url) {
+    if (!link) return;
+    if (url) link.href = url;
+    else link.removeAttribute('href');
+    link.hidden = !url;
 }
 
 function initHubUpdate() {
@@ -530,11 +563,21 @@ function initHubUpdate() {
     }
 
     function dismissedVersion() {
-        try {
-            return localStorage.getItem(HUB_UPDATE_DISMISS_KEY);
-        } catch (e) {
-            return null;  // storage disabled: the notice simply is not dismissible
-        }
+        return storedDismissal(HUB_UPDATE_DISMISS_KEY);
+    }
+
+    const agent = agentUpdateEls();
+
+    // No "relevant" test beyond "a version is known and not dismissed": there is nothing
+    // to compare it against here, because the fleet runs a mix of versions and the notice is
+    // about the release, not about any one machine.
+    function paintAgent(info) {
+        if (!agent || !info) return;
+        const latest = info.latest || '';
+        agent.notice.dataset.agentLatest = latest;
+        agent.text.textContent = t('agent_update.available', { version: latest });
+        setNotesLink(agent.notes, info.release_notes_url);
+        agent.notice.hidden = !latest || storedDismissal(AGENT_UPDATE_DISMISS_KEY) === latest;
     }
 
     // Wrapper, so the announcement happens once however `paint` returned -- it has four
@@ -543,16 +586,22 @@ function initHubUpdate() {
     // already been installed.
     function render(data) {
         paint(data);
+        paintAgent(data.agent);
         document.dispatchEvent(new CustomEvent('hubupdate:change'));
     }
 
     function paint(data) {
         const latest = data.latest || '';
         els.notice.dataset.hubLatest = latest;
+        // Only replaced when the payload carries one: the local failure/running renders
+        // below pass a partial object, and must not blank a link the last poll set.
+        if ('release_notes_url' in data) setNotesLink(els.notes, data.release_notes_url);
 
         if (data.status === 'running') {
             els.text.textContent = t('hub_update.updating');
             els.action.hidden = true;
+            // Notes for a version that is being installed this second are no longer news.
+            if (els.notes) els.notes.hidden = true;
             // No dismissing something that is already rewriting the hub underneath us.
             els.dismiss.hidden = true;
             els.notice.hidden = false;
@@ -647,6 +696,18 @@ function initHubUpdate() {
     // for the tab left open across a release.
     if (dismissedVersion() && dismissedVersion() === els.notice.dataset.hubLatest) {
         els.notice.hidden = true;
+    }
+    if (agent) {
+        const shown = agent.notice.dataset.agentLatest;
+        if (shown && storedDismissal(AGENT_UPDATE_DISMISS_KEY) === shown) agent.notice.hidden = true;
+        agent.dismiss.addEventListener('click', () => {
+            try {
+                // Stamped with the version, like the hub notice: the next release brings it back.
+                localStorage.setItem(AGENT_UPDATE_DISMISS_KEY, agent.notice.dataset.agentLatest || '');
+            } catch (e) { /* storage disabled: hide it for this page view only */ }
+            agent.notice.hidden = true;
+            document.dispatchEvent(new CustomEvent('hubupdate:change'));
+        });
     }
     schedule(HUB_UPDATE_POLL_MS);
     document.addEventListener('visibilitychange', () => {

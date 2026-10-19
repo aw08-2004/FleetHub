@@ -271,19 +271,28 @@
     border-radius: 999px;
 }
 
-/* Hub-update notice, pinned to the bottom of the sidebar.
-   margin-top:auto is what pins it: .sidebar is a flex column, so the auto margin eats
-   the leftover space above and the notice sits on the floor however short the nav is.
-   The zeroed bottom margin drops .banner's, which is sized for the gap between stacked
-   form elements and reads as a dangling edge here. It carries .banner--warn for the
-   surface, so the colours are the same "you have something to do" tint used on the Rules
-   and Backups pages.
+/* Hub- and agent-update notices, pinned to the bottom of the sidebar.
+   The wrapper's margin-top:auto is what pins them: .sidebar is a flex column, so the auto
+   margin eats the leftover space above and the notices sit on the floor however short the
+   nav is. On the wrapper, not on each notice: with two notices, one auto margin each
+   would split the free space between them and float the first into mid-sidebar.
+   The zeroed margins drop .banner's, which is sized for the gap between stacked form
+   elements and reads as a dangling edge here. Each carries .banner--warn for the surface,
+   so the colours are the same "you have something to do" tint used on the Rules and
+   Backups pages.
 
-   Selected on TWO classes, not one: .banner sets `margin` as a shorthand and lives
-   further down this file, so at equal specificity it would win on source order and the
-   auto margin would silently never apply. */
-.sidebar__update.banner {
+   The notice is selected on TWO classes, not one: .banner sets `margin` as a shorthand and
+   lives further down this file, so at equal specificity it would win on source order. */
+.sidebar__updates {
     margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+.sidebar__update.banner {
+    margin-top: 0;
     margin-bottom: 0;
     position: relative;
     display: flex;
@@ -335,6 +344,14 @@
 
 /* Same reason: common.js hides this button while an update is applying. */
 .sidebar__update-dismiss[hidden] { display: none; }
+
+.sidebar__update-link {
+    font-size: var(--text-xs);
+    color: inherit;
+    text-decoration: underline;
+}
+
+.sidebar__update-link[hidden] { display: none; }
 
 .sidebar__update-dismiss:hover {
     opacity: 1;
@@ -492,6 +509,7 @@
 
     :root[data-sidebar="collapsed"] .sidebar__update-text,
     :root[data-sidebar="collapsed"] .sidebar__update-action,
+    :root[data-sidebar="collapsed"] .sidebar__update-link,
     :root[data-sidebar="collapsed"] .sidebar__update-dismiss {
         display: none;
     }

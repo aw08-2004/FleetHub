@@ -51,7 +51,13 @@
     "update_now": "Jetzt aktualisieren",
     "dismiss": "Ausblenden",
     "updating": "Aktualisierung läuft… der Hub startet gleich neu.",
-    "failed": "Aktualisierung fehlgeschlagen. Bitte das Hub-Protokoll prüfen."
+    "failed": "Aktualisierung fehlgeschlagen. Bitte das Hub-Protokoll prüfen.",
+    "release_notes": "Versionshinweise"
+  },
+  "agent_update": {
+    "available": "Agent v{version} wurde veröffentlicht. Die Rechner installieren ihn innerhalb von etwa 15 Minuten.",
+    "release_notes": "Versionshinweise",
+    "dismiss": "Ausblenden"
   },
   "topbar": {
     "hub_version": "Hub v{version}",

@@ -708,6 +708,48 @@ def test_hub_update_notice():
         check("reports update_available", body["update_available"] is True)
         check("reports the auto-update setting", body["auto_update"] is False)
         check("reports idle status", body["status"] == "idle")
+        # The link is built, not fetched, so all that can be checked here is that it names
+        # the version being announced on the ref this hub's channel reads it from.
+        notes = body.get("release_notes_url") or ""
+        check("links the announced version's release notes",
+              notes.endswith("/deploy/docker/release-notes/999.0.0.md"))
+        check("...on the stable channel's ref", "/blob/main/" in notes)
+
+        print("\n-- new-agent notice: /api/hub/version carries the fleet's agent release --")
+        import capabilities as _caps
+        import channels as _channels
+        win = _caps.PLATFORM_WINDOWS
+        saved_agent = dict(app.latest_agent_version)
+        try:
+            app.latest_agent_version[(win, _channels.STABLE)] = None
+            agent = client.get("/api/hub/version").get_json()["agent"]
+            check("never read -> no version, no link (the notice stays hidden)",
+                  agent["latest"] is None and agent["release_notes_url"] is None)
+
+            app.latest_agent_version[(win, _channels.STABLE)] = "3.99.0"
+            app.latest_agent_version[(win, _channels.BETA)] = "3.100.0"
+            agent = client.get("/api/hub/version").get_json()["agent"]
+            check("reports the stable version for a stable fleet", agent["latest"] == "3.99.0")
+            check("...and links its GitHub release",
+                  agent["release_notes_url"].endswith("/releases/tag/agent-v3.99.0"))
+
+            _settings.set_many(app.DB_PATH, {"fleet.default_agent_channel": _channels.BETA})
+            agent = client.get("/api/hub/version").get_json()["agent"]
+            check("a beta fleet is told about the beta train", agent["latest"] == "3.100.0")
+            check("...whose tag carries -beta, as release.ps1 cuts it",
+                  agent["release_notes_url"].endswith("/releases/tag/agent-v3.100.0-beta"))
+        finally:
+            app.latest_agent_version.clear()
+            app.latest_agent_version.update(saved_agent)
+            _settings.reset(app.DB_PATH, ["fleet.default_agent_channel"])
+
+        print("\n-- release-notes URL builders --")
+        check("hub: no version -> None", _channels.hub_release_notes_url("") is None)
+        check("hub: beta reads the beta ref",
+              "/blob/beta/" in _channels.hub_release_notes_url("1.2.3", _channels.BETA))
+        check("agent: no version -> None", _channels.agent_release_notes_url(None) is None)
+        check("agent: stable tag has no suffix",
+              _channels.agent_release_notes_url("3.1.0").endswith("/agent-v3.1.0"))
 
         print("\n-- hub update notice: POST /api/hub/update --")
         app.latest_hub_version = app.HUB_VERSION

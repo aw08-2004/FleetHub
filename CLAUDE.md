@@ -34,6 +34,12 @@ Four canonical docs already exist. Go to them by question, not by default:
   as part of the change, unasked; the comment two lines above it says the same thing. The hub
   compares `main`'s value against the running one, so a push without a bump never reaches a
   deployed hub. Docs-only and `tests/`-only pushes need no bump.
+- **Every `HUB_VERSION` bump writes `deploy/docker/release-notes/<version>.md` in the same
+  change.** Same release-please layout as `agent/release-notes/README.md`, written for the
+  operators. The hub has no GitHub releases, so this file *is* the release notes: the sidebar's
+  "Hub vX is available" notice links straight to it on the channel's branch, and a missing file
+  is a 404 in front of every operator. Docs-only and `tests/`-only pushes need no bump and so
+  no notes.
 - **Exactly `MAJOR.MINOR.PATCH`, three numeric components, no suffix.** No `-rc1`, no `+build`,
   never two or four components — `parse_hub_version()` matches digits and dots only, so a
   suffix parses as `None` and the hub silently stops discovering updates fleet-wide.
@@ -182,6 +188,7 @@ lie.
 
 ```
 [ ] Touched hub/?           -> bump HUB_VERSION in hub/app.py
+[ ] Bumped HUB_VERSION?     -> deploy/docker/release-notes/<version>.md
 [ ] New user-facing string? -> en.json + de.json + es.json, same change
 [ ] Changed Tailwind classes? -> tools/build_css.ps1, commit app.css
 [ ] python tests/run_all.py -q      (+ dotnet test if agent/ changed)
