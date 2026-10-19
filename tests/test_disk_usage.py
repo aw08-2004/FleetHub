@@ -414,9 +414,22 @@ def test_history():
         listing = {e["name"] for e in disk_history.browse(
             root, "PC-2", "C:", "C:\\", disk_history.day_number(day3))["entries"]}
         check("only the well-formed line on this volume is stored", listing == {"ok.txt"})
-        check("an upload with no length is refused",
+        check("an upload with no Content-Length at all is refused",
+              disk_history.accept(root, "PC-2", "C:", day2, day3, False, io.BytesIO(b""), None)
+              == "no_length")
+        check("an empty full tree is refused -- a real one always has the volume root",
               disk_history.accept(root, "PC-2", "C:", day2, None, True, io.BytesIO(b""), 0)
               == "no_length")
+
+        # .NET's GZipStream writes 0 bytes for an unchanged volume (issue #153).
+        check("an empty delta is an unchanged volume, and is stored",
+              disk_history.accept(root, "PC-2", "C:", day2, day3, False, io.BytesIO(b""), 0)
+              == "stored")
+        disk_history.process_spool(root)
+        check("...so the next delta's base is that scan, not a forced full tree",
+              disk_history.last_scanned_at(root, "PC-2", "C:") == day2)
+        check("...and nothing it held was lost", {e["name"] for e in disk_history.browse(
+            root, "PC-2", "C:", "C:\\", disk_history.day_number(day2))["entries"]} == {"ok.txt"})
         check("an upload over the cap is refused before its body is read",
               disk_history.accept(root, "PC-2", "C:", day2, None, True, io.BytesIO(b""),
                                   disk_history.MAX_UPLOAD_BYTES + 1) == "too_large")
@@ -562,6 +575,22 @@ def test_web(db_path):
     check("a full tree -> 200", r.status_code == 200)
     disk_history.process_spool(history_root)
     check("...filed under the CALLING machine", disk_history.volumes(history_root, "PC-1") == ["C:"])
+    # Through the real route, because the fix hinges on Flask giving `content_length` 0
+    # here and not None -- None is the missing header, which must still be a 411 (#153).
+    # The agent's HttpClient does send `Content-Length: 0` for an empty file (checked against
+    # a raw socket). Werkzeug's test client, though, DROPS the header for an empty body, so
+    # it is set in the environ directly; a `headers=` entry would silently test None instead.
+    later = now + 60
+    empty = f"/api/agent/disk-usage/history?volume=C:&scanned_at={later}&base={now}"
+    r = c.post(empty, data=b"", content_type="application/gzip", headers=pc1)
+    check("an empty delta with no Content-Length at all is still refused -> 411",
+          r.status_code == 411)
+    r = c.post(empty, data=b"", content_type="application/gzip", headers=pc1,
+               environ_overrides={"CONTENT_LENGTH": "0"})
+    check("an unchanged volume's empty delta -> 200, not 411", r.status_code == 200)
+    disk_history.process_spool(history_root)
+    check("...and it becomes the next delta's base",
+          disk_history.last_scanned_at(history_root, "PC-1", "C:") == later)
     r = c.post("/api/agent/disk-usage/history?volume=..&scanned_at=1&full=1", data=body,
                content_type="application/gzip", headers=pc1)
     check("a volume that is not a letter -> 400", r.status_code == 400)

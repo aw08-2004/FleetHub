@@ -1515,7 +1515,13 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
-            _log.LogDebug(e, "Ticket screenshot upload failed: {Msg}", e.Message);
+            // Warning, not Debug: the field log of issue #153 said only "0/3 screenshot(s)",
+            // with no reason anywhere, because this was the one failure that never answered
+            // with a status. The base exception carries the socket-level cause ("connection
+            // reset" from a proxy that refused the body); the outer one only says "an error
+            // occurred while sending the request".
+            _log.LogWarning(e, "Ticket screenshot upload failed ({Kind}): {Msg}",
+                            e.GetType().Name, e.GetBaseException().Message);
         }
         return false;
     }
@@ -1633,7 +1639,12 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
         {
-            _log.LogDebug("Disk usage history upload failed: {Msg}", e.Message);
+            // Warning for the same reason as the ticket screenshot above (issue #153). This one
+            // retries every five minutes per volume while the hub is unreachable, so an outage
+            // repeats it -- accepted, because the stack is what tells a proxy reset from a TLS
+            // or file error, and a quieter line here is how #153 went undiagnosed.
+            _log.LogWarning(e, "Disk usage history upload failed ({Kind}): {Msg}",
+                            e.GetType().Name, e.GetBaseException().Message);
         }
         return HistoryUpload.Failed;
     }
