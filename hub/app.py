@@ -6963,20 +6963,59 @@ def _frame_policy(response):
     return response
 
 
+def _agents_behind(latest, channel):
+    """How many Windows machines in the caller's scope still report an agent below `latest`.
+
+    **This is what makes the notice mean "new".** Without it the notice announced whatever
+    the manifest said to every browser that had not dismissed it -- including a release
+    every machine installed months ago, under a sentence saying machines would install it
+    within 15 minutes (PR #156 review). Counted by the same rules as the dashboard's
+    "agents outdated" figure in _build_fleet_summary, so the two never disagree: Windows
+    train only (a Linux 0.4.0 is not behind a Windows 3.46.1), the 3.0.0 floor (a 2.x
+    companion has no release to be behind), and pinned machines left out -- a pilot ring is
+    measured against another manifest. `channel` is accepted for symmetry with the caller and
+    is the fleet default the unpinned machines follow.
+
+    Rejected: remembering a "last announced" version in settings. That answers "has the
+    manifest changed", not "is anything still waiting for it", and it would need a write on
+    a read path to stay correct."""
+    if not latest:
+        return 0
+    with get_db_conn() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT machine, companion_version, update_channel FROM machine_info "
+            "WHERE companion_version IS NOT NULL").fetchall()]
+    rows = access.filter_rows(rows)
+    platforms = capabilities.platforms_for(DB_PATH, [r["machine"] for r in rows])
+    behind = 0
+    for row in rows:
+        if channels.normalize_platform(platforms.get(row["machine"])) != capabilities.PLATFORM_WINDOWS:
+            continue
+        if channels.is_override(row.get("update_channel")):
+            continue
+        version = row["companion_version"]
+        if cmp_versions(version, AGENT_TRAIN_MIN_VERSION) >= 0 and cmp_versions(latest, version) > 0:
+            behind += 1
+    return behind
+
+
 def _fleet_agent_release():
     """The newest Windows agent on the fleet's default channel, for the sidebar notice.
 
     The fleet default rather than per machine: the notice speaks for the fleet, and a pilot
     ring on beta is the exception the operator already chose. `latest` is None until the
-    version watcher has read the manifest once -- the notice stays hidden rather than
-    announcing nothing. Never raises; the nav context renders on the login page too."""
+    version watcher has read the manifest once, and `behind` is 0 once every machine in
+    scope runs it -- either way the notice stays hidden. Never raises; the nav context
+    renders on the login page too."""
     try:
         channel = agent_channel_for(None)
         latest = get_latest_agent_version(channel, capabilities.PLATFORM_WINDOWS)
         return {"latest": latest, "channel": channel,
+                "behind": _agents_behind(latest, channel),
                 "release_notes_url": channels.agent_release_notes_url(latest, channel)}
     except Exception:
-        return {"latest": None, "channel": channels.DEFAULT, "release_notes_url": None}
+        return {"latest": None, "channel": channels.DEFAULT, "behind": 0,
+                "release_notes_url": None}
 
 
 def _hub_release_notes_url():
@@ -7035,7 +7074,9 @@ def inject_nav_context():
                "hub_update_mode": HUB_UPDATE_MODE,
                "hub_release_notes_url": _hub_release_notes_url(),
                # First paint for the new-agent notice beside it; same poller afterwards.
-               "fleet_agent_release": _fleet_agent_release(),
+               # Passed as the function, not its result: it reads machine_info, and only
+               # the manage_settings block of the sidebar ever calls it.
+               "fleet_agent_release": _fleet_agent_release,
                # CSRF token for the meta tag; _get_or_create_csrf_token is safe to
                # call on every render -- it only creates a token when the session
                # does not already carry one.

@@ -728,10 +728,21 @@ def test_hub_update_notice():
 
             app.latest_agent_version[(win, _channels.STABLE)] = "3.99.0"
             app.latest_agent_version[(win, _channels.BETA)] = "3.100.0"
+            app.save_machine_info("notice-behind-box", None, None, None, companion_version="3.98.0")
             agent = client.get("/api/hub/version").get_json()["agent"]
             check("reports the stable version for a stable fleet", agent["latest"] == "3.99.0")
             check("...and links its GitHub release",
                   agent["release_notes_url"].endswith("/releases/tag/agent-v3.99.0"))
+            check("a machine on an older agent counts as behind (the notice shows)",
+                  agent["behind"] >= 1)
+
+            # The review finding this pins: a release every machine already runs is not
+            # news, and the notice must not tell a fresh browser it is about to install.
+            app.latest_agent_version[(win, _channels.STABLE)] = "3.0.0"
+            agent = client.get("/api/hub/version").get_json()["agent"]
+            check("nothing behind the published version -> behind 0 (the notice stays hidden)",
+                  agent["latest"] == "3.0.0" and agent["behind"] == 0)
+            app.latest_agent_version[(win, _channels.STABLE)] = "3.99.0"
 
             _settings.set_many(app.DB_PATH, {"fleet.default_agent_channel": _channels.BETA})
             agent = client.get("/api/hub/version").get_json()["agent"]

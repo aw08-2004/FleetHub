@@ -333,9 +333,9 @@
     {# New agent release. A notice, not a gate: agents install it on their own within about
        15 minutes, so all this can do is say so and point at the notes before it lands.
        Dismissed per version in localStorage, like the hub notice above. #}
-    {% set agent_rel = fleet_agent_release or {} %}
+    {% set agent_rel = fleet_agent_release() if fleet_agent_release else {} %}
     <div class="sidebar__update banner banner--warn" id="agent-update-notice"
-         data-agent-latest="{{ agent_rel.latest or '' }}" {% if not agent_rel.latest %}hidden{% endif %}>
+         data-agent-latest="{{ agent_rel.latest or '' }}" {% if not (agent_rel.latest and agent_rel.behind) %}hidden{% endif %}>
         <button type="button" class="sidebar__update-dismiss" id="agent-update-dismiss"
                 aria-label="{{ t('agent_update.dismiss') }}" title="{{ t('agent_update.dismiss') }}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>

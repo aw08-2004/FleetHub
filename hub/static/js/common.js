@@ -568,16 +568,17 @@ function initHubUpdate() {
 
     const agent = agentUpdateEls();
 
-    // No "relevant" test beyond "a version is known and not dismissed": there is nothing
-    // to compare it against here, because the fleet runs a mix of versions and the notice is
-    // about the release, not about any one machine.
+    // Relevant only while some machine in the caller's scope still reports an older agent
+    // (`behind`, counted server-side by the dashboard's "agents outdated" rules). Without
+    // that, every fresh browser was told a months-old release was about to install.
     function paintAgent(info) {
         if (!agent || !info) return;
         const latest = info.latest || '';
         agent.notice.dataset.agentLatest = latest;
         agent.text.textContent = t('agent_update.available', { version: latest });
         setNotesLink(agent.notes, info.release_notes_url);
-        agent.notice.hidden = !latest || storedDismissal(AGENT_UPDATE_DISMISS_KEY) === latest;
+        agent.notice.hidden = !latest || !info.behind
+            || storedDismissal(AGENT_UPDATE_DISMISS_KEY) === latest;
     }
 
     // Wrapper, so the announcement happens once however `paint` returned -- it has four
