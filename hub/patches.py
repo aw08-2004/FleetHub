@@ -1862,16 +1862,19 @@ def open_window_runs(db_path, now=None, *, max_attempts=DEFAULT_MAX_ATTEMPTS,
         covered = known if window["scope_kind"] == SCOPE_ALL else window["machines"]
         hosts = [m for m in covered
                  if m.lower() not in busy and approved_for_machine(db_path, m)]
-        if not hosts:
-            continue
-        created.append(create_run(
-            db_path, machines=hosts[:MAX_TARGETS_PER_RUN],
-            created_by=f"window:{window['name']}"[:200],
-            note=f"Automatic run for maintenance window {window['name']}",
-            window_id=window["id"], window_start=start, window_end=end,
-            reboot_policy=window["reboot_policy"], max_attempts=max_attempts,
-            retry_backoff_seconds=retry_backoff_seconds,
-            confirm_timeout_seconds=confirm_timeout_seconds, now=now))
+        # More machines than one run may hold become several runs in the same tick, never a
+        # truncated one: the dedupe above would stop the remainder getting a run later in
+        # the occurrence, and on a window that also owns Windows Update those PCs would get
+        # no installs at all.
+        for i in range(0, len(hosts), MAX_TARGETS_PER_RUN):
+            created.append(create_run(
+                db_path, machines=hosts[i:i + MAX_TARGETS_PER_RUN],
+                created_by=f"window:{window['name']}"[:200],
+                note=f"Automatic run for maintenance window {window['name']}",
+                window_id=window["id"], window_start=start, window_end=end,
+                reboot_policy=window["reboot_policy"], max_attempts=max_attempts,
+                retry_backoff_seconds=retry_backoff_seconds,
+                confirm_timeout_seconds=confirm_timeout_seconds, now=now))
     return created
 
 

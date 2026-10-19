@@ -188,6 +188,22 @@ def main():
                        for t in patches.get_run(db_path, rid)["targets"]}
         check("an all-machine window covers a PC nobody named", "PC9" in every_hosts)
 
+        # More covered machines than one run holds: split, never truncated, because the
+        # dedupe would stop the overflow getting a run later that night.
+        cap = patches.MAX_TARGETS_PER_RUN
+        patches.MAX_TARGETS_PER_RUN = 2
+        try:
+            for host in ("BIG1", "BIG2", "BIG3", "BIG4", "BIG5"):
+                offer(db_path, host, "KB5000001")
+            made = patches.open_window_runs(db_path, local_epoch(2026, 10, 29, 1, 30))
+            split = sorted(t["machine"] for rid in made
+                           for t in patches.get_run(db_path, rid)["targets"])
+            check("a window over the per-run cap gets several runs, not a truncated one",
+                  len(made) >= 3 and all(h in split for h in
+                                         ("BIG1", "BIG2", "BIG3", "BIG4", "BIG5")))
+        finally:
+            patches.MAX_TARGETS_PER_RUN = cap
+
         # Nothing approved anywhere: a window that opens must not leave an empty run behind.
         patches.clear_approval(db_path, "KB5000001")
         check("a window with nothing to install creates no run",
