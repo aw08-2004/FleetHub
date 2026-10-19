@@ -183,18 +183,19 @@ public sealed class UpdateControl(UpdateControl.IPolicyStore store)
 
         public void DeleteValue(string subKey, string name)
         {
-            using var key = Registry.LocalMachine.OpenSubKey(subKey, writable: true);
-            key?.DeleteValue(name, throwOnMissingValue: false);
-            if (key is null) return;
+            bool nowEmpty;
+            using (var key = Registry.LocalMachine.OpenSubKey(subKey, writable: true))
+            {
+                if (key is null) return;
+                key.DeleteValue(name, throwOnMissingValue: false);
+                nowEmpty = key.ValueCount == 0 && key.SubKeyCount == 0;
+            }
             // The marker key is ours alone; once its last value goes, so does it, so an
             // uninstalled PC carries no FleetHub residue. Policy keys are left even when
-            // empty -- an empty WindowsUpdate key may be a GPO's, and it costs nothing.
-            if (subKey.Equals(MarkerKey, StringComparison.OrdinalIgnoreCase)
-                && key.ValueCount == 0 && key.SubKeyCount == 0)
-            {
-                key.Dispose();
+            // empty -- an empty WindowsUpdate key may be a GPO's, and it costs nothing. The
+            // handle is closed first (the using block above) so the delete is not refused.
+            if (nowEmpty && subKey.Equals(MarkerKey, StringComparison.OrdinalIgnoreCase))
                 Registry.LocalMachine.DeleteSubKey(subKey, throwOnMissingSubKey: false);
-            }
         }
     }
 }

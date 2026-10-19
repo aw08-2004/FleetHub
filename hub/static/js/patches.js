@@ -377,8 +377,8 @@
         const syncScope = () => { machines.hidden = scope.value === 'all'; };
         scope.onchange = syncScope;
         syncScope();
-        document.getElementById('win-auto-run').checked = Boolean(win && win.auto_run);
-        document.getElementById('win-own-wu').checked = Boolean(win && win.own_windows_update);
+        document.getElementById('win-auto-run').checked = Boolean(win?.auto_run);
+        document.getElementById('win-own-wu').checked = Boolean(win?.own_windows_update);
 
         windowModal.showModal();
     }
