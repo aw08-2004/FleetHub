@@ -260,8 +260,18 @@ def accept(root, machine, volume, scanned_at, base, full, stream, length):
         spool is at MAX_SPOOL_BYTES; the agent retries later
 
     Raises ValueError only when the body turns out longer than its Content-Length.
+
+    **A zero-length DELTA is an unchanged volume, not a missing length.** The agent's
+    TreeDelta writes through .NET's GZipStream, which emits no bytes at all -- not even a gzip
+    header -- when nothing was written to it. So a data drive with no change since the last
+    scan arrives as `Content-Length: 0`. This used to answer 411, the agent kept the empty file
+    and retried every five minutes, and the next scan's delta then failed its base check and
+    became a full tree (issue #153). It is stored as an empty gzip instead, so the scan is
+    recorded and the next delta's base matches. Fixed here rather than only in the agent
+    because every agent up to 3.46.0 already sends it. A zero-length FULL tree stays refused:
+    a real tree always has at least the volume root, so an empty one is a broken upload.
     """
-    if not length or length <= 0:
+    if length is None or length < 0 or (length == 0 and full):
         return "no_length"
     if length > MAX_UPLOAD_BYTES:
         return "too_large"
@@ -288,7 +298,9 @@ def accept(root, machine, volume, scanned_at, base, full, stream, length):
     written = 0
     try:
         with open(data_path, "wb") as handle:
-            while True:
+            if length == 0:
+                handle.write(gzip.compress(b""))
+            while length:
                 chunk = stream.read(1024 * 1024)
                 if not chunk:
                     break

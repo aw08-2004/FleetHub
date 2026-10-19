@@ -414,9 +414,22 @@ def test_history():
         listing = {e["name"] for e in disk_history.browse(
             root, "PC-2", "C:", "C:\\", disk_history.day_number(day3))["entries"]}
         check("only the well-formed line on this volume is stored", listing == {"ok.txt"})
-        check("an upload with no length is refused",
+        check("an upload with no Content-Length at all is refused",
+              disk_history.accept(root, "PC-2", "C:", day2, day3, False, io.BytesIO(b""), None)
+              == "no_length")
+        check("an empty full tree is refused -- a real one always has the volume root",
               disk_history.accept(root, "PC-2", "C:", day2, None, True, io.BytesIO(b""), 0)
               == "no_length")
+
+        # .NET's GZipStream writes 0 bytes for an unchanged volume (issue #153).
+        check("an empty delta is an unchanged volume, and is stored",
+              disk_history.accept(root, "PC-2", "C:", day2, day3, False, io.BytesIO(b""), 0)
+              == "stored")
+        disk_history.process_spool(root)
+        check("...so the next delta's base is that scan, not a forced full tree",
+              disk_history.last_scanned_at(root, "PC-2", "C:") == day2)
+        check("...and nothing it held was lost", {e["name"] for e in disk_history.browse(
+            root, "PC-2", "C:", "C:\\", disk_history.day_number(day2))["entries"]} == {"ok.txt"})
         check("an upload over the cap is refused before its body is read",
               disk_history.accept(root, "PC-2", "C:", day2, None, True, io.BytesIO(b""),
                                   disk_history.MAX_UPLOAD_BYTES + 1) == "too_large")
