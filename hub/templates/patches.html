@@ -29,6 +29,10 @@
    reported is fine. See patches.compliance_summary. #}
 <div class="stat-grid" id="patches-summary" style="margin-bottom: var(--space-5);"></div>
 
+{# Who installs Windows updates (issue #140): only rendered when a window takes Windows Update
+   over or an agent has reported a state, so a fleet that never turned it on sees nothing. #}
+<div id="patches-control" style="margin-bottom: var(--space-5);" hidden></div>
+
 {# Driven by the shared tabs.js (ARIA roles, roving tabindex, arrow keys, #hash
    linkability, last-tab persistence), for the reason packages.html gives: rolling a
    switcher by hand would lose all of that and be a second implementation to drift.
@@ -102,6 +106,17 @@
             <label class="setting__label" for="win-scope" style="margin-top: var(--space-4);">{{ t('patches.window.scope') }}</label>
             <select class="input" id="win-scope" style="width: 100%;"></select>
             <div id="win-machines" style="margin-top: var(--space-3);" hidden></div>
+
+            {# Issue #140. Both off by default, and each says what it will DO rather than
+               what it is: either one starts changing PCs on the window's next opening. #}
+            <label class="setting__label" style="margin-top: var(--space-4);">
+                <input type="checkbox" id="win-auto-run"> {{ t('patches.window.auto_run') }}
+            </label>
+            <p class="setting__default">{{ t('patches.window.auto_run_help') }}</p>
+            <label class="setting__label" style="margin-top: var(--space-3);">
+                <input type="checkbox" id="win-own-wu"> {{ t('patches.window.own_windows_update') }}
+            </label>
+            <p class="setting__default">{{ t('patches.window.own_windows_update_help') }}</p>
         </div>
         <div class="modal__foot">
             <button class="btn" type="button" id="win-cancel">{{ t('common.cancel') }}</button>

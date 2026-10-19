@@ -163,7 +163,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.154.0"
+HUB_VERSION = "1.155.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -4565,6 +4565,17 @@ def patch_scheduler():
                 settings.get_list(DB_PATH, "patches.auto_approve_classifications"))
             if approved:
                 print(f"[patches] Auto-approved {approved} update(s).")
+            # Windows that install approved updates by themselves (issue #140). Before the
+            # tick, so a run created as a window opens is dispatched in the same pass.
+            created = patches.open_window_runs(
+                DB_PATH,
+                max_attempts=settings.get_int(DB_PATH, "patches.default_max_attempts"),
+                retry_backoff_seconds=settings.get_int(
+                    DB_PATH, "patches.default_retry_backoff_seconds"),
+                confirm_timeout_seconds=settings.get_int(
+                    DB_PATH, "patches.confirm_timeout_seconds"))
+            if created:
+                print(f"[patches] Opened {len(created)} window run(s).")
             reconciled, dispatched = patches.tick(
                 DB_PATH,
                 ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
@@ -4574,6 +4585,15 @@ def patch_scheduler():
                 print(f"[patches] Reconciled {reconciled}, dispatched {dispatched}.")
         except Exception as e:
             print(f"[patches] Scheduler pass failed: {e}")
+        # Take Windows Update away from Windows where a window says so (issue #140). Its own
+        # try block: a failure here must not stop runs advancing, and the reverse.
+        try:
+            controlled = patches.reconcile_control(
+                DB_PATH, ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"))
+            if controlled:
+                print(f"[patches] Queued {controlled} update-control change(s).")
+        except Exception as e:
+            print(f"[patches] Update-control pass failed: {e}")
         # Switch on the PCs a window is waiting for (roadmap #10). Its own try block for
         # the same reason the deploy scheduler's is: opting into auto-wake must never stop
         # patch runs advancing, and a wake with no relay is a normal outcome here.

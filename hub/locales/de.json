@@ -3933,6 +3933,16 @@
     "none_declined": "Kein derzeit gemeldetes Update ist abgelehnt.",
     "no_windows": "Noch kein Wartungsfenster. Ohne eines installiert nur ein Notlauf überhaupt etwas.",
     "no_runs": "Noch kein Patch-Lauf.",
+    "approved_hint": "Ein Update freizugeben installiert es nicht. Freigegebene Updates werden in einem Patch-Lauf installiert: Starten Sie einen mit Patches ausführen, oder aktivieren Sie \"Freigegebene Updates automatisch installieren\" für ein Wartungsfenster.",
+    "no_runs_hint": "Läufe entstehen über Patches ausführen oder, sobald es öffnet, durch ein Wartungsfenster mit aktivierter Option \"Freigegebene Updates automatisch installieren\".",
+    "control": {
+      "heading": "Windows Update",
+      "owned": "{owned} von {total} von FleetHub gesteuert",
+      "managed_elsewhere": "{machine}: Windows Update wird per Gruppenrichtlinie oder Intune gesteuert, FleetHub ändert daran nichts.",
+      "not_reported": "{machine}: wartet auf die Meldung des Agenten. Die Übernahme von Windows Update erfordert Agent 3.47.0 oder neuer.",
+      "pending": "{machine}: Windows Update wird übernommen.",
+      "outside_install": "{machine}: {title} wurde außerhalb von FleetHub installiert."
+    },
     "request_failed": "Der Hub war nicht erreichbar.",
     "approve": "Freigeben",
     "decline": "Ablehnen",
@@ -3998,7 +4008,13 @@
       "summary": "{start} für {minutes} Min.",
       "disabled": "Deaktiviert",
       "confirm_delete": "Wartungsfenster {name} löschen?",
-      "confirm_delete_title": "Wartungsfenster löschen"
+      "confirm_delete_title": "Wartungsfenster löschen",
+      "auto_run": "Freigegebene Updates automatisch installieren",
+      "auto_run_help": "Wenn dieses Fenster öffnet, startet FleetHub einen Lauf für jede erfasste Maschine mit freigegebenen Updates und startet sie gemäß der Neustartrichtlinie neu.",
+      "own_windows_update": "Nur FleetHub installiert Updates auf diesen Maschinen",
+      "own_windows_update_help": "Schaltet die automatischen Updates von Windows ab und blendet Installieren in den Einstellungen aus, sodass nur freigegebene Updates installiert werden, während eines Laufs. Erfordert Agent 3.47.0. Maschinen, deren Windows Update per Gruppenrichtlinie oder Intune gesteuert wird, bleiben unverändert.",
+      "auto_run_badge": "Installiert freigegebene Updates automatisch",
+      "own_badge": "Nur FleetHub installiert Updates"
     },
     "run": {
       "new": "Patches ausführen",
