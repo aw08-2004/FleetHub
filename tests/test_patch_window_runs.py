@@ -226,6 +226,19 @@ def main():
               state["outside_installs"] == [{"title": "Cumulative Update", "kb": "KB5000009",
                                              "installed_at": 1234,
                                              "client": "PSWindowsUpdate"}])
+        # The block arrives from an agent: junk entries are dropped, and a flood is capped
+        # rather than stored whole on every report.
+        patches.record_control(db_path, "FLOOD", {"state": "fleethub", "outside_installs": (
+            ["not an object", None, {"kb": "5000001"}]
+            + [{"title": f"Update {n}"} for n in range(patches.MAX_OUTSIDE_INSTALLS + 25)])})
+        flood = patches.control_for(db_path, "FLOOD")["outside_installs"]
+        check("non-object and untitled outside installs are dropped",
+              all(isinstance(i, dict) and i["title"] for i in flood))
+        check("outside installs are capped",
+              len(flood) <= patches.MAX_OUTSIDE_INSTALLS)
+        check("a block without a machine is ignored",
+              patches.record_control(db_path, "", {"state": "fleethub"}) is False)
+        patches.forget_machine(db_path, "FLOOD")
         offer(db_path, "PC1", "KB5000001", now=2000)
         check("an inventory ingest does not wipe the control state",
               patches.control_for(db_path, "PC1")["state"] == patches.CONTROL_WINDOWS)
