@@ -1639,11 +1639,11 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
         {
-            // Warning for the same reason as the ticket screenshot above (issue #153). Without
-            // the exception's stack, unlike that one: this retries every five minutes per
-            // volume for as long as the hub is unreachable, and a trace each time would bury
-            // the rest of the log. The one-line cause is what tells the failures apart.
-            _log.LogWarning("Disk usage history upload failed ({Kind}): {Msg}",
+            // Warning for the same reason as the ticket screenshot above (issue #153). This one
+            // retries every five minutes per volume while the hub is unreachable, so an outage
+            // repeats it -- accepted, because the stack is what tells a proxy reset from a TLS
+            // or file error, and a quieter line here is how #153 went undiagnosed.
+            _log.LogWarning(e, "Disk usage history upload failed ({Kind}): {Msg}",
                             e.GetType().Name, e.GetBaseException().Message);
         }
         return HistoryUpload.Failed;
