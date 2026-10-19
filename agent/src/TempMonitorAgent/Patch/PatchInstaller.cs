@@ -121,8 +121,11 @@ public static class PatchInstaller
                 say("This machine has no Windows Update Agent.");
                 return NothingAttempted;
             }
-            session = Activator.CreateInstance(sessionType);
+            // Tagged FleetHub, so this install is not later reported as an outside one
+            // (issue #140, UpdateHistory).
+            session = WindowsUpdateApi.CreateSession();
             var searcher = WindowsUpdateApi.Invoke(session, "CreateUpdateSearcher");
+            WindowsUpdateApi.Tag(searcher);
             var found = WindowsUpdateApi.Invoke(
                 searcher, "Search", "IsInstalled=0 AND IsHidden=0");
             var available = found is null ? null : WindowsUpdateApi.Get(found, "Updates");
@@ -156,6 +159,7 @@ public static class PatchInstaller
 
             say($"Downloading {chosen.Count} update(s) through Windows Update...");
             var downloader = WindowsUpdateApi.Invoke(session, "CreateUpdateDownloader");
+            WindowsUpdateApi.Tag(downloader);
             WindowsUpdateApi.Set(downloader, "Updates", batch);
             var downloadResult = WindowsUpdateApi.Invoke(downloader, "Download");
             var downloadCode = WindowsUpdateApi.ToInt(
@@ -164,6 +168,7 @@ public static class PatchInstaller
 
             say($"Installing {chosen.Count} update(s)...");
             var installer = WindowsUpdateApi.Invoke(session, "CreateUpdateInstaller");
+            WindowsUpdateApi.Tag(installer);
             WindowsUpdateApi.Set(installer, "Updates", batch);
             var installResult = WindowsUpdateApi.Invoke(installer, "Install");
             var installCode = WindowsUpdateApi.ToInt(

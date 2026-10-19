@@ -35,6 +35,82 @@ public static class WindowsUpdateApi
     /// patch run (see hub/patches.py confirm_from_inventory).</summary>
     private const string SearchCriteria = "IsInstalled=0 AND IsHidden=0";
 
+    /// <summary>The ClientApplicationID every WUA session this agent creates carries
+    /// (issue #140). Windows Update history records it per entry, and it is the ONLY thing
+    /// that tells the agent's own installs apart from ones Windows or a user made -- see
+    /// UpdateHistory. Change it and every past FleetHub install reads as an outside one.</summary>
+    public const string ClientId = "FleetHub";
+
+    /// <summary>A new Microsoft.Update.Session tagged with <see cref="ClientId"/>, or null on
+    /// a machine with no Windows Update Agent. Every session goes through here, so no code
+    /// path can install untagged.</summary>
+    internal static object? CreateSession()
+    {
+        var type = Type.GetTypeFromProgID("Microsoft.Update.Session");
+        if (type is null) return null;
+        var session = Activator.CreateInstance(type);
+        Tag(session);
+        return session;
+    }
+
+    /// <summary>Set ClientApplicationID on a session, searcher, downloader or installer. The
+    /// installer's is what history records, but setting it on each object costs nothing and
+    /// does not depend on Windows copying the session's down. Best effort: an object that
+    /// refuses the property still works, it just installs untagged.</summary>
+    internal static void Tag(object? wuaObject)
+    {
+        try { Set(wuaObject, "ClientApplicationID", ClientId); }
+        catch (Exception e) when (e is COMException or TargetInvocationException
+                                       or MissingMethodException) { }
+    }
+
+    /// <summary>The newest history entries, at most <paramref name="limit"/>, mapped for
+    /// UpdateHistory.Select. Empty (never throws) when history cannot be read, for the same
+    /// reasons Search() does not throw.</summary>
+    public static IReadOnlyList<UpdateHistory.Entry> ReadHistory(int limit = 500)
+    {
+        object? session = null;
+        var rows = new List<UpdateHistory.Entry>();
+        try
+        {
+            session = CreateSession();
+            var searcher = Invoke(session, "CreateUpdateSearcher");
+            if (searcher is null) return rows;
+            Tag(searcher);
+            var total = ToInt(Invoke(searcher, "GetTotalHistoryCount"));
+            if (total <= 0) return rows;
+            // History is returned newest first, so the first `limit` entries already span
+            // well past UpdateHistory.Window on any normally patched machine.
+            var history = Invoke(searcher, "QueryHistory", 0, Math.Min(total, limit));
+            var count = ToInt(Get(history, "Count"));
+            for (var i = 0; i < count; i++)
+            {
+                var entry = Index(history, i);
+                if (entry is null) continue;
+                var date = Get(entry, "Date") is DateTime d
+                    ? new DateTimeOffset(DateTime.SpecifyKind(d, DateTimeKind.Utc))
+                    : DateTimeOffset.MinValue;
+                rows.Add(new UpdateHistory.Entry(
+                    Title: ToText(Get(entry, "Title")),
+                    Date: date,
+                    Client: ToText(Get(entry, "ClientApplicationID")),
+                    Operation: ToInt(Get(entry, "Operation")),
+                    ResultCode: ToInt(Get(entry, "ResultCode"))));
+            }
+        }
+        catch (Exception e) when (e is COMException or TargetInvocationException
+                                       or MissingMethodException or InvalidCastException
+                                       or UnauthorizedAccessException)
+        {
+            // Whatever was read before the failure is still true; keep it.
+        }
+        finally
+        {
+            if (session is not null && Marshal.IsComObject(session)) Marshal.ReleaseComObject(session);
+        }
+        return rows;
+    }
+
     public sealed record ScanResult(
         IReadOnlyList<AvailableUpdate> Updates, bool Supported, string Error);
 
@@ -43,13 +119,12 @@ public static class WindowsUpdateApi
         object? session = null;
         try
         {
-            var type = Type.GetTypeFromProgID("Microsoft.Update.Session");
-            if (type is null)
+            if (Type.GetTypeFromProgID("Microsoft.Update.Session") is null)
             {
                 return new ScanResult([], false,
                     "this machine has no Windows Update Agent");
             }
-            session = Activator.CreateInstance(type);
+            session = CreateSession();
             if (session is null)
             {
                 return new ScanResult([], false,
@@ -62,6 +137,7 @@ public static class WindowsUpdateApi
                 return new ScanResult([], false,
                     "the Windows Update Agent returned no searcher");
             }
+            Tag(searcher);
 
             var result = Invoke(searcher, "Search", SearchCriteria);
             var collection = result is null ? null : Get(result, "Updates");
