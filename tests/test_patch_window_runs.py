@@ -164,6 +164,15 @@ def main():
         check("editing the start time mid-occurrence creates no second run",
               patches.open_window_runs(db_path, sunday_2330 + 120) == [])
         patches.update_window(db_path, wid, actor="op@x.com", start_minute=23 * 60)
+        # An update approved an hour into the window must still install tonight -- the
+        # "approved but nothing installs" symptom this file exists for, in miniature.
+        patches.set_approval(db_path, "KB5000003", patches.APPROVAL_APPROVED, actor="op@x.com")
+        late = patches.open_window_runs(db_path, sunday_2330 + 3600)
+        check("an update approved mid-window gets a run the same night",
+              len(late) == 1 and [t["machine"] for t in
+                                  patches.get_run(db_path, late[0])["targets"]] == ["PC2"])
+        check("...without re-running the machines the night already covered",
+              patches.open_window_runs(db_path, sunday_2330 + 3660) == [])
 
         # PC1 is still pending in Sunday's open run when the next Sunday comes around (it
         # never came online). It must not be put into a second run alongside.
@@ -270,39 +279,58 @@ def main():
 
         check("the next pass does not repeat it while it is outstanding",
               patches.reconcile_control(db_path, now=now + 60) == 0)
-        # Reversal inside the cooldown: the operator switches the window off a minute after
-        # switching it on. The owned PC must be handed back NOW, not after the cooldown of an
-        # unrelated command; PC1, still reporting `windows`, now matches and gets nothing.
+
+        def last_own(machine):
+            rows = control_commands(db_path, machine)
+            return rows[-1]["params_json"] if rows else ""
+
+        def answer_all(machine):
+            agent_id = f"agent-{machine}"
+            for cmd in fleet.claim_commands(db_path, agent_id, machine) or []:
+                fleet.complete_command(db_path, cmd["id"], agent_id, True, "ok")
+
+        # Flip-flop inside the cooldown. Off a minute later: both PCs are sent own=false at
+        # once -- PC1 too, although it still reports `windows`, because its queued own=true
+        # would otherwise take it over. On again: both are sent own=true, because the
+        # newest command, not any recent one, is what the PC will end up doing.
         patches.update_window(db_path, wid, actor="op@x.com", own_windows_update=False)
-        check("switching off a minute later hands an owned PC back at once",
-              patches.reconcile_control(db_path, now=now + 70) == 1
-              and '"own": false' in control_commands(db_path, "PC4")[-1]["params_json"]
-              and len(control_commands(db_path, "PC1")) == 1)
+        check("switching off a minute later reaches every PC at once",
+              patches.reconcile_control(db_path, now=now + 70) == 2
+              and '"own": false' in last_own("PC1") and '"own": false' in last_own("PC4"))
         patches.update_window(db_path, wid, actor="op@x.com", own_windows_update=True)
-        check("...and switching back on does not resend PC1's identical command",
-              patches.reconcile_control(db_path, now=now + 80) == 0)
-        fleet.claim_commands(db_path, "agent-PC1", "PC1")
-        fleet.complete_command(db_path, commands[0]["id"], "agent-PC1", True, "fleethub")
-        check("...nor inside the cooldown after it was answered",
+        check("switching back on inside the cooldown is not held back",
+              patches.reconcile_control(db_path, now=now + 80) == 2
+              and '"own": true' in last_own("PC1") and '"own": true' in last_own("PC4"))
+        check("...and is not repeated on the next pass",
+              patches.reconcile_control(db_path, now=now + 90) == 0)
+
+        answer_all("PC1")
+        answer_all("PC4")
+        patches.record_control(db_path, "PC1", {"state": "fleethub"})
+        check("an answered command is not repeated inside the cooldown",
               patches.reconcile_control(db_path, now=now + 120) == 0)
 
-        # Drift: an administrator deleted the keys. The agent reports `windows` again, and
-        # once the cooldown is over the hub takes it back.
-        later = now + patches.CONTROL_COOLDOWN_SECONDS + 1
+        # Drift: an administrator deleted the keys and the agent reports `windows`. Inside
+        # the cooldown the hub waits (the report may predate the command); after it, the PC
+        # is taken back.
+        patches.record_control(db_path, "PC1", {"state": "windows"})
+        # fleet.create_command stamps the wall clock; put the commands on this test's clock.
         with patches.get_conn(db_path) as conn:
-            conn.execute("UPDATE commands SET created_at = ? WHERE machine = ?",
-                         (now, "PC1"))
+            conn.execute("UPDATE commands SET created_at = ? WHERE type = ?",
+                         (now + 80, patches.CONTROL_COMMAND_TYPE))
+        check("drift inside the cooldown waits",
+              patches.reconcile_control(db_path, now=now + 130) == 0)
+        later = now + 80 + patches.CONTROL_COOLDOWN_SECONDS + 1
         check("drift is repaired after the cooldown",
-              patches.reconcile_control(db_path, now=later) == 1)
+              patches.reconcile_control(db_path, now=later) == 1
+              and '"own": true' in last_own("PC1"))
 
-        # Hand-back again, with PC4's earlier own=false still unanswered: the outstanding
-        # command already says it, so nothing is queued on top however long it waits.
+        # Hand-back with nothing answered: queued once, not again on the next pass.
         patches.update_window(db_path, wid, actor="op@x.com", own_windows_update=False)
-        released = patches.reconcile_control(
-            db_path, now=later + patches.CONTROL_COOLDOWN_SECONDS)
-        pc4 = control_commands(db_path, "PC4")
+        patches.reconcile_control(db_path, now=later + 10)
         check("an unanswered hand-back is not queued twice",
-              released == 0 and len(pc4) == 1 and '"own": false' in pc4[-1]["params_json"])
+              patches.reconcile_control(db_path, now=later + 20) == 0
+              and '"own": false' in last_own("PC1") and '"own": false' in last_own("PC4"))
 
         patches.update_window(db_path, wid, actor="op@x.com", own_windows_update=True,
                               enabled=False)

@@ -1813,8 +1813,10 @@ def open_window_runs(db_path, now=None, *, max_attempts=DEFAULT_MAX_ATTEMPTS,
     "No patch run yet.", and the installs anybody saw were Windows' own. The owner's
     decision on the issue: what is approved installs on a run, without a further click.
 
-    One run per window per OCCURRENCE, keyed on (window_id, window_start). The scheduler
-    ticks every minute, so without the key a four-hour window would create 240 runs. A run
+    Each machine gets at most one run per window OCCURRENCE, keyed on (window_id,
+    window_start). The scheduler ticks every minute, so without the key a four-hour window
+    would create 240 runs. Usually that is one run as the window opens; a machine whose
+    first approved update arrives later in the night gets its own small run when it does. A run
     created here carries its occurrence's end as `window_end`, so a machine that never came
     online expires with the occurrence instead of being carried into next week's -- next
     week's occurrence makes its own run.
@@ -1843,29 +1845,31 @@ def open_window_runs(db_path, now=None, *, max_attempts=DEFAULT_MAX_ATTEMPTS,
             continue
         start, end = occurrence
         with get_conn(db_path) as conn:
-            # This occurrence's run, or any run of this window still covering `now`. The
-            # second half is for an operator who moves the start time mid-occurrence: the
-            # key changes, and without it the next tick would create a second run for the
-            # same night.
-            exists = conn.execute(
-                "SELECT 1 FROM patch_runs WHERE window_id = ? AND (window_start = ? "
-                "  OR (window_start <= ? AND window_end > ?)) LIMIT 1",
-                (window["id"], start, now, now)).fetchone()
+            # Machines this occurrence has already given a run to, in any state. Its runs are
+            # the ones keyed on its start, plus any run of this window still covering `now`
+            # -- the second half is for an operator who moves the start time mid-occurrence,
+            # which changes the key. Per MACHINE rather than per window, so an update
+            # approved, or a PC that first reports, an hour into the window still gets a run
+            # tonight. A machine is never given a second run in one occurrence: one whose
+            # attempts ran out would otherwise get a fresh run every minute until morning.
+            done = {r["machine"].lower() for r in conn.execute(
+                "SELECT t.machine FROM patch_run_targets t "
+                "JOIN patch_runs r ON r.id = t.run_id "
+                "WHERE r.window_id = ? AND (r.window_start = ? "
+                "  OR (r.window_start <= ? AND r.window_end > ?))",
+                (window["id"], start, now, now))}
             busy = {r["machine"].lower() for r in conn.execute(
                 "SELECT t.machine FROM patch_run_targets t "
                 "JOIN patch_runs r ON r.id = t.run_id "
                 f"WHERE r.status IN ({','.join('?' * len(RUN_OPEN_STATUSES))}) "
                 "AND t.status IN (?, ?)",
                 list(RUN_OPEN_STATUSES) + [TARGET_PENDING, TARGET_IN_FLIGHT])}
-        if exists:
-            continue
         covered = known if window["scope_kind"] == SCOPE_ALL else window["machines"]
         hosts = [m for m in covered
-                 if m.lower() not in busy and approved_for_machine(db_path, m)]
+                 if m.lower() not in busy and m.lower() not in done
+                 and approved_for_machine(db_path, m)]
         # More machines than one run may hold become several runs in the same tick, never a
-        # truncated one: the dedupe above would stop the remainder getting a run later in
-        # the occurrence, and on a window that also owns Windows Update those PCs would get
-        # no installs at all.
+        # truncated one.
         for i in range(0, len(hosts), MAX_TARGETS_PER_RUN):
             created.append(create_run(
                 db_path, machines=hosts[i:i + MAX_TARGETS_PER_RUN],
@@ -2009,26 +2013,28 @@ def reconcile_control(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_S
         reported = [dict(r) for r in conn.execute(
             "SELECT machine, control_state FROM machine_patch_state "
             "WHERE control_state IN (?, ?)", (CONTROL_FLEETHUB, CONTROL_WINDOWS))]
-        # (machine, own) pairs already sent recently. Keyed on the VALUE as well as the
-        # machine, so an operator who switches a window back off a minute after switching
-        # it on is not made to wait out the cooldown of the command they just reversed --
-        # the agent runs commands in order, so the later one is the state it ends in.
-        recent = set()
+        # The NEWEST control command per machine that is still outstanding or inside the
+        # cooldown, and the value it carried. Only an identical repeat is held back: a
+        # reversal (on, then off a minute later, then on again) always goes out at once,
+        # because agents run commands in order and the newest is the state the PC ends in.
+        newest = {}
         for r in conn.execute(
                 "SELECT machine, params_json FROM commands WHERE type = ? AND "
-                "(status IN (?, ?) OR created_at > ?)",
+                "(status IN (?, ?) OR created_at > ?) ORDER BY created_at, rowid",
                 (CONTROL_COMMAND_TYPE, fleet.STATUS_PENDING, fleet.STATUS_CLAIMED,
                  now - CONTROL_COOLDOWN_SECONDS)):
             try:
                 own = bool(json.loads(r["params_json"] or "{}").get("own"))
             except (TypeError, ValueError, AttributeError):
                 continue
-            recent.add((r["machine"].lower(), own))
+            newest[r["machine"].lower()] = own
     queued = 0
     for row in reported:
         want = control_desired(windows, row["machine"])
         have = row["control_state"] == CONTROL_FLEETHUB
-        if want == have or (row["machine"].lower(), want) in recent:
+        # What the PC will be once its queue drains: the newest command's value if one is
+        # recent, else what it last reported.
+        if newest.get(row["machine"].lower(), have) == want:
             continue
         fleet.create_command(
             db_path, machine=row["machine"], command_type=CONTROL_COMMAND_TYPE,

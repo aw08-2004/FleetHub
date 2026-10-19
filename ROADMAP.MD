@@ -3409,8 +3409,10 @@ update):
 
 - **Install approved updates automatically** (`auto_run`). When the window opens,
   `patches.open_window_runs` creates one `approved` run for the covered machines that report
-  at least one approved update and are not already waiting in another open run; deduped on
-  `(window_id, window_start)` so a minute-by-minute scheduler makes one run per occurrence.
+  at least one approved update and are not already waiting in another open run. Each machine
+  gets at most one run per occurrence (keyed on `(window_id, window_start)`), so a
+  minute-by-minute scheduler does not repeat itself, while an update approved an hour into the
+  window still gets a small run that night.
   `window_occurrence` is factored out of `window_is_open`, so the spill past midnight belongs to
   the opening that started it. The run's `window_end` is the occurrence's, so a dark PC expires
   with the night and next week makes its own run. A window with nothing approved creates nothing.
@@ -3419,8 +3421,9 @@ update):
   wrote under `HKLM\SOFTWARE\FleetHub\UpdateControl` so switching off or uninstalling removes
   only its own values. It reports `fleethub` / `windows` / `managed_elsewhere` in the patch
   inventory, and `patches.reconcile_control` queues `set_update_control` wherever that
-  disagrees with the windows (any enabled covering window that says so wins), at most once per
-  machine per half hour. **Only machines that have reported a state are sent anything** -- that
+  disagrees with the windows (any enabled covering window that says so wins). Only an
+  identical repeat of the newest recent command is held back for half an hour; a reversal goes
+  out at once. **Only machines that have reported a state are sent anything** -- that
   is the version gate, so a 3.46 agent and every Linux/Android agent are left alone without a
   version comparison.
 - The Approved tab and the empty Runs tab now say that approving does not install.
