@@ -410,6 +410,34 @@ if ($Uninstall) {
         }
     }
 
+    # Hand Windows Update back (issue #140). An agent that had taken update control wrote
+    # NoAutoUpdate and SetDisableUXWUAccess; uninstalling it without removing them leaves a PC
+    # that neither Windows nor FleetHub will ever patch. Same rules as UpdateControl.Release
+    # in the agent: only values listed in the marker, only while they still hold the 1 we
+    # wrote (a GPO that took one over owns it now), then the marker itself. A PC whose policy
+    # came from GPO or Intune has no marker entries, so nothing of theirs is touched.
+    $policyRoot = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+    $markerKey  = "HKLM:\SOFTWARE\FleetHub\UpdateControl"
+    $marked = (Get-ItemProperty -LiteralPath $markerKey -Name Written -ErrorAction SilentlyContinue).Written
+    if ($marked) {
+        foreach ($id in @($marked)) {
+            # Ids are the path below the policy root, e.g. "AU\NoAutoUpdate". Anything that
+            # tries to climb out of it is not one this agent wrote, so it is skipped.
+            if ($id -match '\.\.' -or $id -match '^\\') { continue }
+            $parent = Split-Path $id -Parent
+            $name   = Split-Path $id -Leaf
+            $key    = if ($parent) { Join-Path $policyRoot $parent } else { $policyRoot }
+            $value  = (Get-ItemProperty -LiteralPath $key -Name $name -ErrorAction SilentlyContinue).$name
+            if ($value -is [int] -and $value -eq 1) {
+                Remove-ItemProperty -LiteralPath $key -Name $name -ErrorAction SilentlyContinue
+                Ok "Released Windows Update policy $id"
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $markerKey) {
+        Remove-Item -LiteralPath $markerKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     Warn "Left PawnIO driver and the rest of %ProgramData%\FleetHub\Agent (logs) in place."
     Write-Host "`nDone.`n" -ForegroundColor Green
     exit
