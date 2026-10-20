@@ -76,7 +76,9 @@
             // The answer arrives later, as a live 'location' event that reloads this page's
             // data; until then the row says the request is in flight.
             await load();
-        } catch (e) {
+        } catch {
+            // A network failure, not a refusal: there is no reason text to show, so the row
+            // says the request did not go out and the button stays disabled until a reload.
             button.textContent = t('location.failed');
         }
     }

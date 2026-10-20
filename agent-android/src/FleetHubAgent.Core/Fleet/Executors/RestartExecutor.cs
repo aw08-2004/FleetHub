@@ -58,13 +58,13 @@ public sealed class RestartExecutor(ILogger<RestartExecutor> log, IDeviceReboot 
         // still happen if the process lives long enough to do it.
         _ = Task.Run(async () =>
         {
-            await Task.Delay(TimeSpan.FromSeconds(delay));
+            await Task.Delay(TimeSpan.FromSeconds(delay), CancellationToken.None);
             var error = reboot.Reboot();
             if (error is not null)
                 // Too late to tell the hub; the next heartbeat after the expected downtime is
                 // what tells it nothing happened. Logged so that is explicable on the device.
                 log.LogWarning("Scheduled restart did not happen: {Error}", error);
-        });
+        }, CancellationToken.None);
 
         log.LogInformation("Restart scheduled in {Delay}s", delay);
         return Task.FromResult(CommandResult.Ok($"restart scheduled in {delay}s"));

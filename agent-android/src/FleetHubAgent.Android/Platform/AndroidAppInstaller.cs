@@ -39,14 +39,8 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
             return AppInstallResult.Refused("no package installer on this device");
 
         // What the file claims to be, read before anything is installed.
-        var archive = pm.GetPackageArchiveInfo(path, 0);
-        if (archive?.PackageName is not { Length: > 0 } packageName)
-            return AppInstallResult.Refused("the file is not an Android app (no package in it)");
-        if (packageName == context.PackageName)
-            return AppInstallResult.Refused(
-                "this is the FleetHub agent itself, which updates only through its own signed " +
-                "release channel");
-        var wantedVersion = VersionCode(archive);
+        var (packageName, wantedVersion, refusal) = ReadArchive(pm, path);
+        if (refusal is not null) return AppInstallResult.Refused(refusal);
 
         var action = $"{context.PackageName}.INSTALL_RESULT.{Guid.NewGuid():N}";
         var verdict = new TaskCompletionSource<(int Status, string? Message)>(
@@ -61,28 +55,7 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         var sessionId = -1;
         try
         {
-            var parameters = new PackageInstaller.SessionParams(PackageInstallMode.FullInstall);
-            parameters.SetAppPackageName(packageName);
-            sessionId = installer.CreateSession(parameters);
-            using (var session = installer.OpenSession(sessionId))
-            {
-                await using (var source = File.OpenRead(path))
-                await using (var destination = session.OpenWrite("app.apk", 0, source.Length))
-                {
-                    await source.CopyToAsync(destination, ct);
-                    session.Fsync(destination);
-                }
-
-                // Explicit (setPackage) and mutable: the platform writes the status extras
-                // into it, and from API 34 a mutable PendingIntent must name its target.
-                var intent = new Intent(action);
-                intent.SetPackage(context.PackageName);
-                var flags = PendingIntentFlags.UpdateCurrent
-                            | (OperatingSystem.IsAndroidVersionAtLeast(31)
-                                ? PendingIntentFlags.Mutable : 0);
-                var pending = PendingIntent.GetBroadcast(context, sessionId, intent, flags);
-                session.Commit(pending!.IntentSender!);
-            }
+            sessionId = await CommitAsync(installer, packageName!, path, action, ct);
 
             (int Status, string? Message) answer;
             try
@@ -102,19 +75,7 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
                 return AppInstallResult.Refused(answer.Message is { Length: > 0 } m
                     ? m : $"the installer refused it (status {answer.Status})");
             }
-
-            // ---- detection: is it really there, at the version the file declares? ----
-            PackageInfo? installed;
-            try { installed = pm.GetPackageInfo(packageName, 0); }
-            catch (PackageManager.NameNotFoundException) { installed = null; }
-            if (installed is null)
-                return AppInstallResult.Refused(
-                    $"the installer reported success but {packageName} is not installed");
-            if (VersionCode(installed) < wantedVersion)
-                return AppInstallResult.Refused(
-                    $"the installer reported success but {packageName} is still at " +
-                    $"{installed.VersionName}");
-            return new AppInstallResult(true, packageName, installed.VersionName, null);
+            return Confirm(pm, packageName!, wantedVersion);
         }
         catch (System.OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -135,6 +96,63 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         }
     }
 
+    /// <summary>The package and version the APK declares, or why it will not be installed.</summary>
+    private (string? Package, long Version, string? Refusal) ReadArchive(PackageManager pm, string path)
+    {
+        var archive = pm.GetPackageArchiveInfo(path, 0);
+        if (archive?.PackageName is not { Length: > 0 } packageName)
+            return (null, 0, "the file is not an Android app (no package in it)");
+        if (packageName == context.PackageName)
+            return (null, 0, "this is the FleetHub agent itself, which updates only through its " +
+                             "own signed release channel");
+        return (packageName, VersionCode(archive), null);
+    }
+
+    /// <summary>Stream the APK into a new install session and commit it. Returns the session
+    /// id, so a failure after this point can abandon it. The verdict arrives later, as the
+    /// broadcast `action` names.</summary>
+    private async Task<int> CommitAsync(PackageInstaller installer, string packageName,
+        string path, string action, CancellationToken ct)
+    {
+        var parameters = new PackageInstaller.SessionParams(PackageInstallMode.FullInstall);
+        parameters.SetAppPackageName(packageName);
+        var sessionId = installer.CreateSession(parameters);
+        using var session = installer.OpenSession(sessionId);
+        await using (var source = File.OpenRead(path))
+        await using (var destination = session.OpenWrite("app.apk", 0, source.Length))
+        {
+            await source.CopyToAsync(destination, ct);
+            session.Fsync(destination);
+        }
+
+        // Explicit (setPackage) and mutable: the platform writes the status extras into it,
+        // and from API 34 a mutable PendingIntent must name its target.
+        var intent = new Intent(action);
+        intent.SetPackage(context.PackageName);
+        var flags = PendingIntentFlags.UpdateCurrent
+                    | (OperatingSystem.IsAndroidVersionAtLeast(31) ? PendingIntentFlags.Mutable : 0);
+        var pending = PendingIntent.GetBroadcast(context, sessionId, intent, flags);
+        session.Commit(pending!.IntentSender!);
+        return sessionId;
+    }
+
+    /// <summary>Detection: is the package really installed, at least at the version the file
+    /// declared? "The installer said success" is evidence, not proof.</summary>
+    private static AppInstallResult Confirm(PackageManager pm, string packageName, long wantedVersion)
+    {
+        PackageInfo? installed;
+        try { installed = pm.GetPackageInfo(packageName, 0); }
+        catch (PackageManager.NameNotFoundException) { installed = null; }
+        if (installed is null)
+            return AppInstallResult.Refused(
+                $"the installer reported success but {packageName} is not installed");
+        if (VersionCode(installed) < wantedVersion)
+            return AppInstallResult.Refused(
+                $"the installer reported success but {packageName} is still at " +
+                $"{installed.VersionName}");
+        return new AppInstallResult(true, packageName, installed.VersionName, null);
+    }
+
     private static long VersionCode(PackageInfo info)
         => OperatingSystem.IsAndroidVersionAtLeast(28)
             ? info.LongVersionCode
@@ -147,7 +165,7 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
     private sealed class ResultReceiver(TaskCompletionSource<(int, string?)> verdict)
         : BroadcastReceiver
     {
-        public override void OnReceive(Context? context, Intent? intent)
+        public override void OnReceive(Context? _, Intent? intent)
         {
             var status = intent?.GetIntExtra(PackageInstaller.ExtraStatus, int.MinValue)
                          ?? int.MinValue;

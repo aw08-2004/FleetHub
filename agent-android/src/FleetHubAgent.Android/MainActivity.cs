@@ -190,109 +190,113 @@ public sealed class MainActivity : Activity
     {
         var identity = _state.LoadIdentity();
         var snapshot = AgentService.Snapshot();
-        var hasSecret = new AndroidEnrollmentSecretSource(this, _state).Read() is not null;
         var enrolled = snapshot?.Enrolled ?? identity.IsEnrolled;
         var name = snapshot?.MachineName ?? _state.LoadMachineNameOverride() ?? "(derived from this device)";
 
-        // ---- the card ----
-        if (!AgentConfig.IsHubConfigured)
-        {
-            // Not "Hub: https://your.hub.url". A placeholder URL formatted exactly like a real
-            // one reads as configured at a glance, and this is the state a QR-provisioned
-            // device was silently left in -- so it is the loudest thing on the screen.
-            Chip(_statusChip, "NOT SET UP", Tone.Warn);
-            _statusHeadline.Text = "No hub configured";
-            _statusDetail.Text = "This device is reporting nowhere. Provision it with a QR code " +
-                                 "minted by the console, or set the hub URL under Advanced.";
-        }
-        else if (snapshot is null)
-        {
-            Chip(_statusChip, "STARTING", Tone.Info);
-            _statusHeadline.Text = "The agent is starting";
-            _statusDetail.Text = "If this does not change, open the app again -- that restarts it.";
-        }
-        else if (enrolled)
-        {
-            Chip(_statusChip, "MANAGED", Tone.Ok);
-            _statusHeadline.Text = snapshot.Buffered > 0 ? "Managed, but offline" : "Managed by FleetHub";
-            _statusDetail.Text = snapshot.Buffered > 0
-                ? $"The hub cannot be reached. {snapshot.Buffered} report(s) are waiting and will be sent when it can."
-                : "Reporting to the hub and accepting commands from the console.";
-        }
-        else
-        {
-            // The state that looks fine and is not. Said plainly, because on a phone there is
-            // no installer output to say it in.
-            Chip(_statusChip, "NOT ENROLLED", Tone.Warn);
-            _statusHeadline.Text = "Not enrolled";
-            _statusDetail.Text = hasSecret
-                ? "A fleet secret is set and enrolment is retried every 30 seconds."
-                : "This device reports to the console but will never accept a command. " +
-                  "Enroll it with a one-time code from Administration → Onboarding.";
-        }
-
+        RenderCard(snapshot, enrolled);
         _statusFacts.Text = string.Join("\n", new[]
         {
             $"Name in the console:  {name}",
             $"Hub:  {(AgentConfig.IsHubConfigured ? AgentConfig.HubBase : "none")}",
             enrolled && identity.AgentId is { Length: > 0 } id ? $"Agent id:  {id}" : null,
         }.Where(l => l is not null));
-
         _enrollButton.Visibility = AgentConfig.IsHubConfigured && !enrolled
             ? ViewStates.Visible : ViewStates.Gone;
 
-        // ---- the checklist ----
+        var rows = Checklist(enrolled);
         _checklist.RemoveAllViews();
-        var managed = DeviceOwner.IsManaged(this);
-        var rows = new List<CheckRow>
-        {
-            new("Enrollment",
-                enrolled ? "Done" : "Needed", enrolled ? Tone.Ok : Tone.Warn,
-                enrolled
-                    ? "This device has its own credential and takes commands."
-                    : "Without it the console can see this device but cannot manage it.",
-                enrolled ? null : ("Enter code", ShowEnrollDialog)),
-            new("Location",
-                AndroidLocationReader.IsGranted(this) ? "Granted" : "Not granted",
-                AndroidLocationReader.IsGranted(this) ? Tone.Ok : Tone.Warn,
-                AndroidLocationReader.IsGranted(this)
-                    ? "The console can locate this device. Nothing is tracked in the background."
-                    : "A locate from the console will answer “unavailable” and the device " +
-                      "will not appear on the map.",
-                AndroidLocationReader.IsGranted(this) ? null : ("Grant location", GrantLocation)),
-            new("Notifications",
-                NotificationsAllowed() ? "On" : "Off",
-                NotificationsAllowed() ? Tone.Ok : Tone.Warn,
-                NotificationsAllowed()
-                    ? "Messages from the helpdesk and locate notices can be shown."
-                    : "Messages from the helpdesk come back unanswered, and the status " +
-                      "notification is hidden.",
-                NotificationsAllowed() ? null : ("Turn on", RequestNotificationsOrSettings)),
-            new("Battery optimisation",
-                IgnoringBatteryOptimisation() ? "Excluded" : "Active",
-                IgnoringBatteryOptimisation() ? Tone.Ok : Tone.Warn,
-                IgnoringBatteryOptimisation()
-                    ? "Android will not freeze the agent while the device is idle."
-                    : "The device may stop reporting overnight and read offline in the console.",
-                IgnoringBatteryOptimisation() ? null : ("Open battery settings", OpenBatterySettings)),
-            new("Usage access",
-                UsageStatsReader.IsGranted(this) ? "Granted" : "Not granted",
-                UsageStatsReader.IsGranted(this) ? Tone.Ok : Tone.Info,
-                UsageStatsReader.IsGranted(this)
-                    ? "Screen-time budgets can be enforced."
-                    : "Only needed for screen-time budgets. Blocked hours work without it.",
-                UsageStatsReader.IsGranted(this) ? null : ("Grant usage access", OpenUsageAccessSettings)),
-            new("Device owner",
-                managed ? "Fully managed" : "Not managed", managed ? Tone.Ok : Tone.Info,
-                managed
-                    ? "Lock, wipe, restart and app installs from the console work on this device."
-                    : "Installed as an ordinary app. Lock, wipe, restart and app installs need " +
-                      "the device provisioned by QR code, which starts with a factory reset.",
-                null),
-        };
         for (var i = 0; i < rows.Count; i++)
             _checklist.AddView(Render(rows[i], last: i == rows.Count - 1));
     }
+
+    /// <summary>The status card: one chip, one headline, one sentence of what it means.</summary>
+    private void RenderCard(AgentSnapshot? snapshot, bool enrolled)
+    {
+        var (chip, tone, headline, detail) = CardState(snapshot, enrolled);
+        Chip(_statusChip, chip, tone);
+        _statusHeadline.Text = headline;
+        _statusDetail.Text = detail;
+    }
+
+    private (string Chip, Tone Tone, string Headline, string Detail) CardState(
+        AgentSnapshot? snapshot, bool enrolled)
+    {
+        if (!AgentConfig.IsHubConfigured)
+            // Not "Hub: https://your.hub.url". A placeholder URL formatted exactly like a real
+            // one reads as configured at a glance, and this is the state a QR-provisioned
+            // device was silently left in -- so it is the loudest thing on the screen.
+            return ("NOT SET UP", Tone.Warn, "No hub configured",
+                "This device is reporting nowhere. Provision it with a QR code minted by the " +
+                "console, or set the hub URL under Advanced.");
+        if (snapshot is null)
+            return ("STARTING", Tone.Info, "The agent is starting",
+                "If this does not change, open the app again -- that restarts it.");
+        if (enrolled)
+            return snapshot.Buffered > 0
+                ? ("MANAGED", Tone.Ok, "Managed, but offline",
+                   $"The hub cannot be reached. {snapshot.Buffered} report(s) are waiting and " +
+                   "will be sent when it can.")
+                : ("MANAGED", Tone.Ok, "Managed by FleetHub",
+                   "Reporting to the hub and accepting commands from the console.");
+
+        // The state that looks fine and is not. Said plainly, because on a phone there is no
+        // installer output to say it in.
+        var hasSecret = new AndroidEnrollmentSecretSource(this, _state).Read() is not null;
+        return ("NOT ENROLLED", Tone.Warn, "Not enrolled", hasSecret
+            ? "A fleet secret is set and enrolment is retried every 30 seconds."
+            : "This device reports to the console but will never accept a command. Enroll it " +
+              "with a one-time code from Administration → Onboarding.");
+    }
+
+    /// <summary>The setup checklist, in the order somebody setting up a device works through it.</summary>
+    private List<CheckRow> Checklist(bool enrolled)
+    {
+        var located = AndroidLocationReader.IsGranted(this);
+        var notifications = NotificationsAllowed();
+        var battery = IgnoringBatteryOptimisation();
+        var usage = UsageStatsReader.IsGranted(this);
+        var managed = DeviceOwner.IsManaged(this);
+        return
+        [
+            Row("Enrollment", enrolled, "Done", "Needed", Tone.Warn,
+                "This device has its own credential and takes commands.",
+                "Without it the console can see this device but cannot manage it.",
+                ("Enter code", ShowEnrollDialog)),
+            Row("Location", located, "Granted", "Not granted", Tone.Warn,
+                "The console can locate this device. Nothing is tracked in the background.",
+                "A locate from the console will answer “unavailable” and the device " +
+                "will not appear on the map.",
+                ("Grant location", GrantLocation)),
+            Row("Notifications", notifications, "On", "Off", Tone.Warn,
+                "Messages from the helpdesk and locate notices can be shown.",
+                "Messages from the helpdesk come back unanswered, and the status notification " +
+                "is hidden.",
+                ("Turn on", RequestNotificationsOrSettings)),
+            Row("Battery optimisation", battery, "Excluded", "Active", Tone.Warn,
+                "Android will not freeze the agent while the device is idle.",
+                "The device may stop reporting overnight and read offline in the console.",
+                ("Open battery settings", OpenBatterySettings)),
+            Row("Usage access", usage, "Granted", "Not granted", Tone.Info,
+                "Screen-time budgets can be enforced.",
+                "Only needed for screen-time budgets. Blocked hours work without it.",
+                ("Grant usage access", OpenUsageAccessSettings)),
+            // Information only: device ownership is taken at a factory reset, by QR, and no
+            // button on this screen can grant it.
+            Row("Device owner", managed, "Fully managed", "Not managed", Tone.Info,
+                "Lock, wipe, restart and app installs from the console work on this device.",
+                "Installed as an ordinary app. Lock, wipe, restart and app installs need the " +
+                "device provisioned by QR code, which starts with a factory reset.",
+                null),
+        ];
+    }
+
+    /// <summary>One row, in its done or its not-done state. The fix button only appears on the
+    /// second: a button that does nothing because the thing is already done reads as broken.</summary>
+    private static CheckRow Row(string title, bool done, string doneState, string todoState,
+        Tone todoTone, string doneDetail, string todoDetail, (string Label, Action Run)? fix)
+        => done
+            ? new CheckRow(title, doneState, Tone.Ok, doneDetail, null)
+            : new CheckRow(title, todoState, todoTone, todoDetail, fix);
 
     private enum Tone { Ok, Warn, Info }
 

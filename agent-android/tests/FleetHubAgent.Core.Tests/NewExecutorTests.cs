@@ -225,7 +225,85 @@ public sealed class NewExecutorTests : IDisposable
         finally { dir.Delete(recursive: true); }
     }
 
+    [Fact]
+    public async Task A_redirect_off_the_hub_does_not_carry_the_token()
+    {
+        // The hub answers with a redirect to a CDN. The token went to the hub; it must not
+        // follow the file to somebody else's host, whatever the platform's handler would do.
+        var handler = new RoutingHandler(request => request.RequestUri!.Host == "hub.example.com"
+            ? Redirect("https://cdn.vendor.example/app.apk")
+            : Ok([1, 2, 3]));
+        using var downloader = new HubPayloadDownloader(() => "agent-1:tok", handler);
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var error = await downloader.DownloadAsync("/api/agent/packages/abc",
+                Path.Combine(dir.FullName, "a"), default);
+            Assert.Null(error);
+            Assert.Equal(["agent-1:tok", null], handler.Tokens);
+            Assert.Equal([1, 2, 3], await File.ReadAllBytesAsync(Path.Combine(dir.FullName, "a")));
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
+    [Fact]
+    public void A_redirect_from_https_to_http_is_refused()
+    {
+        var (next, refusal) = HubPayloadDownloader.NextHop(
+            new Uri("https://cdn.vendor.example/a"), new Uri("http://cdn.vendor.example/a"));
+        Assert.Null(next);
+        Assert.Contains("https to http", refusal);
+    }
+
+    [Fact]
+    public void A_relative_redirect_stays_on_its_host()
+        => Assert.Equal("https://cdn.vendor.example/files/b.apk",
+            HubPayloadDownloader.NextHop(new Uri("https://cdn.vendor.example/a/x"),
+                new Uri("/files/b.apk", UriKind.Relative)).Next?.ToString());
+
+    [Fact]
+    public async Task A_payload_that_says_it_is_too_large_is_refused_before_the_body()
+    {
+        var handler = new RoutingHandler(_ =>
+        {
+            var response = Ok([1]);
+            response.Content.Headers.ContentLength = HubPayloadDownloader.MaxPayloadBytes + 1;
+            return response;
+        });
+        using var downloader = new HubPayloadDownloader(() => null, handler);
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var error = await downloader.DownloadAsync("https://cdn.vendor.example/huge.apk",
+                Path.Combine(dir.FullName, "a"), default);
+            Assert.Contains("larger than", error);
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
     // ------------------------------------------------------------------ helpers
+
+    private static HttpResponseMessage Ok(byte[] body)
+        => new(HttpStatusCode.OK) { Content = new ByteArrayContent(body) };
+
+    private static HttpResponseMessage Redirect(string to)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.Found);
+        response.Headers.Location = new Uri(to);
+        return response;
+    }
+
+    private sealed class RoutingHandler(Func<HttpRequestMessage, HttpResponseMessage> route)
+        : HttpMessageHandler
+    {
+        public List<string?> Tokens { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Tokens.Add(request.Headers.Authorization?.Parameter);
+            return Task.FromResult(route(request));
+        }
+    }
 
     private static FleetCommand Cmd(string type, JsonNode parameters)
         => new() { Id = "c1", Type = type, Params = parameters };

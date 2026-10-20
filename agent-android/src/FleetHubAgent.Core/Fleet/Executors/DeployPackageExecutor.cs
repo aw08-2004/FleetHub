@@ -52,21 +52,15 @@ public sealed class DeployPackageExecutor(
     /// private files -- the one place nothing else on the device can swap a file in.</summary>
     private static string StagingDir => Path.Combine(AgentConfig.UpdateStagingDir, "packages");
 
+    /// <summary>What an unmanaged device says, before anything is downloaded.</summary>
+    internal const string NotManaged =
+        "this device is not fully managed, so it cannot install an app without somebody " +
+        "tapping Install on the device. Provisioning it as a device owner needs a factory reset.";
+
     public async Task<CommandResult> ExecuteAsync(
         FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
     {
-        var output = new StringBuilder();
-        void Say(string line)
-        {
-            output.AppendLine(line);
-            onOutput?.Invoke(line + "\n");
-        }
-        CommandResult Failed(string line)
-        {
-            Say("[deploy] FAILED: " + line);
-            return CommandResult.Fail(output.ToString());
-        }
-
+        var transcript = new Transcript(onOutput);
         var parameters = cmd.Params as JsonObject;
         var packageName = cmd.Params.GetString("package_name") ?? "package";
         var steps = (parameters?["steps"] as JsonArray)?.OfType<JsonObject>().ToList() ?? [];
@@ -74,15 +68,12 @@ public sealed class DeployPackageExecutor(
         var timeout = TimeSpan.FromSeconds(
             Math.Clamp(cmd.Params.GetInt("timeout_seconds", 900), 30, 24 * 60 * 60));
 
-        Say($"[deploy] {packageName} ({steps.Count} step(s))");
+        transcript.Say($"[deploy] {packageName} ({steps.Count} step(s))");
 
-        // ---- refusals that need no download ----
-        var refusal = Refuse(steps, parameters?["detection"] as JsonObject);
-        if (refusal is not null) return Failed(refusal);
-        if (!installer.CanInstallSilently)
-            return Failed("this device is not fully managed, so it cannot install an app " +
-                          "without somebody tapping Install on the device. Provisioning it as " +
-                          "a device owner needs a factory reset.");
+        // Refusals that need no download.
+        var refusal = Refuse(steps, parameters?["detection"] as JsonObject)
+                      ?? (installer.CanInstallSilently ? null : NotManaged);
+        if (refusal is not null) return transcript.Fail(refusal);
 
         var workDir = Path.Combine(StagingDir, Guid.NewGuid().ToString("N"));
         try
@@ -90,57 +81,19 @@ public sealed class DeployPackageExecutor(
             Directory.CreateDirectory(workDir);
 
             // ---- 1. payloads ----
-            var bound = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var source in sources)
-            {
-                var name = source.GetString("name") ?? "payload";
-                var (path, error) = await FetchAsync(source, workDir, Say, ct);
-                if (error is not null) return Failed(error);
-                bound[name] = path!;
-                // `{file}` keeps meaning the one payload, exactly as on Windows.
-                if (sources.Count == 1) bound["file"] = path!;
-            }
+            var (bound, fetchError) = await FetchAllAsync(sources, workDir, transcript.Say, ct);
+            if (fetchError is not null) return transcript.Fail(fetchError);
 
             // ---- 2 + 3. install and check, step by step ----
             var index = 0;
             foreach (var step in steps)
             {
-                index++;
-                var label = step.GetString("name") ?? $"step {index}";
-                var reference = step.GetString(StepApk) ?? "";
-                var path = Resolve(reference, bound);
-                if (path is null)
-                    return Failed($"{label}: {reference} names no payload in this package");
-
-                Say($"[deploy] {label}: installing {Path.GetFileName(path)}");
-                var stepTimeout = step["timeout_seconds"] is JsonValue v && v.TryGetValue<int>(out var s)
-                    ? TimeSpan.FromSeconds(Math.Clamp(s, 30, 24 * 60 * 60))
-                    : timeout;
-                AppInstallResult result;
-                try
-                {
-                    result = await installer.InstallAsync(path, stepTimeout, ct);
-                }
-                catch (Exception e) when (e is not System.OperationCanceledException)
-                {
-                    result = AppInstallResult.Refused(e.Message);
-                }
-
-                if (!result.Installed)
-                {
-                    var line = $"{label}: {result.Error ?? "the installer refused the app"}";
-                    if (step["continue_on_error"] is JsonValue c && c.TryGetValue<bool>(out var go) && go)
-                    {
-                        Say($"[deploy] {line} (continuing, as this step allows)");
-                        continue;
-                    }
-                    return Failed(line);
-                }
-                Say($"[deploy] {label}: {result.PackageName} {result.VersionName} installed");
+                var stepError = await InstallStepAsync(step, ++index, bound, timeout, transcript.Say, ct);
+                if (stepError is not null) return transcript.Fail(stepError);
             }
 
-            Say($"[deploy] {packageName} installed");
-            return CommandResult.Ok(output.ToString());
+            transcript.Say($"[deploy] {packageName} installed");
+            return CommandResult.Ok(transcript.Text);
         }
         catch (System.OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -149,12 +102,87 @@ public sealed class DeployPackageExecutor(
         catch (Exception e)
         {
             log.LogWarning(e, "deploy_package failed for {Package}", packageName);
-            return Failed(e.Message);
+            return transcript.Fail(e.Message);
         }
         finally
         {
             try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
-            catch (Exception e) { log.LogDebug("Could not clean up {Path}: {Msg}", workDir, e.Message); }
+            catch (Exception e) { log.LogDebug(e, "Could not clean up {Path}", workDir); }
+        }
+    }
+
+    /// <summary>Download and verify every payload, bound to its slot name. Returns the map,
+    /// or the first error.</summary>
+    private async Task<(Dictionary<string, string> Bound, string? Error)> FetchAllAsync(
+        List<JsonObject> sources, string workDir, Action<string> say, CancellationToken ct)
+    {
+        var bound = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var source in sources)
+        {
+            var (path, error) = await FetchAsync(source, workDir, say, ct);
+            if (error is not null) return (bound, error);
+            bound[source.GetString("name") ?? "payload"] = path!;
+            // `{file}` keeps meaning the one payload, exactly as on Windows.
+            if (sources.Count == 1) bound["file"] = path!;
+        }
+        return (bound, null);
+    }
+
+    /// <summary>Install one apk step. Null when it installed (or failed with
+    /// `continue_on_error`), else the line the deploy fails with.</summary>
+    private async Task<string?> InstallStepAsync(JsonObject step, int index,
+        IReadOnlyDictionary<string, string> bound, TimeSpan timeout, Action<string> say,
+        CancellationToken ct)
+    {
+        var label = step.GetString("name") ?? $"step {index}";
+        var reference = step.GetString(StepApk) ?? "";
+        var path = Resolve(reference, bound);
+        if (path is null) return $"{label}: {reference} names no payload in this package";
+
+        say($"[deploy] {label}: installing {Path.GetFileName(path)}");
+        var stepTimeout = step["timeout_seconds"] is JsonValue v && v.TryGetValue<int>(out var s)
+            ? TimeSpan.FromSeconds(Math.Clamp(s, 30, 24 * 60 * 60))
+            : timeout;
+        AppInstallResult result;
+        try
+        {
+            result = await installer.InstallAsync(path, stepTimeout, ct);
+        }
+        catch (Exception e) when (e is not System.OperationCanceledException)
+        {
+            result = AppInstallResult.Refused(e.Message);
+        }
+
+        if (result.Installed)
+        {
+            say($"[deploy] {label}: {result.PackageName} {result.VersionName} installed");
+            return null;
+        }
+        var line = $"{label}: {result.Error ?? "the installer refused the app"}";
+        if (step["continue_on_error"] is JsonValue c && c.TryGetValue<bool>(out var go) && go)
+        {
+            say($"[deploy] {line} (continuing, as this step allows)");
+            return null;
+        }
+        return line;
+    }
+
+    /// <summary>The deploy's output, as the hub stores it and the console streams it.</summary>
+    private sealed class Transcript(Action<string>? onOutput)
+    {
+        private readonly StringBuilder _text = new();
+        public string Text => _text.ToString();
+
+        public void Say(string line)
+        {
+            _text.AppendLine(line);
+            onOutput?.Invoke(line + "\n");
+        }
+
+        public CommandResult Fail(string line)
+        {
+            Say("[deploy] FAILED: " + line);
+            return CommandResult.Fail(Text);
         }
     }
 
@@ -261,17 +289,39 @@ public interface IPayloadDownloader
 ///
 /// A hub-hosted payload (`/api/agent/packages/&lt;sha256&gt;`) needs this agent's bearer token;
 /// a pinned URL elsewhere must NOT get it, or every package pointing at a vendor's CDN would
-/// hand that vendor a credential for this fleet. So the header is attached only when the
-/// resolved URL is on the configured hub. A relative URL -- what the hub sends when it has no
+/// hand that vendor a credential for this fleet. So the header is attached only when the URL
+/// being fetched is on the configured hub. A relative URL -- what the hub sends when it has no
 /// HUB_URL configured -- is resolved against the hub base, which is the address the agent
 /// already trusts.
+///
+/// **Redirects are followed here, by hand, rather than by the HTTP stack.** Whether a
+/// platform handler drops the Authorization header on a redirect to another host is that
+/// handler's decision, and on Android the default handler is the platform's, not .NET's -- so
+/// "the runtime strips it" is a claim nobody here has verified. Following them here makes the
+/// rule the same one as above, applied per hop: the token goes to the hub's host and nowhere
+/// else. A redirect from https to http is refused outright. (Raised in review of PR #161.)
+///
+/// **The body is capped.** The sha256 is checked once the file is on disk, so without a cap a
+/// pinned URL serving an endless body would fill the phone's private storage before the
+/// mismatch was ever noticed. <see cref="MaxPayloadBytes"/> is refused from Content-Length when
+/// the server states one, and enforced on the copy when it does not.
 /// </summary>
 public sealed class HubPayloadDownloader(Func<string?> bearer, HttpMessageHandler? handler = null)
     : IPayloadDownloader, IDisposable
 {
-    private readonly HttpClient _http = handler is null
-        ? new HttpClient { Timeout = TimeSpan.FromMinutes(15) }
-        : new HttpClient(handler, disposeHandler: false) { Timeout = TimeSpan.FromMinutes(15) };
+    /// <summary>Half a gigabyte. Large Android apps are a few hundred megabytes; anything past
+    /// this is not an app a fleet pushes to phones over their own connection.</summary>
+    internal const long MaxPayloadBytes = 512L * 1024 * 1024;
+
+    /// <summary>Enough for a CDN's usual hop or two; a loop is refused rather than chased.</summary>
+    internal const int MaxRedirects = 5;
+
+    private readonly HttpClient _http = new(
+        handler ?? new HttpClientHandler { AllowAutoRedirect = false },
+        disposeHandler: handler is null)
+    {
+        Timeout = TimeSpan.FromMinutes(15),
+    };
 
     internal static Uri? ResolveUrl(string url)
     {
@@ -295,20 +345,62 @@ public sealed class HubPayloadDownloader(Func<string?> bearer, HttpMessageHandle
         if (target is null) return $"not a usable URL: {url}";
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Get, target);
-            if (IsHub(target) && bearer() is { } value)
-                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", value);
-            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (!resp.IsSuccessStatusCode) return $"HTTP {(int)resp.StatusCode}";
-            await using var source = await resp.Content.ReadAsStreamAsync(ct);
-            await using var file = File.Create(destination);
-            await source.CopyToAsync(file, ct);
-            return null;
+            for (var hop = 0; hop <= MaxRedirects; hop++)
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, target);
+                if (IsHub(target) && bearer() is { } value)
+                    req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", value);
+                using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+
+                if ((int)resp.StatusCode is >= 300 and < 400)
+                {
+                    var (next, refusal) = NextHop(target, resp.Headers.Location);
+                    if (refusal is not null) return refusal;
+                    target = next!;
+                    continue;
+                }
+                if (!resp.IsSuccessStatusCode) return $"HTTP {(int)resp.StatusCode}";
+                return await SaveBoundedAsync(resp, destination, ct);
+            }
+            return $"more than {MaxRedirects} redirects";
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
         {
             return e.Message;
         }
+    }
+
+    /// <summary>Where a redirect points, or why it will not be followed.</summary>
+    internal static (Uri? Next, string? Refusal) NextHop(Uri current, Uri? location)
+    {
+        if (location is null) return (null, "a redirect with no Location");
+        var next = location.IsAbsoluteUri ? location : new Uri(current, location);
+        if (next.Scheme != Uri.UriSchemeHttps && next.Scheme != Uri.UriSchemeHttp)
+            return (null, $"a redirect to an unusable URL: {next}");
+        if (current.Scheme == Uri.UriSchemeHttps && next.Scheme == Uri.UriSchemeHttp)
+            return (null, "a redirect from https to http");
+        return (next, null);
+    }
+
+    private static async Task<string?> SaveBoundedAsync(
+        HttpResponseMessage resp, string destination, CancellationToken ct)
+    {
+        if (resp.Content.Headers.ContentLength is > MaxPayloadBytes)
+            return $"the payload is larger than {MaxPayloadBytes / (1024 * 1024)} MB";
+
+        await using var source = await resp.Content.ReadAsStreamAsync(ct);
+        await using var file = File.Create(destination);
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await source.ReadAsync(buffer, ct)) > 0)
+        {
+            total += read;
+            if (total > MaxPayloadBytes)
+                return $"the payload is larger than {MaxPayloadBytes / (1024 * 1024)} MB";
+            await file.WriteAsync(buffer.AsMemory(0, read), ct);
+        }
+        return null;
     }
 
     public void Dispose() => _http.Dispose();

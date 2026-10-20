@@ -97,7 +97,7 @@ public sealed class AndroidDeviceSecurity(Context context, ILogger log)
         }
         catch (Exception e)
         {
-            log.LogWarning("reboot refused: {Msg}", e.Message);
+            log.LogWarning(e, "reboot refused");
             return e.Message;
         }
     }

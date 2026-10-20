@@ -504,14 +504,7 @@ def _check_encryption(p, _t, encryption):
     or, on a phone, from what Android says about its own storage."""
     mobile = p.get("mobile") or {}
     if _sent(mobile):
-        state = mobile.get("encryption")
-        if state == "active":
-            return _verdict(STATUS_PASS, "enc_device")
-        if state == "inactive":
-            return _verdict(STATUS_FAIL, "enc_device_off")
-        if state == "unsupported":
-            return _verdict(STATUS_FAIL, "enc_device_unsupported")
-        return _unknown(mobile)
+        return _check_device_encryption(mobile)
     support = (encryption or {}).get("support")
     if support is None:
         return _verdict(STATUS_UNKNOWN, "enc_not_reported")
@@ -526,6 +519,21 @@ def _check_encryption(p, _t, encryption):
     if volumes and all(v.get("protection") == "on" for v in volumes):
         return _verdict(STATUS_PASS, "enc_all", count=len(volumes))
     return _verdict(STATUS_UNKNOWN, "not_reported")
+
+
+#: A phone's storage encryption state, as the agent maps getStorageEncryptionStatus, to its
+#: verdict. Anything else -- including "unknown" -- falls through to _unknown.
+_DEVICE_ENCRYPTION = {
+    "active": (STATUS_PASS, "enc_device"),
+    "inactive": (STATUS_FAIL, "enc_device_off"),
+    "unsupported": (STATUS_FAIL, "enc_device_unsupported"),
+}
+
+
+def _check_device_encryption(mobile):
+    """CIS 3.6 on a phone, from what Android says about its own storage."""
+    verdict = _DEVICE_ENCRYPTION.get(mobile.get("encryption"))
+    return _verdict(*verdict) if verdict else _unknown(mobile)
 
 
 def _check_os_patch(p, t, now=None):

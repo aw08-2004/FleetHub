@@ -74,7 +74,7 @@ public sealed class AndroidNetworkReader(Context context, ILogger log) : IInvent
         {
             // Null is "could not look", which leaves the hub's last reading alone -- see
             // IInventorySource. An empty list would erase it.
-            log.LogDebug("Network read failed: {Msg}", e.Message);
+            log.LogDebug(e, "Network read failed");
             return null;
         }
     }
@@ -91,7 +91,7 @@ public sealed class AndroidNetworkReader(Context context, ILogger log) : IInvent
         }
         catch (Exception e)
         {
-            log.LogDebug("getWifiMacAddress refused: {Msg}", e.Message);
+            log.LogDebug(e, "getWifiMacAddress refused");
             return null;
         }
     }
@@ -175,7 +175,7 @@ public sealed class AndroidPostureReader(Context context, ILogger log) : IInvent
         }
         catch (Exception e)
         {
-            log.LogDebug("Posture read failed: {Msg}", e.Message);
+            log.LogDebug(e, "Posture read failed");
             return null;
         }
     }
