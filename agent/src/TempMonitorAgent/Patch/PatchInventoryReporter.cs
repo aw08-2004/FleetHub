@@ -115,12 +115,39 @@ public static class PatchInventoryReporter
                 ["size_bytes"] = update.SizeBytes,
             });
         }
-        return new JsonObject
+        var payload = new JsonObject
         {
             // Always present, even when empty. See the class remarks -- this is the whole
             // reason the payload is an object rather than the array itself.
             ["updates"] = updates,
             ["error"] = scan.Error,
+        };
+        if (scan.Control is not null) payload["control"] = ToControl(scan.Control);
+        return payload;
+    }
+
+    /// <summary>The <c>control</c> block (issue #140). Inside the payload, so it is covered
+    /// by the same change hash: a PC that flips to managed_elsewhere, or gains an outside
+    /// install, re-reports even when its available updates did not move. The hub's reconcile
+    /// loop treats a MISSING block as "agent predates the feature", so it is never omitted
+    /// from a real scan.</summary>
+    private static JsonObject ToControl(PatchScanner.ControlReport control)
+    {
+        var outside = new JsonArray();
+        foreach (var row in control.OutsideInstalls)
+        {
+            outside.Add(new JsonObject
+            {
+                ["title"] = row.Title,
+                ["kb"] = row.Kb,
+                ["installed_at"] = row.InstalledAt,
+                ["client"] = row.Client,
+            });
+        }
+        return new JsonObject
+        {
+            ["state"] = control.State,
+            ["outside_installs"] = outside,
         };
     }
 

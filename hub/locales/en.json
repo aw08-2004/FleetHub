@@ -4056,6 +4056,16 @@
     "none_declined": "No update the fleet is currently reporting has been declined.",
     "no_windows": "No maintenance window yet. Without one, only an emergency run installs anything.",
     "no_runs": "No patch run yet.",
+    "approved_hint": "Approving an update does not install it. Approved updates install in a patch run: start one with Run patches, or turn on \"Install approved updates automatically\" for a maintenance window.",
+    "no_runs_hint": "Runs are created by Run patches, or by a maintenance window with \"Install approved updates automatically\" turned on, when it opens.",
+    "control": {
+      "heading": "Windows Update",
+      "owned": "{owned} of {total} controlled by FleetHub",
+      "managed_elsewhere": "{machine}: Windows Update is set by Group Policy or Intune, so FleetHub leaves it alone.",
+      "not_reported": "{machine}: waiting for its agent to report. Taking over Windows Update needs agent 3.47.0 or later.",
+      "pending": "{machine}: taking over Windows Update.",
+      "outside_install": "{machine}: {title} was installed outside FleetHub."
+    },
     "request_failed": "The hub could not be reached.",
     "approve": "Approve",
     "decline": "Decline",
@@ -4121,7 +4131,14 @@
       "summary": "{start} for {minutes} min",
       "disabled": "Disabled",
       "confirm_delete": "Delete the maintenance window {name}?",
-      "confirm_delete_title": "Delete maintenance window"
+      "confirm_delete_title": "Delete maintenance window",
+      "auto_run": "Install approved updates automatically",
+      "auto_run_help": "When this window opens, FleetHub starts a run for every covered machine with approved updates, and restarts them according to the restart policy.",
+      "own_windows_update": "Only FleetHub installs updates on these machines",
+      "own_windows_update_help": "Turns off Windows' own automatic updates and hides Install in Settings, so only approved updates install, during a run. Needs agent 3.47.0. Machines whose Windows Update is set by Group Policy or Intune are left alone.",
+      "auto_run_badge": "Installs approved updates automatically",
+      "own_badge": "Only FleetHub installs updates",
+      "own_without_auto_run": "Windows' own updates are off and nothing installs automatically: only runs started by hand patch these machines."
     },
     "run": {
       "new": "Run patches",

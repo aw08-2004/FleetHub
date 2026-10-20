@@ -199,6 +199,18 @@ public sealed class SelfUninstaller(ILogger<SelfUninstaller> log)
                 return;
             }
             log.LogWarning("The hub reports this machine was deleted; uninstalling the agent now");
+            // Hand Windows Update back BEFORE the agent goes (issue #140). An uninstalled
+            // agent that left NoAutoUpdate behind would leave a PC nobody patches at all --
+            // Windows told not to, and FleetHub no longer there to do it. Done here, in
+            // process, rather than in the script: the marker rules live in UpdateControl, and
+            // a second copy of them in generated PowerShell is one more place to drift. Only
+            // values the agent wrote are removed; a GPO's are untouched.
+            try { TempMonitorAgent.Patch.UpdateControl.ForMachine().Release(); }
+            catch (Exception e) when (e is UnauthorizedAccessException or IOException
+                                           or System.Security.SecurityException)
+            {
+                log.LogError(e, "Could not release Windows Update control before uninstalling");
+            }
             var run = await ProcessRunner.RunAsync("schtasks.exe", $"/run /tn {TaskName}", ct, timeoutSeconds: 30);
             if (run.ExitCode != 0)
             {

@@ -25,7 +25,15 @@ public static class PatchScanner
     /// past this the answer is not worth a scan thread.</summary>
     private static readonly TimeSpan WingetTimeout = TimeSpan.FromMinutes(3);
 
-    public sealed record Scan(IReadOnlyList<AvailableUpdate> Updates, string Error);
+    /// <summary>What a scan found. <c>Control</c> is null only in tests that build a Scan by
+    /// hand; Read() always fills it.</summary>
+    public sealed record Scan(IReadOnlyList<AvailableUpdate> Updates, string Error,
+                              ControlReport? Control = null);
+
+    /// <summary>Who decides when Windows updates install here, and what installed without
+    /// FleetHub anyway (issue #140). See UpdateControl and UpdateHistory.</summary>
+    public sealed record ControlReport(string State,
+                                       IReadOnlyList<UpdateHistory.OutsideInstall> OutsideInstalls);
 
     public static Scan Read()
     {
@@ -58,7 +66,27 @@ public static class PatchScanner
             if (seen.Add(update.Uid)) deduped.Add(update);
         }
 
-        return new Scan(deduped, string.Join("; ", problems));
+        return new Scan(deduped, string.Join("; ", problems), ReadControl(problems));
+    }
+
+    /// <summary>The control half of the scan. Read here, on the inventory loop, because the
+    /// history query is a WUA call with the same latency profile as the search above.
+    ///
+    /// A registry failure is reported as "windows" -- the state that makes the hub's
+    /// reconcile loop try again -- rather than dropping the block, which the hub would read
+    /// as an agent too old to have the feature at all.</summary>
+    private static ControlReport ReadControl(List<string> problems)
+    {
+        string state;
+        try { state = UpdateControl.ForMachine().State(); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException
+                                       or System.Security.SecurityException)
+        {
+            problems.Add($"update control could not be read: {e.Message}");
+            state = UpdateControl.Windows;
+        }
+        var outside = UpdateHistory.Select(WindowsUpdateApi.ReadHistory(), DateTimeOffset.UtcNow);
+        return new ControlReport(state, outside);
     }
 
     private static IReadOnlyList<AvailableUpdate> ReadWinget(out string error)

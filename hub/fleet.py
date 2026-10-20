@@ -103,6 +103,12 @@ SCHEDULED_COMMANDS = frozenset({
     # installed, which Windows Update answers with a failure indistinguishable from a
     # broken patch.
     "install_patches",
+    # Who installs Windows updates on this PC (issue #140): FleetHub, or Windows itself.
+    # Issued by the patch scheduler's reconcile pass, never by hand -- the desired state is
+    # a property of the maintenance windows covering the PC, and a favorite replaying
+    # `own: false` would hand a PC back to Windows behind every window's back. The next
+    # reconcile would undo it, but only after Windows had had its chance to install.
+    "set_update_control",
 })
 
 # Remote view/control (roadmap #2). Like the session-control types these steer a live,

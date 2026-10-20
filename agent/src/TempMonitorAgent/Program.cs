@@ -194,6 +194,10 @@ try
     // outcome later by observing that the machine has stopped offering the update. See
     // InstallPatchesExecutor and hub/patches.py confirm_from_inventory.
     builder.Services.AddSingleton<ICommandExecutor, TempMonitorAgent.Patch.InstallPatchesExecutor>();
+    // Who installs Windows updates here (issue #140): FleetHub alone, or Windows as usual.
+    // Queued by the hub's reconcile loop, never by hand; a PC whose policy belongs to GPO or
+    // Intune is left untouched and reported as managed_elsewhere. See UpdateControl.
+    builder.Services.AddSingleton<ICommandExecutor, TempMonitorAgent.Patch.SetUpdateControlExecutor>();
     builder.Services.AddSingleton<ICommandExecutor>(_ => new StubExecutor("install_driver"));
 
     // Self-healing watchdogs (roadmap #20). Not an executor: nothing in the command queue
