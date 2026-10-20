@@ -52,19 +52,21 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         {
             sessionId = await CommitAsync(installer, packageName!, path, action, ct);
             var refused = await VerdictAsync(verdict.Task, packageName!, timeout, ct);
-            return refused ?? Confirm(pm, packageName!, wantedVersion);
+            if (refused is { TimedOut: true })
+                return AppInstallResult.Refused(refused.Error + Abandon(installer, sessionId));
+            return refused?.Result ?? Confirm(pm, packageName!, wantedVersion);
         }
         catch (System.OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            // The agent is stopping. The session must not go on to install an app after the
+            // command that asked for it has been abandoned too.
+            Abandon(installer, sessionId);
             throw;
         }
         catch (Exception e)
         {
             log.LogWarning(e, "Install session for {Package} failed", packageName);
-            if (sessionId >= 0)
-            {
-                try { installer.AbandonSession(sessionId); } catch { /* best effort */ }
-            }
+            Abandon(installer, sessionId);
             return AppInstallResult.Refused(e.Message);
         }
         finally
@@ -86,9 +88,17 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         return receiver;
     }
 
+    /// <summary>A verdict that is not success. `TimedOut` is the one case where the session
+    /// is still alive and has to be abandoned -- every other refusal is the platform's final
+    /// word.</summary>
+    private sealed record Refusal(string Error, bool TimedOut)
+    {
+        public AppInstallResult Result => AppInstallResult.Refused(Error);
+    }
+
     /// <summary>Wait for the platform's answer. Null when it said success; otherwise the
     /// refusal, in the platform's own words where it gave any.</summary>
-    private async Task<AppInstallResult?> VerdictAsync(Task<(int Status, string? Message)> verdict,
+    private async Task<Refusal?> VerdictAsync(Task<(int Status, string? Message)> verdict,
         string packageName, TimeSpan timeout, CancellationToken ct)
     {
         (int Status, string? Message) answer;
@@ -98,15 +108,37 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         }
         catch (TimeoutException)
         {
-            return AppInstallResult.Refused(
-                $"the installer gave no answer within {(int)timeout.TotalSeconds} seconds");
+            return new Refusal(
+                $"the installer gave no answer within {(int)timeout.TotalSeconds} seconds", true);
         }
         if (answer.Status == (int)PackageInstallStatus.Success) return null;
 
         log.LogWarning("Install of {Package} refused: {Status} {Msg}",
             packageName, answer.Status, answer.Message);
-        return AppInstallResult.Refused(answer.Message is { Length: > 0 } m
-            ? m : $"the installer refused it (status {answer.Status})");
+        return new Refusal(answer.Message is { Length: > 0 } m
+            ? m : $"the installer refused it (status {answer.Status})", false);
+    }
+
+    /// <summary>Abandon a committed session that this deploy has given up on, so the app does
+    /// not appear on the device after the console was told the install failed -- and a retry
+    /// does not race a second session for the same package (raised in review of PR #161).
+    ///
+    /// Best effort, and the result says which way it went: the platform refuses to abandon a
+    /// session that has already finished installing, and an operator reading "timed out" has
+    /// to know whether the app may turn up anyway.</summary>
+    private string Abandon(PackageInstaller installer, int sessionId)
+    {
+        if (sessionId < 0) return "";
+        try
+        {
+            installer.AbandonSession(sessionId);
+            return "; the install was cancelled";
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "Could not abandon install session {Id}", sessionId);
+            return "; the install could not be cancelled, so the app may still appear";
+        }
     }
 
     /// <summary>The package and version the APK declares, or why it will not be installed.</summary>
