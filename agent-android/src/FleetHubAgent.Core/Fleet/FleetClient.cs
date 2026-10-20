@@ -30,6 +30,8 @@ namespace FleetHubAgent.Fleet;
 /// </summary>
 public sealed class FleetClient : IDisposable
 {
+    private const string JsonMediaType = "application/json";
+
     private readonly ILogger<FleetClient> _log;
     private readonly AgentState _state;
     private readonly MachineNameProvider _names;
@@ -110,7 +112,7 @@ public sealed class FleetClient : IDisposable
             ["machine"] = _names.Current,
             ["enrollment_secret"] = enrollmentSecret,
         };
-        using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+        using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, JsonMediaType);
 
         try
         {
@@ -196,7 +198,7 @@ public sealed class FleetClient : IDisposable
             // while a different device presenting that name is refused.
             ["serial"] = serial ?? "",
         };
-        using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+        using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, JsonMediaType);
         try
         {
             using var resp = await _http.PostAsync(AgentConfig.OnboardingRedeemUrl, content, ct);
@@ -221,7 +223,7 @@ public sealed class FleetClient : IDisposable
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
-            _log.LogWarning("Onboarding code call failed: {Msg}", e.Message);
+            _log.LogWarning(e, "Onboarding code call failed");
             return CodeRedeemOutcome.Unreachable;
         }
     }
@@ -246,9 +248,7 @@ public sealed class FleetClient : IDisposable
         }
         var code = sb.ToString();
         if (code.Length != OnboardingCodeLength) return null;
-        foreach (var ch in code)
-            if (!OnboardingAlphabet.Contains(ch)) return null;
-        return code;
+        return code.All(OnboardingAlphabet.Contains) ? code : null;
     }
 
     /// <summary>
@@ -313,7 +313,7 @@ public sealed class FleetClient : IDisposable
             {
                 body[key] = payload.DeepClone();
             }
-            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, JsonMediaType);
 
             using var resp = await _http.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode) return null;
@@ -383,7 +383,7 @@ public sealed class FleetClient : IDisposable
         try
         {
             using var req = Authorized(HttpMethod.Post, AgentConfig.CommandResultUrl(commandId));
-            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, JsonMediaType);
             using var resp = await _http.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
             {
