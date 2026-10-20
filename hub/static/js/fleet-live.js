@@ -46,6 +46,15 @@
     const FALLBACK_TICK_MS = 30000;
     const AGO_TICK_MS = 10000;
 
+    /** The topbar's Live pill, in the document that owns the socket. */
+    function setPill(state) {
+        const pill = document.getElementById('socket-status');
+        if (!pill || typeof setStatusPill !== 'function') return;
+        pill.hidden = false;
+        if (state === 'ok') setStatusPill(pill, 'ok', t('common.status.live'));
+        else setStatusPill(pill, 'danger', t('common.status.offline'));
+    }
+
     // ---------------- The hub: owns the socket (top document only) ----------------
     function createHub() {
         /** event name -> Set of callbacks. Raw socket events plus three synthetic ones:
@@ -84,14 +93,6 @@
             fallbackTimer = null;
         }
 
-        function setPill(state) {
-            const pill = document.getElementById('socket-status');
-            if (!pill || typeof setStatusPill !== 'function') return;
-            pill.hidden = false;
-            if (state === 'ok') setStatusPill(pill, 'ok', t('common.status.live'));
-            else setStatusPill(pill, 'danger', t('common.status.offline'));
-        }
-
         function connect() {
             if (socket || typeof io !== 'function') {
                 // No socket library (a page that does not load it): still keep pages fresh.
@@ -109,11 +110,16 @@
                 if (everConnected) dispatch('resync', { reason: 'reconnect' });
                 everConnected = true;
             });
-            socket.on('disconnect', () => {
+            socket.on('disconnect', (reason) => {
                 connected = false;
                 setPill('danger');
                 dispatch('state', { connected: false });
                 startFallback();
+                // The hub ends every socket after a permission change, so rooms are
+                // re-resolved on the way back in (app.py, _drop_live_sockets). Socket.IO does
+                // not retry a disconnect the SERVER chose, so this does; the reconnect then
+                // re-runs every watcher, which is also how the sidebar picks the change up.
+                if (reason === 'io server disconnect') setTimeout(() => socket.connect(), 500);
             });
             socket.on('connect_error', () => { setPill('danger'); startFallback(); });
             socket.onAny((event, payload) => dispatch(event, payload));

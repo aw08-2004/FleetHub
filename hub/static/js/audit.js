@@ -248,7 +248,7 @@ clearBtn.addEventListener('click', () => {
     levelSelect.value = '';
     fromInput.value = '';
     toInput.value = '';
-    reload();
+    void reload();
 });
 
 loadActors();

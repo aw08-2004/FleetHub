@@ -574,9 +574,15 @@ concurrent) and pauses it while the tab is hidden. It also defers the refresh wh
 the rule and policy editors, staged firmware edits, the wipe panel). Every watcher re-runs on
 reconnect, and a 30 s fallback tick stands in while the socket is down. The ticker re-renders
 `[data-ago-at]` elements every 10 s, so relative times keep counting. On a `permissions` or
-`settings` notice the shell re-reads its own nav and swaps it in if the links differ. A
-permissions notice also reconnects the socket, so rooms are re-resolved and a revocation
-reaches live telemetry without a reload, which closes the gap noted at `handle_socket_connect`.
+`settings` notice the shell re-reads its own nav and swaps it in if the links differ.
+
+**A permission change ends every live socket, server-side** (`_drop_live_sockets`), and so
+does an AD sync that moved a machine between OUs. Stock tabs reconnect at once and go back
+through `handle_socket_connect`, so rooms are re-resolved and a revocation reaches live
+telemetry without a reload. That closes the gap noted there. The first version only asked the
+browser to reconnect, and review (PR #158) pointed out that a client ignoring the notice would
+keep its rooms. Re-diffing each socket's rooms (sid -> user) was rejected: it would be a second
+copy of the scope logic, for a rare event where a blunt reconnect is already correct.
 
 *Rejected:*
 - **Pushing the changed data.** Rooms are fixed at connect time, so a payload would need a

@@ -210,8 +210,19 @@ def test_rooms_and_scope():
     check(f"a refused write ({r.status_code}) pushes nothing",
           r.status_code >= 400 and not any(c["topic"] == "device_groups"
                                            for c in received_changes(super_sock)))
-    for sock in (super_sock, tech_sock):
-        sock.disconnect()
+
+    print("\n-- a permission change ends every live socket, so rooms are re-resolved --")
+    # Rooms are fixed at connect time. The hub must not rely on the browser choosing to
+    # reconnect: a client that ignores the notice would keep the rooms it was revoked from.
+    app.mark_changed("permissions")
+    app.change_notifier.flush()
+    check("the unrestricted operator's socket is ended",
+          not super_sock.is_connected())
+    check("...and so is the scoped one's, whatever its script does next",
+          not tech_sock.is_connected())
+    again = app.socketio.test_client(app.app, flask_test_client=tech_http)
+    check("reconnecting goes back through the connect check", again.is_connected())
+    again.disconnect()
 
 
 def test_offline_transition_is_pushed():

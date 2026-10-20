@@ -3119,6 +3119,34 @@ def _emit_changes(batch):
             by_machine.setdefault(c["machine"], []).append(c)
         for machine, items in by_machine.items():
             socketio.emit("changes", {"changes": items}, room=machine_room(machine))
+    if any(c["topic"] == changes.PERMISSIONS for c in batch):
+        _drop_live_sockets()
+
+
+def _drop_live_sockets():
+    """Disconnect every open console socket, so each one's rooms are resolved afresh.
+
+    Room membership is decided in handle_socket_connect and nowhere else, so after a
+    permission change the only way to take a machine away from a socket already in its room
+    is to end the socket. **The hub does this itself, rather than asking browsers to
+    reconnect**: a tab whose script ignores the `permissions` notice (a modified client, a
+    page that failed to load fleet-live.js) would otherwise keep its old rooms and keep
+    receiving telemetry for machines it lost. A stock tab reconnects at once
+    (fleet-live.js) and is re-checked on the way back in; one that lost `view` is refused.
+    Everyone reconnecting is affordable because permission changes are rare. Rejected:
+    tracking sid -> user and re-diffing each socket's rooms, which is a second copy of the
+    scope logic for the one event where a blunt reconnect is already correct.
+    """
+    try:
+        sids = [sid for sid, _ in socketio.server.manager.get_participants("/", ALL_VIEWERS_ROOM)]
+    except Exception as e:
+        print(f"[changes] Could not list live sockets: {e}")
+        return
+    for sid in sids:
+        try:
+            socketio.server.disconnect(sid, namespace="/")
+        except Exception as e:
+            print(f"[changes] Could not drop socket {sid}: {e}")
 
 
 change_notifier = changes.ChangeNotifier(_emit_changes)
@@ -4744,6 +4772,18 @@ SWEEP_TICK_SECONDS = 30
 BIOS_CHANGE_TIMEOUT_SECONDS = 60 * 60
 
 
+def _sweep(failure, run, *topics):
+    """Run one housekeeping sweep: log rather than raise, and when it changed anything (a
+    truthy count), tell open pages which topics moved (changes.py). One helper rather than a
+    try/if pair per sweep, which is the shape that made sweep_worker unreadable."""
+    try:
+        if run():
+            for topic in topics:
+                mark_changed(topic)
+    except Exception as e:
+        print(f"{failure}: {e}")
+
+
 def sweep_worker():
     """Wake on a fixed cadence and run the hub's expiry/reap sweeps. Same shape and failure
     discipline as retention_pruner: each sweep is guarded on its own and errors are logged,
@@ -4753,20 +4793,15 @@ def sweep_worker():
         # Remote sessions expire on this heartbeat (roadmap #2), same reasoning as
         # fleet.expire_stale_commands: a browser tab that vanished without a clean stop must
         # not leave a session -- and its minted TURN credential -- live forever.
-        try:
-            if remote.expire_sessions(DB_PATH):
-                mark_changed("remote")
-        except Exception as e:
-            print(f"[remote] Session expiry sweep failed: {e}")
+        _sweep("[remote] Session expiry sweep failed",
+               lambda: remote.expire_sessions(DB_PATH), "remote")
         # Recordings whose session just expired, whose badge was never confirmed, or whose
         # deadline passed with no browser left to say so (roadmap #19). The console also
         # reconciles on every read; this is for the recording nobody is looking at.
-        try:
-            if recordings.reconcile(DB_PATH,
-                                    lambda sid: remote.is_session_live(DB_PATH, sid)):
-                mark_changed("recordings")
-        except Exception as e:
-            print(f"[recordings] Recording sweep failed: {e}")
+        _sweep("[recordings] Recording sweep failed",
+               lambda: recordings.reconcile(
+                   DB_PATH, lambda sid: remote.is_session_live(DB_PATH, sid)),
+               "recordings")
         # Interactive terminals ride the same sweep, and here the hub is the AUTHORITY
         # rather than a backstop: a session deliberately survives its operator navigating
         # away, so only the hub can tell "gone to Packages for ten minutes" from "closed
@@ -4774,30 +4809,22 @@ def sweep_worker():
         # The agent's equivalent timer is deliberately much longer (AgentConfig
         # .PtyIdleTimeoutSeconds) so it cannot pre-empt this and reap the very absence the
         # feature exists to support.
-        try:
-            terminal.reap_sessions(DB_PATH)
-        except Exception as e:
-            print(f"[terminal] Session reap sweep failed: {e}")
+        _sweep("[terminal] Session reap sweep failed",
+               lambda: terminal.reap_sessions(DB_PATH))
         # Firmware changes whose machine never reported back (roadmap #9). Without this a
         # machine that went down mid-write leaves a running change forever, and the hub
         # refuses every subsequent change to it -- one dead agent would permanently lock its
         # own Firmware tab. Given an hour, which is generous against a write measured in
         # seconds, because closing one early would tell an operator a change failed while the
         # machine was still applying it.
-        try:
-            if bios.expire_stale_changes(DB_PATH, BIOS_CHANGE_TIMEOUT_SECONDS):
-                mark_changed("firmware")
-        except Exception as e:
-            print(f"[bios] Stale change sweep failed: {e}")
+        _sweep("[bios] Stale change sweep failed",
+               lambda: bios.expire_stale_changes(DB_PATH, BIOS_CHANGE_TIMEOUT_SECONDS),
+               "firmware")
         # Tickets whose "needed by" just passed (roadmap #31). Here rather than on the daily
         # retention tick, because a ticket due at 9 that alerts at midnight has missed the
         # point; tickets.scan_overdue raises once per ticket, so thirty seconds costs nothing.
-        try:
-            if tickets.scan_overdue(DB_PATH):
-                mark_changed("tickets")
-                mark_changed("alerts")
-        except Exception as e:
-            print(f"[tickets] Overdue sweep failed: {e}")
+        _sweep("[tickets] Overdue sweep failed",
+               lambda: tickets.scan_overdue(DB_PATH), "tickets", "alerts")
         time.sleep(SWEEP_TICK_SECONDS)
 
 
@@ -5266,7 +5293,14 @@ def run_directory_sync():
     OUs from staying in its old group's scope until the next hub restart.
     """
     return directory.sync_once(DB_PATH, directory.config_from_settings(DB_PATH),
-                               on_change=permissions.invalidate)
+                               on_change=_directory_scope_changed)
+
+
+def _directory_scope_changed():
+    """An AD sync moved a machine between OUs: re-point permission scoping, and tell live
+    sockets, whose rooms were resolved against the old OU data (see _drop_live_sockets)."""
+    permissions.invalidate()
+    mark_changed(changes.PERMISSIONS)
 
 
 def directory_sync_scheduler():

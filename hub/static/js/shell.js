@@ -442,9 +442,9 @@
     // re-reads its own chrome from a plain page render and swaps the nav in when, and only
     // when, the set of links actually differs -- most such notices are about somebody else.
     //
-    // It also re-opens the socket on a permissions change, because socket rooms are fixed
-    // at connect time (app.py, handle_socket_connect): that is what makes a scope change,
-    // including a revocation, reach live telemetry without a reload.
+    // The socket side of a permission change is the hub's job, not this file's: it ends every
+    // live socket so rooms are re-resolved (app.py, _drop_live_sockets), because a revocation
+    // that depended on the revoked browser's own script cooperating would not be one.
     //
     // Rejected: reloading the shell. It would drop the persistent frames, and a live remote
     // session with them, over a link appearing in the sidebar.
@@ -461,22 +461,20 @@
             const resp = await fetch('/', { credentials: 'same-origin' });
             if (!resp.ok) return;
             html = await resp.text();
-        } catch (e) { return; }
+        } catch (e) { return; }     // offline or mid-deploy: keep the nav we have
         const fresh = new DOMParser().parseFromString(html, 'text/html')
             .querySelector('#app-sidebar .sidebar__nav');
         if (!fresh || navSignature(fresh) === navSignature(current)) return;
         current.replaceWith(document.importNode(fresh, true));
         if (typeof initNavFold === 'function') initNavFold();
-        if (typeof refreshAlertBadge === 'function') refreshAlertBadge();
+        if (typeof refreshAlertBadge === 'function') void refreshAlertBadge();
         syncNav(visible ? new URL(frameHref(visible), location.href).pathname : location.pathname);
     }
 
     if (window.FleetLive) {
-        window.FleetLive.watch(['permissions', 'settings'], refreshChrome, { minInterval: 5000 });
-        window.FleetLive.on('changes', (msg) => {
-            const list = (msg && msg.changes) || [];
-            if (list.some((c) => c.topic === 'permissions')) window.FleetLive.reconnect();
-        });
+        window.FleetLive.watch(['permissions', 'settings'],
+            () => refreshChrome().catch(() => { /* the old nav stays; the next notice retries */ }),
+            { minInterval: 5000 });
     }
 
     // ---------------- Boot ----------------

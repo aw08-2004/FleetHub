@@ -99,6 +99,12 @@ BLUEPRINT_TOPICS = {
 MACHINES = "machines"
 STATUS = "status"
 
+#: The permissions blueprint's topic, named because app.py acts on it beyond pushing it: a
+#: batch carrying it ends every live socket so rooms are re-resolved (app.py,
+#: _drop_live_sockets). Rooms are fixed at connect time, so this is how a scope change --
+#: a revocation above all -- reaches a socket that is already open.
+PERMISSIONS = "permissions"
+
 #: Request paths that must NOT mark from the generic after-request hook. /api/report is
 #: already pushed as `new_temp`, every few seconds per machine, and marking it too would
 #: turn every report into a refetch on every open page. The heartbeat marks explicitly,
