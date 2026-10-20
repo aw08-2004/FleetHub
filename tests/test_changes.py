@@ -222,7 +222,23 @@ def test_rooms_and_scope():
           not tech_sock.is_connected())
     again = app.socketio.test_client(app.app, flask_test_client=tech_http)
     check("reconnecting goes back through the connect check", again.is_connected())
-    again.disconnect()
+
+    # The console's Sync now, not just the scheduler: an OU move found by a manual pass must
+    # end live sockets too. LDAP is stubbed to report a change, which is all that matters.
+    import directory
+    real_sync, real_enabled = directory.sync_once, settings.get_bool
+    def fake_sync(db_path, config, on_change=None):
+        on_change()
+        return {"objects_found": 1, "matched": 1, "unmatched": []}
+    directory.sync_once = fake_sync
+    settings.get_bool = lambda db, key: True if key == "directory.enabled" else real_enabled(db, key)
+    try:
+        r = super_http.post("/api/directory/sync", json={})
+    finally:
+        directory.sync_once, settings.get_bool = real_sync, real_enabled
+    app.change_notifier.flush()
+    check(f"Sync now that moved a machine ({r.status_code}) ends live sockets too",
+          r.status_code == 200 and not again.is_connected())
 
 
 def test_offline_transition_is_pushed():

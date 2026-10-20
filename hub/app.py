@@ -164,7 +164,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.156.1"
+HUB_VERSION = "1.156.2"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2579,7 +2579,11 @@ app.register_blueprint(create_recordings_blueprint(DB_PATH, login_required, acce
 
 # Active Directory sync (roadmap #4): status, the OU list the group scope picker uses,
 # and a synchronous "sync now". Same login_required + access seam as everything above.
-app.register_blueprint(create_directory_blueprint(DB_PATH, login_required, access))
+# Sync now shares the scheduler's scope-change callback, so a manual pass also ends live
+# sockets whose rooms the OU move invalidated (see _directory_scope_changed).
+app.register_blueprint(create_directory_blueprint(
+    DB_PATH, login_required, access,
+    on_scope_change=lambda: _directory_scope_changed()))
 
 # BIOS/firmware inventory and writes (roadmap #9): what a machine's firmware is set to, a
 # "re-read it now" command, and the `set_bios_settings` write half behind its own

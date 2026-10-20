@@ -48,6 +48,12 @@ MAX_PENDING = 500
 #: between hub/ and hub/static/js/ -- rename one and the page that watched it silently
 #: stops updating. tests/test_changes.py fails when a blueprint with a mutating route is
 #: missing from this map, which is the way a new feature area would otherwise go un-live.
+#:
+#: Only `permissions` affects socket ROOMS, so only it ends live sockets (app.py,
+#: _drop_live_sockets). `device_groups` and `users` look as if they should and do not:
+#: permission scope is a group's machine list or its AD OU, never a device group, and a user
+#: record's writes are profile fields -- deleting one deliberately leaves group membership
+#: alone (users.delete_user). An AD sync that moves a machine marks `permissions` itself.
 BLUEPRINT_TOPICS = {
     "ai": "settings",
     "apitokens": "tokens",

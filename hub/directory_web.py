@@ -29,8 +29,14 @@ import refusals
 import settings
 
 
-def create_directory_blueprint(db_path, login_required, access):
+def create_directory_blueprint(db_path, login_required, access, on_scope_change=None):
+    """`on_scope_change` runs when a sync moved a machine between OUs. app.py hands in the
+    same callback its scheduled sync uses, which re-points permission scoping AND ends live
+    sockets so their rooms are re-resolved (app.py, _drop_live_sockets). Defaulting to
+    `permissions.invalidate` alone is what let Sync now leave a scoped operator's open
+    socket in a machine's room after an OU move (found in review on PR #158)."""
     bp = Blueprint("directory", __name__)
+    scope_changed = on_scope_change or permissions.invalidate
 
     def _may_read():
         return (access.can(permissions.MANAGE_PERMISSION_GROUPS)
@@ -86,7 +92,7 @@ def create_directory_blueprint(db_path, login_required, access):
         try:
             result = directory.sync_once(
                 db_path, directory.config_from_settings(db_path),
-                on_change=permissions.invalidate)
+                on_change=scope_changed)
         except directory.DirectoryError as e:
             # 400, not 500: every one of these is a configuration problem the operator can
             # act on, and the message is written to be read by them.
