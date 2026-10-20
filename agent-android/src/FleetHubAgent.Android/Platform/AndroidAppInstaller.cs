@@ -50,7 +50,13 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         var sessionId = -1;
         try
         {
-            sessionId = await CommitAsync(installer, packageName!, path, action, ct);
+            // Created here rather than inside CommitAsync, so the id is in hand before any of
+            // the work that can fail -- a copy that runs out of disk, an Fsync or Commit that
+            // throws, an agent stopping mid-copy. Returned from CommitAsync, it reached the
+            // handlers below as -1 on exactly those paths, and the open session sat in the
+            // platform's store until its own expiry (raised in review of PR #161).
+            sessionId = CreateSession(installer, packageName!);
+            await CommitAsync(installer, sessionId, path, action, ct);
             var refused = await VerdictAsync(verdict.Task, packageName!, timeout, ct);
             if (refused is { TimedOut: true })
                 return AppInstallResult.Refused(refused.Error + Abandon(installer, sessionId));
@@ -153,15 +159,18 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         return (packageName, VersionCode(archive), null);
     }
 
-    /// <summary>Stream the APK into a new install session and commit it. Returns the session
-    /// id, so a failure after this point can abandon it. The verdict arrives later, as the
-    /// broadcast `action` names.</summary>
-    private async Task<int> CommitAsync(PackageInstaller installer, string packageName,
-        string path, string action, CancellationToken ct)
+    private static int CreateSession(PackageInstaller installer, string packageName)
     {
         var parameters = new PackageInstaller.SessionParams(PackageInstallMode.FullInstall);
         parameters.SetAppPackageName(packageName);
-        var sessionId = installer.CreateSession(parameters);
+        return installer.CreateSession(parameters);
+    }
+
+    /// <summary>Stream the APK into the session and commit it. The verdict arrives later, as
+    /// the broadcast `action` names.</summary>
+    private async Task CommitAsync(PackageInstaller installer, int sessionId,
+        string path, string action, CancellationToken ct)
+    {
         using var session = installer.OpenSession(sessionId);
         await using (var source = File.OpenRead(path))
         await using (var destination = session.OpenWrite("app.apk", 0, source.Length))
@@ -178,7 +187,6 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
                     | (OperatingSystem.IsAndroidVersionAtLeast(31) ? PendingIntentFlags.Mutable : 0);
         var pending = PendingIntent.GetBroadcast(context, sessionId, intent, flags);
         session.Commit(pending!.IntentSender!);
-        return sessionId;
     }
 
     /// <summary>Detection: is the package really installed, at least at the version the file
