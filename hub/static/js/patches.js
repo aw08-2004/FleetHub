@@ -256,6 +256,24 @@
                  { start: `${hh}:${mm}`, minutes: window.duration_minutes });
     }
 
+    // The name cell, with one line under it per state an operator needs to see at a glance.
+    function windowNameCell(win) {
+        const name = el('td');
+        name.append(el('div', null, win.name));
+        const notes = [];
+        if (!win.enabled) notes.push(t('patches.window.disabled'));
+        if (win.auto_run) notes.push(t('patches.window.auto_run_badge'));
+        if (win.own_windows_update) notes.push(t('patches.window.own_badge'));
+        // Taking Windows Update away without installing automatically is a legitimate
+        // pilot, and also the one setting that leaves PCs unpatched without anybody
+        // noticing -- so the table says so rather than leaving it to be worked out.
+        if (win.own_windows_update && !win.auto_run && win.enabled) {
+            notes.push(t('patches.window.own_without_auto_run'));
+        }
+        for (const note of notes) name.append(el('div', 'stat-card__meta', note));
+        return name;
+    }
+
     async function renderWindows() {
         let doc;
         try {
@@ -279,25 +297,7 @@
         const body = el('tbody');
         for (const win of doc.windows) {
             const tr = el('tr');
-            const name = el('td');
-            name.append(el('div', null, win.name));
-            if (!win.enabled) {
-                name.append(el('div', 'stat-card__meta', t('patches.window.disabled')));
-            }
-            if (win.auto_run) {
-                name.append(el('div', 'stat-card__meta', t('patches.window.auto_run_badge')));
-            }
-            if (win.own_windows_update) {
-                name.append(el('div', 'stat-card__meta', t('patches.window.own_badge')));
-            }
-            // Taking Windows Update away without installing automatically is a legitimate
-            // pilot, and also the one setting that leaves PCs unpatched without anybody
-            // noticing -- so the table says so rather than leaving it to be worked out.
-            if (win.own_windows_update && !win.auto_run && win.enabled) {
-                name.append(el('div', 'stat-card__meta',
-                               t('patches.window.own_without_auto_run')));
-            }
-            tr.append(name);
+            tr.append(windowNameCell(win));
             tr.append(el('td', null, describeDays(win.days_mask)));
             tr.append(el('td', null, describeTime(win)));
             tr.append(el('td', null, win.scope_kind === 'all'
