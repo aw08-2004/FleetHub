@@ -527,6 +527,21 @@ def gpos_using_script(db_path, script_name):
             if any(s.get("name") == wanted for s in p["settings"].get("scripts") or [])]
 
 
+def machines_running_script(db_path, script_name):
+    """Every PC a policy could run `script_name` on: the union of machines_linked over every
+    policy that lists it, sorted.
+
+    What an EDIT to that library script reaches. Run-once is keyed on the body's hash, so
+    changing the body queues the new one on each of these PCs at the next scheduler pass, with
+    no policy edit involved -- which is why the script editor's scope must cover them
+    (rules_web.save_one_script, raised in review on #162). The same superset machines_linked
+    uses for a policy edit, for the same reason."""
+    reached = set()
+    for policy in gpos_using_script(db_path, script_name):
+        reached.update(machines_linked(db_path, policy["id"]))
+    return sorted(reached)
+
+
 # ================================================================ nodes and links
 def node_key(kind, key):
     """The comparison form of a node. Raises ValueError for a node that cannot exist."""

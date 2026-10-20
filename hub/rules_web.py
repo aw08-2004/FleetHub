@@ -464,6 +464,18 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
     def save_one_script():
         body = request.get_json(silent=True) or {}
         extra = _extra()
+        # A script a Group Policy runs reaches every PC under every node that policy is
+        # linked to, and an edit re-runs it there: run-once is keyed on the body's hash, so a
+        # new body is a new run, with no policy edit and no manage_group_policy check on the
+        # way (raised in review on #162). So an edit -- any edit, since telling a cosmetic one
+        # from a new body here would mean re-deriving the hash before validation -- needs the
+        # editor's scope to cover those PCs, exactly as editing the policy itself would.
+        outside = sorted(m for m in gpo.machines_running_script(db_path, body.get("name"))
+                         if not access.in_scope(m))
+        if outside:
+            more = f" (and {len(outside) - 5} more)" if len(outside) > 5 else ""
+            return jsonify({"error": "a Group Policy runs this script on PCs outside your "
+                                     "access: " + ", ".join(outside[:5]) + more}), 403
         error, script = scripts.save_script(
             db_path,
             body.get("name"), body.get("label"), body.get("description"),
@@ -479,16 +491,18 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
             return jsonify({"error": error}), 400
         # LEVEL_SECURITY, like a settings change and unlike a rule edit: the detail of what
         # this row records is the content of code that will run as SYSTEM. `used_by` is in the
-        # detail because editing a script silently changes what every one of those rules does
-        # -- the rules themselves are untouched, so this row is the only trace of it.
+        # detail because editing a script silently changes what every one of those rules AND
+        # policies does -- they are untouched, so this row is the only trace of it. A policy
+        # also re-runs the new body on every PC it reaches, which makes leaving policies out
+        # of this list the worse omission of the two.
+        used_by = (rules.rules_using_script(db_path, script["name"])
+                   + gpo.gpos_using_script(db_path, script["name"]))
         fleet.audit(db_path, actor=_actor(), action="save_script",
                     level=fleet.LEVEL_SECURITY, target=script["name"],
                     detail={"shell": script["shell"],
                             "chars": len(script["body"]),
                             "inputs": [i["name"] for i in script["inputs"]],
-                            "used_by": [r["name"]
-                                        for r in rules.rules_using_script(db_path,
-                                                                          script["name"])]})
+                            "used_by": [u["name"] for u in used_by]})
         return jsonify(script), 200
 
     @bp.route("/api/rules/scripts/<name>", methods=["DELETE"])

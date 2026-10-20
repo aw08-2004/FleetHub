@@ -79,6 +79,10 @@ lists the policies in processing order and names the winner of every setting.
 - **Every PC a change can reach must be in your own scope.** Linking at a node, changing a link
   or blocking inheritance reaches every PC beneath that node; editing or deleting a policy
   reaches every PC beneath every node it is linked to.
+- **Editing a library script that a policy runs** counts as a change to that policy's reach:
+  a changed script runs again on every PC the policy applies to, so the editor's scope must
+  cover every PC beneath the nodes the policy is linked to. The edit's audit entry lists the
+  policies as well as the rules that use the script.
 - **A link remembers its author's scope.** A link created by an operator scoped to some PCs
   applies only to those PCs, even if another PC is later filed beneath the node. Such links
   are marked in the node view.

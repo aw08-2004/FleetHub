@@ -6,6 +6,8 @@ The silent failures this file exists to catch:
     and editing a linked policy each reach every PC beneath; a site-scoped operator must not be
     able to aim a policy at the whole fleet.
   * **A policy that runs code written without `issue_commands`.**
+  * **A library script edit that re-runs as SYSTEM wherever a policy reaches**, made by
+    someone whose scope covers none of those PCs, and audited as if no policy used it.
   * **A `view`-only route that writes**, and a resultant set readable for a PC outside scope.
   * **The heartbeat not carrying the result**: config overrides that never reach the agent, a
     registry document sent to an agent that never asked for one, or none sent to one that did.
@@ -73,6 +75,11 @@ def setup():
     permissions.create_group(
         app.DB_PATH, name="Viewers", capabilities=[permissions.VIEW],
         machines=["FIL-1"], members=["viewer@example.com"], actor="root@example.com")
+    permissions.create_group(
+        app.DB_PATH, name="Filadelfia coders",
+        capabilities=[permissions.VIEW, permissions.ISSUE_COMMANDS],
+        scope_mode=permissions.SCOPE_AD_OU, ous=[FIL], members=["coder@example.com"],
+        actor="root@example.com")
     permissions.create_group(
         app.DB_PATH, name="Filadelfia policy",
         capabilities=[permissions.VIEW, permissions.MANAGE_GROUP_POLICY],
@@ -155,6 +162,28 @@ def test_scope_and_scripts():
     return policy, link
 
 
+def test_script_edit_reach():
+    print("\n-- editing a script a policy runs is a write to that policy's reach --")
+    root = client_for("root@example.com")
+    runs = [p for p in root.get("/api/gpo").get_json()["gpos"] if p["name"] == "Runs code"][0]
+    r = root.post(f"/api/gpo/{runs['id']}/links", json={"node_kind": "root", "node_key": ""})
+    check("the script-running policy is linked to every PC", r.status_code == 201)
+    script = {"name": "setup", "label": "Setup", "description": "", "shell": "powershell",
+              "body": "Write-Output changed", "inputs": [], "timeout_seconds": 60}
+    r = client_for("coder@example.com").post("/api/rules/scripts", json=script)
+    check("a scoped operator with Issue commands cannot change it -- the new body would run "
+          "on every PC", r.status_code == 403 and "outside your access" in r.get_json()["error"])
+    check("...and the stored body is unchanged",
+          scripts.get_script(app.DB_PATH, "setup")["body"] == "Write-Output hi")
+    r = root.post("/api/rules/scripts", json=script)
+    check("an operator who holds every PC it reaches can", r.status_code == 200)
+    with fleet.get_conn(app.DB_PATH) as conn:
+        row = conn.execute("SELECT detail_json FROM audit_log WHERE action = 'save_script'"
+                           " ORDER BY id DESC LIMIT 1").fetchone()
+    check("the audit row names the policy among what the edit changed",
+          row is not None and "Runs code" in (row["detail_json"] or ""))
+
+
 def test_heartbeat(policy):
     print("\n-- the heartbeat carries the result --")
     agent_id, token = fleet.enroll_agent(app.DB_PATH, "FIL-1", "secret", "secret")
@@ -216,6 +245,7 @@ def main():
     setup()
     test_gates()
     policy, _link = test_scope_and_scripts()
+    test_script_edit_reach()
     test_heartbeat(policy)
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
