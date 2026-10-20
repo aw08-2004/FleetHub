@@ -114,6 +114,14 @@ def test_request_classification():
           == ["bitlocker", "software"])
     check("an EMPTY app list is still a report",
           changes.heartbeat_topics({"apps": {"apps": []}}) == ["apps"])
+    known_topics = set(changes.BLUEPRINT_TOPICS.values()) | set(changes.HEARTBEAT_TOPICS.values())
+    stray = set(changes.TOPIC_CAPABILITIES) - known_topics
+    check(f"every gated topic is one something actually marks (stray: {sorted(stray)})",
+          not stray)
+    bogus = set(changes.TOPIC_CAPABILITIES.values()) - set(permissions.CAPABILITIES)
+    check(f"every gate is a real capability (unknown: {sorted(bogus)})", not bogus)
+    check("view itself never gates a topic -- that would be an ordinary notice",
+          permissions.VIEW not in changes.TOPIC_CAPABILITIES.values())
 
 
 # --------------------------------------------------------------------------- the routes
@@ -190,12 +198,30 @@ def test_rooms_and_scope():
     check("the unrestricted operator hears it once too, not once per room",
           len(received_changes(super_sock)) == 1)
 
-    app.mark_changed("settings")
+    app.mark_changed("alerts")
     app.change_notifier.flush()
     check("a fleet-wide notice reaches a scoped operator",
-          received_changes(tech_sock) == [{"topic": "settings", "machine": None}])
+          received_changes(tech_sock) == [{"topic": "alerts", "machine": None}])
     check("...and an unrestricted one, once",
-          received_changes(super_sock) == [{"topic": "settings", "machine": None}])
+          received_changes(super_sock) == [{"topic": "alerts", "machine": None}])
+
+    print("\n-- an admin-only topic reaches only the operators holding its capability --")
+    # The silent failure here is a leak, not a stale page: a view-only operator watching the
+    # socket would learn exactly when tokens were minted or users edited.
+    # `permissions` is gated too, but it also ends every socket: its own section is below.
+    for topic in ("settings", "users", "tokens", "audit"):
+        app.mark_changed(topic)
+    app.change_notifier.flush()
+    got_super = received_changes(super_sock)
+    check("a view-only operator hears none of them", received_changes(tech_sock) == [])
+    check("the operator holding each capability hears each one, once",
+          sorted(c["topic"] for c in got_super) == ["audit", "settings", "tokens", "users"])
+    app.mark_changed("backups", "PC-1")
+    app.change_notifier.flush()
+    check("...even about a machine inside the view-only operator's scope",
+          received_changes(tech_sock) == [])
+    check("a gated notice never carries the machine name",
+          received_changes(super_sock) == [{"topic": "backups", "machine": None}])
 
     print("\n-- a write through the API notifies with no code in the route --")
     r = super_http.post("/api/device-groups",

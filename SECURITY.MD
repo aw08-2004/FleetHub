@@ -324,6 +324,26 @@ controls are stated here rather than left implicit:
   sign-in round trip in the signed session cookie, never as a query parameter, so it does not
   reach referrer headers or proxy logs.
 
+## The live console's change notices (hub 1.156.0+)
+
+Every console page updates on its own. The hub pushes a **change notice** over the console's
+Socket.IO connection, and the page re-reads through the same permission-checked route it loaded
+from (`hub/changes.py`, `static/js/fleet-live.js`).
+
+- **A notice carries no data.** It holds a topic name and, at most, a machine name. Everything
+  a page shows still comes through its gated REST route.
+- **Machine notices follow scope.** A notice about one machine goes only to operators whose
+  scope includes it.
+- **Admin-only topics follow capability.** Even "this changed just now" is administrative
+  information for some topics: API tokens, users, permission groups, invites, onboarding codes,
+  settings, directory sync, provisioning, backups, deployments and the audit log. These go
+  only to operators holding the capability that reads them (`changes.TOPIC_CAPABILITIES`), and
+  never with a machine name. A view-only operator never hears about them.
+- **Revocation is immediate.** A permission change, or an AD sync that moves a machine between
+  OUs, makes the hub end every live connection. Each tab reconnects through the sign-in and
+  permission check, so a narrowed or revoked operator stops receiving notices and telemetry for
+  what they lost within about a second, whatever their browser does.
+
 ## For Antivirus Teams
 
 This software is **not malware** and is flagged by heuristics that detect:

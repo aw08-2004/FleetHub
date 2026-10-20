@@ -584,6 +584,21 @@ browser to reconnect, and review (PR #158) pointed out that a client ignoring th
 keep its rooms. Re-diffing each socket's rooms (sid -> user) was rejected: it would be a second
 copy of the scope logic, for a rare event where a blunt reconnect is already correct.
 
+**Admin-only topics go to capability rooms** (hub 1.156.3, chosen by the owner after review on
+PR #158). A notice carries no data, but for some topics its timing alone is administrative:
+before this, a view-only operator could see exactly when API tokens were minted or users
+edited. `changes.TOPIC_CAPABILITIES` maps each such topic to the capability its read routes
+require. Every socket joins a `cap:<capability>` room per capability it holds, and those topics
+go only there, without a machine name. Scope and capability are two axes, and intersecting them
+would need a room per capability per machine; the page re-reads through its gated route anyway.
+Topics that view-only pages still read (alerts, firmware, events, tickets...) stay ungated, so
+those pages keep updating for everyone allowed to see them. *Rejected:* documenting the
+exposure and accepting it (the reviewer's alternative; the owner chose to close it), and a
+per-socket permission check on every emit (exact, but it puts scope logic in the hot path).
+Accepted costs: a sidebar without `manage_settings` no longer refreshes on a settings change,
+and a view-only operator's own paired-device list no longer follows a pairing made in another
+tab. Both catch up on the next reconnect or visit.
+
 *Rejected:*
 - **Pushing the changed data.** Rooms are fixed at connect time, so a payload would need a
   per-listener permission check on every write. One mistake there leaks a machine to somebody

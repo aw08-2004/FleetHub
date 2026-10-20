@@ -34,6 +34,8 @@ imports socketio, so it is unit-testable standalone (tests/test_changes.py).
 import threading
 import time
 
+import permissions
+
 #: How often marks are drained into a push. Under a second so "live" reads as live to
 #: somebody watching two tabs; long enough that a burst of writes is one push.
 FLUSH_SECONDS = 0.75
@@ -110,6 +112,46 @@ STATUS = "status"
 #: _drop_live_sockets). Rooms are fixed at connect time, so this is how a scope change --
 #: a revocation above all -- reaches a socket that is already open.
 PERMISSIONS = "permissions"
+
+#: Topics only some operators may even hear about, and the capability that decides it.
+#:
+#: A notice carries no data, but it does say WHEN something changed, and for these topics
+#: that alone is administrative information: a view-only operator has no business watching
+#: API tokens being minted, users being edited, permission groups being rearranged, or the
+#: audit log moving (raised in review on PR #158). So these go only to the room of operators
+#: holding that capability (app.py, capability_room), and always WITHOUT a machine name --
+#: scope is a second axis rooms cannot intersect with cheaply, and a page watching one of
+#: these topics re-reads through its gated route either way, so dropping the name costs only
+#: a little targeting.
+#:
+#: Each capability is the one the topic's own READ routes require -- the people who can
+#: load that page are exactly the people who may know it changed. Deliberately absent:
+#: topics a view-only page still reads (alerts, firmware, events, recordings, tickets,
+#: watchdogs, patches, policy...), which would stop those pages updating for the very people
+#: allowed to see them. Two accepted costs, both re-read on the next reconnect or visit:
+#: the sidebar of an operator without `manage_settings` no longer refreshes on a settings
+#: change (e.g. the Assistant being switched on), and a view-only operator's own paired-
+#: device list no longer follows a pairing made from another tab.
+TOPIC_CAPABILITIES = {
+    "audit": permissions.VIEW_AUDIT_LOG,
+    "backups": permissions.MANAGE_BACKUPS,
+    "deployments": permissions.DEPLOY_PACKAGES,
+    "directory": permissions.MANAGE_SETTINGS,
+    "invites": permissions.MANAGE_PERMISSION_GROUPS,
+    "onboarding": permissions.MANAGE_ONBOARDING,
+    "permissions": permissions.MANAGE_PERMISSION_GROUPS,
+    "provisioning": permissions.MANAGE_SETTINGS,
+    "settings": permissions.MANAGE_SETTINGS,
+    "tokens": permissions.MANAGE_USERS,
+    "users": permissions.MANAGE_USERS,
+    "webfetch": permissions.DEPLOY_PACKAGES,
+}
+
+
+def required_capability(topic):
+    """The capability a listener must hold to hear about `topic`, or None for anyone with view."""
+    return TOPIC_CAPABILITIES.get(topic)
+
 
 #: Request paths that must NOT mark from the generic after-request hook. /api/report is
 #: already pushed as `new_temp`, every few seconds per machine, and marking it too would

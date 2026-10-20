@@ -164,7 +164,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.156.2"
+HUB_VERSION = "1.156.3"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3097,10 +3097,16 @@ def _emit_fleet_event(event, payload, machine):
     socketio.emit(event, payload, room=machine_room(machine))
 
 
-# Every accepted socket, whatever its scope. Change notices that name no machine (a setting,
-# a rule, a user) go here, and ONLY here: an unrestricted operator is in FLEET_ROOM too, so
-# sending a fleet-wide notice to both would deliver it twice.
+# Every accepted socket, whatever its scope. Change notices that name no machine go here, and
+# ONLY here: an unrestricted operator is in FLEET_ROOM too, so sending a fleet-wide notice to
+# both would deliver it twice. Admin-only topics go to a capability room instead (below).
 ALL_VIEWERS_ROOM = "viewers:all"
+
+
+def capability_room(capability):
+    """Every socket whose operator holds `capability`, joined at connect. Admin-only topics
+    (changes.TOPIC_CAPABILITIES) are sent here instead of to everyone with view."""
+    return f"cap:{capability}"
 
 
 def _emit_changes(batch):
@@ -3110,9 +3116,25 @@ def _emit_changes(batch):
     only about their own machines; a notice about no machine goes to ALL_VIEWERS_ROOM. The
     payload is a topic name and a machine name, never data -- the page refetches through
     its own gated route, which is why a notice can be broadcast without a permission check.
+
+    An admin-only topic (changes.TOPIC_CAPABILITIES) is the exception to both rules: it goes
+    only to the capability's room, with the machine name dropped, because even "users were
+    just edited" is not something a view-only operator should be able to watch.
     """
-    fleet_wide = [c for c in batch if not c["machine"]]
-    per_machine = [c for c in batch if c["machine"]]
+    gated = {}
+    open_changes = []
+    for c in batch:
+        capability = changes.required_capability(c["topic"])
+        if capability:
+            gated.setdefault(capability, set()).add(c["topic"])
+        else:
+            open_changes.append(c)
+    for capability, topics in gated.items():
+        socketio.emit("changes", {"changes": [{"topic": t, "machine": None}
+                                              for t in sorted(topics)]},
+                      room=capability_room(capability))
+    fleet_wide = [c for c in open_changes if not c["machine"]]
+    per_machine = [c for c in open_changes if c["machine"]]
     if fleet_wide:
         socketio.emit("changes", {"changes": fleet_wide}, room=ALL_VIEWERS_ROOM)
     if per_machine:
@@ -3171,6 +3193,8 @@ def handle_socket_connect():
     if not permissions.has_capability(current, permissions.VIEW):
         return False
     join_room(ALL_VIEWERS_ROOM)
+    for capability in current.get("capabilities") or ():
+        join_room(capability_room(capability))
     if current["machines"] is None:
         join_room(FLEET_ROOM)
     else:
