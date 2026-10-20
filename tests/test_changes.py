@@ -226,16 +226,19 @@ def test_rooms_and_scope():
     # The console's Sync now, not just the scheduler: an OU move found by a manual pass must
     # end live sockets too. LDAP is stubbed to report a change, which is all that matters.
     import directory
-    real_sync, real_enabled = directory.sync_once, settings.get_bool
+    from unittest import mock
+    real_enabled = settings.get_bool
+
     def fake_sync(db_path, config, on_change=None):
         on_change()
         return {"objects_found": 1, "matched": 1, "unmatched": []}
-    directory.sync_once = fake_sync
-    settings.get_bool = lambda db, key: True if key == "directory.enabled" else real_enabled(db, key)
-    try:
+
+    def enabled(db, key):
+        return True if key == "directory.enabled" else real_enabled(db, key)
+
+    with mock.patch.object(directory, "sync_once", fake_sync), \
+            mock.patch.object(settings, "get_bool", enabled):
         r = super_http.post("/api/directory/sync", json={})
-    finally:
-        directory.sync_once, settings.get_bool = real_sync, real_enabled
     app.change_notifier.flush()
     check(f"Sync now that moved a machine ({r.status_code}) ends live sockets too",
           r.status_code == 200 and not again.is_connected())
