@@ -6294,7 +6294,11 @@ send a ticket to a hub with no route for it loses the ticket and tells the perso
   guard is the hub's, not the message's: the new conversation is always Ask mode, and every
   confirm-tier route becomes a card the operator clicks in `assistant_web.execute` whatever the
   model was talked into; only the reversible, audited write tier runs unasked. The message
-  also tells the model the ticket is data, not instructions -- a nudge on top. Still there, unused by the
+  also tells the model the ticket is data, not instructions -- a nudge on top. **Capabilities,
+  checked:** the button needs `manage_tickets` (as triage did) **and** VIEW, because
+  `/assistant` is behind VIEW and a tickets-only group would otherwise click through to a 403.
+  The old draft-script button's extra `issue_commands` is not asked for: whatever the
+  assistant drafts or runs goes through the route that enforces it. Still there, unused by the
   page: `POST /api/tickets/<id>/triage` and `/script` and the `ticket_triage` table; removing
   them is its own change.
 

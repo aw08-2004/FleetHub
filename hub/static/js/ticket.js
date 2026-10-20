@@ -208,6 +208,12 @@
         card.hidden = !(card.dataset.assistant && ticket.can_manage);
     }
 
+    /** A run of three backticks in the PC's text, made harmless. Without this a ticket body
+     *  could close the assistant message's fence and carry on as if it were the operator. */
+    function defuse(text) {
+        return String(text).replace(/`{3,}/g, "'''");
+    }
+
     /** What the assistant is sent. **The same line the old inline triage held: never who
      *  reported it, never the screenshots** -- the ticket text, its state and the facts. The
      *  assistant can read the ticket route itself if it needs more, through the same gates
@@ -220,10 +226,7 @@
      *  (assistant_web.execute), whatever the message talked the model into. */
     function buildDraft() {
         // Everything the PC wrote -- subject, body, program names and patch titles in the
-        // facts -- goes inside ONE fence, and the notice says so. A run of three backticks in
-        // that text is defused first, or a body could close the fence and carry on as if it
-        // were the operator talking (PR #160 review).
-        function defuse(text) { return String(text).replace(/`{3,}/g, "'''"); }
+        // facts -- goes inside ONE fence, and the notice says so (PR #160 review).
         var pc = [
             t('tickets.assistant_draft_subject') + ': ' + defuse(ticket.subject),
             '',
