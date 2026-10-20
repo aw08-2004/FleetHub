@@ -341,7 +341,23 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
 
     /// <summary>Who connected: the session from the kernel, the user from their own token.
     /// Null -- connection dropped -- for anything that is not a person in an interactive
-    /// session, which is the only thing a tray ever is.</summary>
+    /// session, which is the only thing a tray ever is.
+    ///
+    /// **Only the SID is read while impersonating; the account name is looked up after.** This
+    /// is issue #153, and it cost four wrong diagnoses. <c>WindowsIdentity.Name</c> does its
+    /// LSA lookup inside <c>WindowsIdentity.RunImpersonated</c>, which first saves the thread's
+    /// current token -- here the tray's, from <c>ImpersonateNamedPipeClient</c>, which .NET
+    /// knows nothing about -- into an AsyncLocal of the CALLER's execution context.
+    /// <c>RunAsClient</c>'s <c>RevertToSelf</c> clears the thread but not that AsyncLocal, so
+    /// .NET put the tray's Identification-level token back on every thread the connection's
+    /// async flow resumed on, for the life of the connection. An Identification token may not
+    /// ask the DNS client for anything, so every request in that flow that needed a NEW
+    /// connection failed with WSAHOST_NOT_FOUND (11001) on every PC, while the ticket POST on
+    /// the heartbeat's already-open connection went through: tickets arrived, their
+    /// screenshots never did. <c>identity.User</c> reads the token directly and leaves nothing
+    /// behind; the SID-to-name lookup runs as the service, which is who did it anyway.
+    /// Reproduced and confirmed against a real pipe before the change, and pinned by
+    /// TicketPipeTests.</summary>
     private TrayCaller? Identify(NamedPipeServerStream pipe)
     {
         if (!GetNamedPipeClientSessionId(pipe.SafePipeHandle, out uint session) || session == 0)
@@ -352,12 +368,15 @@ public sealed class TicketPipeServer(ILogger<TicketPipeServer> log, ITicketUplin
         string? sid = null, account = null;
         try
         {
+            SecurityIdentifier? user = null;
             pipe.RunAsClient(() =>
             {
+                // Nothing in here but reading the token. See the summary before adding to it.
                 using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
-                sid = identity.User?.Value;
-                account = identity.Name;
+                user = identity.User;
             });
+            sid = user?.Value;
+            account = user?.Translate(typeof(NTAccount)).Value;
         }
         catch (Exception e)
         {
