@@ -40,7 +40,7 @@ web console to monitor, support and manage the fleet.
   permissions.
 - **Tickets:** a Tickets page for problems people report from their own PC, each with the
   machine's facts frozen at that moment, automatic labels (OS, recent hub patches and
-  installs, low disk) and an optional suggest-only AI triage. Needs the `view_tickets` /
+  installs, low disk) and a button that hands the ticket to the AI assistant. Needs the `view_tickets` /
   `manage_tickets` capabilities; the agent tray that files them is still to come.
 
 ## Quick start
