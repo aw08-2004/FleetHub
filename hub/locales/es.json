@@ -1401,6 +1401,10 @@
       "tickets.screenshot_retention_days": {
         "label": "Conservar capturas de tickets durante",
         "help": "Las capturas muestran la pantalla de alguien, por eso se eliminan tras estos días sea cual sea el estado del ticket. El texto del ticket se conserva."
+      },
+      "security.posture_patch_max_age_days": {
+        "label": "Los parches de seguridad de Android se consideran antiguos tras",
+        "help": "Qué antigüedad puede tener el parche de seguridad de un dispositivo Android antes de que falle su comprobación de seguridad (CIS 7.3). Los fabricantes publican uno al mes; noventa días son tres perdidos, lo que en un dispositivo con soporte significa que sus actualizaciones dejaron de llegar."
       }
     },
     "ai": {
@@ -1781,7 +1785,9 @@
       "min_version": "Versión mínima",
       "version_help": "Se compara con la lista de programas instalados de Windows, en las vistas del registro de 64 y de 32 bits.",
       "choose_file": "Elige un archivo para subir.",
-      "save": "Guardar el paquete"
+      "save": "Guardar el paquete",
+      "apk_payload": "APK que se instalará",
+      "apk_hint": "la carga que contiene el .apk, entre llaves"
     },
     "deploy_editor": {
       "add_group": "Añadir un grupo",
@@ -1878,6 +1884,10 @@
       "pnputil": {
         "label": "Instalar controladores",
         "description": "Entrega una carpeta de archivos .inf a pnputil, que los prepara e instala uno a uno."
+      },
+      "apk": {
+        "label": "Instalar una app de Android",
+        "description": "Instala un APK sin preguntar en un dispositivo Android totalmente administrado. Un paquete con este paso es solo para dispositivos Android, y cada carga debe estar fijada por sha256."
       }
     },
     "detection": {
@@ -4326,7 +4336,15 @@
     },
     "list": {
       "fixed": "Localizado {when}",
-      "last_known": "Última posición, {when}"
+      "last_known": "Última posición, {when}",
+      "unlocated_heading": "Aún sin ubicar",
+      "never_asked": "Nadie ha preguntado todavía dónde está este dispositivo.",
+      "pending": "Ubicando -- esperando la respuesta del dispositivo.",
+      "unavailable": "El dispositivo respondió sin posición.",
+      "unavailable_detail": "Sin posición: {detail}",
+      "no_answer": "El dispositivo no respondió a la última solicitud.",
+      "asked": "Última consulta {when}",
+      "locate": "Ubicar"
     },
     "map": {
       "heading": "Mapa de dispositivos",
@@ -4335,7 +4353,9 @@
       "count": "{count} mostrados",
       "none": "Ningún dispositivo que pueda ver se ha localizado nunca.",
       "no_match": "Ningún dispositivo coincide con ese filtro.",
-      "unreachable": "El hub no respondió."
+      "unreachable": "El hub no respondió.",
+      "count_with_unlocated": "{count} mostrados, {unlocated} aún sin ubicar",
+      "none_yet": "Ningún dispositivo tiene posición todavía. {count} se pueden ubicar -- aparecen junto al mapa con lo último que respondió cada uno."
     }
   },
   "apps": {
@@ -4572,7 +4592,8 @@
       "admin_accounts": "Solo administradores autorizados",
       "encryption": "Unidades cifradas",
       "secure_boot": "Arranque seguro activado",
-      "tpm": "TPM listo"
+      "tpm": "TPM listo",
+      "os_patch": "Parche de seguridad reciente"
     },
     "profile": {
       "domain": "Dominio",
@@ -4609,7 +4630,12 @@
       "secure_boot_legacy": "El equipo arranca en modo BIOS heredado, que no tiene arranque seguro.",
       "tpm_ready": "El TPM {version} está habilitado y activado.",
       "tpm_missing": "No se encontró ningún TPM.",
-      "tpm_not_ready": "Hay un TPM, pero no está habilitado o no está activado."
+      "tpm_not_ready": "Hay un TPM, pero no está habilitado o no está activado.",
+      "enc_device": "El almacenamiento del dispositivo está cifrado.",
+      "enc_device_off": "El almacenamiento del dispositivo no está cifrado.",
+      "enc_device_unsupported": "Este dispositivo no puede cifrar su almacenamiento.",
+      "patch_current": "Parche de seguridad {date}.",
+      "patch_stale": "El parche de seguridad {date} tiene {days} días; el límite es {max}."
     }
   },
   "report": {

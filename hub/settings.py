@@ -874,6 +874,10 @@ REGISTRY = (
     # Fifteen minutes is the figure CIS 4.3 names for a general-purpose operating system.
     _s("security.posture_lock_max_seconds", "security", "int", 900,
        minimum=60, maximum=86400, unit="seconds"),
+    # How old an Android device's security patch may be (CIS 7.3). Ninety days is three missed
+    # monthly bulletins -- see posture.DEFAULT_PATCH_MAX_AGE_DAYS, which must match this.
+    _s("security.posture_patch_max_age_days", "security", "int", 90,
+       minimum=30, maximum=730, unit="days"),
     # Who else may be a local administrator (CIS 5.4) without being reported. The built-in
     # Administrator, Domain Admins and Entra role groups are always allowed -- see
     # posture._admin_allowed -- so this is for a helpdesk's own support group. Empty by

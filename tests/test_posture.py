@@ -22,6 +22,7 @@ roadmap #25 D) is what the antivirus and administrator cases are modelled on.
 import gc
 import os
 import sys
+import time
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
@@ -80,10 +81,43 @@ def verdicts(p, thresholds=THRESHOLDS, encryption=ENCRYPTED):
     return {c["id"]: c for c in posture.evaluate(p, thresholds, encryption)}
 
 
+def test_phone_checks():
+    """A phone is judged on the three things it can answer, and nothing else -- a card of
+    seven grey unknowns on every Android device is the failure this split prevents."""
+    print("\n== An Android device gets the mobile checks only ==")
+    now = time.mktime(time.strptime("2026-10-20", "%Y-%m-%d"))
+    raw = {
+        "session_lock": {"machine_inactivity_seconds": None, "error": "",
+                         "users": [{"sid": "android-user-0", "active": True, "secure": True,
+                                    "timeout_seconds": 60}]},
+        "mobile": {"security_patch": "2026-09-05", "encryption": "active", "error": ""},
+    }
+    cleaned = posture.clean_posture(raw)
+    checks = {c["id"]: c for c in posture.evaluate(cleaned, THRESHOLDS)}
+    check("exactly the mobile checks", list(checks) == list(posture.MOBILE_CHECKS))
+    check("a locking, encrypted phone passes those", all(
+        checks[c]["status"] == "pass" for c in ("session_lock", "encryption")))
+    verdict = posture._check_os_patch(cleaned, THRESHOLDS, now=now)
+    check("a six-week-old patch is current", verdict["status"] == "pass")
+    stale = posture.clean_posture({"mobile": {"security_patch": "2025-11-01",
+                                              "encryption": "inactive", "error": ""}})
+    verdict = posture._check_os_patch(stale, THRESHOLDS, now=now)
+    check("an eleven-month-old patch is stale, with its age",
+          verdict["status"] == "fail" and verdict["params"]["days"] > 300)
+    check("unencrypted storage fails CIS 3.6",
+          verdicts(stale)["encryption"]["status"] == "fail")
+    junk = posture.clean_posture({"mobile": {"security_patch": "Sept 2026", "error": ""}})
+    check("a patch level that is not a date reads as not reported",
+          posture._check_os_patch(junk, THRESHOLDS, now=now)["status"] == "unknown")
+    check("a PC is never judged on the phone check", "os_patch" not in verdicts(report()))
+
+
 def main():
+    test_phone_checks()
     print("\n== A healthy PC passes every check, in CHECKS order ==")
     checks = posture.evaluate(report(), THRESHOLDS, ENCRYPTED)
-    check("ten checks, in order", [c["id"] for c in checks] == list(posture.CHECK_IDS))
+    check("the ten desktop checks, in order",
+          [c["id"] for c in checks] == list(posture.DESKTOP_CHECKS))
     check("all pass", all(c["status"] == "pass" for c in checks))
     check("each names its CIS safeguard",
           {c["id"]: c["cis"] for c in checks}["firewall"] == "4.4, 4.5")
@@ -248,7 +282,8 @@ def main():
 
         t = posture.thresholds_from_settings(db)
         check("thresholds come from settings with the CIS defaults",
-              t == {"signature_max_age_days": 7, "lock_max_seconds": 900, "admin_allowlist": []})
+              t == {"signature_max_age_days": 7, "lock_max_seconds": 900, "admin_allowlist": [],
+                    "patch_max_age_days": 90})
         summary = posture.fleet_summary(db, ["PC-01", "PC-02", "PC-03"], t, no_encryption)
         rows = {r["id"]: r for r in summary["checks"]}
         check("the summary counts reporting and not-yet-reporting machines",

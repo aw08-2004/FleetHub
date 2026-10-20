@@ -26,6 +26,7 @@
             case 'encryption': return t('posture.check.encryption');
             case 'secure_boot': return t('posture.check.secure_boot');
             case 'tpm': return t('posture.check.tpm');
+            case 'os_patch': return t('posture.check.os_patch');
             default: return id;
         }
     }
@@ -70,6 +71,11 @@
             case 'enc_unprotected': return t('posture.detail.enc_unprotected', p);
             case 'enc_unsupported': return t('posture.detail.enc_unsupported', p);
             case 'enc_not_reported': return t('posture.detail.enc_not_reported', p);
+            case 'enc_device': return t('posture.detail.enc_device', p);
+            case 'enc_device_off': return t('posture.detail.enc_device_off', p);
+            case 'enc_device_unsupported': return t('posture.detail.enc_device_unsupported', p);
+            case 'patch_current': return t('posture.detail.patch_current', p);
+            case 'patch_stale': return t('posture.detail.patch_stale', p);
             case 'secure_boot_on': return t('posture.detail.secure_boot_on', p);
             case 'secure_boot_off': return t('posture.detail.secure_boot_off', p);
             case 'secure_boot_legacy': return t('posture.detail.secure_boot_legacy', p);

@@ -116,8 +116,52 @@ def create_location_blueprint(db_path, login_required, access):
         wants the whole fleet at once, and a query per machine is how a map page becomes the
         slowest thing in the console.
         """
-        rows = location.latest_fixes(db_path)
-        return jsonify({"fixes": access.filter_rows(rows), "map": _map_config()}), 200
+        rows = access.filter_rows(location.latest_fixes(db_path))
+        return jsonify({
+            "fixes": rows,
+            "unlocated": _unlocated(rows),
+            "can_locate": access.can(permissions.LOCATE_DEVICE),
+            "map": _map_config(),
+        }), 200
+
+    def _unlocated(fixes):
+        """Devices that can be located and have no position on the map, with what they said
+        the last time anybody asked.
+
+        **Without this list the map is silent about exactly the devices it most needs to
+        explain.** A phone that has never answered with coordinates has no point to draw, so
+        it used to be absent from the map and from its search alike -- indistinguishable from
+        a device that does not exist. Now it is listed, with its last answer ("the location
+        permission has not been granted on this device") or the fact that nobody has asked.
+
+        Scoped through the same `filter_rows` as the fixes, so this cannot become the way to
+        enumerate devices outside an operator's groups.
+        """
+        located = {f["machine"] for f in fixes}
+        capable = [{"machine": m} for m in
+                   capabilities.machines_with_feature(db_path, capabilities.FEATURE_LOCATE)
+                   if m not in located]
+        capable = access.filter_rows(capable)
+        if not capable:
+            return []
+        last = {row["machine"]: row for row in
+                location.latest_attempts(db_path, [c["machine"] for c in capable])}
+        pending = {}
+        for c in capable:
+            req = location.open_request(db_path, c["machine"])
+            if req is not None:
+                pending[c["machine"]] = req["status"]
+        out = []
+        for c in capable:
+            attempt = last.get(c["machine"])
+            out.append({
+                "machine": c["machine"],
+                "status": attempt["status"] if attempt else None,
+                "detail": attempt["detail"] if attempt else "",
+                "received_at": attempt["received_at"] if attempt else None,
+                "pending": pending.get(c["machine"]),
+            })
+        return out
 
     # ---------------- Ask ----------------
     @bp.route("/api/location/machines/<machine>", methods=["POST"])

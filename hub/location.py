@@ -383,6 +383,35 @@ def latest_fixes(db_path, machines=None):
     return [_row(r) for r in rows]
 
 
+def latest_attempts(db_path, machines=None):
+    """The newest row of ANY status per machine -- the fleet map's "not located yet" list.
+
+    **The question this answers is "why is this device not on the map".** latest_fixes only
+    returns rows with coordinates, which is right for drawing points and was, on its own, the
+    whole of the map: a fleet whose every locate came back "the permission has not been
+    granted" showed an empty map and an empty search, with nothing anywhere saying that
+    eleven phones had been asked and had each given the same answer. Found on the first
+    fleet of phones to try it.
+    """
+    params = []
+    scope_clause = ""
+    if machines is not None:
+        scope = [str(m).strip() for m in machines if str(m or "").strip()]
+        if not scope:
+            return []
+        scope_clause = f"WHERE l.machine IN ({','.join('?' for _ in scope)}) AND "
+        params.extend(scope)
+    else:
+        scope_clause = "WHERE "
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT l.* FROM machine_locations l {scope_clause} l.id = "
+            f"(SELECT id FROM machine_locations WHERE machine = l.machine "
+            f" ORDER BY received_at DESC, id DESC LIMIT 1) "
+            f"ORDER BY l.machine ASC", params).fetchall()
+    return [_row(r) for r in rows]
+
+
 def open_request(db_path, machine):
     """This machine's in-flight locate command, if it has one.
 

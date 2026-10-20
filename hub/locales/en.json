@@ -1478,6 +1478,10 @@
       "tickets.screenshot_retention_days": {
         "label": "Keep ticket screenshots for",
         "help": "Screenshots are a picture of somebody's screen, so they are deleted after this many days whatever state the ticket is in. The ticket's text stays."
+      },
+      "security.posture_patch_max_age_days": {
+        "label": "Android security patches count as stale after",
+        "help": "How old an Android device's security patch may be before its Security posture check fails (CIS 7.3). Vendors ship one a month; ninety days is three missed, which on a supported device means its updates have stopped arriving."
       }
     },
     "_choice": [
@@ -1872,7 +1876,9 @@
       "min_version": "Minimum version",
       "version_help": "Matched against Windows' installed-programs list, in both the 64- and 32-bit registry views.",
       "choose_file": "Choose a file to upload.",
-      "save": "Save package"
+      "save": "Save package",
+      "apk_payload": "APK to install",
+      "apk_hint": "the payload that holds the .apk, named in braces"
     },
     "deploy_editor": {
       "add_group": "Add a group",
@@ -1978,6 +1984,10 @@
       "pnputil": {
         "label": "Install drivers",
         "description": "Hands a folder of .inf files to pnputil, which stages and installs each one."
+      },
+      "apk": {
+        "label": "Install an Android app",
+        "description": "Installs an APK on a fully managed Android device, silently. A package with this step is for Android devices only, and every payload must be pinned by sha256."
       }
     },
     "_detection": [
@@ -4449,7 +4459,15 @@
     },
     "list": {
       "fixed": "Located {when}",
-      "last_known": "Last known, {when}"
+      "last_known": "Last known, {when}",
+      "unlocated_heading": "Not located yet",
+      "never_asked": "Nobody has asked where this device is.",
+      "pending": "Locating -- waiting for the device to answer.",
+      "unavailable": "The device answered with no position.",
+      "unavailable_detail": "No position: {detail}",
+      "no_answer": "The device did not answer the last request.",
+      "asked": "Last asked {when}",
+      "locate": "Locate"
     },
     "map": {
       "heading": "Device map",
@@ -4458,7 +4476,9 @@
       "count": "{count} shown",
       "none": "No device you can see has ever been located.",
       "no_match": "No device matches that filter.",
-      "unreachable": "The hub did not answer."
+      "unreachable": "The hub did not answer.",
+      "count_with_unlocated": "{count} shown, {unlocated} not located yet",
+      "none_yet": "No device has a position yet. {count} can be located -- they are listed beside the map with what each one last said."
     }
   },
   "apps": {
@@ -4695,7 +4715,8 @@
       "admin_accounts": "Only sanctioned administrators",
       "encryption": "Drives encrypted",
       "secure_boot": "Secure Boot on",
-      "tpm": "TPM ready"
+      "tpm": "TPM ready",
+      "os_patch": "Security patch recent"
     },
     "profile": {
       "domain": "Domain",
@@ -4732,7 +4753,12 @@
       "secure_boot_legacy": "The machine boots in legacy BIOS mode, which has no Secure Boot.",
       "tpm_ready": "TPM {version} is enabled and activated.",
       "tpm_missing": "No TPM was found.",
-      "tpm_not_ready": "A TPM is present but not enabled or not activated."
+      "tpm_not_ready": "A TPM is present but not enabled or not activated.",
+      "enc_device": "The device's storage is encrypted.",
+      "enc_device_off": "The device's storage is not encrypted.",
+      "enc_device_unsupported": "This device cannot encrypt its storage.",
+      "patch_current": "Security patch {date}.",
+      "patch_stale": "Security patch {date} is {days} days old; the limit is {max}."
     }
   },
   "report": {

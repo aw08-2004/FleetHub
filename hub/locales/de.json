@@ -1401,6 +1401,10 @@
       "tickets.screenshot_retention_days": {
         "label": "Ticket-Screenshots aufbewahren für",
         "help": "Screenshots zeigen den Bildschirm einer Person und werden daher nach so vielen Tagen gelöscht, unabhängig vom Ticketstatus. Der Tickettext bleibt erhalten."
+      },
+      "security.posture_patch_max_age_days": {
+        "label": "Android-Sicherheitspatches gelten als veraltet nach",
+        "help": "Wie alt der Sicherheitspatch eines Android-Geräts sein darf, bevor seine Sicherheitsprüfung fehlschlägt (CIS 7.3). Hersteller liefern monatlich einen; neunzig Tage sind drei verpasste, was bei einem unterstützten Gerät bedeutet, dass seine Updates nicht mehr ankommen."
       }
     },
     "ai": {
@@ -1781,7 +1785,9 @@
       "min_version": "Mindestversion",
       "version_help": "Wird mit der Liste installierter Programme von Windows abgeglichen, in der 64- und der 32-Bit-Registry-Sicht.",
       "choose_file": "Wähle eine Datei zum Hochladen.",
-      "save": "Paket speichern"
+      "save": "Paket speichern",
+      "apk_payload": "Zu installierende APK",
+      "apk_hint": "die Nutzlast mit der .apk, in geschweiften Klammern"
     },
     "deploy_editor": {
       "add_group": "Gruppe hinzufügen",
@@ -1878,6 +1884,10 @@
       "pnputil": {
         "label": "Treiber installieren",
         "description": "Übergibt einen Ordner mit .inf-Dateien an pnputil, das sie einzeln bereitstellt und installiert."
+      },
+      "apk": {
+        "label": "Android-App installieren",
+        "description": "Installiert eine APK still auf einem vollständig verwalteten Android-Gerät. Ein Paket mit diesem Schritt ist nur für Android-Geräte, und jede Nutzlast muss per sha256 festgelegt sein."
       }
     },
     "detection": {
@@ -4326,7 +4336,15 @@
     },
     "list": {
       "fixed": "Geortet {when}",
-      "last_known": "Zuletzt bekannt, {when}"
+      "last_known": "Zuletzt bekannt, {when}",
+      "unlocated_heading": "Noch nicht geortet",
+      "never_asked": "Niemand hat bisher nach dem Standort dieses Geräts gefragt.",
+      "pending": "Ortung läuft -- warte auf die Antwort des Geräts.",
+      "unavailable": "Das Gerät hat ohne Position geantwortet.",
+      "unavailable_detail": "Keine Position: {detail}",
+      "no_answer": "Das Gerät hat auf die letzte Anfrage nicht geantwortet.",
+      "asked": "Zuletzt gefragt {when}",
+      "locate": "Orten"
     },
     "map": {
       "heading": "Gerätekarte",
@@ -4335,7 +4353,9 @@
       "count": "{count} angezeigt",
       "none": "Kein für Sie sichtbares Gerät wurde je geortet.",
       "no_match": "Kein Gerät passt zu diesem Filter.",
-      "unreachable": "Der Hub hat nicht geantwortet."
+      "unreachable": "Der Hub hat nicht geantwortet.",
+      "count_with_unlocated": "{count} angezeigt, {unlocated} noch nicht geortet",
+      "none_yet": "Noch kein Gerät hat eine Position. {count} können geortet werden -- sie stehen neben der Karte, mit ihrer jeweils letzten Antwort."
     }
   },
   "apps": {
@@ -4572,7 +4592,8 @@
       "admin_accounts": "Nur freigegebene Administratoren",
       "encryption": "Laufwerke verschlüsselt",
       "secure_boot": "Secure Boot an",
-      "tpm": "TPM bereit"
+      "tpm": "TPM bereit",
+      "os_patch": "Sicherheitspatch aktuell"
     },
     "profile": {
       "domain": "Domäne",
@@ -4609,7 +4630,12 @@
       "secure_boot_legacy": "Das Gerät startet im Legacy-BIOS-Modus, der kein Secure Boot kennt.",
       "tpm_ready": "TPM {version} ist aktiviert und in Betrieb.",
       "tpm_missing": "Es wurde kein TPM gefunden.",
-      "tpm_not_ready": "Ein TPM ist vorhanden, aber nicht aktiviert oder nicht in Betrieb."
+      "tpm_not_ready": "Ein TPM ist vorhanden, aber nicht aktiviert oder nicht in Betrieb.",
+      "enc_device": "Der Speicher des Geräts ist verschlüsselt.",
+      "enc_device_off": "Der Speicher des Geräts ist nicht verschlüsselt.",
+      "enc_device_unsupported": "Dieses Gerät kann seinen Speicher nicht verschlüsseln.",
+      "patch_current": "Sicherheitspatch {date}.",
+      "patch_stale": "Sicherheitspatch {date} ist {days} Tage alt; die Grenze ist {max}."
     }
   },
   "report": {
