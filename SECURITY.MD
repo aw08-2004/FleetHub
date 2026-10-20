@@ -141,6 +141,15 @@ by reflex.
   typed out, is written to the audit trail *before* the command is created, and cannot be saved
   as a favorite or issued by a rule. The device answers once and then stops reporting for good,
   which is why the hub records the request rather than waiting for a result.
+- **Restarting the device** (`reboot`, agent 0.3.0), under `issue_commands` like a PC restart:
+  it loses nothing and the person holding the phone unlocks it as after any reboot.
+- **Installing apps silently** (the package installer, agent 0.3.0), only from a `deploy_package`
+  whose every payload is pinned by sha256 -- the hub refuses to save an Android package with an
+  unpinned one, and the agent refuses it again. Gated like every deployment, on `deploy_packages`.
+  The agent will not install itself this way; it updates only through its signed manifest.
+- **Reading the Wi-Fi MAC address** (`getWifiMacAddress`, agent 0.3.0), reported on the network
+  block so the phone can relay Wake-on-LAN. It is the factory address, a stable hardware id, held
+  like a PC's NIC inventory and erased with the machine.
 
 **Deliberately not taken**, each available and each declined: no camera or screenshot
 restrictions, no factory-reset block, no certificate installation, no always-on VPN, no keyguard

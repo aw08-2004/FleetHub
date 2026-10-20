@@ -6,7 +6,9 @@ Both hold the same geometry and nothing else compares them: edit one and the sid
 browser tab quietly show two different logos, with every page still rendering fine.
 
 Also pins that the committed favicon.svg is what the generator produces today, i.e. that
-nobody hand-edited the output or changed the geometry without re-running the script.
+nobody hand-edited the output or changed the geometry without re-running the script -- and
+the same for the Android agent's vector layers, where a stale file is a phone launcher still
+showing the old mark (or no mark: a missing layer is a blank adaptive icon, not a build error).
 """
 import os
 import re
@@ -55,9 +57,27 @@ def test_partial_matches_generator_geometry():
     check("partial has the same four nodes and hub", circles == expected)
 
 
+def test_android_vectors_match_generator():
+    res = build_logo.ANDROID_RES
+    for rel, expected in (
+            ("drawable/ic_launcher_foreground.xml", build_logo.android_foreground()),
+            ("drawable/ic_launcher_monochrome.xml", build_logo.android_monochrome()),
+            ("drawable/ic_launcher_background.xml", build_logo.android_background()),
+            ("drawable/ic_stat_fleethub.xml", build_logo.android_notification()),
+            ("mipmap-anydpi-v26/ic_launcher.xml", build_logo.android_adaptive()),
+            ("mipmap-anydpi-v26/ic_launcher_round.xml", build_logo.android_adaptive())):
+        committed = read(f"{res}/{rel}").replace("\r\n", "\n")
+        check(f"{rel} is what tools/build_logo.py writes", committed == expected)
+    for bucket, _ in build_logo.ANDROID_DENSITIES:
+        for name in ("ic_launcher.png", "ic_launcher_round.png"):
+            check(f"mipmap-{bucket}/{name} exists",
+                  os.path.isfile(os.path.join(ROOT, res, f"mipmap-{bucket}", name)))
+
+
 def main():
     print("logo:")
     test_committed_favicon_matches_generator()
+    test_android_vectors_match_generator()
     test_partial_matches_generator_geometry()
     print(f"==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0

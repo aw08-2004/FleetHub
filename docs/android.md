@@ -1,5 +1,18 @@
 # Android devices
 
+## The agent app
+
+Opening **FleetHub Agent** on a device shows its status first -- managed, not enrolled, offline,
+or no hub configured -- then a setup checklist: enrollment, location, notifications, battery
+optimisation, usage access and device owner. Each row says what goes wrong without it and has the
+button that fixes it. Nothing on the first screen prompts for a credential or opens the keyboard.
+
+**Enroll with a one-time code.** Mint one under Administration → Onboarding, press **Enroll this
+device**, type the six characters. The code admits that device once. The fleet's shared secret
+still works under *Advanced*, but it enrols any device and stays on the one it was typed into.
+
+## Fully managed features
+
 These features need the Android agent on a fully managed device (see
 [Android device provisioning](#android-device-provisioning) and
 [agent-android/README.md](../agent-android/README.md)). They are built but **not yet
@@ -218,6 +231,12 @@ the device did not state is not drawn at all rather than assumed. Stale fixes ar
 colour and say how old they are. The coordinates are always shown in full — they are what you
 paste into a phone before walking out of the door to find something.
 
+**A device that can be located and has no position is listed, not hidden.** Under **Not
+located yet** beside the map, with what it said the last time anybody asked -- *the location
+permission has not been granted on this device*, say -- or that nobody has asked, and a Locate
+button if you hold `locate_device`. Before 0.3.0 the agent never asked for the permission, so
+every phone answered that way and the map showed nothing at all.
+
 **The fold does not appear on a device that cannot locate**, which today is every Windows PC.
 Hidden rather than greyed: a permanently dead card on several hundred machine pages is worse
 than no card.
@@ -230,6 +249,30 @@ background with their coordinates and says so, rather than showing grey squares.
 
 **Endpoints**: `GET|POST /api/location/machines/<machine>`, `GET /api/location/fleet`,
 `GET /map`.
+
+## Restart, app installs and Wake-on-LAN
+
+Three things a fully managed device does from 0.3.0 that an ordinary app cannot.
+
+**Restart** works from the machine page and from rules like it does on a PC. The command answers
+first and the device restarts five seconds later at the earliest, so the console never shows a
+restart that worked as one that hung. A device that is not fully managed refuses with the reason.
+
+**App installs** go through **Packages**, with the **Install an Android app** step (an APK
+payload). An Android package can hold only that step, every payload must be pinned by sha256,
+and it takes no detection rule -- the device asks Android afterwards whether the app is installed
+at the version the APK declares. A deployment aimed at a mixed group keeps each package on its
+own platform: a phone is never sent a Windows package, nor a PC an APK; those targets are marked
+failed with the reason. The agent refuses to install itself this way.
+
+**Wake-on-LAN relay**: a fully managed phone on the office Wi-Fi reports its adapter, and the hub
+can pick it to broadcast the magic packet for a sleeping PC on the same subnet. Only a device
+owner can read the phone's real MAC, so only those are picked. Some access points drop broadcast
+frames between wireless clients; a wake is confirmed by the PC checking in, not by the packet.
+
+**Security posture**: a phone is judged on screen lock (CIS 4.3), storage encryption (3.6) and a
+**Security patch recent** check (7.3, limit `security.posture_patch_max_age_days`, 90 days) --
+not on the Windows checks it could never answer.
 
 ## Android device provisioning
 

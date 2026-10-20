@@ -370,6 +370,18 @@ def supports(db_path, machine, feature):
     return bool(reported) and str(feature or "").strip() in reported
 
 
+def machines_with_feature(db_path, feature):
+    """Every machine that reported `feature`, sorted. One statement, for the fleet map, which
+    has to list the devices that COULD be located alongside the ones that have been -- see
+    location_web.fleet_locations. The same unknown-is-no rule as `supports`."""
+    feature = str(feature or "").strip()
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT machine, features_json FROM machine_capabilities "
+            "WHERE features_json IS NOT NULL").fetchall()
+    return sorted(row["machine"] for row in rows if feature in (_decode(row["features_json"]) or ()))
+
+
 def filter_machines(db_path, machines, command_type):
     """The subset of `machines` that can be sent this command type, in the order given.
 

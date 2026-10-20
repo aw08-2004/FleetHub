@@ -105,7 +105,29 @@ STEP_POWERSHELL = "powershell"  # an inline script, the general-purpose escape h
 STEP_WINGET = "winget"          # winget install <id>
 STEP_EXTRACT = "extract"        # unpack a .zip into a directory
 STEP_PNPUTIL = "pnputil"        # stage/install driver packages
-STEP_KINDS = (STEP_RUN, STEP_POWERSHELL, STEP_WINGET, STEP_EXTRACT, STEP_PNPUTIL)
+STEP_APK = "apk"                # install an Android app (roadmap #23)
+STEP_KINDS = (STEP_RUN, STEP_POWERSHELL, STEP_WINGET, STEP_EXTRACT, STEP_PNPUTIL, STEP_APK)
+
+# ================================
+# PLATFORM
+# ================================
+# **A package installs on ONE platform, and its steps say which.** The five Windows kinds above
+# are meaningless on a phone and `apk` is meaningless on a PC, so a package is Android exactly
+# when it has an `apk` step -- and then it may have nothing else. Derived rather than stored:
+# a separate platform column could disagree with the recipe it describes, and the recipe is
+# what the agent actually runs.
+#
+# Rejected: one package installing on both, branching per platform at the agent. It would make
+# "deploy Chrome to the floor" one click, and it would make every recipe's correctness depend
+# on two agents reading one document the same way. A PC and a phone get the same app from
+# different payloads anyway; two packages is the honest shape.
+#
+# **The scheduler enforces it** (dispatch_once): a target of the wrong platform is retired with
+# the reason, never dispatched. Without that an Android package aimed at a mixed group would
+# send a Windows agent a step kind it fails on, and a Windows package would land on a phone --
+# which an Android agent answers "cannot be run", correctly but only after it was sent.
+PLATFORM_WINDOWS = capabilities.PLATFORM_WINDOWS
+PLATFORM_ANDROID = capabilities.PLATFORM_ANDROID
 
 # Labels/descriptions live in the catalogs under `packages.step.<kind>.<label|description>`,
 # exactly like DETECTION_TEXT_KEY -- so the step palette in the editor is served by the API
@@ -150,6 +172,7 @@ _STEP_SUBSTITUTED = {
     STEP_WINGET: ("args",),
     STEP_EXTRACT: ("archive", "dest"),
     STEP_PNPUTIL: ("path",),
+    STEP_APK: ("apk",),
 }
 
 MAX_STEPS = 25
@@ -657,6 +680,14 @@ def validate_steps(steps, source_names=()):
             if dest:
                 step["dest"] = dest
 
+        elif kind == STEP_APK:
+            apk = _clean(raw.get("apk"), MAX_COMMAND_CHARS)
+            if not apk:
+                raise ValueError(
+                    f"step {index}: an apk step needs the payload to install, "
+                    f"e.g. {{{source_names[0] if source_names else DEFAULT_SOURCE_NAME}}}")
+            step["apk"] = apk
+
         else:  # STEP_PNPUTIL
             path = _clean(raw.get("path"), MAX_COMMAND_CHARS)
             if not path:
@@ -712,6 +743,49 @@ def validate_steps(steps, source_names=()):
 
         validated.append(step)
     return validated
+
+
+def package_platform(steps):
+    """Which platform a recipe installs on -- see PLATFORM above."""
+    if any(s.get("kind") == STEP_APK for s in steps or ()):
+        return PLATFORM_ANDROID
+    return PLATFORM_WINDOWS
+
+
+def _validate_platform(sources, steps, detection):
+    """The rules an Android package has to meet, which a Windows one does not.
+
+    Each is a mistake that would otherwise surface on a phone, as a failed deploy, after the
+    operator had already aimed it at the fleet:
+
+      * **Nothing but `apk` steps.** A phone has no shell for a `run` or `powershell` step.
+      * **Every payload pinned by sha256.** An upload always is; a URL must be. The agent
+        hands the file to the package installer as the device owner, which installs it with
+        no prompt, so "whatever that URL serves today" is not a payload it may accept.
+      * **No detection rule.** The three kinds are a file path, a registry value and the
+        Windows uninstall list. The agent checks an APK by asking Android whether the
+        package is installed afterwards, which is the same promise kept the platform's way.
+    """
+    if package_platform(steps) != PLATFORM_ANDROID:
+        return
+    others = sorted({s["kind"] for s in steps if s["kind"] != STEP_APK})
+    if others:
+        raise ValueError(
+            f"an Android package can only have apk steps -- {others[0]!r} is a Windows step, "
+            f"and a phone has nowhere to run it")
+    for source in sources:
+        if source["kind"] not in (SOURCE_UPLOAD, SOURCE_URL):
+            raise ValueError(
+                f"payload {source['name']!r}: an Android package needs an uploaded file or a "
+                f"URL -- a phone cannot read a {source['kind']} source")
+        if not source.get("sha256"):
+            raise ValueError(
+                f"payload {source['name']!r}: pin its sha256 -- the device installs it "
+                f"silently, so it must be exactly the file you meant")
+    if (detection or {}).get("kind", DETECT_NONE) != DETECT_NONE:
+        raise ValueError(
+            "an Android package has no detection rule -- the device checks that the app is "
+            "installed itself; set detection to none")
 
 
 def _validate_recipe(install_command, install_args, sources, steps, timeout_seconds):
@@ -895,6 +969,7 @@ def _package_row(row, source_rows=()):
     pkg["success_exit_codes"] = json.loads(pkg.pop("success_exit_codes"))
     pkg["detection"] = json.loads(pkg.pop("detection_json"))
     pkg["steps"] = json.loads(pkg.pop("steps_json", None) or "[]")
+    pkg["platform"] = package_platform(pkg["steps"])
     sources = []
     for source_row in source_rows:
         source = dict(source_row)
@@ -966,6 +1041,7 @@ def create_package(db_path, *, name, source=None, sources=None, steps=None,
         install_command, install_args, payloads, plan, timeout_seconds)
     codes = validate_exit_codes(success_exit_codes)
     rule = validate_detection(detection)
+    _validate_platform(payloads, plan, rule)
 
     package_id = uuid.uuid4().hex
     now = int(time.time())
@@ -1054,6 +1130,7 @@ def update_package(db_path, package_id, *, name=None, source=None, sources=None,
     codes = (existing["success_exit_codes"] if success_exit_codes is None
              else validate_exit_codes(success_exit_codes))
     rule = existing["detection"] if detection is None else validate_detection(detection)
+    _validate_platform(payloads, plan, rule)
 
     new_name = existing["name"] if name is None else _clean(name, MAX_NAME_CHARS)
     if not new_name:
@@ -1725,6 +1802,9 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
     retire = []
     ready = []
     package_cache = {}
+    # One capability read per MACHINE, not per target: a machine in several open deployments
+    # is otherwise read once for each of them on every tick.
+    platform_cache = {}
     for target in rows:
         deployment = deployments.get(target["deployment_id"])
         if deployment is None:
@@ -1760,6 +1840,13 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
         if package_id not in package_cache:
             package_cache[package_id] = get_package(db_path, package_id)
         package = package_cache[package_id]
+        wrong_platform = _platform_refusal(db_path, target["machine"], package, platform_cache)
+        if wrong_platform:
+            # Retired, not skipped, for the same reason as `unsupported` above: a target
+            # nothing will ever dispatch must still reach a terminal state.
+            retire.append((target["deployment_id"], target["machine"], TARGET_FAILED, None,
+                           wrong_platform))
+            continue
         if package is None:
             # The package was deleted mid-deployment. Retire the target with a real
             # reason rather than retrying something that can no longer be built.
@@ -1796,6 +1883,31 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
             for deployment_id in touched:
                 _refresh_deployment_status(conn, deployment_id, now)
     return dispatched
+
+
+def _platform_refusal(db_path, machine, package, cache=None):
+    """Why this machine cannot take this package, or None -- see PLATFORM above.
+
+    A machine that has not reported a platform is a Windows PC: every Windows agent in the
+    field reports nothing (capabilities.py's absent-report rule), and reading that silence as
+    "might be a phone" would stop every Windows deploy there is.
+    """
+    if package is None:
+        return None
+    if cache is not None and machine in cache:
+        reported = cache[machine]
+    else:
+        reported = (capabilities.get_capabilities(db_path, machine) or {}).get("platform") or ""
+        if cache is not None:
+            cache[machine] = reported
+    machine_platform = PLATFORM_ANDROID if reported == PLATFORM_ANDROID else PLATFORM_WINDOWS
+    wanted = package_platform(package.get("steps"))
+    if wanted == machine_platform:
+        return None
+    if wanted == PLATFORM_ANDROID:
+        return "this package installs an Android app, and this machine is not an Android device"
+    return ("this package runs Windows installers -- an Android device can only take a "
+            "package made of apk steps")
 
 
 def tick(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS, hub_url=""):

@@ -383,6 +383,52 @@ def latest_fixes(db_path, machines=None):
     return [_row(r) for r in rows]
 
 
+def latest_attempts(db_path, machines=None):
+    """The newest row of ANY status per machine -- the fleet map's "not located yet" list.
+
+    **The question this answers is "why is this device not on the map".** latest_fixes only
+    returns rows with coordinates, which is right for drawing points and was, on its own, the
+    whole of the map: a fleet whose every locate came back "the permission has not been
+    granted" showed an empty map and an empty search, with nothing anywhere saying that
+    eleven phones had been asked and had each given the same answer. Found on the first
+    fleet of phones to try it.
+    """
+    params = []
+    scope_clause = ""
+    if machines is not None:
+        scope = [str(m).strip() for m in machines if str(m or "").strip()]
+        if not scope:
+            return []
+        scope_clause = f"WHERE l.machine IN ({','.join('?' for _ in scope)}) AND "
+        params.extend(scope)
+    else:
+        scope_clause = "WHERE "
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT l.* FROM machine_locations l {scope_clause} l.id = "
+            f"(SELECT id FROM machine_locations WHERE machine = l.machine "
+            f" ORDER BY received_at DESC, id DESC LIMIT 1) "
+            f"ORDER BY l.machine ASC", params).fetchall()
+    return [_row(r) for r in rows]
+
+
+def open_requests(db_path, machines):
+    """`{machine: status}` for every one of `machines` with a locate in flight -- open_request
+    for a list, in one statement. The fleet map asks this for every phone with no fix, and a
+    query per phone is the page-is-slow trap fleet_locations' docstring warns about."""
+    names = [str(m).strip() for m in machines or () if str(m or "").strip()]
+    if not names:
+        return {}
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT machine, status FROM commands WHERE type = ? AND status IN (?, ?) "
+            f"AND machine IN ({','.join('?' for _ in names)}) ORDER BY created_at ASC",
+            [COMMAND_TYPE, fleet.STATUS_PENDING, fleet.STATUS_CLAIMED, *names]).fetchall()
+    # Ascending, so the newest request per machine is the one left standing -- the same
+    # answer open_request gives for one machine.
+    return {row["machine"]: row["status"] for row in rows}
+
+
 def open_request(db_path, machine):
     """This machine's in-flight locate command, if it has one.
 

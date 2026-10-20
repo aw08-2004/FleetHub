@@ -275,7 +275,8 @@ def build_sheet(db_path, machine, hardware_probe=None, now=None):
         # carries its own pass / fail / unknown; the section only says whether there are any.
         if stored_posture["posture"] is not None:
             security["checks"] = posture.evaluate(
-                stored_posture["posture"], posture.thresholds_from_settings(db_path), encryption)
+                stored_posture["posture"], posture.thresholds_from_settings(db_path), encryption,
+                capabilities.get_capabilities(db_path, machine)["platform"])
         else:
             # The one half of this section that waits on an agent RELEASE: no agent before
             # #25 D's cut sends a posture at all.
