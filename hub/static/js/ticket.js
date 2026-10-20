@@ -228,6 +228,9 @@
         // Everything the PC wrote -- subject, body, program names and patch titles in the
         // facts -- goes inside ONE fence, and the notice says so (PR #160 review).
         var pc = [
+            // The machine too: it is a validated name, but spaces are allowed, so it can
+            // still be a sentence (PR #160 review).
+            t('tickets.machine') + ': ' + defuse(ticket.machine),
             t('tickets.assistant_draft_subject') + ': ' + defuse(ticket.subject),
             '',
             t('tickets.description') + ':',
@@ -241,7 +244,7 @@
         });
         return [
             t('tickets.assistant_draft_intro', {
-                id: ticket.id, machine: ticket.machine, link: '/tickets/' + ticket.id
+                id: ticket.id, link: '/tickets/' + ticket.id
             }),
             t('tickets.assistant_draft_state', {
                 urgency: URGENCY_TEXT[ticket.urgency] || ticket.urgency,

@@ -327,7 +327,7 @@ def test_ticket_page_wiring():
           set(re.findall(r"\bticket\.(\w+)", facts)) <= {"facts"})
     check("...and the PC's text goes inside a fence it cannot close",
           "tickets.assistant_draft_untrusted" in draft and "defuse(ticket.body" in draft
-          and "defuse(ticket.subject)" in draft)
+          and "defuse(ticket.subject)" in draft and "defuse(ticket.machine)" in draft)
 
 
 def main():
