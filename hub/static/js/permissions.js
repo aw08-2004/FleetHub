@@ -635,6 +635,8 @@ async function init() {
     } catch (e) { /* no AD, or no permission to read it; typing still works */ }
     attachPickers();
     await loadGroups();
+    // The group editor is a <dialog>, so FleetLive holds this off while it is open.
+    window.FleetLive.watch(['permissions', 'users', 'device_groups'], loadGroups);
 }
 
 init();

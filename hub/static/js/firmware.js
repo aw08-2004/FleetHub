@@ -131,7 +131,10 @@
         panelId: PANEL_ID,
         load,
         teardown: reset,
-        requires: (machine) => !!machine
+        requires: (machine) => !!machine,
+        // Never while an edit is staged: load() re-renders the attribute table, and a staged
+        // Dell setting silently vanishing is worse than a status a few seconds old.
+        live: { topics: ['firmware'], busy: () => edits.size > 0 }
     });
 
     // A staged edit belongs to the machine it was staged against, so leaving one behind on

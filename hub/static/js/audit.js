@@ -208,8 +208,15 @@ async function load(append) {
 function reload() {
     cursor = null;
     tbody = null;
-    load(false);
+    pagedPastFirst = false;
+    return load(false);
 }
+
+// Set once "Load more" has been pressed. A live re-read starts over at the top, so while the
+// operator is reading page three it waits -- throwing away the pages they asked for would be
+// the refresh getting in their way.
+let pagedPastFirst = false;
+moreBtn.addEventListener('click', () => { pagedPastFirst = true; });
 
 async function loadActors() {
     try {
@@ -241,8 +248,14 @@ clearBtn.addEventListener('click', () => {
     levelSelect.value = '';
     fromInput.value = '';
     toInput.value = '';
-    reload();
+    void reload();
 });
 
 loadActors();
 load(false);
+// Every mutation writes an audit row, so any change notice may be a new line here.
+window.FleetLive.watch('*', reload, {
+    minInterval: 5000,
+    busy: () => pagedPastFirst
+        || document.activeElement === searchInput || document.activeElement === actorInput,
+});

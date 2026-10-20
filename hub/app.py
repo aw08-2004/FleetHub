@@ -76,6 +76,7 @@ import notify
 import processes
 import files
 import live
+import changes
 import authconfig
 import apitokens
 import push
@@ -163,7 +164,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.155.0"
+HUB_VERSION = "1.156.6"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2510,6 +2511,7 @@ def _on_command_result(command_id, machine, success, result, output=None):
 app.register_blueprint(create_fleet_blueprint(
     DB_PATH, AGENT_ENROLLMENT_SECRET, login_required, access,
     on_command_result=_on_command_result,
+    on_change=lambda topic, machine: mark_changed(topic, machine),
 ))
 # Settings endpoints (console-facing only). Same reason for being registered here.
 app.register_blueprint(create_settings_blueprint(DB_PATH, login_required, access))
@@ -2577,7 +2579,11 @@ app.register_blueprint(create_recordings_blueprint(DB_PATH, login_required, acce
 
 # Active Directory sync (roadmap #4): status, the OU list the group scope picker uses,
 # and a synchronous "sync now". Same login_required + access seam as everything above.
-app.register_blueprint(create_directory_blueprint(DB_PATH, login_required, access))
+# Sync now shares the scheduler's scope-change callback, so a manual pass also ends live
+# sockets whose rooms the OU move invalidated (see _directory_scope_changed).
+app.register_blueprint(create_directory_blueprint(
+    DB_PATH, login_required, access,
+    on_scope_change=lambda: _directory_scope_changed()))
 
 # BIOS/firmware inventory and writes (roadmap #9): what a machine's firmware is set to, a
 # "re-read it now" command, and the `set_bios_settings` write half behind its own
@@ -3067,13 +3073,12 @@ def logout():
 # listener: unrestricted operators sit in FLEET_ROOM, scoped ones sit in one room per
 # machine they can see.
 #
-# Room membership is decided at CONNECT time, so a scope change (added to a group, a
-# machine added to their group) reaches an already-open tab on its next reconnect, not
-# instantly. That is the right trade for a telemetry feed -- the alternative is
-# re-resolving permissions on every emit, i.e. once per machine per few seconds -- but
-# it does mean a REVOKED operator keeps seeing live temperatures on an open tab until
-# they reload. Every actual action they could take is re-checked server-side per
-# request, so this is a stale view, not stale authority.
+# Room membership is decided at CONNECT time, not re-resolved on every emit -- that would be
+# once per machine per few seconds. Instead a permission change (or an AD sync that moved a
+# machine between OUs) ENDS every live socket within one flush, ~0.75s (_drop_live_sockets),
+# and the stock console reconnects through the check below. So a revoked operator stops
+# receiving telemetry at once rather than "until they reload", which is what this comment
+# said before hub 1.156.0. Every action they could take was always re-checked per request.
 FLEET_ROOM = "fleet:all"
 
 
@@ -3092,6 +3097,94 @@ def _emit_fleet_event(event, payload, machine):
     socketio.emit(event, payload, room=machine_room(machine))
 
 
+# Every accepted socket, whatever its scope. Change notices that name no machine go here, and
+# ONLY here: an unrestricted operator is in FLEET_ROOM too, so sending a fleet-wide notice to
+# both would deliver it twice. Admin-only topics go to a capability room instead (below).
+ALL_VIEWERS_ROOM = "viewers:all"
+
+
+def capability_room(capability):
+    """Every socket whose operator holds `capability`, joined at connect. Admin-only topics
+    (changes.TOPIC_CAPABILITIES) are sent here instead of to everyone with view."""
+    return f"cap:{capability}"
+
+
+def _emit_changes(batch):
+    """Push one coalesced batch of change notices (changes.py) to the people who may see it.
+
+    A notice about a machine follows the two-room rule above, so a scoped operator hears
+    only about their own machines; a notice about no machine goes to ALL_VIEWERS_ROOM. The
+    payload is a topic name and a machine name, never data -- the page refetches through
+    its own gated route, which is why a notice can be broadcast without a permission check.
+
+    An admin-only topic (changes.TOPIC_CAPABILITIES) is the exception to both rules: it goes
+    only to the capability's room, with the machine name dropped, because even "users were
+    just edited" is not something a view-only operator should be able to watch.
+    """
+    gated = {}
+    open_changes = []
+    for c in batch:
+        capability = changes.required_capability(c["topic"])
+        if capability:
+            gated.setdefault(capability, set()).add(c["topic"])
+        else:
+            open_changes.append(c)
+    for capability, topics in gated.items():
+        socketio.emit("changes", {"changes": [{"topic": t, "machine": None}
+                                              for t in sorted(topics)]},
+                      room=capability_room(capability))
+    fleet_wide = [c for c in open_changes if not c["machine"]]
+    per_machine = [c for c in open_changes if c["machine"]]
+    if fleet_wide:
+        socketio.emit("changes", {"changes": fleet_wide}, room=ALL_VIEWERS_ROOM)
+    if per_machine:
+        socketio.emit("changes", {"changes": per_machine}, room=FLEET_ROOM)
+        by_machine = {}
+        for c in per_machine:
+            by_machine.setdefault(c["machine"], []).append(c)
+        for machine, items in by_machine.items():
+            socketio.emit("changes", {"changes": items}, room=machine_room(machine))
+    if any(c["topic"] == changes.PERMISSIONS for c in batch):
+        _drop_live_sockets()
+
+
+def _drop_live_sockets():
+    """Disconnect every open console socket, so each one's rooms are resolved afresh.
+
+    Room membership is decided in handle_socket_connect and nowhere else, so after a
+    permission change the only way to take a machine away from a socket already in its room
+    is to end the socket. **The hub does this itself, rather than asking browsers to
+    reconnect**: a tab whose script ignores the `permissions` notice (a modified client, a
+    page that failed to load fleet-live.js) would otherwise keep its old rooms and keep
+    receiving telemetry for machines it lost. A stock tab reconnects at once
+    (fleet-live.js) and is re-checked on the way back in; one that lost `view` is refused.
+    Everyone reconnecting is affordable because permission changes are rare. Rejected:
+    tracking sid -> user and re-diffing each socket's rooms, which is a second copy of the
+    scope logic for the one event where a blunt reconnect is already correct.
+    """
+    try:
+        sids = [sid for sid, _ in socketio.server.manager.get_participants("/", ALL_VIEWERS_ROOM)]
+    except Exception as e:
+        print(f"[changes] Could not list live sockets: {e}")
+        return
+    for sid in sids:
+        try:
+            socketio.server.disconnect(sid, namespace="/")
+        except Exception as e:
+            print(f"[changes] Could not drop socket {sid}: {e}")
+
+
+change_notifier = changes.ChangeNotifier(_emit_changes)
+
+
+def mark_changed(topic, machine=None):
+    """Tell open console pages that `topic` changed (for `machine`). Never raises."""
+    try:
+        change_notifier.mark(topic, machine)
+    except Exception as e:
+        print(f"[changes] Could not mark {topic}: {e}")
+
+
 @socketio.on("connect")
 def handle_socket_connect():
     if not session.get("user"):
@@ -3099,6 +3192,9 @@ def handle_socket_connect():
     current = access.current()
     if not permissions.has_capability(current, permissions.VIEW):
         return False
+    join_room(ALL_VIEWERS_ROOM)
+    for capability in current.get("capabilities") or ():
+        join_room(capability_room(capability))
     if current["machines"] is None:
         join_room(FLEET_ROOM)
     else:
@@ -3551,6 +3647,11 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
         set_latest_temp(machine_name, temp_value)
         set_latest_sensors(machine_name, sensors)
         persist_live_status(machine_name, temp_value, uptime_seconds)
+        # A machine the status watcher last saw offline is online from THIS report, not
+        # from the watcher's next tick -- "it's back" is the transition somebody is waiting
+        # on. Online -> offline has no report to ride, so that one waits for the watcher.
+        if machine_status_tracker.note(machine_name, "online"):
+            mark_changed(changes.STATUS, machine_name)
 
     # Emit via WebSocket. Diagnostics come from the freshest cached sensors, not
     # this report's raw `sensors`, so a report that arrived without a sensor block
@@ -4449,6 +4550,7 @@ def deploy_scheduler():
             )
             if reconciled or dispatched:
                 print(f"[deploy] Reconciled {reconciled}, dispatched {dispatched}.")
+                mark_changed("deployments")
         except Exception as e:
             print(f"[deploy] Scheduler pass failed: {e}")
         # Switch on the PCs this window is waiting for (roadmap #10). Its own try block:
@@ -4505,6 +4607,7 @@ def firmware_scheduler():
             )
             if expired or dispatched:
                 print(f"[firmware] Retired {expired}, dispatched {dispatched}.")
+                mark_changed("firmware")
             # ...and switch on the machines this window is still waiting for (roadmap #10).
             # This is the pairing that makes auto-wake worth having here in particular:
             # dispatch above is deliberately limited to ONLINE machines, so without it a
@@ -4577,6 +4680,7 @@ def _patch_run_pass():
         DB_PATH, settings.get_list(DB_PATH, "patches.auto_approve_classifications"))
     if approved:
         print(f"[patches] Auto-approved {approved} update(s).")
+        mark_changed("patches")
     # Windows that install approved updates by themselves (issue #140). Before the tick, so
     # a run created as a window opens is dispatched in the same pass.
     created = patches.open_window_runs(
@@ -4587,6 +4691,7 @@ def _patch_run_pass():
         confirm_timeout_seconds=settings.get_int(DB_PATH, "patches.confirm_timeout_seconds"))
     if created:
         print(f"[patches] Opened {len(created)} window run(s).")
+        mark_changed("patches")
     reconciled, dispatched = patches.tick(
         DB_PATH,
         ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
@@ -4594,6 +4699,7 @@ def _patch_run_pass():
     )
     if reconciled or dispatched:
         print(f"[patches] Reconciled {reconciled}, dispatched {dispatched}.")
+        mark_changed("patches")
 
 
 def _patch_control_pass():
@@ -4602,6 +4708,7 @@ def _patch_control_pass():
         DB_PATH, ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"))
     if controlled:
         print(f"[patches] Queued {controlled} update-control change(s).")
+        mark_changed("patches")
 
 
 def _patch_wake_pass():
@@ -4649,6 +4756,7 @@ def wake_scheduler():
             if confirmed or expired or dispatched:
                 print(f"[wake] Confirmed {confirmed}, retired {expired}, "
                       f"dispatched {dispatched}.")
+                mark_changed("wake")
         except Exception as e:
             print(f"[wake] Scheduler pass failed: {e}")
         time.sleep(interval)
@@ -4691,6 +4799,18 @@ SWEEP_TICK_SECONDS = 30
 BIOS_CHANGE_TIMEOUT_SECONDS = 60 * 60
 
 
+def _sweep(failure, run, *topics):
+    """Run one housekeeping sweep: log rather than raise, and when it changed anything (a
+    truthy count), tell open pages which topics moved (changes.py). One helper rather than a
+    try/if pair per sweep, which is the shape that made sweep_worker unreadable."""
+    try:
+        if run():
+            for topic in topics:
+                mark_changed(topic)
+    except Exception as e:
+        print(f"{failure}: {e}")
+
+
 def sweep_worker():
     """Wake on a fixed cadence and run the hub's expiry/reap sweeps. Same shape and failure
     discipline as retention_pruner: each sweep is guarded on its own and errors are logged,
@@ -4700,17 +4820,15 @@ def sweep_worker():
         # Remote sessions expire on this heartbeat (roadmap #2), same reasoning as
         # fleet.expire_stale_commands: a browser tab that vanished without a clean stop must
         # not leave a session -- and its minted TURN credential -- live forever.
-        try:
-            remote.expire_sessions(DB_PATH)
-        except Exception as e:
-            print(f"[remote] Session expiry sweep failed: {e}")
+        _sweep("[remote] Session expiry sweep failed",
+               lambda: remote.expire_sessions(DB_PATH), "remote")
         # Recordings whose session just expired, whose badge was never confirmed, or whose
         # deadline passed with no browser left to say so (roadmap #19). The console also
         # reconciles on every read; this is for the recording nobody is looking at.
-        try:
-            recordings.reconcile(DB_PATH, lambda sid: remote.is_session_live(DB_PATH, sid))
-        except Exception as e:
-            print(f"[recordings] Recording sweep failed: {e}")
+        _sweep("[recordings] Recording sweep failed",
+               lambda: recordings.reconcile(
+                   DB_PATH, lambda sid: remote.is_session_live(DB_PATH, sid)),
+               "recordings")
         # Interactive terminals ride the same sweep, and here the hub is the AUTHORITY
         # rather than a backstop: a session deliberately survives its operator navigating
         # away, so only the hub can tell "gone to Packages for ten minutes" from "closed
@@ -4718,32 +4836,100 @@ def sweep_worker():
         # The agent's equivalent timer is deliberately much longer (AgentConfig
         # .PtyIdleTimeoutSeconds) so it cannot pre-empt this and reap the very absence the
         # feature exists to support.
-        try:
-            terminal.reap_sessions(DB_PATH)
-        except Exception as e:
-            print(f"[terminal] Session reap sweep failed: {e}")
+        _sweep("[terminal] Session reap sweep failed",
+               lambda: terminal.reap_sessions(DB_PATH))
         # Firmware changes whose machine never reported back (roadmap #9). Without this a
         # machine that went down mid-write leaves a running change forever, and the hub
         # refuses every subsequent change to it -- one dead agent would permanently lock its
         # own Firmware tab. Given an hour, which is generous against a write measured in
         # seconds, because closing one early would tell an operator a change failed while the
         # machine was still applying it.
-        try:
-            bios.expire_stale_changes(DB_PATH, BIOS_CHANGE_TIMEOUT_SECONDS)
-        except Exception as e:
-            print(f"[bios] Stale change sweep failed: {e}")
+        _sweep("[bios] Stale change sweep failed",
+               lambda: bios.expire_stale_changes(DB_PATH, BIOS_CHANGE_TIMEOUT_SECONDS),
+               "firmware")
         # Tickets whose "needed by" just passed (roadmap #31). Here rather than on the daily
         # retention tick, because a ticket due at 9 that alerts at midnight has missed the
         # point; tickets.scan_overdue raises once per ticket, so thirty seconds costs nothing.
-        try:
-            tickets.scan_overdue(DB_PATH)
-        except Exception as e:
-            print(f"[tickets] Overdue sweep failed: {e}")
+        _sweep("[tickets] Overdue sweep failed",
+               lambda: tickets.scan_overdue(DB_PATH), "tickets", "alerts")
         time.sleep(SWEEP_TICK_SECONDS)
 
 
 def start_sweep_worker():
     threading.Thread(target=sweep_worker, daemon=True, name="sweep_worker").start()
+
+
+# How often the status watcher re-derives online/offline. Five seconds puts "went offline"
+# on an open page within a few seconds of the online window expiring, and the pass is one
+# indexed read of machine_info -- a row per machine, no readings.
+STATUS_WATCH_SECONDS = 5
+
+machine_status_tracker = changes.StatusTracker()
+
+# The alerts table is written from a dozen places -- the rule evaluator, watchdogs, the
+# duplicate-serial merge, AD sync, ticket SLAs -- and a mark at each one is the list somebody
+# forgets to extend. Instead the watcher compares a one-row signature of the table each
+# tick, so ANY writer's change reaches the Alerts page and the sidebar badge within a tick.
+# `updated_at` moves on every refresh of an episode; `episode_ended_at` covers the one
+# write that does not touch it.
+#
+# `detail` of the OPEN rows is hashed in as well, because one writer changes it without moving
+# `updated_at` on purpose: alerts.sync_ticket_alert refreshes a ticket alert's count and ids
+# while keeping its place in a newest-first list (raised in review on PR #158). Open rows only,
+# so the read stays a handful of rows however long the history grows. The details go in as a
+# Python hash(), which is salted per process: fine for comparing one pass with the last inside
+# this hub, and meaningless anywhere else, so never persist it or compare it across restarts.
+_ALERTS_SIGNATURE_SQL = (
+    "SELECT COUNT(*), MAX(id), MAX(updated_at), MAX(COALESCE(episode_ended_at, 0)), "
+    "SUM(status = 'open') FROM alerts")
+_OPEN_ALERT_DETAILS_SQL = "SELECT id, detail FROM alerts WHERE status = 'open' ORDER BY id"
+_last_alerts_signature = None
+
+
+def status_watch_pass():
+    """One pass of status_watcher: online/offline transitions, then the alerts signature.
+
+    Its own function so the test suite can drive a pass directly (tests/test_changes.py)
+    instead of waiting on a daemon thread's clock. Each half is guarded on its own.
+    """
+    global _last_alerts_signature
+    try:
+        with get_db_conn() as conn:
+            rows = conn.execute("SELECT machine, updated_at FROM machine_info").fetchall()
+        for machine in machine_status_tracker.update(
+                {r["machine"]: derive_machine_status(r["updated_at"]) for r in rows}):
+            mark_changed(changes.STATUS, machine)
+    except Exception as e:
+        print(f"[changes] Status watch pass failed: {e}")
+    try:
+        with get_db_conn() as conn:
+            signature = (tuple(conn.execute(_ALERTS_SIGNATURE_SQL).fetchone()),
+                         hash(tuple(tuple(r) for r in conn.execute(_OPEN_ALERT_DETAILS_SQL))))
+        if _last_alerts_signature is not None and signature != _last_alerts_signature:
+            mark_changed("alerts")
+        _last_alerts_signature = signature
+    except Exception as e:
+        print(f"[changes] Alerts signature pass failed: {e}")
+
+
+def status_watcher():
+    """Push a change notice when a machine crosses the online/offline line (changes.py).
+
+    Status is derived on read from machine_info.updated_at (derive_machine_status) and was
+    never stored, so no write ever happened at the moment a machine went dark -- an open
+    Dashboard, Inventory or machine page kept saying "online" until it next polled or
+    somebody reloaded. This is the write that was missing, done as a comparison: the same
+    derivation every page uses, against the last answer, and a notice for each difference.
+    Same failure discipline as every other loop here: logged, never fatal.
+    """
+    while True:
+        status_watch_pass()
+        time.sleep(STATUS_WATCH_SECONDS)
+
+
+def start_change_notices():
+    change_notifier.start()
+    threading.Thread(target=status_watcher, daemon=True, name="status_watcher").start()
 
 
 # ================================
@@ -4864,6 +5050,10 @@ def rule_evaluator():
             print(f"[rules] Probe collection failed: {e}")
         try:
             summary = evaluate_rules_once()
+            if summary.get("fired"):
+                # The Rules page's "last fired" and history; the alerts themselves are
+                # caught by the status watcher's table signature.
+                mark_changed("alerts")
             if summary.get("fired") or summary.get("errors") or summary.get("capped"):
                 print(f"[rules] {summary['fired']} fired, {summary['matched']} matching, "
                       f"{summary['rules']} rules; capped={summary['capped']} "
@@ -5139,7 +5329,14 @@ def run_directory_sync():
     OUs from staying in its old group's scope until the next hub restart.
     """
     return directory.sync_once(DB_PATH, directory.config_from_settings(DB_PATH),
-                               on_change=permissions.invalidate)
+                               on_change=_directory_scope_changed)
+
+
+def _directory_scope_changed():
+    """An AD sync moved a machine between OUs: re-point permission scoping, and tell live
+    sockets, whose rooms were resolved against the old OU data (see _drop_live_sockets)."""
+    permissions.invalidate()
+    mark_changed(changes.PERMISSIONS)
 
 
 def directory_sync_scheduler():
@@ -5155,6 +5352,8 @@ def directory_sync_scheduler():
                     # down, hammering a domain controller somebody is already fixing.
                     _directory_last_sync = time.time()
                     result = run_directory_sync()
+                    mark_changed("directory")
+                    mark_changed(changes.MACHINES)
                     print(f"[directory] Synced: {result['objects_found']} objects in AD, "
                           f"{result['matched']} machines matched, "
                           f"{len(result['unmatched'])} unmatched.")
@@ -6989,6 +7188,30 @@ def _frame_policy(response):
     return response
 
 
+@app.after_request
+def _mark_changes(response):
+    """Every successful write under /api/ tells open pages its topic changed (changes.py).
+
+    One hook rather than a call in each of ~250 mutating routes, because the failure it
+    prevents is the route somebody adds next year without remembering to notify: here it is
+    live by default. The topic comes from the blueprint (changes.BLUEPRINT_TOPICS), the
+    machine from the URL or, for an agent's write, from its bearer token (auth_helpers).
+    Never allowed to fail the response it is riding on.
+    """
+    try:
+        rule = request.url_rule.rule if request.url_rule is not None else ""
+        if changes.should_mark_request(request.method, request.path, rule,
+                                       response.status_code):
+            topic = changes.topic_for_request(request.blueprint, request.endpoint)
+            if topic:
+                machine = ((request.view_args or {}).get("machine")
+                           or getattr(g, "agent_machine", None))
+                mark_changed(topic, machine)
+    except Exception as e:
+        print(f"[changes] after-request mark failed: {e}")
+    return response
+
+
 def _fleet_agent_release():
     """The newest Windows agent on the fleet's default channel, for the sidebar notice.
 
@@ -7069,7 +7292,8 @@ def inject_nav_context():
                # Whether the sidebar offers the assistant (roadmap #26). Presentation only,
                # like the capability set below: /assistant answers either way, and says the
                # feature is off rather than 404ing.
-               "assistant_enabled": _assistant_switched_on()}
+               "assistant_enabled": _assistant_switched_on(),
+               "live_enabled": False}
     context.update(i18n.template_context(current_language(), chosen_language()))
     if not session.get("user"):
         return context
@@ -7078,6 +7302,9 @@ def inject_nav_context():
         context["user_capabilities"] = current["capabilities"]
         context["is_superuser"] = current["superuser"]
         context["open_alert_count"] = _scoped_open_alert_count()
+        # Whether this page opens the live socket (static/js/fleet-live.js). The same test
+        # handle_socket_connect applies, so a page never opens a socket the hub will refuse.
+        context["live_enabled"] = permissions.has_capability(current, permissions.VIEW)
         # The Recordings link is for anyone who can make one, AND for someone who cannot
         # but has been shared one -- a helpdesk lead watching a recording a technician made
         # need not be able to remote into the PC themselves (roadmap #19).
@@ -7225,6 +7452,7 @@ start_patch_scheduler()
 start_wake_scheduler()
 start_backup_scheduler()
 start_sweep_worker()
+start_change_notices()
 start_directory_sync_scheduler()
 start_rule_evaluator()
 

@@ -130,7 +130,10 @@
         panelId: PANEL_ID,
         load,
         teardown: reset,
-        requires: (machine) => !!machine
+        requires: (machine) => !!machine,
+        // refresh(), not load(): it redraws without the "Loading" flash, which on a live
+        // update would make the panel blink every time a peer reported.
+        live: { topics: ['wake', 'status', 'machines'], refresh: () => refresh() }
     });
 
     // stopPolling() is the load-bearing half: a wake in flight polls once a second, and a

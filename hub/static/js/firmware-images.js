@@ -591,6 +591,9 @@
         booted = true;
         loadAll();
         loadFleet();
+        // The firmware scheduler marks `firmware` on every pass that moved something.
+        window.FleetLive.watch(['firmware', 'status'],
+            () => Promise.all([loadAll(), loadFleet()]), { minInterval: 3000 });
     }
     if (panel) {
         panel.addEventListener('tab:shown', boot);

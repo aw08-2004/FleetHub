@@ -321,4 +321,11 @@
     });
 
     load().catch(showError);
+    // Another operator's reply, a status or assignee change, the AI triage landing: all
+    // `tickets` notices. The tickets blueprint's own events carry the id, so a notice about a
+    // different ticket is skipped; a generic one (no id) re-reads, which is cheap. The reply
+    // box is static markup, so a re-read never eats a half-typed answer.
+    window.FleetLive.watch(['tickets'], load, {
+        filter: function (change) { return !change.id || String(change.id) === String(ticketId); },
+    });
 }());

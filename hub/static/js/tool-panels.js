@@ -48,6 +48,10 @@
          * @param {function} opts.load      (machine) => void; render for this machine
          * @param {function} [opts.teardown] stop timers, drop state, clear the panel
          * @param {function} [opts.requires] (machine) => bool; skip loading when false
+         * @param {object} [opts.live]  re-render on hub change notices (fleet-live.js):
+         *        live.topics   topic names to watch
+         *        live.refresh  (machine) => void|Promise; defaults to opts.load
+         *        live.busy     () => bool; hold the refresh while the operator is mid-edit
          */
         register(name, opts) {
             const pane = document.getElementById(opts.panelId);
@@ -66,6 +70,22 @@
             };
 
             pane.addEventListener('tab:shown', () => ensure(reg));
+
+            // Live, the same way as every page (fleet-live.js), but only while this panel is
+            // loaded AND on screen: a hidden panel is re-read on its next tab:shown anyway,
+            // so refreshing it in the background would be a request nobody looks at. Notices
+            // about another machine are skipped -- on the Tools page the machine changes
+            // under the panel, so the filter reads it at the moment of the notice.
+            if (opts.live && window.FleetLive) {
+                window.FleetLive.watch(opts.live.topics, () => {
+                    if (!reg.loaded || reg.pane.hidden) return null;
+                    return (opts.live.refresh || reg.load)(reg.loadedFor);
+                }, {
+                    filter: (change) => !change.machine || change.machine === reg.loadedFor,
+                    busy: opts.live.busy,
+                    minInterval: 3000,
+                });
+            }
 
             document.addEventListener('machine:changed', () => {
                 teardown(reg);

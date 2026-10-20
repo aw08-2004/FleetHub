@@ -116,23 +116,6 @@ function saveSort() {
     try { localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort)); } catch (e) { /* private mode */ }
 }
 
-// "3m ago" with the exact stamp as the cell's tooltip. The raw "2026-10-05 17:28:26" made
-// every row read as equally recent until you did the arithmetic, and disagreed with the
-// Dashboard's "9d" for the same machine. Same wording as the machine page (machine.ago.*).
-// updated_at is server-local time, and the hub and its operators share a timezone.
-function formatLastSeen(updatedAt) {
-    if (!updatedAt) return '--';
-    const then = new Date(String(updatedAt).replace(' ', 'T'));
-    if (Number.isNaN(then.getTime())) return updatedAt;
-    const secs = Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
-    if (secs < 60) return t('machine.ago.seconds', { value: secs });
-    const mins = Math.floor(secs / 60);
-    if (mins < 60) return t('machine.ago.minutes', { value: mins });
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return t('machine.ago.hours', { value: hrs });
-    return t('machine.ago.days', { value: Math.floor(hrs / 24) });
-}
-
 function formatTemp(temp) {
     return (temp === null || temp === undefined) ? '--' : `${Number(temp).toFixed(1)} °C`;
 }
@@ -440,11 +423,16 @@ function renderRow(row) {
     serviceTd.textContent = row.service_tag || '--';
     const assetTd = document.createElement('td');
     assetTd.textContent = row.asset_tag || '--';
+    // "3m ago" with the exact stamp as the tooltip (common.js fmtAgoInto), and kept ticking by
+    // fleet-live.js. The raw "2026-10-05 17:28:26" made every row read as equally recent
+    // until you did the arithmetic. Both cells are tagged with their machine so a live
+    // reading can rewrite them in place (onLiveReading below).
     const tempTd = document.createElement('td');
     tempTd.textContent = formatTemp(row.temp);
+    tempTd.dataset.liveTemp = row.machine;
     const seenTd = document.createElement('td');
-    seenTd.textContent = formatLastSeen(row.updated_at);
-    if (row.updated_at) seenTd.title = row.updated_at;
+    fmtAgoInto(seenTd, row.updated_at);
+    seenTd.dataset.liveSeen = row.machine;
 
     const actionTd = document.createElement('td');
     actionTd.className = 'data-table__actions';
@@ -744,8 +732,26 @@ groupSelect.addEventListener('change', async () => {
     render();
 });
 
+// A reading changes two cells of one row, so it is written in place rather than refetching
+// the whole fleet once per report per machine. Everything else -- a machine going offline,
+// one enrolled, renamed or deleted, a group edited -- is a change notice and a full re-read.
+// Search box, sort and selection survive either way, because render() reads them from module
+// state rather than from the DOM rows.
+function onLiveReading(msg) {
+    if (!msg?.machine) return;
+    const row = allRows.find((r) => r.machine === msg.machine);
+    if (!row) return;
+    row.temp = msg.temp;
+    if (msg.timestamp) row.updated_at = msg.timestamp;
+    const name = CSS.escape(msg.machine);
+    const tempTd = inventoryBody.querySelector(`[data-live-temp="${name}"]`);
+    if (tempTd) tempTd.textContent = formatTemp(row.temp);
+    const seenTd = inventoryBody.querySelector(`[data-live-seen="${name}"]`);
+    if (seenTd) fmtAgoInto(seenTd, row.updated_at);
+}
+
 loadGroups();
 loadInventory();
-// Keep status fresh without a manual reload. Search box, sort and selection are preserved
-// because render() reads them from module state, not the DOM rows.
-setInterval(loadInventory, 30000);
+window.FleetLive.onTemp(onLiveReading);
+window.FleetLive.watch(['machines', 'status', 'device_groups'], loadInventory,
+    { minInterval: 3000 });

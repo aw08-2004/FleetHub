@@ -145,15 +145,6 @@
         if (window.FleetNavFold) window.FleetNavFold.reveal();
     }
 
-    /** The topbar's live-data pill is shared by every page in the shell, so it follows
-     *  whichever frame claimed it -- see connectSocketWithStatus in common.js, which sets the
-     *  mark from inside. Checking the mark rather than the path means a page that stops
-     *  using a socket needs nothing changed here. */
-    function syncSocketPill() {
-        const pill = document.getElementById('socket-status');
-        if (pill) pill.hidden = !visible || visible.dataset.socket !== 'yes';
-    }
-
     function applyTheme(frame) {
         const doc = frameDoc(frame);
         if (!doc) return;
@@ -203,7 +194,6 @@
             if (href !== location.href) history.replaceState(history.state, '', href);
             if (doc && doc.title) document.title = doc.title;
             syncNav(new URL(href, location.href).pathname);
-            syncSocketPill();
         });
     }
 
@@ -214,7 +204,6 @@
         if (frame !== frames.get(ASSISTANT)) lastPage = frame;
         const doc = frameDoc(frame);
         if (doc && doc.title) document.title = doc.title;
-        syncSocketPill();
         // Hand the keyboard to the page that just came to the front: a remote screen that
         // needs a click on its own picture before it takes typing is a remote screen that
         // looks broken.
@@ -444,6 +433,53 @@
     document.addEventListener('theme:change', () => {
         for (const frame of frames.values()) applyTheme(frame);
     });
+
+    // ---------------- Live chrome ----------------
+    // The sidebar is rendered once per shell load and this document never reloads, so the
+    // capability-gated links in it used to stay whatever they were at sign-in: an operator
+    // granted Packages had to know to press F5, and one stripped of it kept a link that only
+    // led to "denied". On a permissions or settings change notice (fleet-live.js) the shell
+    // re-reads its own chrome from a plain page render and swaps the nav in when, and only
+    // when, the set of links actually differs -- most such notices are about somebody else.
+    //
+    // The socket side of a permission change is the hub's job, not this file's: it ends every
+    // live socket so rooms are re-resolved (app.py, _drop_live_sockets), because a revocation
+    // that depended on the revoked browser's own script cooperating would not be one.
+    //
+    // Rejected: reloading the shell. It would drop the persistent frames, and a live remote
+    // session with them, over a link appearing in the sidebar.
+    function navSignature(nav) {
+        return Array.from(nav.querySelectorAll('a[href]'))
+            .map((a) => a.getAttribute('href')).join(' ');
+    }
+
+    async function refreshChrome() {
+        const current = document.querySelector('#app-sidebar .sidebar__nav');
+        if (!current) return;
+        let html;
+        try {
+            const resp = await fetch('/', { credentials: 'same-origin' });
+            if (!resp.ok) return;
+            html = await resp.text();
+        } catch (e) {
+            // Offline or mid-deploy: keep the nav we have; the next notice retries.
+            console.warn('[shell] could not re-read the sidebar', e);
+            return;
+        }
+        const fresh = new DOMParser().parseFromString(html, 'text/html')
+            .querySelector('#app-sidebar .sidebar__nav');
+        if (!fresh || navSignature(fresh) === navSignature(current)) return;
+        current.replaceWith(document.importNode(fresh, true));
+        if (typeof initNavFold === 'function') initNavFold();
+        if (typeof refreshAlertBadge === 'function') void refreshAlertBadge();
+        syncNav(visible ? new URL(frameHref(visible), location.href).pathname : location.pathname);
+    }
+
+    if (window.FleetLive) {
+        window.FleetLive.watch(['permissions', 'settings'],
+            () => refreshChrome().catch(() => { /* the old nav stays; the next notice retries */ }),
+            { minInterval: 5000 });
+    }
 
     // ---------------- Boot ----------------
     // The first frame is rendered by base.html rather than created here, so the page inside

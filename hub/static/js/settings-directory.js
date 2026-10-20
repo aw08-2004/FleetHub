@@ -207,4 +207,6 @@
     } else {
         refresh();
     }
+    // The scheduler marks `directory` after every sync pass, so "last synced" follows it.
+    window.FleetLive.watch(['directory'], refresh);
 })();

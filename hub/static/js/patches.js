@@ -616,4 +616,5 @@
     runsPane.addEventListener('tab:shown', renderRuns);
 
     load();
+    window.FleetLive.watch(['patches', 'status'], load, { minInterval: 3000 });
 })();

@@ -476,8 +476,10 @@
     document.getElementById('watchdog-save').addEventListener('click', save);
 
     loadGroups().then(load);
-    // The state a machine reports arrives on its heartbeat, so this page goes stale on its own
-    // within seconds. Polled rather than pushed, like inventory.js: this is not a page anybody
-    // sits on, and a socket for it would be a channel to keep alive for nothing.
-    window.setInterval(load, 30000);
+    // The state a machine reports arrives on its heartbeat, which marks `watchdogs` when it
+    // carried a watchdog block (fleet_web.py) -- so this is pushed now, over the tab's one
+    // shared socket, rather than the 30-second poll it was. Groups are re-read with it.
+    window.FleetLive.watch(['watchdogs', 'device_groups', 'status'], function () {
+        return loadGroups().then(load);
+    });
 }());

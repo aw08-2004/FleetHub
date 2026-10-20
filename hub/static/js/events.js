@@ -418,4 +418,6 @@
     });
 
     load();
+    // A heartbeat that carried new event-log entries marks `events` (fleet_web.py).
+    window.FleetLive.watch(['events'], load, { minInterval: 3000 });
 })();

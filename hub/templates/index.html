@@ -17,10 +17,8 @@
    is one request rather than eight on purpose -- the counts have to agree with each other,
    and eight requests cannot be made to agree on a moment.
 
-   There is no socket.io here any more. With no per-machine cards there is nothing for a
-   `new_temp` event to update, and re-fetching a fleet aggregate at 1 Hz is not viable. The
-   topbar's live-data pill therefore stays dark on this page, which is honest: it is a
-   thirty-second poll, not a live view. The machine page is where live belongs. #}
+   Live through the tab's shared socket (static/js/fleet-live.js): any change notice re-reads
+   the summary, at most every ten seconds, which is as fresh as its server-side cache. #}
 <h1 class="page-title">{{ t('dashboard.heading') }}</h1>
 <p class="stat-card__meta" style="margin-bottom: var(--space-5);">
     {{ t('dashboard.intro') }}

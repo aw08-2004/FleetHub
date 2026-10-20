@@ -320,4 +320,8 @@
     loadCatalog();
     loadGenai();
     loadPosture();
+    // Fleet-wide aggregates, so throttled harder than a list: one re-read per ten seconds is
+    // plenty for a report, and every heartbeat inventory block can move it.
+    window.FleetLive.watch(['machines', 'status', 'software', 'apps', 'posture', 'bitlocker'],
+        () => Promise.all([loadRows(), loadPosture()]), { minInterval: 10000 });
 })();

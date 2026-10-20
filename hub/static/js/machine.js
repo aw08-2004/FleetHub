@@ -27,33 +27,23 @@ const tempCard = document.getElementById('temp-card');
 const uptimeLabelEl = document.getElementById('stat-uptime-label');
 const uptimeValueEl = document.getElementById('stat-uptime');
 
-// Concise "3h ago" from a server-local "YYYY-MM-DD HH:MM:SS" string, for the offline
-// "Last seen" readout (the hub and operators run in the same timezone).
-function formatRelativeTime(updatedAt) {
-    if (!updatedAt) return '--';
-    const then = new Date(String(updatedAt).replace(' ', 'T'));
-    if (Number.isNaN(then.getTime())) return updatedAt;
-    const secs = Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
-    if (secs < 60) return t('machine.ago.seconds', { value: secs });
-    const mins = Math.floor(secs / 60);
-    if (mins < 60) return t('machine.ago.minutes', { value: mins });
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return t('machine.ago.hours', { value: hrs });
-    return t('machine.ago.days', { value: Math.floor(hrs / 24) });
-}
-
 // The Uptime card doubles as a "Last seen" card when the machine is offline -- a stale
 // uptime is meaningless, and last-seen is what you actually want for a machine that's gone quiet.
+//
+// "Last seen" is written with fmtAgoInto (common.js), which marks the element so fleet-live.js
+// keeps it ticking -- it used to be drawn once and say "2m ago" for as long as the page was
+// open. Uptime must therefore REMOVE that mark, or the ticker would overwrite the uptime it
+// just wrote with a last-seen time the moment the machine came back.
 function showUptime(uptimeSeconds) {
     uptimeLabelEl.textContent = t('machine.uptime');
+    delete uptimeValueEl.dataset.agoAt;
     uptimeValueEl.textContent = formatUptime(uptimeSeconds);
     uptimeValueEl.removeAttribute('title');
 }
 
 function showLastSeen(updatedAt) {
     uptimeLabelEl.textContent = t('machine.last_seen');
-    uptimeValueEl.textContent = formatRelativeTime(updatedAt);
-    if (updatedAt) uptimeValueEl.title = updatedAt; else uptimeValueEl.removeAttribute('title');
+    fmtAgoInto(uptimeValueEl, updatedAt || null);
 }
 const VIEWPORT_RELOAD_DEBOUNCE_MS = 250;
 let viewportReloadTimer = null;
@@ -1265,6 +1255,18 @@ buildPanels();
 loadSelectedDay();
 loadMachineInfo();
 loadPrimarySensor();
+// The machine record and its online/offline state, pushed. `status` is what flips the Uptime
+// card to "Last seen" when this PC goes quiet -- before, an open page never noticed. A
+// directory sync can change the AD facts, and an agent self-update the version. Readings
+// themselves stay on the `new_temp` handler below, which is per report and in place.
+window.FleetLive.watch(['machines', 'status', 'directory'], loadMachineInfo, { machine: MACHINE });
+// The primary-sensor pin, re-read when somebody else changes it -- but never while this
+// operator has the picker in hand, which would snap it back under them.
+window.FleetLive.watch(['machines'], loadPrimarySensor, {
+    machine: MACHINE,
+    busy: () => document.activeElement === primarySensorSelect
+        || primarySensorSelect.value !== savedPrimarySensor,
+});
 
 socket.on('new_temp', (msg) => {
     if (msg.machine !== MACHINE) return;

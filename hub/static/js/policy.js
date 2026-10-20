@@ -374,4 +374,7 @@
     machineFilterEl.addEventListener('input', renderMachines);
 
     load();
+    // A heartbeat's policy_state block marks `policy` too, so compliance moves on its own.
+    // Never under an open editor panel.
+    window.FleetLive.watch(['policy', 'apps'], load, { busy: () => !editor.hidden });
 })();

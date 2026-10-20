@@ -349,4 +349,5 @@
 
     loadApk();
     load();
+    window.FleetLive.watch(['provisioning'], load);
 })();

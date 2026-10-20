@@ -15,13 +15,15 @@
 //  * It still does NOT flag high temperatures as a fault. What counts as too hot is an
 //    operator-written rule (see rules.py), surfacing in Alerts. The tile here says "over
 //    N C" with N on screen, so it reads as the filter it is rather than as a verdict.
-//  * DROPPED: the socket.io connection. With no per-machine cards there is nothing for a
-//    `new_temp` event to update, and re-fetching a fleet aggregate at 1 Hz is not viable.
-//    The live-data pill stays dark here, which is honest -- this is a 30-second poll.
+//  * NO PER-READING UPDATES: re-fetching a fleet aggregate at 1 Hz is not viable. Instead it
+//    is re-read on any change notice (fleet-live.js), every reading included, but at most
+//    once per REFRESH_MS -- which matches the summary's own 10-second server cache
+//    (app.py), so a faster refetch would only be served the same answer. It used to be a
+//    fixed 30-second poll.
 (function () {
     'use strict';
 
-    const REFRESH_MS = 30_000;
+    const REFRESH_MS = 10_000;
 
     const errorEl = document.getElementById('summary-error');
     const generatedEl = document.getElementById('health-generated');
@@ -311,10 +313,7 @@
     }
 
     refresh();
-    setInterval(refresh, REFRESH_MS);
-    // Catch up immediately on returning to the tab rather than waiting out the rest of an
-    // interval that ticked away while nobody was looking.
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) refresh();
-    });
+    // Every topic: the summary counts machines, alerts, deployments, patches and tickets, so
+    // anything changing can move a number here. A hidden tab catches up when shown.
+    window.FleetLive.watch('*', refresh, { minInterval: REFRESH_MS, temp: true });
 })();

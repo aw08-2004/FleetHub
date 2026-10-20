@@ -269,4 +269,5 @@
     }
 
     void load();
+    window.FleetLive.watch(['recordings', 'remote'], load);
 })();

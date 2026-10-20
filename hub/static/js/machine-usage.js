@@ -152,4 +152,5 @@
     }
 
     load();
+    window.FleetLive.watch(['usage', 'policy'], load, { machine });
 })();

@@ -38,6 +38,7 @@ import backups
 import bios
 import bitlocker
 import bitlocker_web
+import changes
 import capabilities
 import channels
 import events
@@ -70,7 +71,7 @@ _bearer_agent = auth_helpers.bearer_agent
 
 
 def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
-                           on_command_result=None):
+                           on_command_result=None, on_change=None):
     """Build the fleet Blueprint. `login_required` (app.py's session gate) and `access`
     (the permission-group layer) are both passed in, to avoid a circular import and to
     keep one source of truth for each.
@@ -78,7 +79,11 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
     `on_command_result(command_id, machine, success, result, output)` is an optional hook fired
     after a command result is recorded. The rules engine uses it to route a show_message
     answer to its follow-up actions -- passed in rather than imported for the same reason as
-    the two above, and so this module keeps no opinion about what any command means."""
+    the two above, and so this module keeps no opinion about what any command means.
+
+    `on_change(topic, machine)` is the live console's change notice (changes.py). The
+    heartbeat is excluded from the generic after-request mark because most heartbeats change
+    nothing, so it calls this itself, once per change-only block it actually carried."""
     bp = Blueprint("fleet", __name__)
     can_view = access.require(permissions.VIEW)
 
@@ -532,6 +537,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                     payload["tickets_marker"] = marker
             except Exception as e:
                 print(f"[tickets] Could not resolve the ticket marker for {machine}: {e}")
+        if on_change is not None:
+            for topic in changes.heartbeat_topics(data):
+                on_change(topic, machine)
         return jsonify(payload), 200
 
     @bp.route("/api/agent/processes/wanted", methods=["GET"])

@@ -285,4 +285,7 @@
 
     fillKinds();
     load();
+    // Membership is resolved against the machine list, so a machine joining or leaving the
+    // fleet moves the counts here too. The editor is a <dialog>, which FleetLive waits on.
+    window.FleetLive.watch(['device_groups', 'machines'], load);
 })();

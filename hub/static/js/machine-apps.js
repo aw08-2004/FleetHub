@@ -151,4 +151,6 @@
     // show no card at all until somebody clicked something they cannot see. One request on page
     // load decides that; it is the same request, so opening the fold afterwards costs nothing.
     load();
+    // A heartbeat that carried an app or software inventory for this PC.
+    window.FleetLive.watch(['apps', 'software'], load, { machine });
 })();

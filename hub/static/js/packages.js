@@ -1324,6 +1324,12 @@ document.getElementById('progress-retry').addEventListener('click', async () => 
 
 (async function init() {
     await loadPackages();
+    // The deploy scheduler marks `deployments` whenever a pass dispatched or reconciled, and
+    // so does every command result, so the deployments list moves while somebody watches it.
+    // The editors are <dialog>s, which FleetLive waits on.
+    window.FleetLive.watch(['deployments', 'commands'],
+        () => Promise.all([loadPackages(), deploymentsPane.hidden ? null : loadDeployments()]),
+        { minInterval: 3000 });
     renderStepPalette();
     renderDetectionKinds();
     syncInstallPanes();

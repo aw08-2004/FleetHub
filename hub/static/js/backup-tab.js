@@ -126,7 +126,10 @@
         load,
         teardown: reset,
         // Nothing to show without a machine; the Tools page draws its own prompt.
-        requires: (machine) => !!machine
+        requires: (machine) => !!machine,
+        // A run finishing, a restore landing, the profiles block a heartbeat carried. Every
+        // control on this tab saves as it changes, so a re-read cannot lose an edit.
+        live: { topics: ['backups'] }
     });
 
     // Everything this panel accumulated about ONE machine. A half-reset here is how a

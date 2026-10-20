@@ -216,5 +216,7 @@ document.getElementById('created-close').addEventListener('click', () => created
 modal.addEventListener('click', (e) => { if (e.target === modal) modal.close(); });
 
 void load();
+// A PC redeeming a code is a write under the onboarding blueprint: use counts follow it.
+window.FleetLive.watch(['onboarding'], load);
 
 })();
