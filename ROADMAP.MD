@@ -108,7 +108,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-19
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-20
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -190,6 +190,21 @@ this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchange
   api.github.com and vendor CDNs directly, without a proxy.
 - **#16 events, #18 sweep, #19 BitLocker:** the checks already written in their entries -- all
   three shipped in agent 3.37.0 and none has been confirmed on a real machine.
+
+**4c. Group Policy (#32), hub 1.158.0 then the next agent MINOR -- not released.** The agent half
+(`agent/src/TempMonitorAgent/GroupPolicy/`) compiles and its 24 tests pass, but it has only ever
+run against a dictionary standing in for HKLM. Owed, in this order: deploy the hub; cut the agent
+with `agent/release.ps1` (a MINOR -- the hub reads `gpo_version` presence, so no hub constant
+changes); then on one PC, elevated:
+- link a policy with `SOFTWARE\Policies\Microsoft\Edge\HideFirstRunExperience = 1` (DWORD) to
+  its OU; within about two minutes `reg query` shows it, the marker
+  `HKLM\SOFTWARE\FleetHub\GroupPolicy` lists it, and the resultant set says Applied;
+- set a value by hand first on a second PC and confirm it stays and reads Managed elsewhere;
+- unlink the policy and confirm the value and the marker are removed;
+- on a domain-joined PC, link a value a real domain GPO also sets and confirm the agent does not
+  fight `gpupdate /force`;
+- uninstall from the hub and confirm the values are gone afterwards.
+Scripts and agent settings need no agent release; check one run-once script on an online PC.
 
 **4b. Disk usage (#27), hub 1.138.0 then agent 3.40.0 -- released 2026-10-05**, tag
 `agent-v3.40.0` on `541c120`, manifest in `5767724`. What remains is the first-contact list
@@ -533,6 +548,100 @@ the wire.
   service runs the new one.
 - **Next agent release:** `release.ps1` now publishes `FleetHubAgent.exe`; check the asset name
   on the release and that a PC still on `TempMonitorAgent.exe` self-updates and keeps that name.
+
+---
+
+## 🚧 32. Nested groups, the PC tree, and Group Policy   ·   **hub 1.158.0** + Windows agent (next MINOR, unreleased)   ·   `permissions.py`, `pc_tree.py` / `pc_tree_web.py`, `gpo.py` / `gpo_web.py`, agent `GroupPolicy/`
+
+Asked for by the owner on 2026-10-20, with a screenshot of ADUC (`ccmf.com.py` →
+FILADELFIA → Usuarios → Cajas → RDP): "make the permission groups nested within other
+groups, for users and PCs ... a Group Policy Manager like Windows has for the computers ...
+browsable and inheriting like Active Directory Users and Computers". Split in two on purpose:
+the trees are hub-only and change nothing on an agent; Group Policy needs an agent MINOR.
+
+### Built · hub 1.158.0 -- the trees
+
+- **Permission groups nest.** `permission_groups.parent_id` (ALTER-if-missing; every existing
+  group stays top level, so nobody's access moved on upgrade). A member of a subgroup holds the
+  subgroup's grants **plus every ancestor's**; resolved once per cache build
+  (`_resolve_inheritance`) and joined into the member's group list by `_with_ancestors`, so
+  `Access`, `effective_permissions` callers, sharing and recordings needed no change. Inherited
+  grants are stored BESIDE the own fields (`inherited_capabilities`, `inherited_machines`,
+  `inherited_all`), never merged into them -- the editor saves own fields only, so a group moved
+  out from under its parent cannot keep the parent's grants. Depth cap 8; cycles, self-parent
+  and over-deep moves refused at write; a hand-made cycle inherits NOTHING (fail closed). A
+  group with subgroups cannot be deleted (409, naming them). `invites._check_creator_ceiling`
+  checks `effective_grant`, inheritance included. `members_of_machine` counts inherited scope.
+- **The PC tree** (`/pc-tree`, `manage_pc_tree`). Two halves: the AD OU tree, derived on read
+  from `machine_info.ad_ou` and narrowed to the caller's scope (an OU with none of your PCs is
+  not disclosed); and hub **folders** (`pc_folders`, `pc_folder_machines`), nested, a PC in at
+  most one. Filing is a grant -- a folder can be a permission scope -- so the filer must hold
+  every PC filed, and every PC under a folder being moved.
+- **`folder` scope mode** for permission groups and a **`folder` target selector** for rules,
+  watchdogs and device groups, both through `pc_tree.machines_in_folders` (subtree included by
+  default). Every tree write invalidates the permissions cache in the model, and the web layer
+  re-points live sockets through the same hook an AD sync uses.
+- **Fixed in passing:** the rules `ad_ou` selector was a lowercase string `endswith`, so
+  `OU=Cajas` reached `OU=NoCajas` -- the exact bug noted for permission scope under #4. It now
+  uses `directory.ou_contains`, the same component-wise test permissions use.
+
+**Rejected:**
+- *A child narrowing its parent* (intersection) -- `effective_permissions` already rejects
+  intersection because adding someone to a group would then depend on every other group.
+  A child only adds.
+- *A separate "user OU" container object* -- a group with no grants already is one.
+- *Re-parenting or cascading on delete* -- both are silent grant changes. Refused instead.
+- *Several folders per PC* -- "which folder is this PC in?" would become a list, and a
+  folder-scoped grant would depend on every folder a PC was ever dropped into.
+- *Editing AD OUs from the hub* -- AD is the source of truth for that half; two trees that
+  disagree about where a PC is would be worse than one read-only one.
+- *Nesting DEVICE groups* -- still the 1.114.0 reasoning: folders give the tree, and a device
+  group may now include a folder selector, which is not nesting.
+- *Reusing `manage_device_groups`* for filing -- a folder is a scope, a device group is not.
+
+### Built · hub 1.158.0 + agent (unreleased) -- Group Policy
+
+- **The model is Windows' on purpose** (`gpo.py`): policy objects linked to tree nodes -- every
+  PC, an AD OU (keyed by normalised DN), a hub folder. Processing order is every PC -> AD
+  domain -> OUs top-down -> hub folders top-down, last wins; link order 1 wins within a node;
+  Block inheritance drops non-enforced links from above; enforced links ignore blocks and the
+  HIGHER enforced link wins. Folders come after AD: the hub's own, more specific statement.
+  `rsop()` is the single resolver; the page's resultant-set view asks it rather than
+  re-deriving precedence in JS.
+- **Agent settings** (`agent=True` settings) merge into the heartbeat `config` block per PC,
+  with the overrides folded into `config_version` -- so they work on every agent in the field.
+  Values go through `settings.coerce_and_validate`, so bounds are the settings page's.
+- **Registry values** under `HKLM\\SOFTWARE\\Policies` only (WindowsUpdate and FleetHub's own key
+  refused), checked by the hub AND by the agent (`PolicyAllowList.cs`). Delivered as
+  `gpo_document`/`gpo_version` on the watchdog pattern: presence of `gpo_version` is the
+  capability, recorded in `machine_gpo_agent` so the console can say "agent too old" instead of
+  "pending"; an empty document is always sent. `GroupPolicyRunner` keeps a registry marker
+  (`HKLM\\SOFTWARE\\FleetHub\\GroupPolicy`) plus the last value written: an existing value it did
+  not write is `managed_elsewhere` and untouched; a value it wrote that something else changed
+  is let go; a deleted one is put back; removal deletes only what still holds our value. Marker
+  first on write, value first on removal. A lost state file waits for the hub rather than
+  stripping every value at boot. States ride the heartbeat with ack-after-success
+  (`GroupPolicyReporter`), unlike the watchdog reporter.
+- **Scripts** run once per (PC, script, body hash) via `run_script`, issued as `gpo:<id>`, from a
+  60-second hub scheduler over ONLINE PCs, at most 50 per tick; an expired command retries up
+  to 3 times. Only `{{sys.machine}}` is offered; anything else skips with a reason.
+- **Gates** (`gpo_web.py`): `view` reads, `manage_group_policy` writes, plus `issue_commands`
+  for anything touching scripts. Every write's reach must be in the writer's scope -- a node's
+  PCs, or every PC under every node a policy is linked to (`machines_linked`, a deliberate
+  superset so re-enabling a policy is covered). Links persist `author_scope`, re-stamped on edit.
+- Delete guards: a folder with policy links, and a script a policy runs, cannot be deleted.
+  Agent self-uninstall and `agent-install.ps1 -Uninstall` remove the values the agent wrote.
+
+**Rejected:** an ADMX parser (large; the raw value is what every template resolves to); authoring
+real Windows GPOs (SYSVOL is not ours, the agent is not assumed domain-joined); arbitrary
+registry paths (HKLM is the trust root); HKCU (hives load only at sign-in); a `MIN_GPO_AGENT`
+constant (presence of `gpo_version` is the capability, the watchdog precedent -- and the agent
+half ships unreleased, so there is no minor yet); scripts "last wins" (two policies asking for
+two scripts both mean it); a per-node settings layer separate from policy objects (one
+precedence rule, not two).
+
+**Owed:** the agent half needs the next agent MINOR (release.ps1), deployed after the hub, and a
+first contact on a real Windows PC -- see *Owed locally*.
 
 ---
 

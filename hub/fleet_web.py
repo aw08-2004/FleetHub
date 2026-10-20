@@ -44,6 +44,7 @@ import channels
 import events
 import firmware
 import fleet
+import gpo
 import live
 import patches
 import permissions
@@ -194,8 +195,19 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         # Per machine, salted with its agent build: an agent that updated would otherwise
         # keep a version stored by a build that skipped the newer keys. See the function.
         current_version = settings.agent_config_version_for(db_path, machine)
+        # Group Policy (roadmap #32) may set any of these per PC. Merged here, into the same
+        # block, so every agent already in the field honours it -- the agent cannot tell a
+        # per-OU value from a fleet-wide one. The overrides are folded into the version, or a
+        # policy change would never reach an agent already holding the fleet-wide config. A
+        # failure to resolve falls back to the fleet-wide config, never to a half-merged one.
+        try:
+            overrides = gpo.config_overrides(db_path, machine)
+        except Exception as e:
+            print(f"[gpo] Could not resolve policy settings for {machine}: {e}")
+            overrides = {}
+        current_version = gpo.config_version(current_version, overrides)
         if data.get("config_version") != current_version:
-            payload["config"] = settings.agent_config(db_path)
+            payload["config"] = {**settings.agent_config(db_path), **overrides}
             payload["config_version"] = current_version
         # What this machine can actually do (roadmap #23). First among the inventory blocks
         # because it is the one that decides what the others are allowed to mean: it is the
@@ -523,6 +535,25 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                     payload["watchdog_version"] = document["version"]
             except Exception as e:
                 print(f"[watchdogs] Could not resolve watchdogs for {machine}: {e}")
+        # Group Policy registry values (roadmap #32): the watchdog shape exactly. State first,
+        # then the document; the document only to an agent that sends `gpo_version`, whose
+        # presence is the capability; and an EMPTY document is still sent, because that is how
+        # unlinking a policy makes the agent remove the values it wrote.
+        if data.get("gpo"):
+            try:
+                gpo.record_report(db_path, machine, data["gpo"])
+            except Exception as e:
+                print(f"[gpo] Could not record policy state for {machine}: {e}")
+        if "gpo_version" in data:
+            try:
+                if not gpo.agent_supports(db_path, machine):
+                    gpo.note_agent(db_path, machine, data.get("gpo_version"))
+                document = gpo.resolve_for(db_path, machine)
+                if data.get("gpo_version") != document["version"]:
+                    payload["gpo_document"] = {"values": document["values"]}
+                    payload["gpo_version"] = document["version"]
+            except Exception as e:
+                print(f"[gpo] Could not resolve policy for {machine}: {e}")
         # Whether anything the people at this PC can see of their tickets has changed
         # (roadmap #31 phase D). Same presence rule as `watchdog_version` directly above: only
         # an agent that sends `tickets_marker` runs a tray, and only that agent is answered --

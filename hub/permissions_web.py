@@ -391,6 +391,8 @@ def create_permissions_blueprint(db_path, login_required, access):
                 # showed the OUs the operator had just typed back to them from their own
                 # unsaved draft.
                 ous=data.get("ous") or [],
+                folders=data.get("folders") or [],
+                parent_id=data.get("parent_id") or None,
                 scope_mode=data.get("scope_mode") or permissions.SCOPE_LIST,
                 actor=access.email(),
             )
@@ -424,6 +426,12 @@ def create_permissions_blueprint(db_path, login_required, access):
                 # semantics as machines/members above -- see update_group's docstring.
                 directory_groups=data.get("directory_groups"),
                 ous=data.get("ous"),
+                folders=data.get("folders"),
+                # The one field where JSON null is a real value: "move to the top level".
+                # So the KEY decides -- absent leaves the parent alone, present-and-empty
+                # (null or "") clears it. Reading it like the fields above would make
+                # "move this group out to the top" impossible to say.
+                parent_id=((data.get("parent_id") or "") if "parent_id" in data else None),
                 scope_mode=data.get("scope_mode"),
                 actor=access.email(),
             )
@@ -441,6 +449,10 @@ def create_permissions_blueprint(db_path, login_required, access):
             permissions.delete_group(db_path, group_id, actor=access.email())
         except KeyError:
             return jsonify({"error": "unknown permission group"}), 404
+        except ValueError as e:
+            # 409, not 400: well-formed and permitted, but the group still has subgroups --
+            # the fix is to move or delete those, the same call device groups make.
+            return refusals.refuse(e, 409)
         return jsonify({"status": "deleted"}), 200
 
     return bp

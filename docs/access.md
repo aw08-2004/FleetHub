@@ -105,8 +105,9 @@ endpoint in [hub/permissions.py](../hub/permissions.py) (model) and
 admin API). Administered at `/permissions`.
 
 A **permission group** carries a set of capabilities and a machine scope. An operator
-gets the union of every group they're in. Scope is either an explicit machine list
-(`list`) or the whole fleet (`all`).
+gets the union of every group they're in. Scope is an explicit machine list (`list`), the
+whole fleet (`all`), the PCs in Active Directory OUs (`ad_ou`, below) or the PCs in hub PC
+folders (`folder`, below).
 
 | Capability | Grants |
 |---|---|
@@ -117,9 +118,52 @@ gets the union of every group they're in. Scope is either an explicit machine li
 | `remote_control` | start a remote view/control session |
 | `deploy_packages` | schedule software deployments |
 | `manage_backups` | configure backups and trigger restores (deliberately fleet-wide) |
+| `manage_firmware` | change BIOS settings and flash firmware — the one action with no way back |
+| `manage_patches` | approve updates, schedule maintenance windows, push a run outside one |
+| `read_recovery_keys` | read an escrowed BitLocker recovery password |
+| `locate_device` | ask a device where it is, on demand |
+| `manage_device_policy` | write app and time policy for managed devices |
+| `wipe_device` | lock or factory-reset a managed device |
+| `manage_rules` | write rules (a rule that sends commands also needs `issue_commands`) |
+| `manage_device_groups` | write device groups — saved target filters |
+| `manage_pc_tree` | create PC folders and file PCs into them — a folder is a scope, so filing is a grant |
+| `manage_group_policy` | write Group Policy and link it to the PC tree ([group-policy.md](group-policy.md)); a policy that runs a script also needs `issue_commands` |
+| `view_tickets` / `manage_tickets` | read / answer tickets opened from a PC |
+| `manage_onboarding` | create and revoke onboarding codes |
 | `manage_settings` | change hub settings; delete/merge machines, pin sensors, dismiss alerts |
 | `manage_users` | edit the registered-users directory (a profile directory, not access) |
 | `manage_permission_groups` | create and edit groups — i.e. grant anyone, including themselves, any of the above |
+
+The authoritative list, with the reasoning behind each split, is `CAPABILITIES` in
+[hub/permissions.py](../hub/permissions.py); the group editor renders from it.
+
+### Nesting groups
+
+Groups nest the way Active Directory groups do. Give a group a **Parent group** in the
+editor, or open a group and press **New subgroup**. The page then shows the tree on the
+left and, on the right, the selected group and the groups directly beneath it.
+
+**A member of a subgroup holds everything every group above it grants**, capabilities and
+machines both, and a fleet-wide (`all`) group anywhere above makes every group beneath it
+fleet-wide. A subgroup can only **add** to what its parents grant, never take anything
+away: if "Hospital" grants *View* over the hospital PCs and "Hospital / Ward 3 admins"
+adds *Issue commands* over the Ward 3 PCs, an admin in the subgroup can view every
+hospital PC and run commands on all of them, while a plain "Hospital" member gets nothing
+extra. Where that is too broad, make a narrower group beside it, not beneath it.
+
+In the editor, inherited capabilities show ticked and locked with the group they come
+from, and the scope section says what the parents already grant. In the list, inherited
+capabilities are dashed badges. Neither can be changed on the subgroup — edit the parent.
+
+- Groups nest at most **8** levels deep, and a group cannot be moved beneath itself or one
+  of its own subgroups.
+- **A group with subgroups cannot be deleted.** Move or delete the subgroups first; the
+  hub will not silently re-parent them or take their access away.
+- An invite link into a subgroup is checked against what joining it really grants, parents
+  included — so an empty subgroup of a fleet-wide group cannot be handed out by someone
+  whose own access is narrower.
+- Moving a group to a new parent is in the audit log at security level, because it changes
+  what every member of it and of every group beneath it holds.
 
 > ⚠️ **`ALLOWED_EMAILS` bypasses all of it.** It is the break-glass superuser list:
 > every capability over every machine, and the hub refuses to start with it empty.
@@ -203,6 +247,34 @@ matching is component-wise, so `OU=Clinical` never captures `OU=NotClinical`.
 
 The group editor shows which machines the OUs currently resolve to, because an OU scope
 is a rule and the only way to check you picked the right one is to see its effect.
+
+### The PC tree, and scoping a group by PC folder
+
+**PC tree** (in Operate, `/pc-tree`) shows the fleet the way ADUC shows a domain: the
+tree on the left, the PCs under the selected node on the right. It has two halves:
+
+- **Active Directory**, read-only, built from the OU each PC was last synced into. It is
+  exactly what AD says; change it in AD.
+- **Hub folders**, the hub's own nested folders, for what AD does not express — workgroup
+  PCs, a hub with no directory at all, or a grouping that cuts across OUs. A PC sits in
+  **at most one** folder. Tick PCs and choose **Move selected to…**, or drag rows onto a
+  folder in the tree.
+
+A permission group's scope can be *"machines in a PC folder"*: it then covers every PC
+filed in the chosen folders **or in any folder beneath them**, and follows the tree at
+once — filing a PC into the folder grants it, moving it out revokes it. Rules, watchdogs
+and device groups can aim at a folder the same way (the **PC folder** target, with
+*and sub-folders*).
+
+Because a folder is a scope, **filing a PC is a grant**. That is why it needs its own
+capability, `manage_pc_tree`, and why an operator can file or move only PCs already in
+their own scope, and can move a folder only if every PC beneath it is in their scope.
+Everyone with `view` can browse the tree, narrowed to their scope: an OU holding none of
+your PCs is not shown. A folder cannot be deleted while it holds PCs or subfolders, or
+while a rule, watchdog, device group or folder-scoped permission group still names it.
+
+The rules **AD organisational unit** target now matches OUs component-wise, like
+permission scope always has: `OU=Cajas` no longer reaches `OU=NoCajas` (hub 1.158.0).
 
 ## Active Directory sync
 

@@ -11,8 +11,22 @@
 //    /api/permissions/capabilities), not a copy here. A hardcoded list would silently
 //    stop offering a new capability, which reads as "the feature doesn't work" rather
 //    than "the UI is stale".
+//
+// Groups nest (permissions.py), so the list is laid out the way ADUC lays out a domain: the
+// tree on the left, and on the right the selected group with the groups directly beneath it.
+// What a group INHERITS is always drawn beside what it grants itself, never merged into it --
+// an admin reading a row has to be able to tell "this group grants X" from "a parent does",
+// because only the first one goes away when they edit this row.
 
 const groupsHost = document.getElementById('groups-host');
+const treeHost = document.getElementById('group-tree');
+const detailHost = document.getElementById('group-detail');
+const parentSelect = document.getElementById('group-parent');
+const inheritedScopeEl = document.getElementById('inherited-scope');
+const folderPicker = document.getElementById('folder-picker');
+const folderChips = document.getElementById('folder-chips');
+const folderSelect = document.getElementById('folder-select');
+const folderResolvedEl = document.getElementById('folder-resolved');
 const modal = document.getElementById('group-modal');
 const modalTitle = document.getElementById('group-modal-title');
 const nameInput = document.getElementById('group-name');
@@ -42,6 +56,12 @@ let draftOus = [];
 let machineDirectory = [];    // full /api/machines rows, for the machine picker's search
 let myDirGroups = [];         // this session's own mapped directory tokens, as a hint
 let fleetOus = [];            // OUs the fleet is actually in, for the OU picker
+let allGroups = [];           // the last /api/permissions/groups answer, for tree + editor
+let selectedId = null;        // the group open on the right; null is "All groups"
+const collapsed = new Set();  // tree nodes the admin folded away
+let pcFolders = [];           // /api/pc-tree folders, for the folder scope picker
+let draftFolders = [];
+let creatingUnder = null;     // the parent a "New subgroup" editor was opened beneath
 
 async function api(path, options) {
     const resp = await fetch(path, options);
@@ -61,18 +81,144 @@ function capabilityLabel(name) {
     return found ? found.label : name;
 }
 
-function renderGroups(groups) {
-    groupsHost.replaceChildren();
-    if (!groups.length) {
-        const empty = el('div', 'empty-state');
-        empty.appendChild(el('p', null, t('permissions.empty')));
-        empty.appendChild(el('p', 'stat-card__meta', t('permissions.empty_hint')));
-        groupsHost.appendChild(empty);
-        return;
-    }
+function groupById(id) {
+    return allGroups.find((g) => g.id === id) || null;
+}
 
-    const card = el('div', 'card');
+function childrenOf(id) {
+    // A parent the list does not contain counts as top level -- the same reading the server
+    // gives a dangling parent (permissions._ancestor_ids).
+    return allGroups.filter((g) => (g.parent_id && groupById(g.parent_id) ? g.parent_id : null) === id);
+}
+
+// "Hospital / Ward 3 / Admins" -- the name an admin needs wherever a group is picked out of
+// a flat list, since two subgroups may share a name under different parents.
+function groupPath(group) {
+    const names = (group.ancestors || []).slice().reverse()
+        .map((id) => (groupById(id) || {}).name).filter(Boolean);
+    names.push(group.name);
+    return names.join(' / ');
+}
+
+function descendantIds(id) {
+    const found = new Set();
+    const walk = (parent) => childrenOf(parent).forEach((child) => {
+        if (!found.has(child.id)) { found.add(child.id); walk(child.id); }
+    });
+    walk(id);
+    return found;
+}
+
+function folderLabel(id) {
+    const byId = new Map(pcFolders.map((f) => [f.id, f]));
+    const names = [];
+    let current = byId.get(id);
+    const seen = new Set();
+    while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        names.unshift(current.name);
+        current = current.parent_id == null ? null : byId.get(current.parent_id);
+    }
+    return names.length ? names.join(' / ') : t('permissions.editor.folder_missing', { id });
+}
+
+// ---------------------------------------------------------------- the tree (left pane)
+
+function selectGroup(id) {
+    selectedId = id;
+    renderAll();
+}
+
+function renderTree() {
+    treeHost.replaceChildren();
+    const all = el('button', 'perm-tree__item', t('permissions.tree.all'));
+    all.type = 'button';
+    if (selectedId === null) all.classList.add('perm-tree__item--active');
+    all.addEventListener('click', () => selectGroup(null));
+    treeHost.appendChild(all);
+    treeHost.appendChild(renderBranch(null, new Set()));
+}
+
+function renderBranch(parentId, seen) {
+    const list = el('ul', 'perm-tree__list');
+    childrenOf(parentId).forEach((group) => {
+        if (seen.has(group.id)) return;   // a hand-made cycle must not hang the page
+        const next = new Set(seen).add(group.id);
+        const li = el('li');
+        const row = el('div', 'perm-tree__row');
+        const kids = childrenOf(group.id);
+        const toggle = el('button', kids.length
+            ? `perm-tree__toggle ${collapsed.has(group.id) ? 'is-closed' : 'is-open'}`
+            : 'perm-tree__toggle');
+        toggle.type = 'button';
+        if (kids.length) {
+            toggle.setAttribute('aria-label', collapsed.has(group.id)
+                ? t('permissions.tree.expand', { group: group.name })
+                : t('permissions.tree.collapse', { group: group.name }));
+            toggle.addEventListener('click', () => {
+                if (collapsed.has(group.id)) collapsed.delete(group.id); else collapsed.add(group.id);
+                renderTree();
+            });
+        } else {
+            toggle.disabled = true;
+            toggle.setAttribute('aria-hidden', 'true');
+        }
+        const item = el('button', 'perm-tree__item', group.name);
+        item.type = 'button';
+        if (group.id === selectedId) item.classList.add('perm-tree__item--active');
+        item.addEventListener('click', () => selectGroup(group.id));
+        row.append(toggle, item);
+        li.appendChild(row);
+        if (kids.length && !collapsed.has(group.id)) li.appendChild(renderBranch(group.id, next));
+        list.appendChild(li);
+    });
+    return list;
+}
+
+// ---------------------------------------------------------------- the selected group
+
+function renderDetail() {
+    detailHost.replaceChildren();
+    const group = selectedId ? groupById(selectedId) : null;
+    if (!group) return;
+    const card = el('div', 'card perm-detail');
+    if ((group.ancestors || []).length) {
+        card.appendChild(el('div', 'stat-card__meta', groupPath(group)));
+    }
+    card.appendChild(el('h2', 'section-title', group.name));
+    if (group.description) card.appendChild(el('p', 'stat-card__meta', group.description));
+    const actions = el('div', 'perm-row-actions');
+    actions.style.justifyContent = 'flex-start';
+    const edit = el('button', 'btn', t('common.edit'));
+    edit.type = 'button';
+    edit.addEventListener('click', () => openEditor(group));
+    const sub = el('button', 'btn btn--primary', t('permissions.new_subgroup'));
+    sub.type = 'button';
+    sub.addEventListener('click', () => openEditor(null, group.id));
+    const remove = el('button', 'btn', t('common.delete'));
+    remove.type = 'button';
+    remove.addEventListener('click', () => deleteGroup(group, remove));
+    actions.append(edit, sub, remove);
+    card.appendChild(actions);
+    // The selected group's own row, so its capabilities, scope and members read exactly as
+    // they do in the list -- one rendering, not a second one that can drift from it.
     const table = el('table', 'data-table');
+    table.appendChild(tableHead());
+    const body = el('tbody');
+    body.appendChild(renderGroupRow(group, { actions: false }));
+    table.appendChild(body);
+    card.appendChild(table);
+    detailHost.appendChild(card);
+}
+
+function renderAll() {
+    if (selectedId && !groupById(selectedId)) selectedId = null;
+    renderTree();
+    renderDetail();
+    renderGroups(childrenOf(selectedId));
+}
+
+function tableHead() {
     const head = el('thead');
     const headRow = el('tr');
     [t('permissions.col.group'), t('permissions.col.capabilities'),
@@ -80,7 +226,32 @@ function renderGroups(groups) {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
-    table.appendChild(head);
+    return head;
+}
+
+// ---------------------------------------------------------------- the group list (right pane)
+
+function renderGroups(groups) {
+    groupsHost.replaceChildren();
+    if (!allGroups.length) {
+        const empty = el('div', 'empty-state');
+        empty.appendChild(el('p', null, t('permissions.empty')));
+        empty.appendChild(el('p', 'stat-card__meta', t('permissions.empty_hint')));
+        groupsHost.appendChild(empty);
+        return;
+    }
+    const selected = selectedId ? groupById(selectedId) : null;
+    groupsHost.appendChild(el('h3', 'perm-subhead', selected
+        ? t('permissions.tree.subgroups', { group: selected.name })
+        : t('permissions.tree.top_level')));
+    if (!groups.length) {
+        groupsHost.appendChild(el('p', 'stat-card__meta', t('permissions.tree.no_subgroups')));
+        return;
+    }
+
+    const card = el('div', 'card');
+    const table = el('table', 'data-table');
+    table.appendChild(tableHead());
 
     const body = el('tbody');
     groups.forEach((group) => body.appendChild(renderGroupRow(group)));
@@ -89,18 +260,34 @@ function renderGroups(groups) {
     groupsHost.appendChild(card);
 }
 
-function renderGroupRow(group) {
+// The nearest ancestor that grants `capability` -- named on an inherited badge so an admin
+// knows which row to edit if the grant is wrong.
+function grantingAncestor(group, capability) {
+    for (const id of group.ancestors || []) {
+        const ancestor = groupById(id);
+        if (ancestor && ancestor.capabilities.includes(capability)) return ancestor;
+    }
+    return null;
+}
+
+function renderGroupRow(group, options) {
+    const showActions = !options || options.actions !== false;
     const tr = el('tr');
 
     const nameCell = el('td');
-    nameCell.appendChild(el('div', null, group.name));
+    // The name drills in, the way double-clicking a container does in ADUC.
+    const open = el('button', 'perm-link', group.name);
+    open.type = 'button';
+    open.addEventListener('click', () => selectGroup(group.id));
+    nameCell.appendChild(open);
     if (group.description) {
         nameCell.appendChild(el('div', 'stat-card__meta', group.description));
     }
     tr.appendChild(nameCell);
 
     const capsCell = el('td');
-    if (!group.capabilities.length) {
+    const inherited = group.inherited_capabilities || [];
+    if (!group.capabilities.length && !inherited.length) {
         capsCell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
     }
     group.capabilities.forEach((name) => {
@@ -110,6 +297,12 @@ function renderGroupRow(group) {
         capsCell.appendChild(
             el('span', isAdmin ? 'cap-badge cap-badge--admin' : 'cap-badge',
                capabilityLabel(name)));
+    });
+    inherited.forEach((name) => {
+        const badge = el('span', 'cap-badge cap-badge--inherited', capabilityLabel(name));
+        const from = grantingAncestor(group, name);
+        if (from) badge.title = t('permissions.editor.inherited_capability', { group: from.name });
+        capsCell.appendChild(badge);
     });
     tr.appendChild(capsCell);
 
@@ -132,6 +325,21 @@ function renderGroupRow(group) {
             ous.length ? t('permissions.from_ou', { ous: ous.join(', ') })
                        : t('permissions.from_ou_empty')));
     }
+    if (group.scope_mode === 'folder') {
+        const folders = group.folders || [];
+        machinesCell.appendChild(el('div', 'stat-card__meta',
+            folders.length ? t('permissions.from_folder', { folders: folders.map(folderLabel).join(', ') })
+                           : t('permissions.from_folder_empty')));
+    }
+    // Inherited scope last, and in its own line: it is real access this group's members hold,
+    // and the one part of the row an edit HERE cannot take away.
+    if (group.inherited_all) {
+        machinesCell.appendChild(el('div', 'cap-badge cap-badge--inherited',
+            t('permissions.inherited_every_machine')));
+    } else if ((group.inherited_machines || []).length) {
+        machinesCell.appendChild(el('div', 'stat-card__meta',
+            tPlural('permissions.inherited_machines', group.inherited_machines.length)));
+    }
     tr.appendChild(machinesCell);
 
     const membersCell = el('td');
@@ -152,6 +360,10 @@ function renderGroupRow(group) {
     }
     tr.appendChild(membersCell);
 
+    if (!showActions) {
+        tr.appendChild(el('td'));
+        return tr;
+    }
     const actions = el('td');
     const wrap = el('div', 'perm-row-actions');
     const edit = el('button', 'btn', t('common.edit'));
@@ -199,7 +411,8 @@ async function deleteGroup(group, btn) {
 
 async function loadGroups() {
     try {
-        renderGroups(await api('/api/permissions/groups'));
+        allGroups = await api('/api/permissions/groups');
+        renderAll();
     } catch (e) {
         groupsHost.replaceChildren();
         const empty = el('div', 'empty-state');
@@ -298,16 +511,43 @@ function renderDirGroupHint() {
     });
 }
 
+// What the parent currently chosen in the editor would hand this group: every ancestor's own
+// grants, nearest first. Worked out here from the loaded list rather than taken from the saved
+// group, because the admin may have just picked a different parent and must see what THAT one
+// brings before it is saved.
+function draftAncestors() {
+    const chain = [];
+    const seen = new Set(editingId ? [editingId] : []);
+    let current = groupById(parentSelect.value || null);
+    while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        chain.push(current);
+        current = current.parent_id ? groupById(current.parent_id) : null;
+    }
+    return chain;
+}
+
 function renderCapabilities(selected) {
     capabilityList.replaceChildren();
+    const ancestors = draftAncestors();
     capabilities.forEach((capability) => {
         const row = el('label', 'perm-capability');
         const box = document.createElement('input');
         box.type = 'checkbox';
         box.value = capability.name;
-        box.checked = selected.includes(capability.name);
+        const from = ancestors.find((a) => a.capabilities.includes(capability.name));
         const text = el('span');
         text.appendChild(el('span', 'perm-capability__label', capability.label));
+        if (from) {
+            // Ticked and locked: the grant is real for this group's members, and unticking it
+            // here could not take it away -- only an edit to the parent can.
+            box.checked = true;
+            box.disabled = true;
+            text.appendChild(el('span', 'perm-capability__inherited',
+                t('permissions.editor.inherited_capability', { group: from.name })));
+        } else {
+            box.checked = selected.includes(capability.name);
+        }
         text.appendChild(el('span', 'perm-capability__help', capability.description));
         row.append(box, text);
         capabilityList.appendChild(row);
@@ -315,7 +555,105 @@ function renderCapabilities(selected) {
 }
 
 function selectedCapabilities() {
-    return Array.from(capabilityList.querySelectorAll('input:checked')).map((b) => b.value);
+    // :not(:disabled) -- an inherited box is ticked for display only, and saving it as this
+    // group's own grant would keep it after the group is moved out from under that parent.
+    return Array.from(capabilityList.querySelectorAll('input:checked:not(:disabled)'))
+        .map((b) => b.value);
+}
+
+// Remember the own ticks across a parent change, then redraw with the new inheritance.
+function rerenderCapabilities() {
+    renderCapabilities(selectedCapabilities());
+}
+
+function renderInheritedScope() {
+    const ancestors = draftAncestors();
+    inheritedScopeEl.replaceChildren();
+    inheritedScopeEl.hidden = !ancestors.length;
+    if (!ancestors.length) return;
+    if (ancestors.some((a) => a.scope_mode === 'all')) {
+        inheritedScopeEl.textContent = t('permissions.editor.inherited_scope_all');
+        return;
+    }
+    const machines = Array.from(new Set(ancestors.flatMap((a) => a.machines || []))).sort();
+    if (!machines.length) {
+        inheritedScopeEl.hidden = true;
+        return;
+    }
+    inheritedScopeEl.textContent = tPlural('permissions.editor.inherited_scope_machines',
+        machines.length, {
+            machines: machines.slice(0, 12).join(', ') + (machines.length > 12 ? '…' : ''),
+        });
+}
+
+function fillParentSelect(currentParent) {
+    // Every group except this one and the groups beneath it -- picking one of those would be a
+    // cycle, which the server refuses; not offering it is kinder than a refusal.
+    const excluded = editingId ? descendantIds(editingId) : new Set();
+    if (editingId) excluded.add(editingId);
+    while (parentSelect.options.length > 1) parentSelect.remove(1);
+    allGroups
+        .filter((g) => !excluded.has(g.id))
+        .map((g) => ({ id: g.id, label: groupPath(g) }))
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .forEach(({ id, label }) => {
+            const option = document.createElement('option');
+            option.value = id;
+            option.textContent = label;
+            parentSelect.appendChild(option);
+        });
+    parentSelect.value = currentParent || '';
+}
+
+function renderFolderChips() {
+    folderChips.replaceChildren();
+    draftFolders.forEach((id) => {
+        const chip = el('span', 'chip');
+        chip.appendChild(el('span', 'chip__name', folderLabel(id)));
+        const x = el('button', 'chip__remove', '×');
+        x.type = 'button';
+        x.setAttribute('aria-label', t('permissions.editor.remove', { value: folderLabel(id) }));
+        x.addEventListener('click', () => {
+            draftFolders = draftFolders.filter((f) => f !== id);
+            renderFolderChips();
+            autoSaveGroup();
+        });
+        chip.appendChild(x);
+        folderChips.appendChild(chip);
+    });
+}
+
+function fillFolderSelect() {
+    while (folderSelect.options.length > 1) folderSelect.remove(1);
+    folderSelect.options[0].textContent = pcFolders.length
+        ? t('permissions.editor.folder_choose') : t('permissions.editor.folder_none_defined');
+    pcFolders
+        .map((f) => ({ id: f.id, label: folderLabel(f.id) }))
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .forEach(({ id, label }) => {
+            const option = document.createElement('option');
+            option.value = String(id);
+            option.textContent = label;
+            folderSelect.appendChild(option);
+        });
+    folderSelect.value = '';
+}
+
+// The folder twin of renderOuResolved: a folder scope is a rule too, so show what it
+// resolves to now.
+function renderFolderResolved(group) {
+    folderResolvedEl.replaceChildren();
+    if (scopeMode() !== 'folder') return;
+    if (!draftFolders.length) {
+        folderResolvedEl.appendChild(el('span', null, t('permissions.editor.folder_none_selected')));
+        return;
+    }
+    const machines = (group && group.scope_mode === 'folder' && group.machines) || [];
+    if (!machines.length) return;
+    folderResolvedEl.appendChild(el('span', null,
+        tPlural('permissions.editor.ou_in_scope', machines.length, {
+            machines: machines.slice(0, 12).join(', ') + (machines.length > 12 ? '…' : ''),
+        })));
 }
 
 function scopeMode() {
@@ -330,10 +668,14 @@ function syncScopeMode() {
     const mode = scopeMode();
     machinePicker.hidden = mode !== 'list';
     ouPicker.hidden = mode !== 'ad_ou';
+    folderPicker.hidden = mode !== 'folder';
 }
 
-function openEditor(group) {
+// `parentId` is set when the editor opens from "New subgroup", so the new group is created
+// beneath the one on screen rather than at the top level.
+function openEditor(group, parentId) {
     editingId = group ? group.id : null;
+    creatingUnder = group ? null : (parentId || null);
     modalTitle.textContent = group
         ? t('permissions.editor.edit_title', { group: group.name })
         : t('permissions.editor.new_title');
@@ -343,18 +685,24 @@ function openEditor(group) {
     draftMembers = group ? group.members.slice() : [];
     draftDirGroups = group ? (group.directory_groups || []).slice() : [];
     draftOus = group ? (group.ous || []).slice() : [];
+    draftFolders = group ? (group.folders || []).slice() : [];
     const mode = group ? group.scope_mode : 'list';
     modal.querySelectorAll('input[name="scope-mode"]').forEach((radio) => {
         radio.checked = radio.value === mode;
     });
+    fillParentSelect(group ? group.parent_id : creatingUnder);
+    fillFolderSelect();
     renderCapabilities(group ? group.capabilities : []);
+    renderInheritedScope();
     renderMachineChips();
     renderMemberChips();
     renderOuChips();
+    renderFolderChips();
     renderDirGroupChips();
     renderDirGroupHint();
     syncScopeMode();
     renderOuResolved(group);
+    renderFolderResolved(group);
     errorEl.textContent = '';
     // Reset the auto-save machinery for the new editing session.
     groupSaving = false;
@@ -421,6 +769,10 @@ async function flushGroup() {
         // Always sent, like machines: the server ignores OUs for a non-ad_ou group, and
         // keeping them means switching modes back and forth doesn't discard what was set.
         ous: draftOus,
+        folders: draftFolders,
+        // Always sent, and "" means top level -- the server reads a present key as the
+        // parent to set (permissions_web.update_permission_group).
+        parent_id: parentSelect.value || '',
     };
     groupSaving = true;
     groupPending = false;
@@ -449,6 +801,7 @@ async function flushGroup() {
         // The saved group carries its freshly re-derived machine list, so an OU edit
         // shows its effect immediately rather than at the next time the editor is opened.
         renderOuResolved(group);
+        renderFolderResolved(group);
         await loadGroups();      // refresh the list behind the modal
     } catch (e) {
         // Validation failure (e.g. a duplicate name) writes nothing; show it and leave the
@@ -569,8 +922,22 @@ modal.querySelectorAll('input[name="scope-mode"]').forEach((radio) => {
     radio.addEventListener('change', () => {
         syncScopeMode();
         renderOuResolved(null);
+        renderFolderResolved(null);
         autoSaveGroup();
     });
+});
+parentSelect.addEventListener('change', () => {
+    rerenderCapabilities();
+    renderInheritedScope();
+    autoSaveGroup();
+});
+folderSelect.addEventListener('change', () => {
+    const id = Number(folderSelect.value);
+    folderSelect.value = '';
+    if (!id || draftFolders.includes(id)) return;
+    draftFolders.push(id);
+    renderFolderChips();
+    autoSaveGroup();
 });
 
 document.getElementById('machine-add').addEventListener('click',
@@ -633,10 +1000,20 @@ async function init() {
     try {
         fleetOus = (await api('/api/directory/ous')).ous || [];
     } catch (e) { /* no AD, or no permission to read it; typing still works */ }
+    // The hub's PC folders, for the folder scope picker. Optional like the OU list: without
+    // them the folder mode simply has nothing to offer yet.
+    await loadFolders();
     attachPickers();
     await loadGroups();
     // The group editor is a <dialog>, so FleetLive holds this off while it is open.
     window.FleetLive.watch(['permissions', 'users', 'device_groups'], loadGroups);
+    window.FleetLive.watch(['pc_tree'], async () => { await loadFolders(); renderAll(); });
+}
+
+async function loadFolders() {
+    try {
+        pcFolders = (await api('/api/pc-tree')).folders || [];
+    } catch (e) { pcFolders = []; }
 }
 
 init();

@@ -142,3 +142,125 @@
     gap: var(--space-2);
     justify-content: flex-end;
 }
+
+/* An inherited capability or scope: present, but owned by a parent group. Dashed rather than
+   faded, so it still reads as a grant in force -- just not one this row can take away. */
+.cap-badge--inherited {
+    border-style: dashed;
+    background: none;
+}
+
+.perm-capability__inherited {
+    font-size: var(--text-xs);
+    color: var(--accent, var(--text));
+    display: block;
+    margin-top: 2px;
+}
+
+/* The ADUC-style layout: tree left, contents right. Stacks on a narrow screen, tree first,
+   because the tree is how you get to everything else. */
+.perm-layout {
+    display: grid;
+    grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: start;
+}
+
+@media (max-width: 860px) {
+    .perm-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.perm-pane { min-width: 0; }
+
+.perm-detail { margin-bottom: var(--space-4); }
+
+.perm-detail .section-title { margin: var(--space-1) 0 var(--space-2); }
+
+.perm-tree {
+    padding: var(--space-2);
+    position: sticky;
+    top: var(--space-4);
+    max-height: calc(100vh - 2 * var(--space-4));
+    overflow: auto;
+}
+
+.perm-tree__list {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 var(--space-3);
+}
+
+.perm-tree > .perm-tree__list { padding-left: 0; }
+
+.perm-tree__row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.perm-tree__toggle {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    line-height: 1;
+    padding: 0;
+}
+
+/* A drawn chevron rather than a ▸/▾ glyph: those render a few pixels tall in most UI fonts,
+   which is too small a target to hit on purpose. Pointing right when folded, down when open. */
+.perm-tree__toggle.is-closed::before,
+.perm-tree__toggle.is-open::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(-45deg);
+}
+
+.perm-tree__toggle.is-open::before { transform: rotate(45deg) translate(-1px, -1px); }
+
+.perm-tree__toggle:hover { color: var(--text); }
+
+.perm-tree__toggle:disabled { cursor: default; }
+
+.perm-tree__item {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    border: none;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+    font-size: var(--text-sm);
+    padding: 4px var(--space-2);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.perm-tree__item:hover { background: var(--control-bg); }
+
+.perm-tree__item--active {
+    background: var(--control-bg);
+    font-weight: 600;
+}
+
+/* A group name in the table: a link-styled button that drills into the group. */
+.perm-link {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+
+.perm-link:hover { text-decoration: underline; }

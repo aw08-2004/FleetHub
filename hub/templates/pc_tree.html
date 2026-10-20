@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}{{ t('pc_tree.heading') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pc_tree.css') }}">
+{% endblock %}
+{% block content %}
+{# The PC tree: AD OUs and the hub's own folders, laid out the way Active Directory Users and
+   Computers lays out a domain -- tree left, contents right. Structure only; pc-tree.js builds
+   both panes from /api/pc-tree, which is already narrowed to the caller's scope.
+
+   Write controls are rendered only for manage_pc_tree, and the API refuses without it
+   regardless. data-can-manage tells the script whether to offer moving and folder edits. #}
+<div id="pc-tree-root" data-can-manage="{{ 1 if cap.MANAGE_PC_TREE in user_capabilities else 0 }}">
+    <div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+        <div>
+            <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('pc_tree.heading') }}</h1>
+            <p class="stat-card__meta" style="max-width: 80ch;">{{ t('pc_tree.intro') }}</p>
+        </div>
+        {% if cap.MANAGE_PC_TREE in user_capabilities %}
+        <button class="btn btn--primary" type="button" id="pc-folder-new">{{ t('pc_tree.new_folder') }}</button>
+        {% endif %}
+    </div>
+
+    <div class="perm-layout">
+        <nav class="card perm-tree" id="pc-tree-nav" aria-label="{{ t('pc_tree.tree_label') }}"></nav>
+        <div class="perm-pane">
+            <div class="card">
+                <div class="toolbar pc-pane-head">
+                    <div>
+                        <div class="stat-card__meta" id="pc-node-path"></div>
+                        <h2 class="section-title" id="pc-node-title"></h2>
+                    </div>
+                    <div class="perm-row-actions" id="pc-node-actions"></div>
+                </div>
+                <div class="toolbar pc-pane-tools">
+                    <input class="input" id="pc-filter" type="search" autocomplete="off"
+                           placeholder="{{ t('pc_tree.filter') }}" aria-label="{{ t('pc_tree.filter') }}">
+                    <label class="checkbox"><input type="checkbox" id="pc-include-sub" checked> {{ t('pc_tree.include_sub') }}</label>
+                    {% if cap.MANAGE_PC_TREE in user_capabilities %}
+                    <span class="pc-move">
+                        <select class="input" id="pc-move-target" aria-label="{{ t('pc_tree.move_to') }}"></select>
+                        <button class="btn" type="button" id="pc-move">{{ t('pc_tree.move_button') }}</button>
+                    </span>
+                    {% endif %}
+                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            {% if cap.MANAGE_PC_TREE in user_capabilities %}
+                            <th style="width: 2rem;"><input type="checkbox" id="pc-select-all" aria-label="{{ t('pc_tree.select_all') }}"></th>
+                            {% endif %}
+                            <th>{{ t('pc_tree.col.machine') }}</th>
+                            <th>{{ t('pc_tree.col.folder') }}</th>
+                            <th>{{ t('pc_tree.col.ou') }}</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pc-machines-body">
+                        <tr><td colspan="4" class="stat-card__meta">{{ t('common.loading') }}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if cap.MANAGE_PC_TREE in user_capabilities %}
+<dialog class="modal" id="pc-folder-dialog" aria-labelledby="pc-folder-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="pc-folder-title"></h2>
+    </div>
+    <div class="modal__body">
+        <label class="setting__label" for="pc-folder-name">{{ t('pc_tree.dialog.name') }}</label>
+        <input class="input" id="pc-folder-name" maxlength="80" autocomplete="off"
+               placeholder="{{ t('pc_tree.dialog.name_placeholder') }}" style="width: 100%;">
+        <label class="setting__label" for="pc-folder-parent" style="margin-top: var(--space-3);">{{ t('pc_tree.dialog.parent') }}</label>
+        <select class="input" id="pc-folder-parent" style="width: 100%;"></select>
+        <label class="setting__label" for="pc-folder-description" style="margin-top: var(--space-3);">{{ t('pc_tree.dialog.description') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+        <input class="input" id="pc-folder-description" maxlength="500" autocomplete="off" style="width: 100%;">
+        <p class="setting__error" id="pc-folder-error"></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" class="btn btn--ghost" id="pc-folder-cancel">{{ t('common.cancel') }}</button>
+        <button type="button" class="btn btn--primary" id="pc-folder-save">{{ t('common.save') }}</button>
+    </div>
+</dialog>
+{% endif %}
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/pc-tree.js') }}"></script>
+{% endblock %}

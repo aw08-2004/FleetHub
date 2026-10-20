@@ -206,6 +206,11 @@ try
     // command would put the hub back in the path of a machine that may not be able to reach it.
     builder.Services.AddSingleton<IServiceControl, WindowsServiceControl>();
     builder.Services.AddSingleton<WatchdogRunner>();
+    // Group Policy registry values (roadmap #32), on the watchdog's shape: a document the
+    // heartbeat delivers, reconciled on its own loop in Worker.
+    builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.IRegistryValueStore,
+                                  TempMonitorAgent.GroupPolicy.RegistryValueStore>();
+    builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.GroupPolicyRunner>();
 
     // Self-update
     builder.Services.AddSingleton<SelfUpdater>();
@@ -233,6 +238,9 @@ try
     // close a cycle that only resolution order keeps open. See FleetClient.Watchdogs.
     host.Services.GetRequiredService<FleetClient>().Watchdogs =
         host.Services.GetRequiredService<WatchdogRunner>();
+    // Group Policy (roadmap #32), handed over the same way and for the same reason.
+    host.Services.GetRequiredService<FleetClient>().GroupPolicy =
+        host.Services.GetRequiredService<TempMonitorAgent.GroupPolicy.GroupPolicyRunner>();
     // The self-uninstall (roadmap #30), handed over the same way and for the same reason.
     host.Services.GetRequiredService<FleetClient>().Uninstaller =
         host.Services.GetRequiredService<TempMonitorAgent.Update.SelfUninstaller>();

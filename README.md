@@ -124,7 +124,8 @@ Read these before you deploy. [SECURITY.MD](SECURITY.MD) has the full model.
 |---|---|
 | Installer options, onboarding, updates, Docker, release signing | [docs/installation.md](docs/installation.md) |
 | Console, telemetry tuning, alerts, assistant, audit log, event logs, reports | [docs/monitoring.md](docs/monitoring.md) |
-| Sign-in (OIDC), permission groups, invite links, Active Directory | [docs/access.md](docs/access.md) |
+| Sign-in (OIDC), permission groups, invite links, Active Directory, the PC tree | [docs/access.md](docs/access.md) |
+| Group Policy: settings, registry values and scripts linked to the PC tree | [docs/group-policy.md](docs/group-policy.md) |
 | Commands, terminal, processes, disk usage, Wake-on-LAN, network discovery | [docs/managing-machines.md](docs/managing-machines.md) |
 | Remote view and control, TURN, session recording | [docs/remote-control.md](docs/remote-control.md) |
 | Package deployment | [docs/packages.md](docs/packages.md) |

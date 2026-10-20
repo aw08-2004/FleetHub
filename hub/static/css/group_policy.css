@@ -1,0 +1,69 @@
+/* Group Policy page. The layout and the tree are permissions.css's and pc_tree.css's, shared so
+   the three ADUC/GPMC-style pages read as one tool; only the policy editor's rows live here. */
+
+/* Wider than the shared modal: a registry row is a path, a name, a type and a value. */
+.gpo-modal {
+    width: min(860px, calc(100vw - 32px));
+    max-width: min(860px, calc(100vw - 32px));
+}
+
+.gpo-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: center;
+    margin-bottom: var(--space-2);
+}
+
+.gpo-row__label {
+    flex: 1 1 220px;
+    min-width: 0;
+    font-size: var(--text-sm);
+    color: var(--text);
+}
+
+.gpo-row .input { min-width: 0; }
+
+.gpo-row__path { flex: 3 1 260px; }
+.gpo-row__name { flex: 2 1 140px; }
+.gpo-row__type { flex: 1 1 140px; }
+.gpo-row__value { flex: 2 1 160px; }
+
+.gpo-row textarea.input {
+    min-height: 3.5em;
+    resize: vertical;
+}
+
+#gpo-agent-add,
+#gpo-script-add { margin-top: var(--space-1); }
+
+/* The section a node or PC view is divided into. */
+.gpo-section { margin-bottom: var(--space-4); }
+
+.gpo-section h3 {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    margin: 0 0 var(--space-2);
+}
+
+.gpo-table-wrap {
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.gpo-mono {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: var(--text-xs);
+    word-break: break-all;
+}
+
+.gpo-state--applied { color: var(--success, var(--text)); }
+.gpo-state--managed_elsewhere,
+.gpo-state--refused { color: var(--warning); }
+.gpo-state--error { color: var(--danger); }
+
+.gpo-link-actions {
+    display: flex;
+    gap: var(--space-1);
+    justify-content: flex-end;
+}

@@ -45,6 +45,7 @@ from flask import Blueprint, jsonify, render_template, request
 
 import alerts
 import fleet
+import gpo
 import i18n
 import permissions
 import rules
@@ -494,7 +495,9 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
     @login_required
     @can_run_code
     def remove_script(name):
-        in_use = rules.rules_using_script(db_path, name)
+        # Group Policy runs library scripts too (gpo.py); a policy whose script vanished would
+        # stop running it silently, which is the failure this refusal exists to prevent.
+        in_use = rules.rules_using_script(db_path, name) + gpo.gpos_using_script(db_path, name)
         error, deleted = scripts.delete_script(db_path, name, in_use=in_use)
         if error:
             # 409, not 400: the request is well-formed and the caller is allowed to make it --

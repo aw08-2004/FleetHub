@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ t('gpo.heading') }} - FleetHub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/permissions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pc_tree.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/group_policy.css') }}">
+{% endblock %}
+{% block content %}
+{# Group Policy (roadmap #32), laid out the way Group Policy Management lays out a domain: the
+   policy objects and the tree on the left, and on the right whatever is selected -- the list of
+   policies, a node's linked policies, or one PC's resultant set. Structure only; group-policy.js
+   builds everything from /api/gpo and /api/pc-tree.
+
+   Write controls are rendered only for manage_group_policy, and the API refuses without it
+   regardless. #}
+<div id="gpo-root" data-can-manage="{{ 1 if cap.MANAGE_GROUP_POLICY in user_capabilities else 0 }}"
+     data-can-run="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
+    <div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-5);">
+        <div>
+            <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('gpo.heading') }}</h1>
+            <p class="stat-card__meta" style="max-width: 80ch;">{{ t('gpo.intro') }}</p>
+        </div>
+        {% if cap.MANAGE_GROUP_POLICY in user_capabilities %}
+        <button class="btn btn--primary" type="button" id="gpo-new">{{ t('gpo.new') }}</button>
+        {% endif %}
+    </div>
+    {% if cap.MANAGE_GROUP_POLICY not in user_capabilities %}
+    <p class="stat-card__meta" style="margin-bottom: var(--space-4);">{{ t('gpo.read_only') }}</p>
+    {% endif %}
+
+    <div class="perm-layout">
+        <nav class="card perm-tree" id="gpo-tree" aria-label="{{ t('gpo.tree_label') }}"></nav>
+        <div class="perm-pane" id="gpo-pane"></div>
+    </div>
+</div>
+
+{% if cap.MANAGE_GROUP_POLICY in user_capabilities %}
+<dialog class="modal gpo-modal" id="gpo-dialog" aria-labelledby="gpo-dialog-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="gpo-dialog-title"></h2>
+    </div>
+    <div class="modal__body">
+        <label class="setting__label" for="gpo-name">{{ t('gpo.editor.name') }}</label>
+        <input class="input" id="gpo-name" maxlength="80" autocomplete="off" style="width: 100%;">
+        <label class="setting__label" for="gpo-description" style="margin-top: var(--space-3);">{{ t('gpo.editor.description') }} <span class="setting__default">{{ t('common.optional') }}</span></label>
+        <input class="input" id="gpo-description" maxlength="500" autocomplete="off" style="width: 100%;">
+        <label class="checkbox" style="margin-top: var(--space-3);"><input type="checkbox" id="gpo-enabled" checked> {{ t('gpo.editor.enabled') }}</label>
+
+        <h3 class="perm-subhead">{{ t('gpo.editor.agent_settings') }}</h3>
+        <p class="setting__help">{{ t('gpo.editor.agent_help') }}</p>
+        <div id="gpo-agent-rows"></div>
+        <select class="input" id="gpo-agent-add" aria-label="{{ t('gpo.editor.add_setting') }}"></select>
+
+        <h3 class="perm-subhead">{{ t('gpo.editor.registry') }}</h3>
+        <p class="setting__help">{{ t('gpo.editor.registry_help') }}</p>
+        <div id="gpo-registry-rows"></div>
+        <button class="btn" type="button" id="gpo-registry-add">{{ t('gpo.editor.add_value') }}</button>
+
+        <h3 class="perm-subhead">{{ t('gpo.editor.scripts') }}</h3>
+        <p class="setting__help">{{ t('gpo.editor.scripts_help') }}</p>
+        <p class="setting__help" id="gpo-scripts-locked" hidden>{{ t('gpo.editor.no_scripts_capability') }}</p>
+        <div id="gpo-script-rows"></div>
+        <select class="input" id="gpo-script-add" aria-label="{{ t('gpo.editor.add_script') }}"></select>
+
+        <p class="setting__error" id="gpo-error"></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" class="btn btn--ghost" id="gpo-cancel">{{ t('common.cancel') }}</button>
+        <button type="button" class="btn btn--primary" id="gpo-save">{{ t('common.save') }}</button>
+    </div>
+</dialog>
+{% endif %}
+{% endblock %}
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='js/group-policy.js') }}"></script>
+{% endblock %}

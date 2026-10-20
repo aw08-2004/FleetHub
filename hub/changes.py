@@ -75,11 +75,16 @@ BLUEPRINT_TOPICS = {
     "events": "events",
     "files": "files",
     "fleet": "commands",
+    "gpo": "gpo",
     "invites": "invites",
     "location": "location",
     "onboarding": "onboarding",
     "packages": "deployments",
     "patches": "patches",
+    # Its own topic, so the tree page refreshes for every reader. A write that changes scope
+    # ALSO marks `permissions` through pc_tree_web's on_scope_change, which is what ends
+    # live sockets -- a folder is a scope, unlike a device group.
+    "pc_tree": "pc_tree",
     "permissions": "permissions",
     "policy": "policy",
     "posture": "posture",
@@ -202,6 +207,7 @@ HEARTBEAT_TOPICS = {
     "bios": "firmware",
     "bitlocker": "bitlocker",
     "events": "events",
+    "gpo": "gpo",
     "network": MACHINES,
     "patches": "patches",
     "policy_state": "policy",

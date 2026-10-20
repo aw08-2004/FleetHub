@@ -59,7 +59,7 @@ SIDEBAR_ENDPOINTS = """index inventory_page alerts_page tools_page remote_page s
     audit.audit_page users.users_page bios.firmware_page rules.rules_page patches.patches_page
     events.events_page apitokens.download_page sharing.sharing_page
     provisioning.provisioning_page location.fleet_map_page reports.reports_page
-    policy.policy_page device_groups.device_groups_page watchdogs.watchdogs_page""".split()
+    policy.policy_page device_groups.device_groups_page pc_tree.pc_tree_page gpo.group_policy_page watchdogs.watchdogs_page""".split()
 
 
 def build_app(db_path, unsigned=None):

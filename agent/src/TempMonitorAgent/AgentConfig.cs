@@ -448,6 +448,10 @@ public static class AgentConfig
     /// pre-rename migration list above, and correctly so: no install that predates the
     /// rename ever had one.</summary>
     public static string WatchdogStatePath => Path.Combine(ProgramDataDir, "watchdogs.json");
+    /// <summary>The Group Policy registry document and the values last written (roadmap #32).
+    /// The registry marker is what says which values are ours; this file says what we wrote
+    /// there, which is how a value somebody else changed afterwards is recognised and let go.</summary>
+    public static string GroupPolicyStatePath => Path.Combine(ProgramDataDir, "group_policy.json");
     /// <summary>The disk-usage folder trees and the last-scan time (roadmap #27). Readable
     /// by SYSTEM and Administrators only: a tree names every folder on a volume, including
     /// other users' -- see StateDirectory.HardenPrivate.</summary>
