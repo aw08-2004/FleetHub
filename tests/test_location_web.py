@@ -305,6 +305,15 @@ def main():
               "PHONE-2" not in waiting and "PHONE-1" not in waiting)
         check("a PC that cannot locate is in neither", "PC-01" not in waiting)
         check("the payload says whether this operator may ask", body["can_locate"] is True)
+        fleet.create_command(db_path, machine="PHONE-3", command_type=location.COMMAND_TYPE,
+                             params={"timeout_seconds": 45}, issued_by="super@x.com")
+        waiting = {u["machine"]: u for u in c.get("/api/location/fleet").get_json()["unlocated"]}
+        check("a locate in flight shows as pending, read in one query for the whole list",
+              waiting["PHONE-3"]["pending"] == fleet.STATUS_PENDING
+              and waiting["PHONE-4"]["pending"] is None)
+        check("open_requests agrees with open_request",
+              location.open_requests(db_path, ["PHONE-3", "PHONE-4"])
+              == {"PHONE-3": location.open_request(db_path, "PHONE-3")["status"]})
         CURRENT_USER = "finder@x.com"
         body = c.get("/api/location/fleet").get_json()
         check("the list is scoped like the fixes -- no way to enumerate other groups' phones",

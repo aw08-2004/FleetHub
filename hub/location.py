@@ -412,6 +412,23 @@ def latest_attempts(db_path, machines=None):
     return [_row(r) for r in rows]
 
 
+def open_requests(db_path, machines):
+    """`{machine: status}` for every one of `machines` with a locate in flight -- open_request
+    for a list, in one statement. The fleet map asks this for every phone with no fix, and a
+    query per phone is the page-is-slow trap fleet_locations' docstring warns about."""
+    names = [str(m).strip() for m in machines or () if str(m or "").strip()]
+    if not names:
+        return {}
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT machine, status FROM commands WHERE type = ? AND status IN (?, ?) "
+            f"AND machine IN ({','.join('?' for _ in names)}) ORDER BY created_at ASC",
+            [COMMAND_TYPE, fleet.STATUS_PENDING, fleet.STATUS_CLAIMED, *names]).fetchall()
+    # Ascending, so the newest request per machine is the one left standing -- the same
+    # answer open_request gives for one machine.
+    return {row["machine"]: row["status"] for row in rows}
+
+
 def open_request(db_path, machine):
     """This machine's in-flight locate command, if it has one.
 

@@ -146,11 +146,7 @@ def create_location_blueprint(db_path, login_required, access):
             return []
         last = {row["machine"]: row for row in
                 location.latest_attempts(db_path, [c["machine"] for c in capable])}
-        pending = {}
-        for c in capable:
-            req = location.open_request(db_path, c["machine"])
-            if req is not None:
-                pending[c["machine"]] = req["status"]
+        pending = location.open_requests(db_path, [c["machine"] for c in capable])
         out = []
         for c in capable:
             attempt = last.get(c["machine"])

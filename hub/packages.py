@@ -1802,6 +1802,9 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
     retire = []
     ready = []
     package_cache = {}
+    # One capability read per MACHINE, not per target: a machine in several open deployments
+    # is otherwise read once for each of them on every tick.
+    platform_cache = {}
     for target in rows:
         deployment = deployments.get(target["deployment_id"])
         if deployment is None:
@@ -1837,7 +1840,7 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
         if package_id not in package_cache:
             package_cache[package_id] = get_package(db_path, package_id)
         package = package_cache[package_id]
-        wrong_platform = _platform_refusal(db_path, target["machine"], package)
+        wrong_platform = _platform_refusal(db_path, target["machine"], package, platform_cache)
         if wrong_platform:
             # Retired, not skipped, for the same reason as `unsupported` above: a target
             # nothing will ever dispatch must still reach a terminal state.
@@ -1882,7 +1885,7 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
     return dispatched
 
 
-def _platform_refusal(db_path, machine, package):
+def _platform_refusal(db_path, machine, package, cache=None):
     """Why this machine cannot take this package, or None -- see PLATFORM above.
 
     A machine that has not reported a platform is a Windows PC: every Windows agent in the
@@ -1891,7 +1894,12 @@ def _platform_refusal(db_path, machine, package):
     """
     if package is None:
         return None
-    reported = (capabilities.get_capabilities(db_path, machine) or {}).get("platform") or ""
+    if cache is not None and machine in cache:
+        reported = cache[machine]
+    else:
+        reported = (capabilities.get_capabilities(db_path, machine) or {}).get("platform") or ""
+        if cache is not None:
+            cache[machine] = reported
     machine_platform = PLATFORM_ANDROID if reported == PLATFORM_ANDROID else PLATFORM_WINDOWS
     wanted = package_platform(package.get("steps"))
     if wanted == machine_platform:
