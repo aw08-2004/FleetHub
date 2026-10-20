@@ -919,7 +919,7 @@
       },
       "manage_group_policy": {
         "label": "Gestionar directivas de grupo",
-        "description": "Crear, editar y eliminar objetos de directiva de grupo, vincularlos al árbol de equipos y bloquear la herencia en un nodo. Una directiva puede cambiar ajustes del hub en sus PC y escribir allí valores del registro bajo HKLM\\SOFTWARE\\Policies; una que ejecuta un script necesita además «Emitir comandos». Cada PC al que pueda llegar un cambio debe estar en el ámbito propio. Para leer directivas y el conjunto resultante de un PC basta con «Ver»."
+        "description": "Crear, editar y eliminar objetos de directiva de grupo, vincularlos al árbol de equipos y bloquear la herencia en un nodo. Sensible para la seguridad: una directiva puede escribir cualquier valor bajo HKLM\\SOFTWARE\\Policies en los PC a los que llega, incluidas las directivas de Windows Defender y del firewall, así que permite debilitar la protección de un PC sin «Emitir comandos». Concédala con ese mismo cuidado. Una directiva también puede cambiar ajustes del hub en sus PC, y una que ejecuta un script necesita además «Emitir comandos». Cada PC al que pueda llegar un cambio debe estar en el ámbito propio. Para leer directivas y el conjunto resultante de un PC basta con «Ver»."
       },
       "locate_device": {
         "label": "Localizar un dispositivo",

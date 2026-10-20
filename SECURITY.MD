@@ -53,7 +53,9 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
    agent, which never overwrites a value it did not write. Writing policy needs
    `manage_group_policy`, plus `issue_commands` for a policy that runs a script; every PC a
    write can reach must be in the writer's scope, and a link keeps its author's scope after
-   more PCs are filed beneath its node
+   more PCs are filed beneath its node. `manage_group_policy` is security-sensitive on its
+   own: `SOFTWARE\Policies` holds Windows Defender and firewall policy, so it can weaken a
+   PC's protection without `issue_commands`. Grant it as carefully as that
 7. **Signed Updates:** Binary replacements verified before execution
 8. **Bounded Invites:** An invite link grants only Permission Groups, never more than
    its creator holds — counting what a subgroup inherits from its parents — and is

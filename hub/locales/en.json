@@ -983,7 +983,7 @@
       },
       "manage_group_policy": {
         "label": "Manage Group Policy",
-        "description": "Create, edit and delete Group Policy objects, link them to the PC tree, and block inheritance on a node. A policy can change hub settings on its PCs and write registry values under HKLM\\SOFTWARE\\Policies on them; one that runs a script also needs 'Issue commands'. Every PC a change can reach must be in the operator's own scope. Reading policies and a PC's resultant set only needs 'View'."
+        "description": "Create, edit and delete Group Policy objects, link them to the PC tree, and block inheritance on a node. Security-sensitive: a policy can write any value under HKLM\\SOFTWARE\\Policies on the PCs it reaches, and that includes Windows Defender and firewall policy, so this can weaken a PC's protection without 'Issue commands'. Grant it as carefully as that. A policy can also change hub settings on its PCs, and one that runs a script also needs 'Issue commands'. Every PC a change can reach must be in the operator's own scope. Reading policies and a PC's resultant set only needs 'View'."
       },
       "locate_device": {
         "label": "Locate a device",

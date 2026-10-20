@@ -72,7 +72,9 @@ lists the policies in processing order and names the winner of every setting.
 
 - Reading policies and a PC's resultant set needs **View** (and the PC in your scope).
 - Creating, editing, linking and deleting policies, and blocking inheritance, needs
-  **Manage Group Policy**. A policy that runs a script, or an edit that adds or removes one,
+  **Manage Group Policy**. Treat it as security-sensitive: `HKLM\SOFTWARE\Policies` includes
+  Windows Defender and firewall policy, so a policy can weaken a PC's protection, even
+  without *Issue commands*. A policy that runs a script, or an edit that adds or removes one,
   also needs **Issue commands**.
 - **Every PC a change can reach must be in your own scope.** Linking at a node, changing a link
   or blocking inheritance reaches every PC beneath that node; editing or deleting a policy

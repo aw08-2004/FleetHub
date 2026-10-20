@@ -198,6 +198,14 @@ MANAGE_PC_TREE = "manage_pc_tree"
 # threshold or an Android app block. A policy that RUNS a library script additionally needs
 # ISSUE_COMMANDS, exactly as a rule that does (gpo_web.py) -- a script is code as SYSTEM.
 #
+# **Security-sensitive even without ISSUE_COMMANDS**, and said so in its description (raised in
+# review on #162). HKLM\SOFTWARE\Policies is where Windows Defender and firewall policy live, so
+# a registry value alone can switch a PC's protection down. That is the feature -- it is exactly
+# what a domain GPO can do -- but it is a weaker grant than a SYSTEM shell only in degree, and it
+# must not be handed out as if it were a settings toggle. Rejected: denying the Defender and
+# firewall policy keys in PolicyAllowList, which would also stop an admin TIGHTENING them, the
+# more common reason to set them.
+#
 # READING policies, and a PC's resultant set of policy, is VIEW plus machine scope.
 MANAGE_GROUP_POLICY = "manage_group_policy"
 # Tickets opened from a PC (roadmap #31). READING them is its own capability rather than VIEW,

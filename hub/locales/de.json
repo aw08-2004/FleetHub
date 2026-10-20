@@ -919,7 +919,7 @@
       },
       "manage_group_policy": {
         "label": "Gruppenrichtlinien verwalten",
-        "description": "Gruppenrichtlinienobjekte anlegen, bearbeiten und löschen, mit dem PC-Baum verknüpfen und an einem Knoten die Vererbung deaktivieren. Eine Richtlinie kann Hub-Einstellungen ihrer PCs ändern und dort Registrierungswerte unter HKLM\\SOFTWARE\\Policies schreiben; eine, die ein Skript ausführt, braucht zusätzlich „Befehle ausführen“. Jeder PC, den eine Änderung erreichen kann, muss im eigenen Bereich liegen. Zum Lesen von Richtlinien und des Ergebnissatzes eines PCs genügt „Ansehen“."
+        "description": "Gruppenrichtlinienobjekte anlegen, bearbeiten und löschen, mit dem PC-Baum verknüpfen und an einem Knoten die Vererbung deaktivieren. Sicherheitskritisch: Eine Richtlinie kann auf den PCs, die sie erreicht, jeden Wert unter HKLM\\SOFTWARE\\Policies schreiben, auch Richtlinien für Windows Defender und die Firewall. Damit lässt sich der Schutz eines PCs ohne „Befehle ausführen“ schwächen – vergeben Sie diese Berechtigung entsprechend vorsichtig. Eine Richtlinie kann außerdem Hub-Einstellungen ihrer PCs ändern; eine, die ein Skript ausführt, braucht zusätzlich „Befehle ausführen“. Jeder PC, den eine Änderung erreichen kann, muss im eigenen Bereich liegen. Zum Lesen von Richtlinien und des Ergebnissatzes eines PCs genügt „Ansehen“."
       },
       "locate_device": {
         "label": "Gerät orten",
