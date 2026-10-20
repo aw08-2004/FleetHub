@@ -37,6 +37,7 @@ as one document, exactly like `machine_bios`).
 
 Kept free of Flask so it can be unit-tested standalone; posture_web.py wires HTTP on top.
 """
+import calendar
 import json
 import sqlite3
 import time
@@ -547,7 +548,9 @@ def _check_os_patch(p, t, now=None):
     if not _sent(mobile) or not mobile.get("security_patch"):
         return _unknown(mobile)
     limit = int(t.get("patch_max_age_days") or DEFAULT_PATCH_MAX_AGE_DAYS)
-    patched = time.mktime(time.strptime(mobile["security_patch"], "%Y-%m-%d"))
+    # timegm, not mktime: the patch date is a calendar date and `now` is UTC epoch, so reading
+    # it in the hub's local zone would skew the age by up to a day at the limit.
+    patched = calendar.timegm(time.strptime(mobile["security_patch"], "%Y-%m-%d"))
     age = max(0, int(((now if now is not None else time.time()) - patched) // 86400))
     if age <= limit:
         return _verdict(STATUS_PASS, "patch_current", date=mobile["security_patch"])

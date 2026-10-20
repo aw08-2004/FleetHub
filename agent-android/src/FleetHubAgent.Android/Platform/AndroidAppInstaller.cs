@@ -210,8 +210,11 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
     private sealed class ResultReceiver(TaskCompletionSource<(int, string?)> verdict)
         : BroadcastReceiver
     {
-        public override void OnReceive(Context? _, Intent? intent)
+        public override void OnReceive(Context? context, Intent? intent)
         {
+            // One verdict per session, so the receiver is done as soon as it has one. The
+            // installer's finally unregisters it too; whichever runs second finds it gone.
+            try { context?.UnregisterReceiver(this); } catch (Java.Lang.IllegalArgumentException) { }
             var status = intent?.GetIntExtra(PackageInstaller.ExtraStatus, int.MinValue)
                          ?? int.MinValue;
             // PENDING_USER_ACTION would mean the platform wants a tap. A device owner is never
