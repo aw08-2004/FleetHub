@@ -186,7 +186,9 @@
                     if (owner.document.querySelector('dialog[open]')) return true;
                     return !!opts.busy?.();
                 } catch (e) {
-                    // A busy() that throws must not wedge the page forever: treat it as idle.
+                    // A busy() that throws must not wedge the page forever: treat it as idle,
+                    // and say so, since the page's own check is what is broken.
+                    console.warn('[fleet-live] busy() threw; refreshing anyway', e);
                     return false;
                 }
             }

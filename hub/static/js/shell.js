@@ -462,7 +462,9 @@
             if (!resp.ok) return;
             html = await resp.text();
         } catch (e) {
-            return;     // offline or mid-deploy: keep the nav we have
+            // Offline or mid-deploy: keep the nav we have; the next notice retries.
+            console.warn('[shell] could not re-read the sidebar', e);
+            return;
         }
         const fresh = new DOMParser().parseFromString(html, 'text/html')
             .querySelector('#app-sidebar .sidebar__nav');
