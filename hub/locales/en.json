@@ -799,7 +799,7 @@
       },
       "manage_tickets": {
         "label": "Manage tickets",
-        "description": "Reply to tickets, change their status, assign them, edit labels and ask the AI for a triage, for PCs in scope. Drafting the AI's script into the library additionally needs 'Issue commands'."
+        "description": "Reply to tickets, change their status, assign them and edit labels, for PCs in scope. With 'View' as well, hand a ticket to the AI assistant; anything the assistant then drafts or runs still needs its own capability."
       }
     }
   },

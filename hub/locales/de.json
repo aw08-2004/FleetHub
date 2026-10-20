@@ -735,7 +735,7 @@
       },
       "manage_tickets": {
         "label": "Tickets bearbeiten",
-        "description": "Auf Tickets antworten, Status ändern, zuweisen, Labels bearbeiten und eine KI-Triage anfordern, für PCs im Geltungsbereich. Das Übernehmen des KI-Skripts in die Bibliothek erfordert zusätzlich 'Befehle ausführen'."
+        "description": "Auf Tickets antworten, Status ändern, zuweisen und Labels bearbeiten, für PCs im Geltungsbereich. Zusammen mit 'Ansehen' ein Ticket an den KI-Assistenten übergeben; was der Assistent dann entwirft oder ausführt, braucht weiterhin die jeweilige eigene Berechtigung."
       }
     }
   },

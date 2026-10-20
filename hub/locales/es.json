@@ -735,7 +735,7 @@
       },
       "manage_tickets": {
         "label": "Gestionar tickets",
-        "description": "Responder a tickets, cambiar su estado, asignarlos, editar etiquetas y pedir un triaje a la IA, para los PC en el ámbito. Redactar el script de la IA en la biblioteca requiere además 'Emitir comandos'."
+        "description": "Responder a tickets, cambiar su estado, asignarlos y editar etiquetas, para los PC en el ámbito. Con 'Ver' además, pasar un ticket al asistente de IA; lo que el asistente redacte o ejecute después sigue necesitando su propio permiso."
       }
     }
   },
