@@ -35,6 +35,9 @@ public static class WindowsUpdateApi
     /// patch run (see hub/patches.py confirm_from_inventory).</summary>
     private const string SearchCriteria = "IsInstalled=0 AND IsHidden=0";
 
+    /// <summary>The length property every WUA COM collection exposes, read late-bound.</summary>
+    private const string CountProperty = "Count";
+
     /// <summary>The ClientApplicationID every WUA session this agent creates carries
     /// (issue #140). Windows Update history records it per entry, and it is the ONLY thing
     /// that tells the agent's own installs apart from ones Windows or a user made -- see
@@ -85,7 +88,7 @@ public static class WindowsUpdateApi
             // History is returned newest first, so the first `limit` entries already span
             // well past UpdateHistory.Window on any normally patched machine.
             var history = Invoke(searcher, "QueryHistory", 0, Math.Min(total, limit));
-            var count = ToInt(Get(history, "Count"));
+            var count = ToInt(Get(history, CountProperty));
             for (var i = 0; i < count; i++)
             {
                 var entry = Index(history, i);
@@ -146,7 +149,7 @@ public static class WindowsUpdateApi
             var collection = result is null ? null : Get(result, "Updates");
             if (collection is null) return new ScanResult([], true, "");
 
-            var count = ToInt(Get(collection, "Count"));
+            var count = ToInt(Get(collection, CountProperty));
             var updates = new List<AvailableUpdate>(count);
             for (var i = 0; i < count; i++)
             {
@@ -215,7 +218,7 @@ public static class WindowsUpdateApi
         var best = "unknown";
         try
         {
-            var count = ToInt(Get(categories, "Count"));
+            var count = ToInt(Get(categories, CountProperty));
             for (var i = 0; i < count; i++)
             {
                 var item = Index(categories, i);
@@ -254,7 +257,7 @@ public static class WindowsUpdateApi
         if (kbArticleIds is null) return "";
         try
         {
-            var count = ToInt(Get(kbArticleIds, "Count"));
+            var count = ToInt(Get(kbArticleIds, CountProperty));
             for (var i = 0; i < count; i++)
             {
                 var raw = ToText(Index(kbArticleIds, i)).Trim();
