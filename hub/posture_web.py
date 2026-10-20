@@ -16,6 +16,7 @@ PCs have the firewall off" answers for the operator's scope and not for the flee
 from flask import Blueprint, jsonify
 
 import bitlocker
+import capabilities
 import permissions
 import posture
 
@@ -27,6 +28,11 @@ def create_posture_blueprint(db_path, login_required, access):
     def _encryption(machine):
         return bitlocker.get_inventory(db_path, machine)
 
+    def _platform(machine):
+        # The hub's record of what the machine is, which decides whether its `mobile` area
+        # counts -- see posture.PLATFORM_ANDROID.
+        return capabilities.get_capabilities(db_path, machine)["platform"]
+
     @bp.route("/api/posture/machines/<machine>", methods=["GET"])
     @login_required
     @access.require_machine(permissions.VIEW)
@@ -37,7 +43,7 @@ def create_posture_blueprint(db_path, login_required, access):
         if stored["posture"] is not None:
             checks = posture.evaluate(stored["posture"],
                                       posture.thresholds_from_settings(db_path),
-                                      _encryption(machine))
+                                      _encryption(machine), _platform(machine))
         return jsonify({"machine": machine, "reported_at": stored["reported_at"],
                         "posture": stored["posture"], "checks": checks,
                         "counts": posture.counts(checks) if checks else None}), 200
@@ -51,7 +57,8 @@ def create_posture_blueprint(db_path, login_required, access):
                 "SELECT machine FROM machine_info ORDER BY machine COLLATE NOCASE")]
         visible = access.filter_machines(names)
         summary = posture.fleet_summary(db_path, visible,
-                                        posture.thresholds_from_settings(db_path), _encryption)
+                                        posture.thresholds_from_settings(db_path), _encryption,
+                                        _platform)
         return jsonify(summary), 200
 
     return bp

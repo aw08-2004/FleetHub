@@ -304,6 +304,14 @@ def main():
         check("a device that has a fix is on the map, not in this list",
               "PHONE-2" not in waiting and "PHONE-1" not in waiting)
         check("a PC that cannot locate is in neither", "PC-01" not in waiting)
+        # The list is "devices that can be located", decided by the `locate` feature and not by
+        # platform. Only the Android agent reports it today; an agent on another platform that
+        # learned to locate would belong here too, and must not need a hub change to appear.
+        capabilities.record_capabilities(db_path, "LAPTOP-9", {
+            "platform": "linux", "commands": ["locate_device"],
+            "features": [capabilities.FEATURE_LOCATE]})
+        waiting = {u["machine"] for u in c.get("/api/location/fleet").get_json()["unlocated"]}
+        check("any platform that reports locate is listed, not only phones", "LAPTOP-9" in waiting)
         check("the payload says whether this operator may ask", body["can_locate"] is True)
         fleet.create_command(db_path, machine="PHONE-3", command_type=location.COMMAND_TYPE,
                              params={"timeout_seconds": 45}, issued_by="super@x.com")

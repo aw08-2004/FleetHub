@@ -93,7 +93,7 @@ def test_phone_checks():
         "mobile": {"security_patch": "2026-09-05", "encryption": "active", "error": ""},
     }
     cleaned = posture.clean_posture(raw)
-    checks = {c["id"]: c for c in posture.evaluate(cleaned, THRESHOLDS)}
+    checks = {c["id"]: c for c in posture.evaluate(cleaned, THRESHOLDS, platform="android")}
     check("exactly the mobile checks", list(checks) == list(posture.MOBILE_CHECKS))
     check("a locking, encrypted phone passes those", all(
         checks[c]["status"] == "pass" for c in ("session_lock", "encryption")))
@@ -105,11 +105,30 @@ def test_phone_checks():
     check("an eleven-month-old patch is stale, with its age",
           verdict["status"] == "fail" and verdict["params"]["days"] > 300)
     check("unencrypted storage fails CIS 3.6",
-          verdicts(stale)["encryption"]["status"] == "fail")
+          {c["id"]: c for c in posture.evaluate(stale, THRESHOLDS, platform="android")}
+          ["encryption"]["status"] == "fail")
     junk = posture.clean_posture({"mobile": {"security_patch": "Sept 2026", "error": ""}})
     check("a patch level that is not a date reads as not reported",
           posture._check_os_patch(junk, THRESHOLDS, now=now)["status"] == "unknown")
     check("a PC is never judged on the phone check", "os_patch" not in verdicts(report()))
+    # The escape hatch review of PR #161 found: the area is machine-supplied, so a PC that
+    # sends one -- even empty, even with antivirus off -- must keep the desktop checks. Only
+    # the hub's own record of the platform can switch a machine to the phone set.
+    stray = report()
+    stray["antivirus"]["products"] = [{"name": "Defender", "enabled": False}]
+    stray["defender"]["realtime"] = False
+    stray["mobile"] = {"security_patch": "2026-10-01", "encryption": "active",
+                       "error": "", "reported": True}
+    judged = {c["id"]: c for c in posture.evaluate(stray, THRESHOLDS, ENCRYPTED, platform="windows")}
+    check("a PC with a stray mobile area still gets the desktop checks",
+          list(judged) == list(posture.DESKTOP_CHECKS))
+    check("...and its antivirus being off is still a fail",
+          judged["antivirus"]["status"] == "fail")
+    check("...and its encryption is judged from BitLocker, not the stray area",
+          judged["encryption"]["detail"] == "enc_all")
+    check("a machine that has reported no platform is not a phone either",
+          list(c["id"] for c in posture.evaluate(stray, THRESHOLDS, ENCRYPTED))
+          == list(posture.DESKTOP_CHECKS))
 
 
 def main():

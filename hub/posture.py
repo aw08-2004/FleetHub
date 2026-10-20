@@ -84,6 +84,13 @@ AREAS = ("antivirus", "defender", "firewall", "autorun", "session_lock", "accoun
 MOBILE_CHECKS = ("session_lock", "encryption", "os_patch")
 DESKTOP_CHECKS = tuple(c for c in CHECK_IDS if c != "os_patch")
 
+#: The platform a machine must have REPORTED (hub/capabilities.py) for its `mobile` area to
+#: count. The area is machine-supplied, and on its own it would let any report choose to be
+#: judged on three checks instead of ten -- a PC sending a stray `mobile` object would stop
+#: being flagged for antivirus being off. The capability report is the hub's own record of what
+#: a machine is, the one packages._platform_refusal also reads (raised in review of PR #161).
+PLATFORM_ANDROID = "android"
+
 #: What Android's DevicePolicyManager.getStorageEncryptionStatus can say, as the agent maps it.
 MOBILE_ENCRYPTION = frozenset({"active", "inactive", "unsupported", "unknown"})
 
@@ -599,14 +606,20 @@ _EVALUATORS = {
 }
 
 
-def evaluate(posture, thresholds, encryption=None):
+def evaluate(posture, thresholds, encryption=None, platform=""):
     """Every check's verdict for one machine, in CHECKS order. Pure.
 
     `posture` is a cleaned document (as stored); `encryption` is bitlocker.get_inventory's
-    answer, passed in so this module never reaches into another's tables. A check whose
+    answer, passed in so this module never reaches into another's tables. `platform` is the
+    machine's reported capability platform, passed in for the same reason: the `mobile` area
+    counts only on a machine the hub knows to be Android -- see PLATFORM_ANDROID. A check whose
     evaluator raises is reported unknown rather than taking the rest with it -- a stored
     document from an older hub is the realistic way to get here.
     """
+    if platform != PLATFORM_ANDROID and posture.get("mobile"):
+        # Dropped rather than ignored check by check: the encryption and patch evaluators read
+        # the area too, and one of them consulting it on a PC would be the same escape hatch.
+        posture = {**posture, "mobile": {}}
     out = []
     applicable = MOBILE_CHECKS if _sent(posture.get("mobile") or {}) else DESKTOP_CHECKS
     for check_id, cis in CHECKS:
@@ -630,7 +643,7 @@ def counts(checks):
     return tally
 
 
-def fleet_summary(db_path, machines, thresholds, encryption_for):
+def fleet_summary(db_path, machines, thresholds, encryption_for, platform_for=None):
     """Per-check pass/fail/unknown counts over the machines that have reported.
 
     `machines` is the caller's visible set, already scoped by the web layer -- always a list,
@@ -648,7 +661,8 @@ def fleet_summary(db_path, machines, thresholds, encryption_for):
         stored = get_posture(db_path, machine)
         if stored["posture"] is None:
             continue
-        for check in evaluate(stored["posture"], thresholds, encryption_for(machine)):
+        platform = platform_for(machine) if platform_for else ""
+        for check in evaluate(stored["posture"], thresholds, encryption_for(machine), platform):
             row = rows[check["id"]]
             row[check["status"]] += 1
             if check["status"] == STATUS_FAIL:
