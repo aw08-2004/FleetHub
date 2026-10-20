@@ -164,7 +164,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.156.4"
+HUB_VERSION = "1.156.5"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -4872,9 +4872,15 @@ machine_status_tracker = changes.StatusTracker()
 # tick, so ANY writer's change reaches the Alerts page and the sidebar badge within a tick.
 # `updated_at` moves on every refresh of an episode; `episode_ended_at` covers the one
 # write that does not touch it.
+#
+# `detail` of the OPEN rows is hashed in as well, because one writer changes it without moving
+# `updated_at` on purpose: alerts.sync_ticket_alert refreshes a ticket alert's count and ids
+# while keeping its place in a newest-first list (raised in review on PR #158). Open rows only,
+# so the read stays a handful of rows however long the history grows.
 _ALERTS_SIGNATURE_SQL = (
     "SELECT COUNT(*), MAX(id), MAX(updated_at), MAX(COALESCE(episode_ended_at, 0)), "
     "SUM(status = 'open') FROM alerts")
+_OPEN_ALERT_DETAILS_SQL = "SELECT id, detail FROM alerts WHERE status = 'open' ORDER BY id"
 _last_alerts_signature = None
 
 
@@ -4895,7 +4901,8 @@ def status_watch_pass():
         print(f"[changes] Status watch pass failed: {e}")
     try:
         with get_db_conn() as conn:
-            signature = tuple(conn.execute(_ALERTS_SIGNATURE_SQL).fetchone())
+            signature = (tuple(conn.execute(_ALERTS_SIGNATURE_SQL).fetchone()),
+                         hash(tuple(tuple(r) for r in conn.execute(_OPEN_ALERT_DETAILS_SQL))))
         if _last_alerts_signature is not None and signature != _last_alerts_signature:
             mark_changed("alerts")
         _last_alerts_signature = signature

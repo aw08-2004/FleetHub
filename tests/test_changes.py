@@ -291,6 +291,21 @@ def test_offline_transition_is_pushed():
     check("...once, not on every pass after",
           not any(c["topic"] == "status" for c in app.change_notifier.drain()))
 
+    print("\n-- an alert whose detail changes without moving updated_at still notifies --")
+    # alerts.sync_ticket_alert refreshes a ticket alert's count and ids but leaves
+    # updated_at alone, so the list keeps its order. The signature must see it anyway.
+    import alerts
+    alerts.sync_ticket_alert(app.DB_PATH, alerts.KIND_TICKET_NEW, "PC-9", [1], raise_new=True)
+    app.status_watch_pass()
+    app.change_notifier.drain()
+    alerts.sync_ticket_alert(app.DB_PATH, alerts.KIND_TICKET_NEW, "PC-9", [1, 2])
+    app.status_watch_pass()
+    check("a detail-only refresh marks `alerts`",
+          {"topic": "alerts", "machine": None} in app.change_notifier.drain())
+    app.status_watch_pass()
+    check("...and an unchanged table does not",
+          not any(c["topic"] == "alerts" for c in app.change_notifier.drain()))
+
 
 def park_background_flusher():
     """The app starts its own flusher thread at import. Left running it could drain a mark
