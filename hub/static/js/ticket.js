@@ -219,28 +219,34 @@
      *  always Ask mode, and every confirm-tier route is a card the operator clicks
      *  (assistant_web.execute), whatever the message talked the model into. */
     function buildDraft() {
-        var lines = [
+        // Everything the PC wrote -- subject, body, program names and patch titles in the
+        // facts -- goes inside ONE fence, and the notice says so. A run of three backticks in
+        // that text is defused first, or a body could close the fence and carry on as if it
+        // were the operator talking (PR #160 review).
+        function defuse(text) { return String(text).replace(/`{3,}/g, "'''"); }
+        var pc = [
+            t('tickets.assistant_draft_subject') + ': ' + defuse(ticket.subject),
+            '',
+            t('tickets.description') + ':',
+            defuse(ticket.body || t('tickets.no_description')),
+            '',
+            t('tickets.facts') + ':'
+        ];
+        factLines().forEach(function (line) {
+            var value = line[1];
+            if (value !== null && value !== undefined && value !== '') pc.push('- ' + line[0] + ': ' + defuse(value));
+        });
+        return [
             t('tickets.assistant_draft_intro', {
-                id: ticket.id, subject: ticket.subject, machine: ticket.machine,
-                link: '/tickets/' + ticket.id
+                id: ticket.id, machine: ticket.machine, link: '/tickets/' + ticket.id
             }),
             t('tickets.assistant_draft_state', {
                 urgency: URGENCY_TEXT[ticket.urgency] || ticket.urgency,
                 status: STATUS_TEXT[ticket.status] || ticket.status
             }),
             t('tickets.assistant_draft_untrusted'),
-            '',
-            t('tickets.description') + ':',
-            ticket.body || t('tickets.no_description'),
-            '',
-            t('tickets.facts') + ':'
-        ];
-        factLines().forEach(function (line) {
-            var value = line[1];
-            if (value !== null && value !== undefined && value !== '') lines.push('- ' + line[0] + ': ' + value);
-        });
-        lines.push('', t('tickets.assistant_draft_ask'));
-        return lines.join('\n');
+            '```'
+        ].concat(pc, ['```', '', t('tickets.assistant_draft_ask')]).join('\n');
     }
 
     function askAssistant() {

@@ -313,11 +313,21 @@ def test_ticket_page_wiring():
     check(f"every id ticket.js looks up is in ticket.html (missing: {missing})", not missing)
     check("the AI card hands the ticket to the assistant",
           "ticket-ask-assistant" in ids and 'id="ticket-ask-assistant"' in template)
-    # The privacy line the old triage held: the reporter never reaches a provider.
+    # The privacy line the old triage held: the reporter (reporter_name, reporter_sid,
+    # reporter_kind) and the screenshots (attachments) never reach a provider. An ALLOW-list
+    # of the ticket fields the message reads, not a search for "reporter": a new field under
+    # another name would sail past a deny-word (PR #160 review).
     draft = script[script.index("function buildDraft"):script.index("function askAssistant")]
-    check("the assistant message never names the reporter", "reporter" not in draft)
-    check("...and marks the ticket text as data, not instructions",
-          "tickets.assistant_draft_untrusted" in draft)
+    facts = script[script.index("function factLines"):script.index("function renderFacts")]
+    sent = set(re.findall(r"\bticket\.(\w+)", draft + facts))
+    allowed = {"id", "subject", "machine", "urgency", "status", "body", "facts"}
+    check(f"the assistant message reads only {sorted(allowed)} (also read: {sorted(sent - allowed)})",
+          sent <= allowed)
+    check("...and the facts helper the message shares reads nothing but ticket.facts",
+          set(re.findall(r"\bticket\.(\w+)", facts)) <= {"facts"})
+    check("...and the PC's text goes inside a fence it cannot close",
+          "tickets.assistant_draft_untrusted" in draft and "defuse(ticket.body" in draft
+          and "defuse(ticket.subject)" in draft)
 
 
 def main():
