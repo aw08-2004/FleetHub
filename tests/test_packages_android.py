@@ -114,6 +114,29 @@ def main():
                       steps=[{"kind": "apk", "apk": "{paylod}"}])
         check("...and a payload that exists", why and "paylod" in why)
 
+        print("\n== An update is held to the same rules as a create ==")
+        # The silent case: create passes the Android rules, and a later edit adds a Windows
+        # step. update_package re-validates the whole recipe, so this must be refused too.
+        why = refused(packages.update_package, db_path, pkg["id"],
+                      steps=[{"kind": "apk", "apk": "{payload}"},
+                             {"kind": "run", "command": "msiexec.exe", "args": "/i {payload}"}],
+                      actor="op@x.com")
+        check("adding a Windows step to an Android package is refused",
+              why and "only have apk steps" in why)
+        why = refused(packages.update_package, db_path, pkg["id"],
+                      detection={"kind": packages.DETECT_FILE_EXISTS, "path": "C:\\x"},
+                      actor="op@x.com")
+        check("adding a detection rule to an Android package is refused",
+              why and "detection" in why)
+        why = refused(packages.update_package, db_path, pkg["id"],
+                      sources=[{"name": "payload", "kind": packages.SOURCE_URL,
+                                "ref": "https://cdn.example/app.apk"}],
+                      actor="op@x.com")
+        check("swapping in an unpinned payload is refused", why and "pin its sha256" in why)
+        check("...and the stored package is unchanged",
+              packages.get_package(db_path, pkg["id"])["steps"]
+              == [{"kind": "apk", "apk": "{payload}"}])
+
         print("\n== The scheduler keeps each package on its own platform ==")
         capabilities.record_capabilities(db_path, "PHONE-1", {
             "platform": "android", "commands": [packages.COMMAND_TYPE], "features": []})
