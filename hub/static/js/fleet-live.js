@@ -184,8 +184,11 @@
             function busy() {
                 try {
                     if (owner.document.querySelector('dialog[open]')) return true;
-                    return !!(opts.busy && opts.busy());
-                } catch (e) { return false; }
+                    return !!opts.busy?.();
+                } catch (e) {
+                    // A busy() that throws must not wedge the page forever: treat it as idle.
+                    return false;
+                }
             }
 
             async function run() {
@@ -215,14 +218,14 @@
 
             const offs = [];
             offs.push(hub.on('changes', (msg) => {
-                const list = (msg && msg.changes) || [];
+                const list = msg?.changes || [];
                 if (list.some(wanted)) schedule();
             }));
             // The tickets blueprint predates change notices and pushes its own two events;
             // they are the same thing as a `tickets` change.
             for (const event of ['ticket_new', 'ticket_updated']) {
                 offs.push(hub.on(event, (msg) => {
-                    const change = { topic: 'tickets', machine: msg && msg.machine, id: msg && msg.id };
+                    const change = { topic: 'tickets', machine: msg?.machine, id: msg?.id };
                     if (wanted(change)) schedule();
                 }));
             }
@@ -267,8 +270,7 @@
     // ---------------- Which hub this document uses ----------------
     function parentHub() {
         try {
-            if (window.parent !== window && window.parent.FleetLive
-                    && window.parent.FleetLive.__hub) {
+            if (window.parent !== window && window.parent.FleetLive?.__hub) {
                 return window.parent.FleetLive.__hub;
             }
         } catch (e) { /* cross-origin parent: not our shell */ }

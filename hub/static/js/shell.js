@@ -461,7 +461,9 @@
             const resp = await fetch('/', { credentials: 'same-origin' });
             if (!resp.ok) return;
             html = await resp.text();
-        } catch (e) { return; }     // offline or mid-deploy: keep the nav we have
+        } catch (e) {
+            return;     // offline or mid-deploy: keep the nav we have
+        }
         const fresh = new DOMParser().parseFromString(html, 'text/html')
             .querySelector('#app-sidebar .sidebar__nav');
         if (!fresh || navSignature(fresh) === navSignature(current)) return;

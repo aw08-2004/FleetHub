@@ -738,7 +738,7 @@ groupSelect.addEventListener('change', async () => {
 // Search box, sort and selection survive either way, because render() reads them from module
 // state rather than from the DOM rows.
 function onLiveReading(msg) {
-    if (!msg || !msg.machine) return;
+    if (!msg?.machine) return;
     const row = allRows.find((r) => r.machine === msg.machine);
     if (!row) return;
     row.temp = msg.temp;

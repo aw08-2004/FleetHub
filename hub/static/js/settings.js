@@ -673,5 +673,5 @@ loadSettings();
 // would silently discard what they typed. The save they make next re-reads anyway.
 window.FleetLive.watch(['settings'], loadSettings, {
     busy: () => dirty.size > 0
-        || !!(document.activeElement && document.activeElement.closest('.setting')),
+        || !!document.activeElement?.closest('.setting'),
 });
