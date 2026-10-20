@@ -341,6 +341,34 @@
         } catch (e) { /* still loading */ }
     }
 
+    // ---------------- Handing a message to the assistant ----------------
+    // A page that wants the assistant to look at something (the ticket page's "Ask the
+    // assistant", roadmap #31) hands the shell the text, and the assistant takes it on load or
+    // on `fleet:draft`, starts a new conversation and sends it. One-shot: takeDraft() clears
+    // it, so reloading the assistant never sends the same ticket twice.
+    //
+    // Rejected: /assistant?draft=<text>. It would put somebody's ticket text in the url bar
+    // and the browser history, and a long description does not fit in a url anyway.
+    let pendingDraft = null;
+
+    function askAssistant(text) {
+        pendingDraft = String(text || '');
+        if (!pendingDraft) return;
+        if (!docked()) navigate(ASSISTANT, { push: true });
+        const frame = frames.get(ASSISTANT);
+        if (!frame) return;
+        try {
+            frame.contentWindow.focus();
+            frame.contentWindow.dispatchEvent(new CustomEvent('fleet:draft'));
+        } catch (e) { /* still loading: its boot takes the draft */ }
+    }
+
+    function takeDraft() {
+        const text = pendingDraft;
+        pendingDraft = null;
+        return text;
+    }
+
     // ---------------- Navigation ----------------
     function navigate(href, { push = false, focus = true } = {}) {
         const url = new URL(href, location.href);
@@ -485,7 +513,7 @@
     // The first frame is rendered by base.html rather than created here, so the page inside
     // it starts loading with the document instead of a script later. Adopt it as it stands.
     window.FleetShell = {
-        pageContext, setContext, pin, unpin,
+        pageContext, setContext, pin, unpin, askAssistant, takeDraft,
         isPinned: () => !!docked(),
         canPin: () => !narrow.matches,
     };

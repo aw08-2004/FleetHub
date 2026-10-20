@@ -6280,6 +6280,17 @@ send a ticket to a hub with no route for it loses the ticket and tells the perso
   only the agent (forget the version on a new build) was rejected as the whole fix: it reaches
   nobody until a release and cannot unstick machines already holding a wrong version.
   `settings.agent_config_version_for` has the full reasoning.
+- **AI triage on the ticket page is the assistant (#26)** (owner, 2026-10-20, hub 1.157.0).
+  The button opens the assistant in a new conversation and sends it the ticket number, link,
+  text, state and facts -- the same privacy line as before, never the screenshots or who
+  reported it -- instead of the page's own one-shot provider call and summary box. One AI
+  surface: a follow-up question, a check on the PC or a drafted script happen in the same
+  conversation, under the assistant's confirm tiers. The hand-off is `FleetShell.askAssistant`
+  (one-shot, so reloading the assistant never re-sends). Rejected: keeping the inline triage
+  beside it (two answers to one ticket that can disagree), and passing the text as
+  `/assistant?draft=` (ticket text in the url bar and history). Still there, unused by the
+  page: `POST /api/tickets/<id>/triage` and `/script` and the `ticket_triage` table; removing
+  them is its own change.
 
 ### Rejected alternatives
 - **A ticket page on the hub that the person signs in to.** No machine identity and no

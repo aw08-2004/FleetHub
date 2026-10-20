@@ -53,22 +53,16 @@
         </div>
     </div>
 
-    {# Suggest-only (roadmap #31): a button, never a timer, and a drafted script lands in the
-       library switched off. #}
-    <div class="card" style="margin-bottom: var(--space-5);" id="ticket-ai">
+    {# AI triage is the console assistant (roadmap #26, #31): the button hands it this ticket in
+       a new conversation instead of running a second, separate AI call here. A button, never a
+       timer. Drawn only while the assistant is switched on and only for manage_tickets holders
+       (ticket.js), the same people the old triage button was for. #}
+    <div class="card" style="margin-bottom: var(--space-5);" id="ticket-ai" hidden
+         data-assistant="{{ 1 if assistant_enabled else '' }}">
         <h2 class="section-title">{{ t('tickets.ai_heading') }}</h2>
         <p class="stat-card__meta">{{ t('tickets.ai_help') }}</p>
         <div class="toolbar" style="margin: var(--space-3) 0;">
-            <button type="button" class="btn btn--primary" id="ticket-triage" hidden>{{ t('tickets.ai_ask') }}</button>
-            <button type="button" class="btn btn--ghost" id="ticket-draft" hidden>{{ t('tickets.ai_draft') }}</button>
-            <span class="stat-card__meta" id="ticket-ai-status"></span>
-        </div>
-        <div id="ticket-triage-result" hidden>
-            <p id="ticket-triage-summary"></p>
-            <p class="stat-card__meta" id="ticket-triage-cause"></p>
-            <ol id="ticket-triage-steps"></ol>
-            <pre id="ticket-triage-script" style="white-space: pre-wrap; overflow-x: auto;" hidden></pre>
-            <p class="stat-card__meta" id="ticket-triage-meta"></p>
+            <button type="button" class="btn btn--primary" id="ticket-ask-assistant">{{ t('tickets.ai_ask_assistant') }}</button>
         </div>
     </div>
 
