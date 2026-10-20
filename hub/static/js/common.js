@@ -130,19 +130,51 @@ function syncUrl(url) {
     } catch (e) { /* not our shell */ }
 }
 
-// Connects the Socket.IO client and wires up a #socket-status pill. Returns the socket
-// so callers can attach their own `new_temp` handlers.
+// The live socket, for a page that wants raw events (`new_temp`). Used to open a socket of
+// its own per page; now it is a view onto the tab's ONE socket (fleet-live.js), which also
+// drives the topbar's Live pill, so it returns something with the one method callers use.
+// Prefer FleetLive.watch() for anything that is "re-read when X changes".
 function connectSocketWithStatus() {
-    const socket = io({ transports: ['polling'], upgrade: false });
-    const statusEl = shellElement('socket-status');
-    // The shell renders one pill for every page and hides it until a page claims it. Claiming
-    // is marking our own frame, not showing the pill directly: the shell keeps several frames
-    // alive at once and only the visible one's status should be on screen.
-    if (window.frameElement) window.frameElement.dataset.socket = 'yes';
-    if (statusEl) statusEl.hidden = false;
-    socket.on('connect', () => setStatusPill(statusEl, 'ok', t('common.status.live')));
-    socket.on('disconnect', () => setStatusPill(statusEl, 'danger', t('common.status.offline')));
-    return socket;
+    return { on: (event, fn) => window.FleetLive.on(event, fn) };
+}
+
+// ---- Relative time ----
+// One formatter for every "3m ago" in the console. There were four near-identical copies
+// (machine, inventory, settings AI, processes); they agreed only by luck. Accepts epoch
+// seconds, or the hub's server-local "YYYY-MM-DD HH:MM:SS" (hub and operators share a
+// timezone). The `machine.ago.*` keys because that page needed them first.
+function fmtAgo(value) {
+    if (value === null || value === undefined || value === '') return '--';
+    let ms;
+    if (typeof value === 'number' || /^\d+(\.\d+)?$/.test(String(value))) {
+        ms = Number(value) * 1000;
+    } else {
+        ms = new Date(String(value).replace(' ', 'T')).getTime();
+        if (Number.isNaN(ms)) return String(value);
+    }
+    const secs = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+    if (secs < 60) return t('machine.ago.seconds', { value: secs });
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return t('machine.ago.minutes', { value: mins });
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return t('machine.ago.hours', { value: hrs });
+    return t('machine.ago.days', { value: Math.floor(hrs / 24) });
+}
+
+// Write a relative time into `node` AND mark it, so fleet-live.js keeps re-rendering it --
+// "2m ago" that still says 2m an hour later is the stale value this whole feature is about.
+// The exact stamp goes in the tooltip. Pass null to clear the mark.
+function fmtAgoInto(node, value) {
+    if (!node) return;
+    if (value === null || value === undefined || value === '') {
+        delete node.dataset.agoAt;
+        node.textContent = '--';
+        node.removeAttribute('title');
+        return;
+    }
+    node.dataset.agoAt = String(value);
+    node.textContent = fmtAgo(value);
+    node.title = typeof value === 'number' ? new Date(value * 1000).toLocaleString() : String(value);
 }
 
 function initThemeToggle() {
@@ -439,8 +471,6 @@ function initTopbarMore() {
 // shell that never reloads this document. So every page that shows the badge keeps it
 // current itself.
 
-const ALERT_BADGE_POLL_MS = 30000;
-
 // In shell mode the sidebar lives in the OUTER document while pages run inside the frame,
 // so a framed page finds its badge through the parent. Same origin by construction; the
 // try/catch is for the case where it isn't ours to touch.
@@ -478,12 +508,10 @@ function initAlertBadge() {
     // and would otherwise double the request rate for one number; it can still push a value
     // through setAlertBadge (alerts.js does, the instant a dismiss is confirmed).
     if (!document.getElementById('alerts-badge')) return;
-    setInterval(refreshAlertBadge, ALERT_BADGE_POLL_MS);
-    // A background tab's timers are throttled hard, so a tab returned to after an hour would
-    // show its hour-old count for a while. Correct it on the way back in.
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) refreshAlertBadge();
-    });
+    // Pushed, not polled: the hub sends an `alerts` change notice whenever the table moves
+    // (app.py, status_watcher), and FleetLive also re-runs this on reconnect and when a
+    // hidden tab is shown again. It used to be a 30-second poll.
+    if (window.FleetLive) window.FleetLive.watch(['alerts'], refreshAlertBadge);
 }
 
 // ============ Hub update notice ============

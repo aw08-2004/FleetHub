@@ -1050,6 +1050,9 @@
         await loadChats();
         const saved = recall(CHAT_KEY);
         if (saved && chats.some((c) => c.id === saved)) await openChat(saved);
+        // A chat started, renamed or deleted in another tab. Only the list: the open thread
+        // already follows its own run on the 800 ms poll, and re-reading it here would race it.
+        window.FleetLive.watch(['assistant'], loadChats, { minInterval: 3000 });
     }
 
     boot();

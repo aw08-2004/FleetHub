@@ -274,4 +274,5 @@
     } else {
         load();
     }
+    window.FleetLive.watch(['settings'], load, { minInterval: 5000 });
 })();

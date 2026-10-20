@@ -277,4 +277,5 @@
     // Re-inject after settings.js (re)renders the panel; refresh once on initial load.
     document.addEventListener('settings:rendered', render);
     document.addEventListener('DOMContentLoaded', refresh);
+    window.FleetLive.watch(['remote', 'settings'], refresh, { minInterval: 5000 });
 })();

@@ -457,6 +457,9 @@ modal.addEventListener('click', (e) => { if (e.target === modal) modal.close(); 
     }
     await load();
     attachPickers();
+    // Somebody redeeming an invite is a write under the invites blueprint, so the "used"
+    // state and counts follow without a reload.
+    window.FleetLive.watch(['invites', 'permissions'], load);
 })();
 
 })();

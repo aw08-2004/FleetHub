@@ -835,4 +835,7 @@ async function fetchBundles() {
 }
 
 loadAlerts();
-setInterval(loadAlerts, 30000);
+// Pushed: the hub sends an `alerts` notice whenever the alerts table moves (app.py,
+// status_watcher), and `status` because the duplicate-serial cards show online/offline.
+// This used to be a 30-second poll.
+window.FleetLive.watch(['alerts', 'status', 'machines'], loadAlerts);

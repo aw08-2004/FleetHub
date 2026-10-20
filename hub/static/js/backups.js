@@ -1312,6 +1312,14 @@ function foldFor(pane) {
 function boot() {
     loadMachineOptions();
     load().catch(onLoadFailed);
+    // Runs, destinations and the key state, pushed. load() keeps the operator's unsaved
+    // selections in `state` (the note near the top of this file), which is what makes it
+    // safe to re-run under them. Once, however many times the tab is booted.
+    if (!boot.watching) {
+        boot.watching = true;
+        window.FleetLive.watch(['backups'], () => load().catch(onLoadFailed),
+            { minInterval: 3000 });
+    }
     // Whichever folds are open on arrival still need their contents; the toggle listeners
     // above only fire on a change.
     if (foldFor(settingsPane).open) { renderSettingsPane(); refreshPreview(); }

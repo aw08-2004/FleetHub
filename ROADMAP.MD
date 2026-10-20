@@ -519,6 +519,71 @@ the wire.
 
 ---
 
+## ✅ Live console -- every page updates without a refresh   ·   hub 1.156.0
+
+Asked for by the owner on 2026-10-19: "it updates real time without me having to refresh the
+page ... with all values visible on screen". Before this, two pages listened to the socket
+(the machine page for `new_temp`, the tickets list), five polled every 30 seconds, and every
+other page was fresh at load and stale from then on. Nothing at all told a page that a
+machine had gone **offline**: status is derived on read, so no write ever happened at that
+moment for anything to push.
+
+**The design: notify, then refetch through the gated route.** `changes.py` (Flask-free)
+coalesces `(topic, machine)` marks and pushes them as one `changes` event per ~750 ms flush.
+`app.py` marks from four places:
+- **One `after_request` hook** marks every 2xx write under `/api/`. The topic comes from the
+  blueprint (`changes.BLUEPRINT_TOPICS`), the machine from the URL or, for an agent's write,
+  from its bearer token (`auth_helpers.bearer_agent` sets `g.agent_machine`). Streams are
+  excluded by URL rule (`UNMARKED_RULES`): terminal output, remote signalling, upload chunks.
+  `/api/report` is excluded too, because it is already `new_temp`.
+- **The heartbeat** marks only the change-only blocks it actually carried
+  (`changes.heartbeat_topics`), so an idle heartbeat marks nothing.
+- **Background writers** mark where they write: the deploy, patch, firmware and wake
+  schedulers, the sweeps, AD sync and the rule evaluator.
+- **`status_watcher`**, every 5 s, compares each machine's derived status with its last answer
+  and marks `status` on a transition. It also compares a one-row signature of the `alerts`
+  table, so all of that table's dozen writers are covered without a mark at each one.
+
+Rooms decide the audience: a machine's notice goes to `fleet:all` plus `machine:<name>`, a
+fleet-wide one to `viewers:all`. Either way it is delivered once per listener.
+`tests/test_changes.py` fails when a blueprint with a write has no topic, which is how a
+future feature area would otherwise go un-live without anyone noticing.
+
+**Client:** `static/js/fleet-live.js`. The shell document owns **one socket per tab** and
+framed pages subscribe through `window.parent.FleetLive`, unsubscribing on `pagehide`.
+`FleetLive.watch(topics, refresh, opts)` throttles each refresh (leading + trailing, never
+concurrent) and pauses it while the tab is hidden. It also defers the refresh while a
+`<dialog>` is open or the page's `busy()` says an edit is in progress (Settings' `dirty` map,
+the rule and policy editors, staged firmware edits, the wipe panel). Every watcher re-runs on
+reconnect, and a 30 s fallback tick stands in while the socket is down. The ticker re-renders
+`[data-ago-at]` elements every 10 s, so relative times keep counting. On a `permissions` or
+`settings` notice the shell re-reads its own nav and swaps it in if the links differ. A
+permissions notice also reconnects the socket, so rooms are re-resolved and a revocation
+reaches live telemetry without a reload, which closes the gap noted at `handle_socket_connect`.
+
+*Rejected:*
+- **Pushing the changed data.** Rooms are fixed at connect time, so a payload would need a
+  per-listener permission check on every write. One mistake there leaks a machine to somebody
+  scoped away from it. tickets_web.py made the same call (roadmap #31).
+- **A socket per page.** Polling-only Socket.IO holds a waitress thread per open socket. One
+  per tab is fewer than before, when the Dashboard and machine page each opened their own.
+- **Shorter polling.** The load scales with tabs x pages x rate, and nearly every poll answers
+  "nothing changed".
+- **WebSockets.** Waitress cannot serve them.
+- **Reloading the shell on a permission change.** It would drop the persistent Remote frame
+  and any live session in it, over a sidebar link.
+
+**Not live, deliberately:** the Files browser, where a refresh would throw away the folder
+you navigated to, and the Remote picker dialog. Both fetch when opened. The topbar's version
+badges change only through a hub update, which restarts the hub and the socket anyway.
+
+**Owed in a browser:** two tabs side by side against a real hub. Change a setting, dismiss an
+alert and reply to a ticket in one, and watch the other follow. Stop an agent and watch its
+machine page flip to "Last seen" without a reload. Confirm the Network panel shows one
+`socket.io` polling stream per tab, not per frame.
+
+---
+
 ## ✅ 6. History page
 
 Done. Per-machine multi-panel dashboard (Komodo-style): CPU load, memory (with total RAM

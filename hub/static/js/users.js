@@ -239,3 +239,4 @@ modal.addEventListener('click', (e) => {
 });
 
 loadUsers();
+window.FleetLive.watch(['users', 'permissions'], loadUsers);

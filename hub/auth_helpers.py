@@ -3,7 +3,7 @@
 Consolidates the _bearer_agent() function that was previously duplicated in
 fleet_web.py, remote_web.py, bios_web.py, backups_web.py, and files_web.py.
 """
-from flask import request
+from flask import g, request
 
 import fleet
 
@@ -38,4 +38,8 @@ def bearer_agent(db_path):
     machine = fleet.authenticate_agent(db_path, agent_id, token)
     if machine is None:
         return None, None
+    # Remembered for the request so the live console's change notice can say WHICH machine
+    # an agent's write was about (app.py, _mark_changes). Agent routes carry the machine in
+    # the token, not the URL, so view_args alone would file every agent result fleet-wide.
+    g.agent_machine = machine
     return agent_id, machine

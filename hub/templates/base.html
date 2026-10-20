@@ -7,6 +7,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="csrf-token" content="{{ csrf_token }}">
+{# Read by static/js/fleet-live.js: "on" opens the tab's live socket. Off on the public pages
+   (invite, onboarding) and for anyone the socket's connect handler would refuse anyway. #}
+<meta name="fleet-live" content="{{ 'on' if live_enabled else 'off' }}">
 <title>{% block title %}FleetHub{% endblock %}</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
@@ -123,6 +126,15 @@
 <script type="application/json" id="i18n-catalog">{{ i18n_catalog_json | safe }}</script>
 <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
 <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+{# The live console: one socket per TAB, owned by the shell (or by a page opened without
+   one), which framed pages subscribe through -- see fleet-live.js for why not one per page.
+   So the socket library is only loaded where a socket can be opened. fleet-live.js itself
+   is loaded everywhere: in a frame it is the thin client of the shell's socket, and every
+   document runs its own relative-time ticker. #}
+{% if live_enabled and shell_mode != 'framed' %}
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
+{% endif %}
+<script src="{{ url_for('static', filename='js/fleet-live.js') }}"></script>
 {# The Ctrl+K palette lives with the topbar, so wherever there is a topbar: the shell and a
    classic page, never a framed one (the shell's copy hears framed keystrokes through
    FleetPalette.listen). Before shell.js, which calls that on every frame load. #}

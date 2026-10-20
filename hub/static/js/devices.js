@@ -130,5 +130,8 @@
             if (loaded) return;
             loaded = true;
             load();
+            // Pairing, revoking, and a token's last use are all writes under the tokens
+            // blueprint; from the first time this tab is shown, it follows them.
+            window.FleetLive.watch(['tokens'], load);
         });
 })();

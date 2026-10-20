@@ -105,6 +105,14 @@
         if (focus) summary.focus();
     }
 
+    // Online pills that follow the fleet: re-read while the list is open, and dropped while it
+    // is closed so the next open fetches fresh rather than showing what was true at first use.
+    window.FleetLive.watch(['status', 'machines'], () => {
+        if (root.open) return load();
+        roster = null;
+        return null;
+    }, { minInterval: 3000 });
+
     root.addEventListener('toggle', () => {
         if (!root.open) return;
         if (!roster) load();

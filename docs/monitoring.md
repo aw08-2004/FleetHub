@@ -19,6 +19,32 @@ Permission groups, Users and others). **Ctrl+K** finds a device or a page by nam
 - **Alerts** (`/alerts`) -- machines running hot, duplicate machines, and other
   conditions that want attention (see below).
 
+### Every page is live
+
+Nothing in the console needs a refresh. When something a page shows changes -- whoever or
+whatever changed it: another operator, an agent's report, a scheduler, a machine going quiet
+-- the page re-reads it within a second or two. Relative times ("last seen 3m ago") keep
+counting while the page is open.
+
+How it works (see [changes.py](../hub/changes.py) and `static/js/fleet-live.js`): every
+successful write under `/api/` makes the hub push a **change notice** naming a topic
+(`alerts`, `deployments`, `settings`, ...) and, when it is about one machine, the machine. The
+notice carries no data; the page re-fetches through the same permission-checked route it
+loaded from, so a notice can never show an operator something their scope hides. A
+five-second watcher turns "this machine's last report is now outside the online window" into a
+`status` notice, which is how a machine going offline reaches an open page.
+
+- **One connection per browser tab.** The shell owns it and every page in the tab shares it,
+  so a tab holds at most one hub worker thread however many pages it visits. The topbar's
+  **Live** pill is that connection's state.
+- **While it is down**, pages re-read every 30 seconds, and everything re-reads once on
+  reconnect.
+- **A page never refreshes under your hands.** It waits while a dialog or editor is open or a
+  setting is unsaved, and catches up as soon as it closes. A hidden tab catches up when it is
+  shown again.
+- **Permission changes apply at once.** The sidebar's links follow a grant or a revocation,
+  and the connection re-joins with the new scope.
+
 ### The machine page reports at 1 Hz while you are watching it
 
 A machine reports every 5s by default (**Settings -> History Metrics**, see below), and only

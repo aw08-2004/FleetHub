@@ -668,3 +668,10 @@ function describe(field, value) {
 }
 
 loadSettings();
+// Another operator's save. Held off while THIS operator has an unsaved value, or the caret
+// in a field: applySchema() re-renders every panel and clears `dirty`, so refreshing then
+// would silently discard what they typed. The save they make next re-reads anyway.
+window.FleetLive.watch(['settings'], loadSettings, {
+    busy: () => dirty.size > 0
+        || !!(document.activeElement && document.activeElement.closest('.setting')),
+});

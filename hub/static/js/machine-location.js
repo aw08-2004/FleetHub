@@ -186,4 +186,7 @@
     });
 
     if (fold.open) load();
+    // A new fix for this PC. Only once the fold has been opened -- a closed card loads on
+    // its own toggle, and fetching a map nobody unfolded is a request nobody asked for.
+    window.FleetLive.watch(['location'], () => (loaded ? load() : null), { machine });
 })();

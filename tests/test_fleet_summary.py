@@ -234,9 +234,10 @@ def test_the_page_asks_for_what_the_endpoint_returns():
     # Matched as an assignment, so the comment explaining the rule does not fail it.
     check("nothing on the Dashboard is built with innerHTML", ".innerHTML =" not in js)
 
-    # socket.io went with the per-machine cards -- there is nothing for a per-reading event
-    # to update, and re-fetching a fleet aggregate at 1 Hz is not viable.
+    # No socket of its own: re-fetching a fleet aggregate at 1 Hz is not viable, so it rides
+    # the shell's shared socket (fleet-live.js) and is throttled to the summary's cache.
     check("the Dashboard no longer opens a socket", "connectSocketWithStatus()" not in js)
+    check("...but re-reads on change notices", "FleetLive.watch(" in js)
     check("...and does not load the client either",
           "socket.io.js" not in read(ROOT, "hub", "templates", "index.html"))
 

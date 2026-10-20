@@ -105,4 +105,5 @@
     }
 
     load();
+    window.FleetLive.watch(['posture'], load, { machine });
 }());

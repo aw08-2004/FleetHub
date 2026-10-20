@@ -261,4 +261,5 @@
     }
 
     load();
+    window.FleetLive.watch(['bitlocker'], load, { machine });
 }());

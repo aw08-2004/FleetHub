@@ -20,7 +20,6 @@
 
     var rows = [];
     var vocabularyLoaded = false;
-    var reloadTimer = null;
 
     function el(tag, className, text) {
         var node = document.createElement(tag);
@@ -169,19 +168,11 @@
         load().catch(showError);
     }
 
-    function scheduleReload() {
-        clearTimeout(reloadTimer);
-        reloadTimer = setTimeout(reload, 500);
-    }
-
     statusSelect.addEventListener('change', reload);
     search.addEventListener('input', render);
 
-    if (typeof io === 'function' && typeof connectSocketWithStatus === 'function') {
-        var socket = connectSocketWithStatus();
-        socket.on('ticket_new', scheduleReload);
-        socket.on('ticket_updated', scheduleReload);
-    }
-
     reload();
+    // The tickets blueprint's own ticket_new / ticket_updated and the generic `tickets`
+    // change notice both land here (fleet-live.js folds the first two into the third).
+    window.FleetLive.watch(['tickets'], load);
 }());

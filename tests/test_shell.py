@@ -204,26 +204,41 @@ def test_sidebar_prefixes_match_their_own_links():
 
 
 def test_socket_pill_is_shared_by_the_shell():
-    print("\n-- the live-data pill is rendered once in the chrome, claimed by the page --")
+    """Every page is live now, over ONE socket per tab that the shell owns (fleet-live.js).
+
+    The silent failure this pins is the old shape coming back by accident: a framed page
+    loading the socket library and opening a second socket, which costs a waitress thread per
+    tab per page (app.py, where SocketIO is built) -- or the pill going back to being hidden
+    until a page "claims" it, which would leave it dark on every page but two.
+    """
+    print("\n-- one socket per tab: the shell owns it, framed pages subscribe through it --")
     shell = get("/", DOCUMENT)
     check("the shell renders the pill", 'id="socket-status"' in shell)
-    check("...starting hidden, since no page has claimed it yet",
-          re.search(r'id="socket-status"[^>]*hidden', shell) is not None)
+    check("...shown from the start, since every page is live",
+          re.search(r'id="socket-status"[^>]*hidden', shell) is None)
+    check("the shell loads the socket library", "vendor/socket.io.min.js" in shell)
+    check("...and fleet-live.js", "js/fleet-live.js" in shell)
+    check("...and says the socket may be opened",
+          '<meta name="fleet-live" content="on">' in shell)
 
     framed = get("/", IFRAME)
-    check("the framed page does not render a second one", 'id="socket-status"' not in framed)
+    check("the framed page does not render a second pill", 'id="socket-status"' not in framed)
+    check("...nor load the socket library (it uses the shell's socket)",
+          "socket.io.min.js" not in framed)
+    check("...but does load fleet-live.js, its client half", "js/fleet-live.js" in framed)
 
-    plain = get("/", {})
-    check("outside the shell the dashboard still renders its own",
-          'id="socket-status"' in plain and "hidden" not in
-          plain.split('id="socket-status"', 1)[1].split(">", 1)[0])
-    check("...and a page with no socket still renders none",
-          'id="socket-status"' not in get("/inventory", {}))
+    plain = get("/inventory", {})
+    check("outside the shell any page renders its own pill", 'id="socket-status"' in plain)
+    check("...and loads the library to open its own socket", "socket.io.min.js" in plain)
 
-    js = read(STATIC, "js", "common.js")
-    check("the page reaches the chrome through the frame boundary", "shellElement" in js)
-    check("...and marks its own frame as the claimant",
-          "window.frameElement" in js and "dataset.socket" in js)
+    for template in ("machine.html", "tickets.html", "index.html"):
+        check(f"{template} no longer loads a socket of its own",
+              "socket.io.min.js" not in read(ROOT, "hub", "templates", template))
+
+    js = read(STATIC, "js", "fleet-live.js")
+    check("a framed page reaches the shell's socket through the parent",
+          "window.parent.FleetLive" in js)
+    check("...and drops its subscriptions when it goes away", "pagehide" in js)
 
 
 def test_shell_js_and_markup_agree():

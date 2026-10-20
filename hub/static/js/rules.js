@@ -1193,4 +1193,10 @@ document.getElementById('script-input-add').addEventListener('click', () => {
     fillKindSelects();
     renderScripts();
     await loadRules();
+    // `alerts` is what the rules blueprint marks, and what the evaluator marks when a rule
+    // fires -- so "last fired" moves on its own. Held off while either editor is open: a
+    // re-render under a half-built rule is the one refresh worse than a stale list.
+    window.FleetLive.watch(['alerts'], loadRules, {
+        busy: () => !editor.hidden || !document.getElementById('script-editor').hidden,
+    });
 })();

@@ -103,6 +103,7 @@
         load,
         teardown: reset,
         requires: (machine) => !!machine,
+        live: { topics: ['discovery'] },
     });
 
     /** Clear card state and invalidate any response still in flight. */

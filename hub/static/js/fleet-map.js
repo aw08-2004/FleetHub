@@ -107,4 +107,6 @@
 
     filterEl.addEventListener('input', draw);
     load();
+    // New fixes, and machines going on- or offline (the marker style follows status).
+    window.FleetLive.watch(['location', 'status', 'machines'], load, { minInterval: 5000 });
 })();

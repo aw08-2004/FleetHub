@@ -790,4 +790,6 @@
     loadBorrowed();
     loadPeers();
     loadLinks();
+    window.FleetLive.watch(['sharing', 'remote'],
+        () => Promise.all([loadShares(), loadBorrowed(), loadPeers(), loadLinks()]));
 }());

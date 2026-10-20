@@ -202,4 +202,10 @@
     frpEl.addEventListener('change', refreshProtectionHelp);
 
     load();
+    // Never while the wipe panel is open: a re-render under somebody typing the machine
+    // name to confirm a wipe is not a place for surprises.
+    window.FleetLive.watch(['wipe', 'commands'], load, {
+        machine,
+        busy: () => !wipePanel.hidden,
+    });
 })();
