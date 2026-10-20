@@ -623,6 +623,26 @@ def create_link(db_path, gpo_id, kind, key, *, label="", enforced=False, author_
     return get_link(db_path, link_id)
 
 
+_SET_ENFORCED_SQL = "UPDATE gpo_links SET enforced = ? WHERE id = ?"
+_SET_ENABLED_SQL = "UPDATE gpo_links SET enabled = ? WHERE id = ?"
+
+
+def _move_link(conn, link, move):
+    """Swap `link` with its neighbour one place up (-1) or down (+1) in its node's order, and
+    renumber. A move past either end is a no-op rather than an error."""
+    rows = conn.execute("SELECT id FROM gpo_links WHERE node_kind = ? AND node_key = ?"
+                        " ORDER BY link_order, id",
+                        (link["node_kind"], link["node_key"])).fetchall()
+    ids = [r["id"] for r in rows]
+    index = ids.index(link["id"])
+    other = index + move
+    if not 0 <= other < len(ids):
+        return
+    ids[index], ids[other] = ids[other], ids[index]
+    conn.executemany("UPDATE gpo_links SET link_order = ? WHERE id = ?",
+                     [(order, lid) for order, lid in enumerate(ids, start=1)])
+
+
 def update_link(db_path, link_id, *, enforced=None, enabled=None, move=None,
                 author_scope="keep"):
     """Toggle enforced/enabled, or move one place up (-1) or down (+1) in its node's order.
@@ -630,28 +650,18 @@ def update_link(db_path, link_id, *, enforced=None, enabled=None, move=None,
     link = get_link(db_path, link_id)
     if link is None:
         return None
+    flags = [(sql, 1 if value else 0)
+             for sql, value in ((_SET_ENFORCED_SQL, enforced), (_SET_ENABLED_SQL, enabled))
+             if value is not None]
     with get_conn(db_path) as conn:
-        if enforced is not None:
-            conn.execute("UPDATE gpo_links SET enforced = ? WHERE id = ?",
-                         (1 if enforced else 0, link["id"]))
-        if enabled is not None:
-            conn.execute("UPDATE gpo_links SET enabled = ? WHERE id = ?",
-                         (1 if enabled else 0, link["id"]))
+        for sql, value in flags:
+            conn.execute(sql, (value, link["id"]))
         if author_scope != "keep":
+            scope_json = None if author_scope is None else json.dumps(sorted(author_scope))
             conn.execute("UPDATE gpo_links SET scope_json = ? WHERE id = ?",
-                         (None if author_scope is None else json.dumps(sorted(author_scope)),
-                          link["id"]))
+                         (scope_json, link["id"]))
         if move in (-1, 1):
-            rows = conn.execute("SELECT id FROM gpo_links WHERE node_kind = ? AND node_key = ?"
-                                " ORDER BY link_order, id",
-                                (link["node_kind"], link["node_key"])).fetchall()
-            ids = [r["id"] for r in rows]
-            index = ids.index(link["id"])
-            other = index + move
-            if 0 <= other < len(ids):
-                ids[index], ids[other] = ids[other], ids[index]
-                for order, lid in enumerate(ids, start=1):
-                    conn.execute("UPDATE gpo_links SET link_order = ? WHERE id = ?", (order, lid))
+            _move_link(conn, link, move)
     invalidate()
     return get_link(db_path, link["id"])
 
