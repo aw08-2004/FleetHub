@@ -227,6 +227,21 @@ DEFAULT_CONFIRM_TIMEOUT_SECONDS = 24 * 3600
 _UID_RE = re.compile(r"^[a-z0-9][a-z0-9._:+-]{0,199}$")
 _KB_RE = re.compile(r"^KB[0-9]{5,10}$", re.IGNORECASE)
 
+# Who installs Windows updates on a PC (issue #140), as its agent reports it. `fleethub`:
+# the agent has set NoAutoUpdate and SetDisableUXWUAccess, so nothing installs except a
+# FleetHub run. `windows`: Windows Update runs on its own schedule. `managed_elsewhere`: a
+# Group Policy or Intune already sets those keys, and the agent will not fight it.
+CONTROL_COMMAND_TYPE = "set_update_control"
+CONTROL_FLEETHUB = "fleethub"
+CONTROL_WINDOWS = "windows"
+CONTROL_MANAGED_ELSEWHERE = "managed_elsewhere"
+CONTROL_STATES = (CONTROL_FLEETHUB, CONTROL_WINDOWS, CONTROL_MANAGED_ELSEWHERE)
+# Half an hour between control commands to one PC: longer than an agent takes to answer
+# and re-report, short enough that a PC an admin "fixed" by hand is taken back the same
+# evening.
+CONTROL_COOLDOWN_SECONDS = 30 * 60
+MAX_OUTSIDE_INSTALLS = 50
+
 # Minutes in a day, for window arithmetic.
 _DAY_MINUTES = 24 * 60
 
@@ -326,6 +341,31 @@ def init_patches_db(db_path):
         )
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_maintenance_windows_name "
                      "ON maintenance_windows(name COLLATE NOCASE)")
+        # Issue #140: the two switches that make a window more than a gate. Both default OFF,
+        # existing windows included -- the owner's decision, because turning either on for a
+        # window that has existed for months starts installing and restarting PCs on its next
+        # opening, and that should be somebody's deliberate click, not a side effect of a
+        # hub update.
+        window_columns = {r["name"] for r in conn.execute(
+            "PRAGMA table_info(maintenance_windows)")}
+        if "auto_run" not in window_columns:
+            conn.execute("ALTER TABLE maintenance_windows "
+                         "ADD COLUMN auto_run INTEGER NOT NULL DEFAULT 0")
+        if "own_windows_update" not in window_columns:
+            conn.execute("ALTER TABLE maintenance_windows "
+                         "ADD COLUMN own_windows_update INTEGER NOT NULL DEFAULT 0")
+
+        # Who decides when Windows installs updates on this PC, as the agent last reported it
+        # (agent 3.47.0+, issue #140). NULL means the agent never said -- an older agent, or
+        # one that has not scanned since upgrading -- which is a different thing from
+        # `windows` and the console says so.
+        state_columns = {r["name"] for r in conn.execute(
+            "PRAGMA table_info(machine_patch_state)")}
+        if "control_state" not in state_columns:
+            conn.execute("ALTER TABLE machine_patch_state ADD COLUMN control_state TEXT")
+        if "outside_installs_json" not in state_columns:
+            conn.execute("ALTER TABLE machine_patch_state "
+                         "ADD COLUMN outside_installs_json TEXT")
 
         # WHAT WAS DONE.
         conn.execute(
@@ -352,6 +392,9 @@ def init_patches_db(db_path):
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_patch_runs_status "
                      "ON patch_runs(status)")
+        # The dedupe key for window-created runs: one run per window OCCURRENCE.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_patch_runs_window "
+                     "ON patch_runs(window_id, window_start)")
 
         conn.execute(
             """
@@ -950,6 +993,8 @@ def _window_row(row):
         "scope_kind": row["scope_kind"],
         "machines": _json_list(row["scope_json"]),
         "reboot_policy": row["reboot_policy"],
+        "auto_run": bool(row["auto_run"]),
+        "own_windows_update": bool(row["own_windows_update"]),
         "created_at": row["created_at"],
         "created_by": row["created_by"],
         "updated_at": row["updated_at"],
@@ -957,7 +1002,8 @@ def _window_row(row):
     }
 
 
-def create_window(db_path, *, actor, now=None, **fields):
+def create_window(db_path, *, actor, now=None, auto_run=False, own_windows_update=False,
+                  **fields):
     clean = validate_window(**fields)
     if now is None:
         now = int(time.time())
@@ -967,11 +1013,13 @@ def create_window(db_path, *, actor, now=None, **fields):
             conn.execute(
                 "INSERT INTO maintenance_windows (id, name, enabled, days_mask, "
                 "  start_minute, duration_minutes, scope_kind, scope_json, reboot_policy, "
+                "  auto_run, own_windows_update, "
                 "  created_at, created_by, updated_at, updated_by) "
-                "VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (window_id, clean["name"], clean["days_mask"], clean["start_minute"],
                  clean["duration_minutes"], clean["scope_kind"],
                  json.dumps(clean["machines"]), clean["reboot_policy"],
+                 1 if auto_run else 0, 1 if own_windows_update else 0,
                  now, _clean(actor, 200) or "system", now, None),
             )
         except sqlite3.IntegrityError:
@@ -979,7 +1027,8 @@ def create_window(db_path, *, actor, now=None, **fields):
     return window_id
 
 
-def update_window(db_path, window_id, *, actor, enabled=None, now=None, **fields):
+def update_window(db_path, window_id, *, actor, enabled=None, auto_run=None,
+                  own_windows_update=None, now=None, **fields):
     existing = get_window(db_path, window_id)
     if existing is None:
         raise PatchError("That maintenance window no longer exists.")
@@ -996,15 +1045,20 @@ def update_window(db_path, window_id, *, actor, enabled=None, now=None, **fields
     if now is None:
         now = int(time.time())
     flag = existing["enabled"] if enabled is None else bool(enabled)
+    auto = existing["auto_run"] if auto_run is None else bool(auto_run)
+    own = (existing["own_windows_update"] if own_windows_update is None
+           else bool(own_windows_update))
     with get_conn(db_path) as conn:
         try:
             conn.execute(
                 "UPDATE maintenance_windows SET name = ?, enabled = ?, days_mask = ?, "
                 "  start_minute = ?, duration_minutes = ?, scope_kind = ?, scope_json = ?, "
-                "  reboot_policy = ?, updated_at = ?, updated_by = ? WHERE id = ?",
+                "  reboot_policy = ?, auto_run = ?, own_windows_update = ?, "
+                "  updated_at = ?, updated_by = ? WHERE id = ?",
                 (clean["name"], 1 if flag else 0, clean["days_mask"], clean["start_minute"],
                  clean["duration_minutes"], clean["scope_kind"],
-                 json.dumps(clean["machines"]), clean["reboot_policy"], now,
+                 json.dumps(clean["machines"]), clean["reboot_policy"],
+                 1 if auto else 0, 1 if own else 0, now,
                  _clean(actor, 200) or "system", window_id),
             )
         except sqlite3.IntegrityError:
@@ -1083,8 +1137,26 @@ def window_is_open(window, now=None):
     Sunday-night patch window silently stops at midnight, which is when it has barely
     started.
     """
+    return window_occurrence(window, now) is not None
+
+
+def window_occurrence(window, now=None):
+    """The (start, end) epoch seconds of the occurrence of this window that is open at `now`,
+    or None when it is closed.
+
+    Split out of window_is_open for issue #140, because a window that CREATES runs needs to
+    know which opening it is in, not just that it is open: the occurrence start is the dedupe
+    key that stops the scheduler creating a second run on its next tick a minute later. The
+    spill-over rule is window_is_open's and is kept here, in one place, so the two can never
+    disagree about whether 01:00 belongs to Sunday night's window.
+
+    The start is built with mktime from a local date plus a minute count, so it is the local
+    wall-clock opening even across a DST change; the end is that plus the duration in elapsed
+    time. On a DST night the two can disagree with window_is_open by the hour the clock
+    moved, which costs at most an hour of a run's `window_end` twice a year.
+    """
     if not window or not window.get("enabled"):
-        return False
+        return None
     stamp = time.localtime(now if now is not None else time.time())
     minute_of_day = stamp.tm_hour * 60 + stamp.tm_min
     start = window["start_minute"]
@@ -1092,14 +1164,19 @@ def window_is_open(window, now=None):
     today = stamp.tm_wday                       # 0 = Monday, matching the mask's bit 0
     yesterday = (today - 1) % 7
 
+    def _bounds(day_offset):
+        opened = int(time.mktime((stamp.tm_year, stamp.tm_mon, stamp.tm_mday + day_offset,
+                                  0, start, 0, 0, 0, -1)))
+        return opened, opened + duration * 60
+
     if window["days_mask"] & (1 << today) and start <= minute_of_day < start + duration:
-        return True
+        return _bounds(0)
     # The spill-over from a window that opened yesterday.
     if window["days_mask"] & (1 << yesterday):
         end = start + duration
         if end > _DAY_MINUTES and minute_of_day < end - _DAY_MINUTES:
-            return True
-    return False
+            return _bounds(-1)
+    return None
 
 
 def window_covers(window, machine):
@@ -1723,6 +1800,247 @@ def confirm_from_inventory(db_path, machine, now=None):
         _finish_target(db_path, target["run_id"], host, status, error=error, now=now)
         closed += 1
     return closed
+
+
+def open_window_runs(db_path, now=None, *, max_attempts=DEFAULT_MAX_ATTEMPTS,
+                     retry_backoff_seconds=DEFAULT_RETRY_BACKOFF_SECONDS,
+                     confirm_timeout_seconds=DEFAULT_CONFIRM_TIMEOUT_SECONDS):
+    """Create one `approved` run per auto-run window occurrence (issue #140).
+
+    **Before this, approving an update installed nothing.** Runs were only ever created by
+    an operator pressing Start run, and a window only GATED runs that already existed -- so
+    a fleet with approvals and windows and no run sat unpatched while the console said
+    "No patch run yet.", and the installs anybody saw were Windows' own. The owner's
+    decision on the issue: what is approved installs on a run, without a further click.
+
+    Each machine gets at most one run per window OCCURRENCE, keyed on (window_id,
+    window_start). The scheduler ticks every minute, so without the key a four-hour window
+    would create 240 runs. Usually that is one run as the window opens; a machine whose
+    first approved update arrives later in the night gets its own small run when it does. A run
+    created here carries its occurrence's end as `window_end`, so a machine that never came
+    online expires with the occurrence instead of being carried into next week's -- next
+    week's occurrence makes its own run.
+
+    Targets are the covered machines that report **at least one approved update right now**
+    and are **not already pending in another open run**. Both are about noise, not
+    correctness: dispatch would resolve either to `nothing_to_do` or to a second command for
+    the same patches. A window with nothing to install creates nothing at all, rather than a
+    run every night that the Runs tab fills up with.
+
+    *Rejected:* creating runs when an update is APPROVED (an approval is fleet-wide and has
+    no hour attached, so it would need a window anyway to decide when); one standing run per
+    window that never closes (its history would be a single row for a year of patch nights,
+    and `window_end` expiry is what stops a dead PC haunting it).
+    """
+    if now is None:
+        now = int(time.time())
+    created = []
+    windows = [w for w in list_windows(db_path) if w["enabled"] and w["auto_run"]]
+    if not windows:
+        return created
+    known = known_machines(db_path)
+    for window in windows:
+        occurrence = window_occurrence(window, now)
+        if occurrence is None:
+            continue
+        start, end = occurrence
+        with get_conn(db_path) as conn:
+            # Machines this occurrence has already given a run to, in any state. Its runs are
+            # the ones keyed on its start, plus any run of this window still covering `now`
+            # -- the second half is for an operator who moves the start time mid-occurrence,
+            # which changes the key. Per MACHINE rather than per window, so an update
+            # approved, or a PC that first reports, an hour into the window still gets a run
+            # tonight. A machine is never given a second run in one occurrence: one whose
+            # attempts ran out would otherwise get a fresh run every minute until morning.
+            done = {r["machine"].lower() for r in conn.execute(
+                "SELECT t.machine FROM patch_run_targets t "
+                "JOIN patch_runs r ON r.id = t.run_id "
+                "WHERE r.window_id = ? AND (r.window_start = ? "
+                "  OR (r.window_start <= ? AND r.window_end > ?))",
+                (window["id"], start, now, now))}
+            busy = {r["machine"].lower() for r in conn.execute(
+                "SELECT t.machine FROM patch_run_targets t "
+                "JOIN patch_runs r ON r.id = t.run_id "
+                f"WHERE r.status IN ({','.join('?' * len(RUN_OPEN_STATUSES))}) "
+                "AND t.status IN (?, ?)",
+                list(RUN_OPEN_STATUSES) + [TARGET_PENDING, TARGET_IN_FLIGHT])}
+        covered = known if window["scope_kind"] == SCOPE_ALL else window["machines"]
+        hosts = [m for m in covered
+                 if m.lower() not in busy and m.lower() not in done
+                 and approved_for_machine(db_path, m)]
+        # More machines than one run may hold become several runs in the same tick, never a
+        # truncated one.
+        for i in range(0, len(hosts), MAX_TARGETS_PER_RUN):
+            created.append(create_run(
+                db_path, machines=hosts[i:i + MAX_TARGETS_PER_RUN],
+                created_by=f"window:{window['name']}"[:200],
+                note=f"Automatic run for maintenance window {window['name']}",
+                window_id=window["id"], window_start=start, window_end=end,
+                reboot_policy=window["reboot_policy"], max_attempts=max_attempts,
+                retry_backoff_seconds=retry_backoff_seconds,
+                confirm_timeout_seconds=confirm_timeout_seconds, now=now))
+    return created
+
+
+# ================================
+# WHO INSTALLS WINDOWS UPDATES (issue #140)
+# ================================
+def record_control(db_path, machine, control, now=None):
+    """Store the agent's own report of who controls Windows Update on this PC.
+
+    `control` is the `patches.control` object agent 3.47.0+ sends:
+    {"state": CONTROL_STATES, "outside_installs": [...]}. Anything else is ignored rather
+    than raised on, for the reason parse_report gives. Called after ingest_inventory, so the
+    machine_patch_state row it updates exists.
+    """
+    host = _clean(machine, 63)
+    if not host or not isinstance(control, dict):
+        return False
+    state = _clean(control.get("state")).lower()
+    if state not in CONTROL_STATES:
+        return False
+    outside = []
+    for raw in (control.get("outside_installs") or [])[:MAX_OUTSIDE_INSTALLS]:
+        if not isinstance(raw, dict):
+            continue
+        title = _clean(raw.get("title"), MAX_TITLE_CHARS)
+        if not title:
+            continue
+        outside.append({
+            "title": title,
+            "kb": normalize_kb(raw.get("kb")),
+            "installed_at": _int_or_none(raw.get("installed_at")),
+            "client": _clean(raw.get("client"), 200),
+        })
+    if now is None:
+        now = int(time.time())
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO machine_patch_state(machine, count, reported_at, control_state, "
+            "  outside_installs_json) VALUES (?, 0, ?, ?, ?) "
+            "ON CONFLICT(machine) DO UPDATE SET control_state = excluded.control_state, "
+            "  outside_installs_json = excluded.outside_installs_json",
+            (host, now, state, json.dumps(outside)))
+    return True
+
+
+def control_for(db_path, machine):
+    """{"state", "desired", "outside_installs"} for one machine, for the console.
+
+    `state` is None when the agent has never reported one -- an agent older than 3.47.0,
+    or a Linux/Android agent, which has no Windows Update to take over.
+    """
+    host = _clean(machine, 63)
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT control_state, outside_installs_json FROM machine_patch_state "
+            "WHERE machine = ?", (host,)).fetchone()
+    return {
+        "state": (row["control_state"] if row else None) or None,
+        "desired": control_desired(list_windows(db_path), host),
+        "outside_installs": _json_list(row["outside_installs_json"]) if row else [],
+    }
+
+
+def control_desired(windows, machine):
+    """Should FleetHub own Windows Update on this machine? Yes when ANY enabled window
+    covering it says so.
+
+    Any rather than all: a PC in a "servers, take over" window and a "everyone" window that
+    does not take over is still a PC somebody decided FleetHub patches, and handing it back
+    to Windows because a second, broader window exists would make the narrower decision
+    impossible to express. A DISABLED window owns nothing -- disabling a window is how an
+    operator stops it doing things, and that has to include this.
+    """
+    return any(w["enabled"] and w["own_windows_update"] and window_covers(w, machine)
+               for w in windows)
+
+
+def control_summary(db_path, machines=None):
+    """Per-machine control rows for the Patches page, narrowed to `machines` when scoped.
+
+    Only machines that have reported a state, or that a window wants owned, are listed:
+    a Linux box has nothing to show here and listing it as "unknown" would be noise.
+    """
+    windows = list_windows(db_path)
+    with get_conn(db_path) as conn:
+        rows = {r["machine"]: r for r in conn.execute(
+            "SELECT machine, control_state, outside_installs_json FROM machine_patch_state")}
+    wanted = set()
+    for w in windows:
+        if w["enabled"] and w["own_windows_update"]:
+            wanted.update(known_machines(db_path) if w["scope_kind"] == SCOPE_ALL
+                          else w["machines"])
+    names = {m for m, r in rows.items() if r["control_state"]} | wanted
+    if machines is not None:
+        allowed = {_clean(m, 63).lower() for m in machines}
+        names = {m for m in names if m.lower() in allowed}
+    out = []
+    for name in sorted(names, key=str.lower):
+        row = rows.get(name)
+        out.append({
+            "machine": name,
+            "state": (row["control_state"] if row else None) or None,
+            "desired": control_desired(windows, name),
+            "outside_installs": _json_list(row["outside_installs_json"]) if row else [],
+        })
+    return out
+
+
+def reconcile_control(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS):
+    """Queue `set_update_control` wherever a PC's reported state disagrees with its windows.
+
+    **Only machines that have REPORTED a state are touched**, and that is the version gate:
+    only agent 3.47.0+ reports one, so an older Windows agent -- which would fail the
+    command as unknown -- and every Linux or Android agent are never sent it. Gating on the
+    reported state instead of comparing version strings also covers the case a version
+    check cannot: an agent that has updated but not scanned yet has nothing to reconcile
+    against, and waits for its first report like everything else here.
+
+    `managed_elsewhere` is never sent anything. Group Policy or Intune already sets these
+    keys on that PC and would rewrite them within ninety minutes, so the two would fight
+    forever -- the owner's decision is to skip and report it.
+
+    This is also the drift repair. A local administrator can always delete HKLM policy
+    values; the agent's next report then says `windows`, and the next pass here takes the PC
+    back. One command per machine per COOLDOWN, so a PC whose report lags its command does
+    not get one a minute.
+    """
+    if now is None:
+        now = int(time.time())
+    windows = list_windows(db_path)
+    with get_conn(db_path) as conn:
+        reported = [dict(r) for r in conn.execute(
+            "SELECT machine, control_state FROM machine_patch_state "
+            "WHERE control_state IN (?, ?)", (CONTROL_FLEETHUB, CONTROL_WINDOWS))]
+        # The NEWEST control command per machine that is still outstanding or inside the
+        # cooldown, and the value it carried. Only an identical repeat is held back: a
+        # reversal (on, then off a minute later, then on again) always goes out at once,
+        # because agents run commands in order and the newest is the state the PC ends in.
+        newest = {}
+        for r in conn.execute(
+                "SELECT machine, params_json FROM commands WHERE type = ? AND "
+                "(status IN (?, ?) OR created_at > ?) ORDER BY created_at, rowid",
+                (CONTROL_COMMAND_TYPE, fleet.STATUS_PENDING, fleet.STATUS_CLAIMED,
+                 now - CONTROL_COOLDOWN_SECONDS)):
+            try:
+                own = bool(json.loads(r["params_json"] or "{}").get("own"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            newest[r["machine"].lower()] = own
+    queued = 0
+    for row in reported:
+        want = control_desired(windows, row["machine"])
+        have = row["control_state"] == CONTROL_FLEETHUB
+        # What the PC will be once its queue drains: the newest command's value if one is
+        # recent, else what it last reported.
+        if newest.get(row["machine"].lower(), have) == want:
+            continue
+        fleet.create_command(
+            db_path, machine=row["machine"], command_type=CONTROL_COMMAND_TYPE,
+            params={"own": want}, issued_by="patch scheduler", ttl_seconds=ttl_seconds)
+        queued += 1
+    return queued
 
 
 def tick(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS,

@@ -18,6 +18,7 @@ whole fleet's update list, or a run quietly starting on nine of the ten machines
 for.
 """
 import functools
+import json
 import os
 import shutil
 import sys
@@ -219,6 +220,22 @@ def main():
               patches.get_window(db_path, window_id)["duration_minutes"] == 120)
         check("editing a window is audited",
               "update_maintenance_window" in audit_actions(db_path))
+        # Issue #140: the two switches that start changing PCs must be in the trail with
+        # their before and after, or "who turned this on" has no answer.
+        check("the window's own API round-trips both switches",
+              c.put(f"/api/patches/windows/{window_id}",
+                    json={"auto_run": True, "own_windows_update": True}).status_code == 200
+              and patches.get_window(db_path, window_id)["auto_run"] is True
+              and patches.get_window(db_path, window_id)["own_windows_update"] is True)
+        with fleet.get_conn(db_path) as conn:
+            last = json.loads(conn.execute(
+                "SELECT detail_json FROM audit_log WHERE action = ? ORDER BY id DESC",
+                ("update_maintenance_window",)).fetchone()["detail_json"] or "{}")
+        check("switching them on is audited with before and after",
+              last.get("auto_run") == {"from": False, "to": True}
+              and last.get("own_windows_update") == {"from": False, "to": True})
+        c.put(f"/api/patches/windows/{window_id}",
+              json={"auto_run": False, "own_windows_update": False})
         check("deleting an unknown window is a 404",
               c.delete("/api/patches/windows/nope").status_code == 404)
         check("a window can be deleted",

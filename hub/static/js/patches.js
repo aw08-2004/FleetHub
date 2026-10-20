@@ -27,6 +27,7 @@
     const runsPane = document.getElementById('runs-pane');
     const actions = document.getElementById('patches-actions');
     const summaryBox = document.getElementById('patches-summary');
+    const controlBox = document.getElementById('patches-control');
 
     const windowModal = document.getElementById('window-modal');
     const runModal = document.getElementById('run-modal');
@@ -97,6 +98,42 @@
         }
     }
 
+    // ------------------------------------------------------------------ control
+
+    // Who installs Windows updates on each PC (issue #140). The point of the card is the
+    // exceptions, not the count: a PC a window wants owned whose agent never said so (too
+    // old, or not scanned yet), a PC Group Policy or Intune already manages, and a PC where
+    // something other than FleetHub installed an update anyway -- which on an owned PC means
+    // a local administrator did it by hand.
+    function renderControl(rows) {
+        controlBox.replaceChildren();
+        controlBox.hidden = !rows.length;
+        if (!rows.length) return;
+        const owned = rows.filter((r) => r.state === 'fleethub').length;
+        const card = el('div', 'stat-card');
+        card.append(el('div', 'stat-card__label', t('patches.control.heading')),
+                    el('div', 'stat-card__value',
+                       t('patches.control.owned', { owned, total: rows.length })));
+        const notes = [];
+        for (const row of rows) {
+            if (row.state === 'managed_elsewhere') {
+                notes.push(t('patches.control.managed_elsewhere', { machine: row.machine }));
+            } else if (row.desired && !row.state) {
+                notes.push(t('patches.control.not_reported', { machine: row.machine }));
+            } else if (row.desired && row.state === 'windows') {
+                notes.push(t('patches.control.pending', { machine: row.machine }));
+            }
+            for (const item of row.outside_installs || []) {
+                notes.push(t('patches.control.outside_install', {
+                    machine: row.machine,
+                    title: item.kb ? `${item.kb} ${item.title}` : item.title,
+                }));
+            }
+        }
+        for (const note of notes) card.append(el('div', 'stat-card__meta', note));
+        controlBox.append(card);
+    }
+
     // ------------------------------------------------------------------ updates
 
     // The three panes, in tab order, and the ONLY thing that sorts a row into one of them
@@ -135,6 +172,11 @@
             empty(group.pane, updates.length ? t(group.emptyKey) : t('patches.no_updates'));
             return;
         }
+        // Issue #140: approving installed nothing and the console never said so. The hint
+        // sits on the Approved pane because that is where somebody looks to see whether
+        // their approvals "worked".
+        const hint = group.decision === 'approved'
+            ? el('p', 'stat-card__meta', t('patches.approved_hint')) : null;
         const table = el('table', 'table');
         const head = el('tr');
         [t('patches.col.update'), t('patches.col.classification'), t('patches.col.source'),
@@ -185,7 +227,7 @@
             body.append(tr);
         }
         table.append(body);
-        group.pane.replaceChildren(table);
+        group.pane.replaceChildren(...(hint ? [hint, table] : [table]));
     }
 
     // All three panes are rendered from the one /api/patches response, rather than each
@@ -214,6 +256,24 @@
                  { start: `${hh}:${mm}`, minutes: window.duration_minutes });
     }
 
+    // The name cell, with one line under it per state an operator needs to see at a glance.
+    function windowNameCell(win) {
+        const name = el('td');
+        name.append(el('div', null, win.name));
+        const notes = [];
+        if (!win.enabled) notes.push(t('patches.window.disabled'));
+        if (win.auto_run) notes.push(t('patches.window.auto_run_badge'));
+        if (win.own_windows_update) notes.push(t('patches.window.own_badge'));
+        // Taking Windows Update away without installing automatically is a legitimate
+        // pilot, and also the one setting that leaves PCs unpatched without anybody
+        // noticing -- so the table says so rather than leaving it to be worked out.
+        if (win.own_windows_update && !win.auto_run && win.enabled) {
+            notes.push(t('patches.window.own_without_auto_run'));
+        }
+        for (const note of notes) name.append(el('div', 'stat-card__meta', note));
+        return name;
+    }
+
     async function renderWindows() {
         let doc;
         try {
@@ -237,12 +297,7 @@
         const body = el('tbody');
         for (const win of doc.windows) {
             const tr = el('tr');
-            const name = el('td');
-            name.append(el('div', null, win.name));
-            if (!win.enabled) {
-                name.append(el('div', 'stat-card__meta', t('patches.window.disabled')));
-            }
-            tr.append(name);
+            tr.append(windowNameCell(win));
             tr.append(el('td', null, describeDays(win.days_mask)));
             tr.append(el('td', null, describeTime(win)));
             tr.append(el('td', null, win.scope_kind === 'all'
@@ -329,6 +384,8 @@
         const syncScope = () => { machines.hidden = scope.value === 'all'; };
         scope.onchange = syncScope;
         syncScope();
+        document.getElementById('win-auto-run').checked = Boolean(win?.auto_run);
+        document.getElementById('win-own-wu').checked = Boolean(win?.own_windows_update);
 
         windowModal.showModal();
     }
@@ -351,6 +408,8 @@
                 (document.getElementById('win-machine-list').value || '')
                     .split('\n').map((s) => s.trim()).filter(Boolean),
             reboot_policy: document.getElementById('win-reboot').value,
+            auto_run: document.getElementById('win-auto-run').checked,
+            own_windows_update: document.getElementById('win-own-wu').checked,
         };
         try {
             if (editingWindowId) {
@@ -382,7 +441,10 @@
             return;
         }
         if (!doc.runs.length) {
-            empty(runsPane, t('patches.no_runs'));
+            // Not just "no runs": an operator who approved updates and is staring at an
+            // empty list needs to be told what makes a run exist (issue #140).
+            runsPane.replaceChildren(el('p', 'stat-card__meta', t('patches.no_runs')),
+                                     el('p', 'stat-card__meta', t('patches.no_runs_hint')));
             return;
         }
         const table = el('table', 'table');
@@ -524,6 +586,7 @@
         canManage = Boolean(doc.can_manage);
         updates = doc.updates;
         renderSummary(doc.summary);
+        renderControl(doc.control || []);
         renderUpdates();
 
         actions.replaceChildren();

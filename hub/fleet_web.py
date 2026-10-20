@@ -348,6 +348,10 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             updates = reported.get("updates") if isinstance(reported, dict) else reported
             try:
                 patches.ingest_inventory(db_path, machine, updates or [])
+                # Who installs updates on this PC (issue #140), agent 3.47.0+. Inside the
+                # same try: it updates the row ingest just wrote.
+                if isinstance(reported, dict) and reported.get("control") is not None:
+                    patches.record_control(db_path, machine, reported["control"])
             except Exception as e:
                 print(f"[patches] Could not record inventory for {machine}: {e}")
             # ...and the same report is what CONFIRMS a patch run, immediately after the

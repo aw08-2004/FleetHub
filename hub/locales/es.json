@@ -3933,6 +3933,16 @@
     "none_declined": "Ninguna actualización que la flota notifique ahora está rechazada.",
     "no_windows": "Aún no hay ventanas de mantenimiento. Sin ninguna, solo una ejecución de emergencia instala algo.",
     "no_runs": "Aún no hay ejecuciones de parches.",
+    "approved_hint": "Aprobar una actualización no la instala. Las actualizaciones aprobadas se instalan en una ejecución de parches: inicie una con Ejecutar parches, o active \"Instalar automáticamente las actualizaciones aprobadas\" en una ventana de mantenimiento.",
+    "no_runs_hint": "Las ejecuciones se crean con Ejecutar parches o, al abrirse, por una ventana de mantenimiento con \"Instalar automáticamente las actualizaciones aprobadas\" activado.",
+    "control": {
+      "heading": "Windows Update",
+      "owned": "{owned} de {total} controlados por FleetHub",
+      "managed_elsewhere": "{machine}: Windows Update está configurado por directiva de grupo o Intune, así que FleetHub no lo toca.",
+      "not_reported": "{machine}: esperando el informe de su agente. Tomar el control de Windows Update requiere el agente 3.47.0 o posterior.",
+      "pending": "{machine}: tomando el control de Windows Update.",
+      "outside_install": "{machine}: {title} se instaló fuera de FleetHub."
+    },
     "request_failed": "No se pudo contactar con el hub.",
     "approve": "Aprobar",
     "decline": "Rechazar",
@@ -3998,7 +4008,14 @@
       "summary": "{start} durante {minutes} min",
       "disabled": "Desactivada",
       "confirm_delete": "¿Eliminar la ventana de mantenimiento {name}?",
-      "confirm_delete_title": "Eliminar ventana de mantenimiento"
+      "confirm_delete_title": "Eliminar ventana de mantenimiento",
+      "auto_run": "Instalar automáticamente las actualizaciones aprobadas",
+      "auto_run_help": "Cuando se abre esta ventana, FleetHub inicia una ejecución para cada equipo cubierto con actualizaciones aprobadas y lo reinicia según la directiva de reinicio.",
+      "own_windows_update": "Solo FleetHub instala actualizaciones en estos equipos",
+      "own_windows_update_help": "Desactiva las actualizaciones automáticas de Windows y oculta Instalar en Configuración, de modo que solo se instalan las actualizaciones aprobadas, durante una ejecución. Requiere el agente 3.47.0. Los equipos cuyo Windows Update está configurado por directiva de grupo o Intune no se modifican.",
+      "auto_run_badge": "Instala automáticamente las actualizaciones aprobadas",
+      "own_badge": "Solo FleetHub instala actualizaciones",
+      "own_without_auto_run": "Las actualizaciones automáticas de Windows están desactivadas y nada se instala automáticamente: solo las ejecuciones iniciadas a mano actualizan estos equipos."
     },
     "run": {
       "new": "Ejecutar parches",

@@ -205,6 +205,11 @@ def create_patches_blueprint(db_path, login_required, access):
         return jsonify({
             "updates": patches.list_fleet_patches(db_path, machines=scope),
             "summary": patches.compliance_summary(db_path, machines=scope),
+            # Who installs Windows updates on each PC (issue #140). Narrowed row by row with
+            # in_scope rather than through `scope`, which is built from machines with an
+            # available update -- a fully patched PC is exactly the one this list must show.
+            "control": [row for row in patches.control_summary(db_path)
+                        if access.in_scope(row["machine"])],
             "vocabulary": _vocabulary(),
             "can_manage": access.can(permissions.MANAGE_PATCHES),
             "auto_approve": settings.get_list(
@@ -231,6 +236,7 @@ def create_patches_blueprint(db_path, login_required, access):
             "machine": machine,
             "updates": available,
             "runs": patches.list_runs(db_path, limit=20, machine=machine),
+            "control": patches.control_for(db_path, machine),
             "vocabulary": _vocabulary(),
             "can_manage": access.can(permissions.MANAGE_PATCHES),
         }), 200
@@ -300,12 +306,16 @@ def create_patches_blueprint(db_path, login_required, access):
                 duration_minutes=data.get("duration_minutes"),
                 scope_kind=data.get("scope_kind") or patches.SCOPE_ALL,
                 machines=data.get("machines") or (),
-                reboot_policy=data.get("reboot_policy") or patches.REBOOT_IF_REQUIRED)
+                reboot_policy=data.get("reboot_policy") or patches.REBOOT_IF_REQUIRED,
+                auto_run=bool(data.get("auto_run")),
+                own_windows_update=bool(data.get("own_windows_update")))
         except patches.PatchError as e:
             return refusals.refuse(e)
         fleet.audit(db_path, actor=_current_email(), action="create_maintenance_window",
                     level=fleet.LEVEL_NOTICE,
-                    detail={"window_id": window_id, "name": data.get("name")})
+                    detail={"window_id": window_id, "name": data.get("name"),
+                            "auto_run": bool(data.get("auto_run")),
+                            "own_windows_update": bool(data.get("own_windows_update"))})
         return jsonify({"ok": True, "window": patches.get_window(db_path, window_id)}), 201
 
     @bp.route("/api/patches/windows/<window_id>", methods=["PUT"])
@@ -330,12 +340,23 @@ def create_patches_blueprint(db_path, login_required, access):
                    "scope_kind", "machines", "reboot_policy") if k in data}
         try:
             patches.update_window(db_path, window_id, actor=_current_email(),
-                                  enabled=data.get("enabled"), **fields)
+                                  enabled=data.get("enabled"),
+                                  auto_run=data.get("auto_run"),
+                                  own_windows_update=data.get("own_windows_update"),
+                                  **fields)
         except patches.PatchError as e:
             return refusals.refuse(e)
+        saved = patches.get_window(db_path, window_id)
+        # The two issue #140 switches go into the trail with their before and after, because
+        # they are the edits that start installing and restarting PCs, or take Windows Update
+        # away from them -- "who turned that on, and when" has to be answerable from here.
+        detail = {"window_id": window_id}
+        for flag in ("auto_run", "own_windows_update"):
+            if saved and saved[flag] != existing[flag]:
+                detail[flag] = {"from": existing[flag], "to": saved[flag]}
         fleet.audit(db_path, actor=_current_email(), action="update_maintenance_window",
-                    level=fleet.LEVEL_NOTICE, detail={"window_id": window_id})
-        return jsonify({"ok": True, "window": patches.get_window(db_path, window_id)}), 200
+                    level=fleet.LEVEL_NOTICE, detail=detail)
+        return jsonify({"ok": True, "window": saved}), 200
 
     @bp.route("/api/patches/windows/<window_id>", methods=["DELETE"])
     @login_required

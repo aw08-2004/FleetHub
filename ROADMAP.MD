@@ -108,7 +108,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-16
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-19
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -434,6 +434,23 @@ the release, on one PC:
   left held down on the PC afterwards (type afterwards and check no letter repeats or shortcut
   fires). Untick the box: ⌘ is the Windows key again.
 - An agent at 3.45.0 shows no clipboard buttons.
+
+**15. FleetHub owns Windows Update (issue #140), owed on Windows.** Hub 1.155.0 first, then
+agent 3.47.0. Both window switches default off, so nothing changes until someone ticks one. On
+one PC in a test window with both switches on:
+- Within a few minutes the Patches page shows it *controlled by FleetHub*; `reg query
+  HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate /s` shows `NoAutoUpdate=1` and
+  `SetDisableUXWUAccess=1`; Settings -> Windows Update has no *Check for updates* / *Install*.
+- As a standard user, `Install-WindowsUpdate` / `UsoClient StartInstall` installs nothing. As an
+  administrator, install one KB by hand: it appears under *installed outside FleetHub*.
+- Delete the two values by hand: within ~30 min (plus the next inventory report) they are back.
+- On a PC with WU set by Group Policy: shown as *managed elsewhere*, keys untouched.
+- Defender signatures still update on their own for a day with `NoAutoUpdate` set. If they
+  do not, auto-approve definition updates on a daily window before rolling this out.
+- Approve one update, let the window open: one run appears, installs it, restarts per the
+  policy, and closes *applied*. A second tick in the same window makes no second run.
+- Untick *Only FleetHub installs updates*: the values are removed. Uninstall the agent on an
+  owned PC: the values are removed, foreign values left alone.
 
 ---
 
@@ -3442,6 +3459,58 @@ The reboot is agent-initiated inside the window under a per-window `reboot_polic
 verb — never leaves a fleet permanently one restart short of being patched, always restarts
 machines that did not need it.
 
+
+### FleetHub is the only thing that installs updates · hub 1.155.0 + agent 3.47.0 (issue #140)
+
+**Approving an update installed nothing, and the console never said so.** Runs came only from
+*Run patches*, and a window only *gated* runs that already existed, so a fleet with approvals and
+windows and no run sat unpatched under "No patch run yet." The updates the owner saw install were
+Windows' own automatic ones -- which is also why nothing ever restarted through FleetHub, and why
+a *declined* update could still install. The owner's decision on the issue: **FleetHub is the
+only thing that installs updates, and what is approved installs on a run.** Two per-window
+switches, both **off by default, existing windows included** (turning either on starts changing
+PCs at the window's next opening, which should be somebody's click, not a side effect of a hub
+update):
+
+- **Install approved updates automatically** (`auto_run`). When the window opens,
+  `patches.open_window_runs` creates one `approved` run for the covered machines that report
+  at least one approved update and are not already waiting in another open run. Each machine
+  gets at most one run per occurrence (keyed on `(window_id, window_start)`), so a
+  minute-by-minute scheduler does not repeat itself, while an update approved an hour into the
+  window still gets a small run that night.
+  `window_occurrence` is factored out of `window_is_open`, so the spill past midnight belongs to
+  the opening that started it. The run's `window_end` is the occurrence's, so a dark PC expires
+  with the night and next week makes its own run. A window with nothing approved creates nothing.
+- **Only FleetHub installs updates on these machines** (`own_windows_update`). The agent sets
+  `AU\NoAutoUpdate=1` and `SetDisableUXWUAccess=1` (Settings loses *Install*), recording what it
+  wrote under `HKLM\SOFTWARE\FleetHub\UpdateControl` so switching off or uninstalling removes
+  only its own values. It reports `fleethub` / `windows` / `managed_elsewhere` in the patch
+  inventory, and `patches.reconcile_control` queues `set_update_control` wherever that
+  disagrees with the windows (any enabled covering window that says so wins). Only an
+  identical repeat of the newest recent command is held back for half an hour; a reversal goes
+  out at once. **Only machines that have reported a state are sent anything** -- that
+  is the version gate, so a 3.46 agent and every Linux/Android agent are left alone without a
+  version comparison.
+- The Approved tab and the empty Runs tab now say that approving does not install.
+
+**Command-line installs.** A standard user cannot install updates from PowerShell or cmd at
+all (a WUA install needs elevation), and the two policy values close the Settings and
+automatic paths. **A local administrator can always delete HKLM policy**, so for them the
+guarantee is detect-and-repair: every agent WUA session identifies itself as `FleetHub`, the
+agent reports Windows Update history entries installed by any other client as
+`outside_installs` (shown on the Patches page), and an admin who deletes the keys is reported
+as `windows` and taken back on the next pass.
+
+*Rejected:* one fleet-wide switch (the owner wants to pilot per window, and a PC in no window
+keeps Windows' own updates, which is the safe failure); overwriting keys Group Policy or Intune
+already sets (GP rewrites them every ~90 minutes, so the two would fight forever -- such a PC is
+`managed_elsewhere` and reported); creating runs on approval (an approval has no hour attached);
+one standing run per window (a year of patch nights in one row, and nothing expires a dead PC);
+gating on agent version in the hub (an updated agent that has not scanned yet has no state to
+reconcile either way); a `MIN_*_AGENT` constant in `patches.js` (nothing in the console is
+offered per machine -- a PC whose agent has not reported is listed as waiting for it).
+Defender signatures are expected to keep updating through Defender's own engine with
+`NoAutoUpdate` set; that is checked on a real PC before rollout (*Owed locally*, item 15).
 ---
 
 ## ✅ 15. Cross-hub machine sharing   ·   hub 1.94.0
