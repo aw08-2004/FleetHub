@@ -58,7 +58,7 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
             sessionId = CreateSession(installer, packageName!);
             await CommitAsync(installer, sessionId, path, action, ct);
             var refused = await VerdictAsync(verdict.Task, packageName!, timeout, ct);
-            if (refused is { TimedOut: true })
+            if (refused is { SessionStillOpen: true })
                 return AppInstallResult.Refused(refused.Error + Abandon(installer, sessionId));
             return refused?.Result ?? Confirm(pm, packageName!, wantedVersion);
         }
@@ -94,10 +94,12 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         return receiver;
     }
 
-    /// <summary>A verdict that is not success. `TimedOut` is the one case where the session
-    /// is still alive and has to be abandoned -- every other refusal is the platform's final
-    /// word.</summary>
-    private sealed record Refusal(string Error, bool TimedOut)
+    /// <summary>A verdict that is not success. `SessionStillOpen` marks the two cases where
+    /// the session is alive and has to be abandoned: no answer in time, and PENDING_USER_ACTION,
+    /// which is the platform waiting for a tap rather than refusing -- left open, somebody
+    /// tapping it later installs an app the console was told failed (raised in review of
+    /// PR #161). Every other refusal is the platform's final word.</summary>
+    private sealed record Refusal(string Error, bool SessionStillOpen)
     {
         public AppInstallResult Result => AppInstallResult.Refused(Error);
     }
@@ -122,7 +124,8 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         log.LogWarning("Install of {Package} refused: {Status} {Msg}",
             packageName, answer.Status, answer.Message);
         return new Refusal(answer.Message is { Length: > 0 } m
-            ? m : $"the installer refused it (status {answer.Status})", false);
+                ? m : $"the installer refused it (status {answer.Status})",
+            SessionStillOpen: answer.Status == (int)PackageInstallStatus.PendingUserAction);
     }
 
     /// <summary>Abandon a committed session that this deploy has given up on, so the app does
