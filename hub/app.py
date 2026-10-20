@@ -4876,7 +4876,9 @@ machine_status_tracker = changes.StatusTracker()
 # `detail` of the OPEN rows is hashed in as well, because one writer changes it without moving
 # `updated_at` on purpose: alerts.sync_ticket_alert refreshes a ticket alert's count and ids
 # while keeping its place in a newest-first list (raised in review on PR #158). Open rows only,
-# so the read stays a handful of rows however long the history grows.
+# so the read stays a handful of rows however long the history grows. The details go in as a
+# Python hash(), which is salted per process: fine for comparing one pass with the last inside
+# this hub, and meaningless anywhere else, so never persist it or compare it across restarts.
 _ALERTS_SIGNATURE_SQL = (
     "SELECT COUNT(*), MAX(id), MAX(updated_at), MAX(COALESCE(episode_ended_at, 0)), "
     "SUM(status = 'open') FROM alerts")
