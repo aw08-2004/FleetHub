@@ -313,7 +313,9 @@ def create_patches_blueprint(db_path, login_required, access):
             return refusals.refuse(e)
         fleet.audit(db_path, actor=_current_email(), action="create_maintenance_window",
                     level=fleet.LEVEL_NOTICE,
-                    detail={"window_id": window_id, "name": data.get("name")})
+                    detail={"window_id": window_id, "name": data.get("name"),
+                            "auto_run": bool(data.get("auto_run")),
+                            "own_windows_update": bool(data.get("own_windows_update"))})
         return jsonify({"ok": True, "window": patches.get_window(db_path, window_id)}), 201
 
     @bp.route("/api/patches/windows/<window_id>", methods=["PUT"])
@@ -344,9 +346,17 @@ def create_patches_blueprint(db_path, login_required, access):
                                   **fields)
         except patches.PatchError as e:
             return refusals.refuse(e)
+        saved = patches.get_window(db_path, window_id)
+        # The two issue #140 switches go into the trail with their before and after, because
+        # they are the edits that start installing and restarting PCs, or take Windows Update
+        # away from them -- "who turned that on, and when" has to be answerable from here.
+        detail = {"window_id": window_id}
+        for flag in ("auto_run", "own_windows_update"):
+            if saved and saved[flag] != existing[flag]:
+                detail[flag] = {"from": existing[flag], "to": saved[flag]}
         fleet.audit(db_path, actor=_current_email(), action="update_maintenance_window",
-                    level=fleet.LEVEL_NOTICE, detail={"window_id": window_id})
-        return jsonify({"ok": True, "window": patches.get_window(db_path, window_id)}), 200
+                    level=fleet.LEVEL_NOTICE, detail=detail)
+        return jsonify({"ok": True, "window": saved}), 200
 
     @bp.route("/api/patches/windows/<window_id>", methods=["DELETE"])
     @login_required

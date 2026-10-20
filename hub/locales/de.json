@@ -4014,7 +4014,8 @@
       "own_windows_update": "Nur FleetHub installiert Updates auf diesen Maschinen",
       "own_windows_update_help": "Schaltet die automatischen Updates von Windows ab und blendet Installieren in den Einstellungen aus, sodass nur freigegebene Updates installiert werden, während eines Laufs. Erfordert Agent 3.47.0. Maschinen, deren Windows Update per Gruppenrichtlinie oder Intune gesteuert wird, bleiben unverändert.",
       "auto_run_badge": "Installiert freigegebene Updates automatisch",
-      "own_badge": "Nur FleetHub installiert Updates"
+      "own_badge": "Nur FleetHub installiert Updates",
+      "own_without_auto_run": "Die automatischen Updates von Windows sind aus und nichts wird automatisch installiert: Nur von Hand gestartete Läufe patchen diese Maschinen."
     },
     "run": {
       "new": "Patches ausführen",

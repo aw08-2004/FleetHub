@@ -290,6 +290,13 @@
             if (win.own_windows_update) {
                 name.append(el('div', 'stat-card__meta', t('patches.window.own_badge')));
             }
+            // Taking Windows Update away without installing automatically is a legitimate
+            // pilot, and also the one setting that leaves PCs unpatched without anybody
+            // noticing -- so the table says so rather than leaving it to be worked out.
+            if (win.own_windows_update && !win.auto_run && win.enabled) {
+                name.append(el('div', 'stat-card__meta',
+                               t('patches.window.own_without_auto_run')));
+            }
             tr.append(name);
             tr.append(el('td', null, describeDays(win.days_mask)));
             tr.append(el('td', null, describeTime(win)));

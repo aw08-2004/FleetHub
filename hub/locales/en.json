@@ -4137,7 +4137,8 @@
       "own_windows_update": "Only FleetHub installs updates on these machines",
       "own_windows_update_help": "Turns off Windows' own automatic updates and hides Install in Settings, so only approved updates install, during a run. Needs agent 3.47.0. Machines whose Windows Update is set by Group Policy or Intune are left alone.",
       "auto_run_badge": "Installs approved updates automatically",
-      "own_badge": "Only FleetHub installs updates"
+      "own_badge": "Only FleetHub installs updates",
+      "own_without_auto_run": "Windows' own updates are off and nothing installs automatically: only runs started by hand patch these machines."
     },
     "run": {
       "new": "Run patches",

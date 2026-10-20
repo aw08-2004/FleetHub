@@ -4014,7 +4014,8 @@
       "own_windows_update": "Solo FleetHub instala actualizaciones en estos equipos",
       "own_windows_update_help": "Desactiva las actualizaciones automáticas de Windows y oculta Instalar en Configuración, de modo que solo se instalan las actualizaciones aprobadas, durante una ejecución. Requiere el agente 3.47.0. Los equipos cuyo Windows Update está configurado por directiva de grupo o Intune no se modifican.",
       "auto_run_badge": "Instala automáticamente las actualizaciones aprobadas",
-      "own_badge": "Solo FleetHub instala actualizaciones"
+      "own_badge": "Solo FleetHub instala actualizaciones",
+      "own_without_auto_run": "Las actualizaciones automáticas de Windows están desactivadas y nada se instala automáticamente: solo las ejecuciones iniciadas a mano actualizan estos equipos."
     },
     "run": {
       "new": "Ejecutar parches",
