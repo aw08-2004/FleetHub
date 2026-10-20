@@ -258,45 +258,53 @@ public sealed class MainActivity : Activity
         var managed = DeviceOwner.IsManaged(this);
         return
         [
-            Row("Enrollment", enrolled, "Done", "Needed", Tone.Warn,
-                "This device has its own credential and takes commands.",
-                "Without it the console can see this device but cannot manage it.",
+            Row("Enrollment", enrolled,
+                ("Done", "This device has its own credential and takes commands."),
+                ("Needed", Tone.Warn,
+                 "Without it the console can see this device but cannot manage it."),
                 ("Enter code", ShowEnrollDialog)),
-            Row("Location", located, "Granted", "Not granted", Tone.Warn,
-                "The console can locate this device. Nothing is tracked in the background.",
-                "A locate from the console will answer “unavailable” and the device " +
-                "will not appear on the map.",
+            Row("Location", located,
+                ("Granted",
+                 "The console can locate this device. Nothing is tracked in the background."),
+                ("Not granted", Tone.Warn,
+                 "A locate from the console will answer “unavailable” and the device " +
+                 "will not appear on the map."),
                 ("Grant location", GrantLocation)),
-            Row("Notifications", notifications, "On", "Off", Tone.Warn,
-                "Messages from the helpdesk and locate notices can be shown.",
-                "Messages from the helpdesk come back unanswered, and the status notification " +
-                "is hidden.",
+            Row("Notifications", notifications,
+                ("On", "Messages from the helpdesk and locate notices can be shown."),
+                ("Off", Tone.Warn,
+                 "Messages from the helpdesk come back unanswered, and the status notification " +
+                 "is hidden."),
                 ("Turn on", RequestNotificationsOrSettings)),
-            Row("Battery optimisation", battery, "Excluded", "Active", Tone.Warn,
-                "Android will not freeze the agent while the device is idle.",
-                "The device may stop reporting overnight and read offline in the console.",
+            Row("Battery optimisation", battery,
+                ("Excluded", "Android will not freeze the agent while the device is idle."),
+                ("Active", Tone.Warn,
+                 "The device may stop reporting overnight and read offline in the console."),
                 ("Open battery settings", OpenBatterySettings)),
-            Row("Usage access", usage, "Granted", "Not granted", Tone.Info,
-                "Screen-time budgets can be enforced.",
-                "Only needed for screen-time budgets. Blocked hours work without it.",
+            Row("Usage access", usage,
+                ("Granted", "Screen-time budgets can be enforced."),
+                ("Not granted", Tone.Info,
+                 "Only needed for screen-time budgets. Blocked hours work without it."),
                 ("Grant usage access", OpenUsageAccessSettings)),
             // Information only: device ownership is taken at a factory reset, by QR, and no
             // button on this screen can grant it.
-            Row("Device owner", managed, "Fully managed", "Not managed", Tone.Info,
-                "Lock, wipe, restart and app installs from the console work on this device.",
-                "Installed as an ordinary app. Lock, wipe, restart and app installs need the " +
-                "device provisioned by QR code, which starts with a factory reset.",
+            Row("Device owner", managed,
+                ("Fully managed",
+                 "Lock, wipe, restart and app installs from the console work on this device."),
+                ("Not managed", Tone.Info,
+                 "Installed as an ordinary app. Lock, wipe, restart and app installs need the " +
+                 "device provisioned by QR code, which starts with a factory reset."),
                 null),
         ];
     }
 
     /// <summary>One row, in its done or its not-done state. The fix button only appears on the
     /// second: a button that does nothing because the thing is already done reads as broken.</summary>
-    private static CheckRow Row(string title, bool done, string doneState, string todoState,
-        Tone todoTone, string doneDetail, string todoDetail, (string Label, Action Run)? fix)
+    private static CheckRow Row(string title, bool done, (string State, string Detail) whenDone,
+        (string State, Tone Tone, string Detail) whenNot, (string Label, Action Run)? fix)
         => done
-            ? new CheckRow(title, doneState, Tone.Ok, doneDetail, null)
-            : new CheckRow(title, todoState, todoTone, todoDetail, fix);
+            ? new CheckRow(title, whenDone.State, Tone.Ok, whenDone.Detail, null)
+            : new CheckRow(title, whenNot.State, whenNot.Tone, whenNot.Detail, fix);
 
     private enum Tone { Ok, Warn, Info }
 

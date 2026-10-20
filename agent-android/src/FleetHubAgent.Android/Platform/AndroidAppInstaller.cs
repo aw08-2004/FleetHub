@@ -45,37 +45,14 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         var action = $"{context.PackageName}.INSTALL_RESULT.{Guid.NewGuid():N}";
         var verdict = new TaskCompletionSource<(int Status, string? Message)>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var receiver = new ResultReceiver(verdict);
-        var filter = new IntentFilter(action);
-        if (OperatingSystem.IsAndroidVersionAtLeast(33))
-            context.RegisterReceiver(receiver, filter, ReceiverFlags.NotExported);
-        else
-            context.RegisterReceiver(receiver, filter);
+        var receiver = Listen(action, verdict);
 
         var sessionId = -1;
         try
         {
             sessionId = await CommitAsync(installer, packageName!, path, action, ct);
-
-            (int Status, string? Message) answer;
-            try
-            {
-                answer = await verdict.Task.WaitAsync(timeout, ct);
-            }
-            catch (TimeoutException)
-            {
-                return AppInstallResult.Refused(
-                    $"the installer gave no answer within {(int)timeout.TotalSeconds} seconds");
-            }
-
-            if (answer.Status != (int)PackageInstallStatus.Success)
-            {
-                log.LogWarning("Install of {Package} refused: {Status} {Msg}",
-                    packageName, answer.Status, answer.Message);
-                return AppInstallResult.Refused(answer.Message is { Length: > 0 } m
-                    ? m : $"the installer refused it (status {answer.Status})");
-            }
-            return Confirm(pm, packageName!, wantedVersion);
+            var refused = await VerdictAsync(verdict.Task, packageName!, timeout, ct);
+            return refused ?? Confirm(pm, packageName!, wantedVersion);
         }
         catch (System.OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -94,6 +71,42 @@ public sealed class AndroidAppInstaller(Context context, ILogger log) : IAppInst
         {
             try { context.UnregisterReceiver(receiver); } catch { /* already gone */ }
         }
+    }
+
+    /// <summary>Register for one session's verdict, not exported: only the platform's
+    /// installer, writing into this app's own PendingIntent, may deliver it.</summary>
+    private ResultReceiver Listen(string action, TaskCompletionSource<(int, string?)> verdict)
+    {
+        var receiver = new ResultReceiver(verdict);
+        var filter = new IntentFilter(action);
+        if (OperatingSystem.IsAndroidVersionAtLeast(33))
+            context.RegisterReceiver(receiver, filter, ReceiverFlags.NotExported);
+        else
+            context.RegisterReceiver(receiver, filter);
+        return receiver;
+    }
+
+    /// <summary>Wait for the platform's answer. Null when it said success; otherwise the
+    /// refusal, in the platform's own words where it gave any.</summary>
+    private async Task<AppInstallResult?> VerdictAsync(Task<(int Status, string? Message)> verdict,
+        string packageName, TimeSpan timeout, CancellationToken ct)
+    {
+        (int Status, string? Message) answer;
+        try
+        {
+            answer = await verdict.WaitAsync(timeout, ct);
+        }
+        catch (TimeoutException)
+        {
+            return AppInstallResult.Refused(
+                $"the installer gave no answer within {(int)timeout.TotalSeconds} seconds");
+        }
+        if (answer.Status == (int)PackageInstallStatus.Success) return null;
+
+        log.LogWarning("Install of {Package} refused: {Status} {Msg}",
+            packageName, answer.Status, answer.Message);
+        return AppInstallResult.Refused(answer.Message is { Length: > 0 } m
+            ? m : $"the installer refused it (status {answer.Status})");
     }
 
     /// <summary>The package and version the APK declares, or why it will not be installed.</summary>
