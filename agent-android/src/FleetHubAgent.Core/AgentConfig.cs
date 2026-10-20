@@ -105,6 +105,9 @@ public static class AgentConfig
 
     public static string ReportUrl => HubBase + "/api/report";
     public static string EnrollUrl => HubBase + "/api/agent/enroll";
+    /// <summary>Where a one-time onboarding code is spent (hub/onboarding_web.py). Not under
+    /// /api/agent/ because the Windows install script calls it too, before any agent exists.</summary>
+    public static string OnboardingRedeemUrl => HubBase + "/api/onboarding/redeem";
     public static string HeartbeatUrl => HubBase + "/api/agent/heartbeat";
     public static string CommandsUrl => HubBase + "/api/agent/commands";
 

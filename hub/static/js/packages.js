@@ -267,6 +267,7 @@ const STEP_LABELS = {
     winget: () => [t('packages.step.winget.label'), t('packages.step.winget.description')],
     extract: () => [t('packages.step.extract.label'), t('packages.step.extract.description')],
     pnputil: () => [t('packages.step.pnputil.label'), t('packages.step.pnputil.description')],
+    apk: () => [t('packages.step.apk.label'), t('packages.step.apk.description')],
 };
 
 function stepText(kind) {
@@ -565,6 +566,15 @@ function stepFields(step) {
                 { hint: t('packages.editor.save_as_hint'), placeholder: 'extracted' }),
         ];
     }
+    if (step.kind === 'apk') {
+        // The whole step is "this payload is the app". No arguments, no exit codes that mean
+        // anything: Android's installer answers success or a reason, and the agent then asks
+        // the platform whether the package is really there.
+        const first = draftPayloads.length ? `{${draftPayloads[0].name}}` : '{payload}';
+        return [textField(t('packages.editor.apk_payload'), step.apk,
+            (v) => { step.apk = v; },
+            { placeholder: first, hint: t('packages.editor.apk_hint') })];
+    }
     // pnputil
     return [
         textField(t('packages.editor.driver_path'), step.path,
@@ -795,7 +805,7 @@ function collectSteps() {
     if (!draftSteps.length) throw new Error(t('packages.editor.no_steps'));
     return draftSteps.map((step) => {
         const out = { kind: step.kind };
-        ['name', 'command', 'args', 'script', 'id', 'archive', 'dest', 'save_as', 'path']
+        ['name', 'command', 'args', 'script', 'id', 'archive', 'dest', 'save_as', 'path', 'apk']
             .forEach((field) => {
                 const value = (step[field] || '').trim ? (step[field] || '').trim() : step[field];
                 if (value) out[field] = value;

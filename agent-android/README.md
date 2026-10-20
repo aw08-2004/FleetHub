@@ -85,9 +85,11 @@ followed were about presentation and policy rather than protocol: an `android` D
 |---|---|
 | **Telemetry** | Temperature, memory, per-volume storage, battery charge and voltage, and CPU load where the device allows it. Flattened into the sensor shape `extract_diagnostics` already reads (`/cpu/0`, `/ram`, `/volume/...`), so the machine page populates with no hub change |
 | **Identity** | `Build.MODEL` / `MANUFACTURER` for model and vendor, `Build.VERSION.RELEASE` for the OS caption, `Build.DISPLAY` as `os_build`, the primary ABI as `os_arch`, and the SSAID as `serial_number` — see below |
-| **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from an MDM's managed configuration or typed once on the setup screen |
+| **Enrollment** | A one-time onboarding code typed on the setup screen (0.3.0), spent at `/api/onboarding/redeem` -- or the hub's shared `AGENT_ENROLLMENT_SECRET`, from an MDM's managed configuration or the setup screen's Advanced section |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect. Earns its keep here more than anywhere: a phone leaves the network several times a day |
-| **Commands** | `rename`, `locate_device`, `lock_device`, `wipe_device`, `show_message` |
+| **Commands** | `rename`, `locate_device`, `lock_device`, `wipe_device`, `show_message`, and since 0.3.0 `restart` and `deploy_package` (device owner only) and `wake_machine` (as a relay) |
+| **Network** | The Wi-Fi adapter's address, subnet and -- on a device owner -- real MAC, as the heartbeat's `network` block. Fills the Network tab and makes the phone eligible as a Wake-on-LAN relay |
+| **Security posture** | Screen lock, storage encryption and security patch level, as the heartbeat's `posture` block, judged by the hub on CIS 4.3, 3.6 and 7.3 |
 | **App inventory** | Every installed package, with its label, version, and whether the framework says it is enabled or suspended. Change-only, on its own loop |
 | **App policy** | Suspends the packages the hub says to, un-suspends what it suspended before, and reports the ones it could not. Lifts everything on its own if the hub goes silent |
 | **Schedules** | Blocked hours and daily budgets, evaluated on the device against its own clock and its own usage -- so a curfew holds with the hub unreachable |
@@ -165,8 +167,7 @@ returns, because "not implemented" sends an operator looking for a version that 
 
 | | |
 |---|---|
-| `restart` | No reboot API. A device enrolled as device-owner through an MDM can be rebooted *by that MDM* |
-| `shutdown` | No power-off API, not even for a device owner |
+| `shutdown` | No power-off API, not even for a device owner. A fully managed device can be *restarted* (`restart`, 0.3.0) |
 | `run_script` | No shell. An app may only execute its own code, in its own sandbox, as its own unprivileged user |
 | `list_directory`, file transfer | An app sees its own storage and what the user has granted, not the device's filesystem |
 | process list, `kill_process` | An app cannot see another app's processes; true since Android 8 |
@@ -177,14 +178,14 @@ returns, because "not implemented" sends an operator looking for a version that 
 1. **Push instead of polling.** FCM against the `push_*` columns already on `api_tokens` would
    let the command loop idle instead of holding a request every 25 seconds, which is most of
    this agent's battery cost. Roadmap #11 scopes the same work for the client.
-2. **`wake_machine`.** Roadmap #10's delivery is an agent peer relay -- the hub picks an awake
-   machine on the sleeping one's subnet and asks *it* to broadcast the magic packet -- and a
-   phone sitting in the building is exactly that. Nothing about it needs a permission this
-   agent does not already hold.
+2. **`network_sweep`.** A phone on the office Wi-Fi could probe its own subnet for roadmap
+   #18, though Android 10 hid the ARP table, so it would see only what answers a ping.
 3. Network throughput and per-app data; GPU sensors.
 
-`show_message`, `patch inventory` and `signed self-update` used to head this list and have all
-since shipped. The self-update note is worth keeping because its conclusion changed: the
+`show_message`, `wake_machine`, `patch inventory` and `signed self-update` used to head this
+list and have all since shipped. `wake_machine` (0.3.0) relays only from a device owner,
+because the hub picks a relay by its adapter's MAC and only a device owner can read the real
+one. The self-update note is worth keeping because its conclusion changed: the
 Windows agent's Ed25519 manifest verification *does* port, but the install does not -- an APK
 goes through the package installer, and an app cannot replace itself silently unless it is a
 device owner, so a sideloaded device declines rather than raising the system installer.
@@ -657,8 +658,11 @@ The device enrolls itself with nobody touching it. `machine_name` and `asset_tag
 too; `machine_name` applies **only** to a device still on its derived default, so an MDM policy
 never silently undoes a rename issued from the console.
 
-**By hand, for a pilot device.** Sideload the APK, open the app once, and enter the hub URL and
-the enrollment secret. `--secret`'s counterpart is that one field.
+**By hand, for a pilot device.** Sideload the APK, open the app once, set the hub URL under
+*Advanced* if the build does not carry it, and press **Enroll this device**: it asks for a
+six-character code from Administration → Onboarding, which admits this one device once. The
+shared secret is still accepted under *Advanced*, but a code is the better choice on any device
+a person carries -- the secret enrols *any* device, and stays on this one.
 
 `enrollment_secret` is the hub's **`AGENT_ENROLLMENT_SECRET`** — one shared value for the whole
 fleet, from the hub's `.env`, printed once by `install.ps1` when the hub was set up. It is not

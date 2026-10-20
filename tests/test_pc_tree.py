@@ -9,7 +9,7 @@ The silent failures this file exists to catch:
   * **Sibling-name collisions and lookalike containment.** "Cajas" under two parents is the
     point of a tree; two "Cajas" side by side is an accident. And `OU=Cajas` must never
     capture `OU=NoCajas`, in targeting as in scoping (rules' OU selector was a string
-    endswith until hub 1.158.0).
+    endswith until hub 1.159.0).
   * **A folder deleted out from under something that names it.** A permission group or a rule
     aimed at a vanished folder grants or matches nothing, silently.
   * **A reused hostname landing in the old box's folder**, and through it in every

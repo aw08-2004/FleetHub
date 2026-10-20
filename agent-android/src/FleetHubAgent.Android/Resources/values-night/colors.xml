@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark theme copies of values/colors.xml. Same names, so a layout never chooses between
+     them; the platform does, from the system dark mode setting. -->
+<resources>
+  <color name="brand">#3b82f6</color>
+  <color name="brand_on">#ffffff</color>
+  <color name="screen">#0b0e14</color>
+  <color name="card">#161a22</color>
+  <color name="card_border">#262b36</color>
+  <color name="text">#ececef</color>
+  <color name="muted">#8b8b95</color>
+  <color name="ok">#4ade80</color>
+  <color name="ok_soft">#14301f</color>
+  <color name="warn">#fbbf24</color>
+  <color name="warn_soft">#3a2a0a</color>
+  <color name="info">#93c5fd</color>
+  <color name="info_soft">#16233d</color>
+</resources>

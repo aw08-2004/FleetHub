@@ -113,3 +113,25 @@
 .leaflet-popup-content strong {
     color: #111827;
 }
+
+/* "Not located yet": devices that could be located and have no position to draw. Not
+   clickable as a whole, unlike a fix row -- there is nothing on the map to frame -- so the
+   name is a link to the device and the row carries its own Locate button. */
+.fleet-map__group {
+    margin: var(--space-3) 0 var(--space-1);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--muted);
+}
+
+.fleet-map__row--unlocated {
+    cursor: default;
+}
+
+.fleet-map__row--unlocated:hover {
+    border-color: var(--card-border);
+}
+
+.fleet-map__locate {
+    margin-top: var(--space-1);
+}

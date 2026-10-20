@@ -274,7 +274,7 @@ your PCs is not shown. A folder cannot be deleted while it holds PCs or subfolde
 while a rule, watchdog, device group or folder-scoped permission group still names it.
 
 The rules **AD organisational unit** target now matches OUs component-wise, like
-permission scope always has: `OU=Cajas` no longer reaches `OU=NoCajas` (hub 1.158.0).
+permission scope always has: `OU=Cajas` no longer reaches `OU=NoCajas` (hub 1.159.0).
 
 ## Active Directory sync
 

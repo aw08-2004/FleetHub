@@ -26,6 +26,7 @@
             case 'encryption': return t('posture.check.encryption');
             case 'secure_boot': return t('posture.check.secure_boot');
             case 'tpm': return t('posture.check.tpm');
+            case 'os_patch': return t('posture.check.os_patch');
             default: return id;
         }
     }
@@ -43,41 +44,51 @@
         return code;
     }
 
+    // A table rather than a switch: one row per detail code in hub/posture.py, each a
+    // literal t() call so tests/test_i18n.py still sees every key. A code this page is
+    // older than falls back to "not reported" rather than printing its own id.
+    const DETAIL_TEXT = {
+        read_failed: (p) => t('posture.detail.read_failed', p),
+        av_on: (p) => t('posture.detail.av_on', p),
+        av_off: (p) => t('posture.detail.av_off', p),
+        av_none: (p) => t('posture.detail.av_none', p),
+        sig_current: (p) => t('posture.detail.sig_current', p),
+        sig_stale: (p) => t('posture.detail.sig_stale', p),
+        sig_stale_product: (p) => t('posture.detail.sig_stale_product', p),
+        autorun_off: (p) => t('posture.detail.autorun_off', p),
+        autorun_on: (p) => t('posture.detail.autorun_on', p),
+        fw_on: (p) => t('posture.detail.fw_on', p),
+        fw_off: (p) => t('posture.detail.fw_off', p),
+        lock_ok: (p) => t('posture.detail.lock_ok', p),
+        lock_too_long: (p) => t('posture.detail.lock_too_long', p),
+        lock_missing: (p) => t('posture.detail.lock_missing', p),
+        lock_no_users: (p) => t('posture.detail.lock_no_users', p),
+        defaults_disabled: (p) => t('posture.detail.defaults_disabled', p),
+        defaults_enabled: (p) => t('posture.detail.defaults_enabled', p),
+        admins_ok: (p) => t('posture.detail.admins_ok', p),
+        admins_extra: (p) => t('posture.detail.admins_extra', p),
+        enc_all: (p) => t('posture.detail.enc_all', p),
+        enc_unprotected: (p) => t('posture.detail.enc_unprotected', p),
+        enc_unsupported: (p) => t('posture.detail.enc_unsupported', p),
+        enc_not_reported: (p) => t('posture.detail.enc_not_reported', p),
+        enc_device: (p) => t('posture.detail.enc_device', p),
+        enc_device_off: (p) => t('posture.detail.enc_device_off', p),
+        enc_device_unsupported: (p) => t('posture.detail.enc_device_unsupported', p),
+        patch_current: (p) => t('posture.detail.patch_current', p),
+        patch_stale: (p) => t('posture.detail.patch_stale', p),
+        secure_boot_on: (p) => t('posture.detail.secure_boot_on', p),
+        secure_boot_off: (p) => t('posture.detail.secure_boot_off', p),
+        secure_boot_legacy: (p) => t('posture.detail.secure_boot_legacy', p),
+        tpm_ready: (p) => t('posture.detail.tpm_ready', p),
+        tpm_missing: (p) => t('posture.detail.tpm_missing', p),
+        tpm_not_ready: (p) => t('posture.detail.tpm_not_ready', p),
+    };
+
     function detailText(check) {
         const p = Object.assign({}, check.params || {});
         if (Array.isArray(p.profiles)) p.profiles = p.profiles.map(profileName).join(', ');
-        switch (check.detail) {
-            case 'read_failed': return t('posture.detail.read_failed', p);
-            case 'av_on': return t('posture.detail.av_on', p);
-            case 'av_off': return t('posture.detail.av_off', p);
-            case 'av_none': return t('posture.detail.av_none', p);
-            case 'sig_current': return t('posture.detail.sig_current', p);
-            case 'sig_stale': return t('posture.detail.sig_stale', p);
-            case 'sig_stale_product': return t('posture.detail.sig_stale_product', p);
-            case 'autorun_off': return t('posture.detail.autorun_off', p);
-            case 'autorun_on': return t('posture.detail.autorun_on', p);
-            case 'fw_on': return t('posture.detail.fw_on', p);
-            case 'fw_off': return t('posture.detail.fw_off', p);
-            case 'lock_ok': return t('posture.detail.lock_ok', p);
-            case 'lock_too_long': return t('posture.detail.lock_too_long', p);
-            case 'lock_missing': return t('posture.detail.lock_missing', p);
-            case 'lock_no_users': return t('posture.detail.lock_no_users', p);
-            case 'defaults_disabled': return t('posture.detail.defaults_disabled', p);
-            case 'defaults_enabled': return t('posture.detail.defaults_enabled', p);
-            case 'admins_ok': return t('posture.detail.admins_ok', p);
-            case 'admins_extra': return t('posture.detail.admins_extra', p);
-            case 'enc_all': return t('posture.detail.enc_all', p);
-            case 'enc_unprotected': return t('posture.detail.enc_unprotected', p);
-            case 'enc_unsupported': return t('posture.detail.enc_unsupported', p);
-            case 'enc_not_reported': return t('posture.detail.enc_not_reported', p);
-            case 'secure_boot_on': return t('posture.detail.secure_boot_on', p);
-            case 'secure_boot_off': return t('posture.detail.secure_boot_off', p);
-            case 'secure_boot_legacy': return t('posture.detail.secure_boot_legacy', p);
-            case 'tpm_ready': return t('posture.detail.tpm_ready', p);
-            case 'tpm_missing': return t('posture.detail.tpm_missing', p);
-            case 'tpm_not_ready': return t('posture.detail.tpm_not_ready', p);
-            default: return t('posture.detail.not_reported', p);
-        }
+        const text = Object.hasOwn(DETAIL_TEXT, check.detail) ? DETAIL_TEXT[check.detail] : null;
+        return text ? text(p) : t('posture.detail.not_reported', p);
     }
 
     window.PostureLabels = { checkTitle, statusLabel, detailText };

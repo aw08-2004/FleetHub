@@ -436,6 +436,26 @@ public sealed class AgentLoops(
         }
     }
 
+    /// <summary>Spend a one-time onboarding code typed on the setup screen.
+    ///
+    /// Behind the SAME gate as the secret path, and that is the point of it living here rather
+    /// than being called on FleetClient directly: the secret loop retries every thirty seconds,
+    /// and a code spent while a secret enrollment was in flight would leave the device holding
+    /// whichever identity happened to be written second -- and the hub holding two.</summary>
+    public async Task<Fleet.CodeRedeemOutcome> RedeemOnboardingCodeAsync(
+        string? code, string? serial, CancellationToken ct)
+    {
+        await _enrollGate.WaitAsync(ct);
+        try
+        {
+            return await fleet.RedeemOnboardingCodeAsync(code, serial, ct);
+        }
+        finally
+        {
+            _enrollGate.Release();
+        }
+    }
+
     /// <summary>Sleep, reporting whether we were cancelled rather than throwing. Every loop
     /// above ends by asking this, so a stop request unwinds all three the same way.</summary>
     private static async Task<bool> DelayAsync(int seconds, CancellationToken ct)

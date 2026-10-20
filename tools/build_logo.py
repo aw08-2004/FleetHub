@@ -13,6 +13,15 @@ Writes, all committed:
     hub/static/apple-touch-icon.png             the same tile, 180px, for iOS home screens
     app/windows/runner/resources/app_icon.ico   the Flutter client's exe and tray icon
     agent/src/TempMonitorAgent/app.ico          the agent exe, and so the ticket tray icon
+    agent-android/.../Resources/mipmap-*/       the Android agent's launcher icon, legacy PNGs
+    agent-android/.../Resources/drawable/       its adaptive-icon layers and notification icon
+
+**Android gets vectors where it can take them.** An adaptive icon (API 26+, which is this
+app's floor) is a background layer and a foreground layer that the launcher masks into its own
+shape, so the foreground is the bare mark in a 108dp canvas with the tile colour behind it --
+not the rounded tile, which a circle mask would cut the corners off. The PNGs are only for
+launchers that ignore adaptive icons, and the notification icon is a white silhouette because
+the status bar draws every small icon as one: the near-black hub would simply vanish.
 
 The console's own copies of the mark (sidebar, mobile topbar, login, invite, onboarding) are
 **not** written here: they are inline SVG in `hub/templates/partials/_logo.html`, coloured by
@@ -127,6 +136,91 @@ def render_tile(size):
     return bytes(out)
 
 
+def render_round(size):
+    """The tile clipped to a circle, for the legacy `ic_launcher_round` slot."""
+    rgba = bytearray(render_tile(size))
+    unit = 32 / size
+    for j in range(size):
+        for i in range(size):
+            x, y = (i + 0.5) * unit, (j + 0.5) * unit
+            alpha = max(0.0, min(1.0, 0.5 - sd_circle(x, y, 16, 16, 16) / unit))
+            p = (j * size + i) * 4 + 3
+            rgba[p] = round(rgba[p] * alpha)
+    return bytes(rgba)
+
+
+# ---------------------------------------------------------------- Android vectors
+ANDROID_RES = "agent-android/src/FleetHubAgent.Android/Resources"
+
+#: Launcher density buckets and their 48dp sizes in pixels.
+ANDROID_DENSITIES = (("mdpi", 48), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 144),
+                     ("xxxhdpi", 192))
+
+#: The adaptive canvas is 108dp, of which the inner 66dp circle is all a launcher promises to
+#: show. At 1.75 the mark is 56dp wide and its outermost node edge sits 28.4dp from centre,
+#: inside the 33dp radius with room to spare on the most aggressive (squircle) masks.
+ADAPTIVE_SCALE = 1.75
+ADAPTIVE_OFFSET = (108 - 32 * ADAPTIVE_SCALE) / 2
+
+ANDROID_NS = 'xmlns:android="http://schemas.android.com/apk/res/android"'
+
+
+def _vector_mark(primary, hub, viewport, scale, offset):
+    spokes = "".join(f"M16,16L{x},{y}" for x, y in NODES)
+    nodes = "".join(
+        f'<path android:fillColor="{primary}" android:pathData="{_circle_path(x, y, NODE_R)}"/>'
+        for x, y in NODES)
+    hub_path = (f'<path android:fillColor="{hub}" '
+                f'android:pathData="{_circle_path(HUB[0], HUB[1], HUB[2])}"/>')
+    return (
+        f'<vector {ANDROID_NS} android:width="{viewport}dp" android:height="{viewport}dp" '
+        f'android:viewportWidth="{viewport}" android:viewportHeight="{viewport}">'
+        f'<group android:translateX="{offset:g}" android:translateY="{offset:g}" '
+        f'android:scaleX="{scale:g}" android:scaleY="{scale:g}">'
+        f'<path android:strokeColor="{primary}" android:strokeWidth="{SPOKE_W:g}" '
+        f'android:strokeLineCap="round" android:pathData="{spokes}"/>'
+        f"{nodes}{hub_path}"
+        "</group></vector>\n"
+    )
+
+
+def _circle_path(cx, cy, r):
+    # VectorDrawable has no <circle>; two arcs are the standard spelling of one.
+    return (f"M{cx - r:g},{cy:g}a{r:g},{r:g} 0,1 1,{2 * r:g},0"
+            f"a{r:g},{r:g} 0,1 1,{-2 * r:g},0z")
+
+
+def android_foreground():
+    return _vector_mark(TILE_PRIMARY, TILE_HUB, 108, ADAPTIVE_SCALE, ADAPTIVE_OFFSET)
+
+
+def android_monochrome():
+    # Themed icons (Android 13+) tint this one colour, so the hub is drawn in the same colour
+    # as everything else: a two-tone mark has no meaning once the launcher recolours it.
+    return _vector_mark("#ffffff", "#ffffff", 108, ADAPTIVE_SCALE, ADAPTIVE_OFFSET)
+
+
+def android_background():
+    return (f'<vector {ANDROID_NS} android:width="108dp" android:height="108dp" '
+            'android:viewportWidth="108" android:viewportHeight="108">'
+            f'<path android:fillColor="{TILE}" android:pathData="M0,0h108v108h-108z"/>'
+            "</vector>\n")
+
+
+def android_notification():
+    # 24dp, the status-bar size, with the mark filling the 32-unit grid edge to edge minus
+    # the node radius it already leaves. White on transparent; the system tints it.
+    return _vector_mark("#ffffff", "#ffffff", 24, 24 / 32, 0)
+
+
+def android_adaptive():
+    return (f'<adaptive-icon {ANDROID_NS}>'
+            '<background android:drawable="@drawable/ic_launcher_background"/>'
+            '<foreground android:drawable="@drawable/ic_launcher_foreground"/>'
+            '<monochrome android:drawable="@drawable/ic_launcher_monochrome"/>'
+            "</adaptive-icon>\n")
+
+
 def png(size, rgba):
     def chunk(kind, data):
         return (struct.pack(">I", len(data)) + kind + data
@@ -182,6 +276,17 @@ def main():
     app_ico = ico(icon_sizes)
     write("app/windows/runner/resources/app_icon.ico", app_ico)
     write("agent/src/TempMonitorAgent/app.ico", app_ico)
+
+    for bucket, size in ANDROID_DENSITIES:
+        write(f"{ANDROID_RES}/mipmap-{bucket}/ic_launcher.png", png(size, render_tile(size)))
+        write(f"{ANDROID_RES}/mipmap-{bucket}/ic_launcher_round.png",
+              png(size, render_round(size)))
+    write(f"{ANDROID_RES}/mipmap-anydpi-v26/ic_launcher.xml", android_adaptive())
+    write(f"{ANDROID_RES}/mipmap-anydpi-v26/ic_launcher_round.xml", android_adaptive())
+    write(f"{ANDROID_RES}/drawable/ic_launcher_foreground.xml", android_foreground())
+    write(f"{ANDROID_RES}/drawable/ic_launcher_monochrome.xml", android_monochrome())
+    write(f"{ANDROID_RES}/drawable/ic_launcher_background.xml", android_background())
+    write(f"{ANDROID_RES}/drawable/ic_stat_fleethub.xml", android_notification())
     return 0
 
 

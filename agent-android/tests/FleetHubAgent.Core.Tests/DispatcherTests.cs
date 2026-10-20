@@ -44,18 +44,36 @@ public class DispatcherTests
     }
 
     [Fact]
-    public void Restart_names_the_route_that_does_exist()
+    public void Shutdown_names_the_route_that_does_exist()
     {
-        // There IS an answer for reboot, and it is not this agent. Saying so is the difference
-        // between a dead end and a next step.
-        Assert.Contains("MDM", CommandDispatcher.Unsupported("restart", ["rename"]));
+        // A phone cannot be powered off remotely, but a managed one CAN be restarted -- this
+        // agent does that now. Saying so is the difference between a dead end and a next step.
+        Assert.Contains("restarted", CommandDispatcher.Unsupported("shutdown", ["rename"]));
+    }
+
+    [Fact]
+    public void Install_app_points_at_an_apk_package()
+    {
+        // The old message sent the operator to "the MDM", which on a QR-provisioned phone is
+        // this agent. There is a real route now, and the message has to name it.
+        Assert.Contains("APK", CommandDispatcher.Unsupported("install_app", ["rename"]));
+    }
+
+    [Theory]
+    [InlineData("restart")]
+    [InlineData("deploy_package")]
+    public void Commands_this_agent_now_runs_are_not_called_impossible(string type)
+    {
+        // Both left the impossible table when they got executors. A stale entry would not be
+        // reached at runtime (the dispatcher routes first), but it would be the comment the
+        // next reader trusts.
+        Assert.DoesNotContain("cannot be run on Android", CommandDispatcher.Unsupported(type, ["rename"]));
     }
 
     [Theory]
     [InlineData("backup_files")]
     [InlineData("restore_files")]
     [InlineData("install_patches")]
-    [InlineData("deploy_package")]
     public void Scheduler_driven_commands_are_named_as_impossible_not_merely_unwritten(string type)
     {
         // These reach an Android device even though no console button offers them: they are
@@ -89,8 +107,10 @@ public class DispatcherTests
         // exactly that -- and this agent simply has not implemented it yet. gpupdate used to
         // stand here and had to move: Group Policy has no Android counterpart, so it belongs
         // in the impossible table, and using it here tested the wrong thing. show_message
-        // stood here next and had to move for the opposite reason -- it is implemented now.
-        var message = CommandDispatcher.Unsupported("wake_machine", ["rename"]);
+        // stood here next and had to move for the opposite reason -- it is implemented now, and
+        // so, since 0.3.0, is wake_machine. network_sweep is the honest example today: a phone
+        // on the office Wi-Fi could plausibly probe its own subnet, and this agent does not.
+        var message = CommandDispatcher.Unsupported("network_sweep", ["rename"]);
         Assert.Contains("not implemented by the Android agent", message);
         Assert.Contains(AgentConfig.Version, message);
     }
@@ -99,7 +119,7 @@ public class DispatcherTests
     public void Both_shapes_list_what_this_agent_can_do()
     {
         Assert.Contains("rename", CommandDispatcher.Unsupported("shutdown", ["rename"]));
-        Assert.Contains("rename", CommandDispatcher.Unsupported("wake_machine", ["rename"]));
+        Assert.Contains("rename", CommandDispatcher.Unsupported("network_sweep", ["rename"]));
     }
 
     [Fact]

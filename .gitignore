@@ -35,3 +35,7 @@ agent-android/dist/
 tools/.bin/
 # Agent Zero project metadata
 .a0proj/
+
+# Claude Code worktrees: full duplicate checkouts of this repo, local to one machine. Tracked
+# by accident once as gitlinks pointing at commits no other clone has.
+.claude/worktrees/

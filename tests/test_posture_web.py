@@ -110,7 +110,8 @@ def main():
         check("the firewall check fails on the public profile",
               checks["firewall"]["status"] == "fail"
               and checks["firewall"]["params"]["profiles"] == ["public"])
-        check("counts add up to every check", sum(data["counts"].values()) == len(posture.CHECKS))
+        check("counts add up to every desktop check",
+              sum(data["counts"].values()) == len(posture.DESKTOP_CHECKS))
         r = c.post("/api/agent/heartbeat", headers=auth["PC-01"], json={"config_version": ""})
         check("a heartbeat without a posture is not flagged either",
               "posture_rejected" not in r.get_json())

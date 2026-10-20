@@ -3019,7 +3019,7 @@ def _match_ad_ou(selector, row, _ctx):
     if not want:
         return False
     # COMPONENT-WISE containment, the same test permission scoping uses. This was a lowercase
-    # string endswith until hub 1.158.0, which let `OU=Cajas,DC=x` reach `OU=NoCajas,DC=x` --
+    # string endswith until hub 1.159.0, which let `OU=Cajas,DC=x` reach `OU=NoCajas,DC=x` --
     # the bug ROADMAP names for permission scope, here in targeting, and the two had to agree
     # once a folder-and-OU tree put them side by side. Falls back to the DN when no OU was
     # stored: a DN is the OU plus one leaf CN, so OU containment of the DN is containment of

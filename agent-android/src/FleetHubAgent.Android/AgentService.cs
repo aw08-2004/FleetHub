@@ -89,6 +89,10 @@ public sealed class AgentService : Service
     /// <summary>Held as a field only so the capability report can ask it, live, whether usage
     /// access has been granted -- see ReportedFeatures.</summary>
     private UsageStatsReader? _usage;
+    /// <summary>Kept so a one-time code can be spent under this device's SSAID -- see
+    /// RedeemCodeAsync.</summary>
+    private SystemIdentity? _identity;
+    private HubPayloadDownloader? _downloader;
 
     public override IBinder? OnBind(Intent? intent) => null;
 
@@ -132,6 +136,7 @@ public sealed class AgentService : Service
         ManagedConfig.ApplyHubUrl(this, state);
 
         var identity = AndroidSystemInfo.Read(this, _loggerFactory!.CreateLogger("SystemInfo"));
+        _identity = identity;
 
         // SECOND: the machine name depends on the identity just read -- the derived default is
         // the model plus a suffix of the stable id, and getting a blank one there is what makes
@@ -146,12 +151,15 @@ public sealed class AgentService : Service
         _reporter = new TelemetryReporter(
             _loggerFactory.CreateLogger<TelemetryReporter>(), identity, _names,
             () => _fleet?.BearerValue);
-        // The executors, which are the whole of what this agent can be TOLD to do today. Five
+        // The executors, which are the whole of what this agent can be TOLD to do today. Eight
         // out of the hub's ~thirty command types, and the gap is a platform limit rather than a
         // backlog: see CommandDispatcher, which distinguishes the commands Android forbids from
         // the ones simply not written yet. The hub is told this exact set on every heartbeat
         // (AgentCapabilities), which is what stops it queueing the rest.
         var security = new AndroidDeviceSecurity(this, _loggerFactory.CreateLogger("Security"));
+        // Signs hub-hosted payload downloads with whatever FleetClient holds at the time, and
+        // sends nothing to any other host -- see HubPayloadDownloader.
+        _downloader = new HubPayloadDownloader(() => _fleet?.BearerValue);
 
         var executors = new ICommandExecutor[]
         {
@@ -178,6 +186,15 @@ public sealed class AgentService : Service
             new ShowMessageExecutor(
                 _loggerFactory.CreateLogger<ShowMessageExecutor>(),
                 new UserMessageNotifier(this, _loggerFactory.CreateLogger("UserMessage"))),
+            // 0.3.0. Restart and app installs are device-owner powers, so both live on a
+            // device that was provisioned by QR and refuse with the reason everywhere else.
+            // The wake relay needs nothing but the network the phone is already on.
+            new RestartExecutor(_loggerFactory.CreateLogger<RestartExecutor>(), security),
+            new WakeMachineExecutor(_loggerFactory.CreateLogger<WakeMachineExecutor>()),
+            new DeployPackageExecutor(
+                _loggerFactory.CreateLogger<DeployPackageExecutor>(),
+                new AndroidAppInstaller(this, _loggerFactory.CreateLogger("AppInstaller")),
+                _downloader),
         };
 
         var dispatcher = new CommandDispatcher(
@@ -227,6 +244,10 @@ public sealed class AgentService : Service
             apps,
             _usage,
             policy,
+            // 0.3.0: the Network tab and the Wake-on-LAN relay picker read the first, the
+            // Security posture card the second. Both were blank for every phone before.
+            new AndroidNetworkReader(this, _loggerFactory.CreateLogger("Network")),
+            new AndroidPostureReader(this, _loggerFactory.CreateLogger("Posture")),
         };
 
         // Self-update (roadmap #22). Core owns everything except the install itself, which is
@@ -314,6 +335,7 @@ public sealed class AgentService : Service
         _sensors?.Dispose();
         _reporter?.Dispose();
         _fleet?.Dispose();
+        _downloader?.Dispose();
         _loggerFactory?.Dispose();
 
         base.OnDestroy();
@@ -451,7 +473,10 @@ public sealed class AgentService : Service
         return new Notification.Builder(this, ChannelId)
             .SetContentTitle("FleetHub Agent")
             .SetContentText(StatusLine())
-            .SetSmallIcon(global::Android.Resource.Drawable.StatNotifySync)
+            // The FleetHub mark as a white silhouette (tools/build_logo.py). It replaced the
+            // platform's sync arrows, which said "something is syncing" rather than whose
+            // agent this is -- the one question a person looking at their status bar has.
+            .SetSmallIcon(Resource.Drawable.ic_stat_fleethub)
             .SetContentIntent(pending)
             .SetOngoing(true)
             .SetOnlyAlertOnce(true)
@@ -512,6 +537,45 @@ public sealed class AgentService : Service
         }
     }
 
+    // ------------------------------------------------------------------ the setup screen
+
+    /// <summary>What the setup screen shows about the running agent. Null when no service
+    /// is up, which the screen says plainly rather than guessing.</summary>
+    internal static AgentSnapshot? Snapshot()
+    {
+        var service = _running;
+        if (service is null || service._agent is null) return null;
+        return new AgentSnapshot(
+            service._names?.Current,
+            service._fleet?.IsEnrolled == true,
+            service._reporter?.BufferedCount ?? 0);
+    }
+
+    /// <summary>Spend a one-time onboarding code typed on the setup screen.
+    ///
+    /// Through the running service rather than a client the activity builds for itself, and
+    /// that is the point of it: AgentLoops serialises this against the 30-second secret retry,
+    /// and a second FleetClient would hold its own copy of the identity and race the first.</summary>
+    internal static async Task<CodeRedeemOutcome> RedeemCodeAsync(string code, CancellationToken ct)
+    {
+        var service = _running;
+        if (service?._agent is null) return CodeRedeemOutcome.Unreachable;
+        var outcome = await service._agent.RedeemOnboardingCodeAsync(
+            code, service._identity?.SerialNumber, ct);
+        if (outcome == CodeRedeemOutcome.Enrolled)
+        {
+            // Redrawn now rather than on the next minute's tick: the person who just typed the
+            // code is looking at the shade to see whether it took.
+            try
+            {
+                if (service.GetSystemService(NotificationService) is NotificationManager manager)
+                    manager.Notify(NotificationId, service.BuildNotification());
+            }
+            catch (Exception) { /* cosmetic */ }
+        }
+        return outcome;
+    }
+
     // ------------------------------------------------------------------ starting
 
     /// <summary>Start the agent, from wherever asks -- the launcher activity, the boot
@@ -538,3 +602,6 @@ public sealed class AgentService : Service
         }
     }
 }
+
+/// <summary>The agent as the setup screen sees it.</summary>
+internal sealed record AgentSnapshot(string? MachineName, bool Enrolled, int Buffered);

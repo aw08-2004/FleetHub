@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The setup screen's palette. Taken from the hub console (hub/static/css/tokens.css) and the
+     logo tile, so the device and the console read as one product. The night copy in
+     values-night/colors.xml redefines the same names; nothing outside these two files names a
+     colour by value. -->
+<resources>
+  <color name="brand">#3b82f6</color>
+  <color name="brand_on">#ffffff</color>
+  <color name="screen">#f4f5f7</color>
+  <color name="card">#ffffff</color>
+  <color name="card_border">#e4e4e7</color>
+  <color name="text">#18181b</color>
+  <color name="muted">#6b6b75</color>
+  <color name="ok">#15803d</color>
+  <color name="ok_soft">#dcfce7</color>
+  <color name="warn">#b45309</color>
+  <color name="warn_soft">#fef3c7</color>
+  <color name="info">#1d4ed8</color>
+  <color name="info_soft">#dbeafe</color>
+</resources>
