@@ -56,17 +56,24 @@ public sealed class FleetClient : IDisposable
 
     public FleetClient(ILogger<FleetClient> log, AgentState state, MachineNameProvider names,
         Func<AgentCapabilities>? capabilities = null)
+        : this(log, state, names, capabilities, handler: null)
+    {
+    }
+
+    /// <summary>The same client over a caller's handler, so a test can answer for the hub.
+    /// Internal because nothing on a device has a reason to swap the transport.</summary>
+    internal FleetClient(ILogger<FleetClient> log, AgentState state, MachineNameProvider names,
+        Func<AgentCapabilities>? capabilities, HttpMessageHandler? handler)
     {
         _log = log;
         _state = state;
         _names = names;
         _capabilities = capabilities;
         _identity = state.LoadIdentity();
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        _commandHttp = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(AgentConfig.CommandPollTimeoutSeconds),
-        };
+        _http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+        _http.Timeout = TimeSpan.FromSeconds(10);
+        _commandHttp = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+        _commandHttp.Timeout = TimeSpan.FromSeconds(AgentConfig.CommandPollTimeoutSeconds);
     }
 
     public bool IsEnrolled => _identity.IsEnrolled;
@@ -115,37 +122,133 @@ public sealed class FleetClient : IDisposable
                 return false;
             }
 
-            var json = JsonNode.Parse(text);
-            var agentId = json?["agent_id"]?.GetValue<string>();
-            var token = json?["token"]?.GetValue<string>();
-            if (string.IsNullOrEmpty(agentId) || string.IsNullOrEmpty(token))
-            {
-                _log.LogWarning("Enrollment response missing agent_id/token");
-                return false;
-            }
-
-            // Persist BEFORE adopting it in memory, and treat a failed write as a failed
-            // enrollment. The token comes back exactly once; running on an identity that is
-            // not on disk works until Android kills the process, and then this device enrolls
-            // again and appears in the console as a second machine. Reporting failure here
-            // costs one retry in thirty seconds.
-            var identity = new AgentIdentity { AgentId = agentId, Token = token };
-            if (!_state.SaveIdentity(identity))
-            {
-                _log.LogError("Enrolled as {AgentId} but could not store the identity; " +
-                              "discarding it and retrying rather than running on a token " +
-                              "that will not survive a restart.", agentId);
-                return false;
-            }
-            _identity = identity;
-            _log.LogInformation("Enrolled as agent {AgentId}", agentId);
-            return true;
+            return AdoptIdentity(text) == CodeRedeemOutcome.Enrolled;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             _log.LogWarning("Enrollment call failed: {Msg}", e.Message);
             return false;
         }
+    }
+
+    /// <summary>Take the `{agent_id, token}` the hub minted, persist it, and adopt it. Shared
+    /// by both enrollment paths, because the rule in it is the one that matters most.</summary>
+    private CodeRedeemOutcome AdoptIdentity(string responseText)
+    {
+        JsonNode? json;
+        try { json = JsonNode.Parse(responseText); }
+        catch (JsonException) { json = null; }
+        var agentId = json?["agent_id"]?.GetValue<string>();
+        var token = json?["token"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(agentId) || string.IsNullOrEmpty(token))
+        {
+            _log.LogWarning("Enrollment response missing agent_id/token");
+            return CodeRedeemOutcome.Unreachable;
+        }
+
+        // Persist BEFORE adopting it in memory, and treat a failed write as a failed
+        // enrollment. The token comes back exactly once; running on an identity that is
+        // not on disk works until Android kills the process, and then this device enrolls
+        // again and appears in the console as a second machine. Reporting failure here
+        // costs one retry in thirty seconds.
+        var identity = new AgentIdentity { AgentId = agentId, Token = token };
+        if (!_state.SaveIdentity(identity))
+        {
+            _log.LogError("Enrolled as {AgentId} but could not store the identity; " +
+                          "discarding it and retrying rather than running on a token " +
+                          "that will not survive a restart.", agentId);
+            return CodeRedeemOutcome.NotStored;
+        }
+        _identity = identity;
+        _log.LogInformation("Enrolled as agent {AgentId}", agentId);
+        return CodeRedeemOutcome.Enrolled;
+    }
+
+    /// <summary>Enroll by spending a one-time onboarding code (roadmap #29), instead of the
+    /// fleet-wide shared secret.
+    ///
+    /// **Why this exists on a phone at all.** The shared secret is a credential that enrols
+    /// ANY device, and the setup screen used to ask for it first thing -- so enrolling one
+    /// phone meant typing the fleet's master key on a screen somebody else might be looking
+    /// at, onto a device that then kept it. A code admits exactly one device, expires within
+    /// a day, and is worthless once spent; the hub records which machine spent it and from
+    /// where. hub/onboarding.py rejected the agent spending codes for the WINDOWS agent only
+    /// because the install script can do it there; a phone has no install script, so the
+    /// agent is the only thing that can.
+    ///
+    /// The caller serialises this against <see cref="EnsureEnrolledAsync"/> -- see the
+    /// enroll gate in AgentLoops. Two paths minting two identities for one device is the
+    /// duplicate this whole client exists to avoid.</summary>
+    public async Task<CodeRedeemOutcome> RedeemOnboardingCodeAsync(
+        string? rawCode, string? serial, CancellationToken ct)
+    {
+        if (_identity.IsEnrolled) return CodeRedeemOutcome.AlreadyEnrolled;
+
+        var code = NormalizeOnboardingCode(rawCode);
+        if (code is null) return CodeRedeemOutcome.Malformed;
+
+        var body = new JsonObject
+        {
+            ["code"] = code,
+            ["machine"] = _names.Current,
+            // The SSAID (AndroidSystemInfo). The hub checks it only when the name already has
+            // history, which is how a reinstalled phone spends a code under its own old name
+            // while a different device presenting that name is refused.
+            ["serial"] = serial ?? "",
+        };
+        using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+        try
+        {
+            using var resp = await _http.PostAsync(AgentConfig.OnboardingRedeemUrl, content, ct);
+            var text = await resp.Content.ReadAsStringAsync(ct);
+            if (resp.IsSuccessStatusCode) return AdoptIdentity(text);
+
+            _log.LogWarning("Onboarding code refused ({Status})", (int)resp.StatusCode);
+            return (int)resp.StatusCode switch
+            {
+                // A live code, a name already enrolled by another device: the code is NOT
+                // spent, and the person needs to rename this one rather than ask for a new code.
+                409 => CodeRedeemOutcome.NameTaken,
+                // The hub's one answer for unknown, spent, expired and revoked alike -- see
+                // onboarding.INVALID_MESSAGE. Not an oracle, so not distinguished here either.
+                404 => CodeRedeemOutcome.Invalid,
+                // The request itself was refused -- in practice a machine name the hub will
+                // not accept. The code is unspent; the name is what needs changing.
+                400 => CodeRedeemOutcome.Rejected,
+                // Rate limited, or a hub too old to have the route: neither is the code's fault.
+                _ => CodeRedeemOutcome.Unreachable,
+            };
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogWarning("Onboarding code call failed: {Msg}", e.Message);
+            return CodeRedeemOutcome.Unreachable;
+        }
+    }
+
+    /// <summary>hub/onboarding.py's alphabet: no 0, O, 1, I or L, because a code is read aloud
+    /// and typed by somebody who is not a technician.</summary>
+    internal const string OnboardingAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    internal const int OnboardingCodeLength = 6;
+
+    /// <summary>The code as the hub stores it, or null if it cannot be one. Spaces and dashes
+    /// are dropped and case is folded, because "ab3-k7q" read off a sticky note is the same
+    /// code; checked locally so a typo is answered on the device instead of costing one of the
+    /// hub's rate-limited attempts.</summary>
+    public static string? NormalizeOnboardingCode(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var sb = new StringBuilder();
+        foreach (var ch in raw)
+        {
+            if (ch is ' ' or '-' or '\t') continue;
+            sb.Append(char.ToUpperInvariant(ch));
+        }
+        var code = sb.ToString();
+        if (code.Length != OnboardingCodeLength) return null;
+        foreach (var ch in code)
+            if (!OnboardingAlphabet.Contains(ch)) return null;
+        return code;
     }
 
     /// <summary>
@@ -332,4 +435,26 @@ public sealed class FleetClient : IDisposable
         _http.Dispose();
         _commandHttp.Dispose();
     }
+}
+
+/// <summary>What spending an onboarding code came to. Each value leads to a different thing
+/// for the person holding the device to do, which is why this is not a bool.</summary>
+public enum CodeRedeemOutcome
+{
+    /// <summary>The device now has its own credential.</summary>
+    Enrolled,
+    /// <summary>It already had one; nothing was spent.</summary>
+    AlreadyEnrolled,
+    /// <summary>Not six characters of the hub's alphabet. Nothing was sent.</summary>
+    Malformed,
+    /// <summary>Unknown, spent, expired or revoked -- the hub will not say which.</summary>
+    Invalid,
+    /// <summary>Another device is enrolled under this name. The code was NOT spent.</summary>
+    NameTaken,
+    /// <summary>The hub refused the request itself (a machine name it will not accept).</summary>
+    Rejected,
+    /// <summary>The hub could not be reached, or answered with something unreadable.</summary>
+    Unreachable,
+    /// <summary>The hub minted a credential and this device could not keep it. Ask again.</summary>
+    NotStored,
 }

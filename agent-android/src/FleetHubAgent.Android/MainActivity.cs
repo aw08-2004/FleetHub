@@ -6,6 +6,7 @@ using Android.Text;
 using Android.Views;
 using Android.Widget;
 using FleetHubAgent;
+using FleetHubAgent.Fleet;
 using FleetHubAgent.State;
 using FleetHubAgent.Android.Platform;
 using FleetHubAgent.Android.Policy;
@@ -14,35 +15,66 @@ using Microsoft.Extensions.Logging;
 namespace FleetHubAgent.Android;
 
 /// <summary>
-/// The device's only screen: what this device is called in the console, which hub it reports
-/// to, and whether it is enrolled -- plus the two fields someone has to fill in when there is
-/// no MDM to fill them in for them.
+/// The device's only screen: whether this device is managed, what it is called in the console,
+/// and a checklist of the switches only somebody holding it can flip.
 ///
 /// **This is a setup and diagnostics screen, not an app.** Nobody uses it after the first
-/// minute; its job is to make the two states that look identical from outside
-/// distinguishable -- "reporting and taking commands" versus "reporting, and silently ignoring
-/// every command because it never enrolled". That second state is the one the Linux agent's
-/// installer prints a warning about, and on a phone there is no installer output to print it
-/// in, so it is on screen instead.
+/// minute; its job is to make the states that look identical from outside distinguishable --
+/// "reporting and taking commands" versus "reporting, and silently ignoring every command
+/// because it never enrolled", "can be located" versus "will answer every locate with
+/// unavailable". That is why the status card leads, and why every checklist row says what
+/// goes wrong without it rather than only what it is.
 ///
-/// **The UI is built in code rather than inflated from a layout.** Six widgets, no styling, no
-/// configuration variants, and nothing here is ever redesigned -- an XML layout would add a
-/// resource file and a set of generated ids to keep in step for no benefit anyone would ever
-/// see. That reasoning does not generalise to a real app screen, and this file is the only
-/// place in this project it applies.
+/// **Status first, and no text field until somebody asks for one** (0.3.0). The screen used to
+/// open on the hub URL and the fleet's enrollment secret, with the keyboard up for the first,
+/// so the first thing anybody saw on a phone was a prompt for the one credential that enrols
+/// ANY device. It now opens on the status card. Enrolling is a button that asks for a
+/// six-character one-time code from Administration -> Onboarding (FleetClient.
+/// RedeemOnboardingCodeAsync), which admits this device once and is worthless afterwards. The
+/// hub URL and the shared secret are still here, behind Advanced, for a lab or a device whose
+/// MDM cannot push managed configuration.
+///
+/// **A layout resource now, where it used to be built in code.** The old docstring argued six
+/// unstyled widgets did not justify one, and said nothing here would ever be redesigned; this
+/// is that redesign, and a card layout with a dark variant is exactly what resources are for.
+/// The platform Material theme rather than AndroidX/Material Components: those libraries would
+/// add megabytes to an APK every managed phone downloads on every release, for widgets the
+/// platform already draws. **The words stay here, in English**, as values/strings.xml records
+/// -- an agent's text is not the hub's catalogue.
 /// </summary>
 [Activity(
     Label = "FleetHub Agent",
+    Icon = "@mipmap/ic_launcher",
+    RoundIcon = "@mipmap/ic_launcher_round",
+    Theme = "@style/FleetHubTheme",
     MainLauncher = true,
     Exported = true,
-    LaunchMode = LaunchMode.SingleTask)]
+    LaunchMode = LaunchMode.SingleTask,
+    // Belt and braces with the layout having no field on it: even a future one must not pull
+    // the keyboard up on launch, which is the complaint this screen was redesigned around.
+    WindowSoftInputMode = SoftInput.StateAlwaysHidden)]
 public sealed class MainActivity : Activity
 {
     private const int RequestPostNotifications = 1001;
     private const int RequestLocation = 1002;
 
+    /// <summary>How often the screen re-reads the agent while it is visible. Enrolment, the
+    /// device-owner grant and the link state all change underneath it, and the person holding
+    /// the device is waiting to see one of them flip.</summary>
+    private static readonly TimeSpan Refresh = TimeSpan.FromSeconds(3);
+
     private AgentState _state = null!;
-    private TextView _status = null!;
+    private Handler _handler = null!;
+    private bool _visible;
+
+    private TextView _statusChip = null!;
+    private TextView _statusHeadline = null!;
+    private TextView _statusDetail = null!;
+    private TextView _statusFacts = null!;
+    private Button _enrollButton = null!;
+    private LinearLayout _checklist = null!;
+    private TextView _advancedToggle = null!;
+    private View _advancedPanel = null!;
     private EditText _hubField = null!;
     private EditText _secretField = null!;
 
@@ -51,14 +83,16 @@ public sealed class MainActivity : Activity
         base.OnCreate(savedInstanceState);
 
         _state = new AgentState(new AndroidStateStore(this));
+        _handler = new Handler(Looper.MainLooper!);
         ManagedConfig.ApplyHubUrl(this, _state);
 
-        SetContentView(BuildLayout());
+        SetContentView(Resource.Layout.activity_main);
+        Bind();
 
         // Asked here rather than from the service, because a runtime permission can only be
         // requested from an activity. On Android 13+ the foreground notification does not
         // appear without it -- the service still RUNS, so this is not fatal, but the only
-        // status display the device has would be invisible.
+        // status display the device has outside this screen would be invisible.
         RequestNotificationPermissionIfNeeded();
 
         // Starting on every launch, not only the first: this is also the recovery path when an
@@ -70,85 +104,330 @@ public sealed class MainActivity : Activity
     protected override void OnResume()
     {
         base.OnResume();
+        _visible = true;
         RefreshStatus();
+        ScheduleRefresh();
+    }
+
+    protected override void OnPause()
+    {
+        _visible = false;
+        base.OnPause();
+    }
+
+    private void ScheduleRefresh()
+    {
+        _handler.PostDelayed(() =>
+        {
+            if (!_visible) return;
+            RefreshStatus();
+            ScheduleRefresh();
+        }, (long)Refresh.TotalMilliseconds);
     }
 
     // ------------------------------------------------------------------ layout
 
-    private View BuildLayout()
+    private void Bind()
     {
-        var root = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        root.SetPadding(48, 48, 48, 48);
+        FindViewById<TextView>(Resource.Id.title)!.Text = "FleetHub Agent";
+        FindViewById<TextView>(Resource.Id.version)!.Text = $"Version {AgentConfig.Version}";
 
-        _status = new TextView(this);
-        _status.SetPadding(0, 0, 0, 48);
-        root.AddView(_status);
+        _statusChip = FindViewById<TextView>(Resource.Id.status_chip)!;
+        _statusHeadline = FindViewById<TextView>(Resource.Id.status_headline)!;
+        _statusDetail = FindViewById<TextView>(Resource.Id.status_detail)!;
+        _statusFacts = FindViewById<TextView>(Resource.Id.status_facts)!;
+        _enrollButton = FindViewById<Button>(Resource.Id.enroll_button)!;
+        _enrollButton.Text = "Enroll this device";
+        _enrollButton.Click += (_, _) => ShowEnrollDialog();
 
-        root.AddView(Label("Hub URL"));
-        _hubField = new EditText(this)
-        {
-            Hint = AgentConfig.DefaultHubBase,
-            InputType = InputTypes.TextVariationUri,
-            Text = _state.LoadHubBaseOverride() ?? "",
-        };
-        root.AddView(_hubField);
+        FindViewById<TextView>(Resource.Id.checklist_title)!.Text = "SETUP";
+        _checklist = FindViewById<LinearLayout>(Resource.Id.checklist)!;
 
-        root.AddView(Label("Enrollment secret"));
-        _secretField = new EditText(this)
-        {
-            // The hub's AGENT_ENROLLMENT_SECRET, one shared value for the whole fleet. Masked
-            // because it is a fleet credential being typed on a device somebody else may be
-            // looking at, and never re-displayed once stored -- the field below shows whether
-            // one is held, not what it is.
-            Hint = "Shared AGENT_ENROLLMENT_SECRET",
-            InputType = InputTypes.TextVariationPassword | InputTypes.ClassText,
-        };
-        root.AddView(_secretField);
+        _advancedToggle = FindViewById<TextView>(Resource.Id.advanced_toggle)!;
+        _advancedPanel = FindViewById(Resource.Id.advanced_panel)!;
+        _advancedToggle.Click += (_, _) => ToggleAdvanced();
+        SetAdvancedOpen(false);
 
-        var save = new Button(this) { Text = "Save and enroll" };
+        FindViewById<TextView>(Resource.Id.hub_label)!.Text = "Hub URL";
+        _hubField = FindViewById<EditText>(Resource.Id.hub_field)!;
+        _hubField.Hint = AgentConfig.DefaultHubBase;
+        _hubField.Text = _state.LoadHubBaseOverride() ?? "";
+
+        FindViewById<TextView>(Resource.Id.secret_label)!.Text = "Fleet enrollment secret";
+        _secretField = FindViewById<EditText>(Resource.Id.secret_field)!;
+        // The hub's AGENT_ENROLLMENT_SECRET, one shared value for the whole fleet. Masked
+        // because it is a fleet credential typed on a device somebody else may be looking at,
+        // and never re-displayed once stored -- the checklist shows whether one is held, not
+        // what it is.
+        _secretField.Hint = "Shared AGENT_ENROLLMENT_SECRET";
+        FindViewById<TextView>(Resource.Id.advanced_hint)!.Text =
+            "Prefer a one-time code: the shared secret enrols any device and stays on this " +
+            "one. Use it only where an MDM pushes it, or on a lab hub with no onboarding codes.";
+
+        var save = FindViewById<Button>(Resource.Id.save_button)!;
+        save.Text = "Save";
         save.Click += (_, _) => Save();
-        root.AddView(save);
 
-        var battery = new Button(this) { Text = "Exclude from battery optimisation" };
-        battery.Click += (_, _) => OpenBatterySettings();
-        root.AddView(battery);
-
-        var usage = new Button(this) { Text = "Grant usage access" };
-        usage.Click += (_, _) => OpenUsageAccessSettings();
-        root.AddView(usage);
-
-        var location = new Button(this) { Text = "Grant location" };
-        location.Click += (_, _) => GrantLocation();
-        root.AddView(location);
-
-        var hint = new TextView(this)
-        {
-            Text =
-                "Battery optimisation is what stops this device reporting overnight. Android " +
-                "and several manufacturers' own power managers will freeze a background app " +
-                "after a few hours idle; the device then reads offline in the console until " +
-                "somebody picks it up. Excluding the agent is the fix, and it has to be granted " +
-                "here -- an app cannot grant it to itself.\n\n" +
-                "Location is what the console's Locate button needs. A fully managed device " +
-                "grants it to itself the first time somebody asks where it is; every other " +
-                "device has to be granted it here, by somebody holding it.",
-        };
-        hint.SetPadding(0, 32, 0, 0);
-        root.AddView(hint);
-
-        var scroll = new ScrollView(this);
-        scroll.AddView(root);
-        return scroll;
+        FindViewById<TextView>(Resource.Id.footer)!.Text =
+            "Battery optimisation is what stops a device reporting overnight: Android and " +
+            "several manufacturers' power managers freeze a background app after a few hours " +
+            "idle, and the device then reads offline until somebody picks it up. Location is " +
+            "what the console's Locate button needs; it is read only when an operator asks, " +
+            "and this device shows a notice naming them every time.";
     }
 
-    private TextView Label(string text)
+    private void ToggleAdvanced() => SetAdvancedOpen(_advancedPanel.Visibility != ViewStates.Visible);
+
+    private void SetAdvancedOpen(bool open)
     {
-        var label = new TextView(this) { Text = text };
-        label.SetPadding(0, 24, 0, 0);
-        return label;
+        _advancedPanel.Visibility = open ? ViewStates.Visible : ViewStates.Gone;
+        _advancedToggle.Text = open ? "Advanced  ▾" : "Advanced  ▸";
     }
 
-    // ------------------------------------------------------------------ actions
+    // ------------------------------------------------------------------ status
+
+    private void RefreshStatus()
+    {
+        var identity = _state.LoadIdentity();
+        var snapshot = AgentService.Snapshot();
+        var hasSecret = new AndroidEnrollmentSecretSource(this, _state).Read() is not null;
+        var enrolled = snapshot?.Enrolled ?? identity.IsEnrolled;
+        var name = snapshot?.MachineName ?? _state.LoadMachineNameOverride() ?? "(derived from this device)";
+
+        // ---- the card ----
+        if (!AgentConfig.IsHubConfigured)
+        {
+            // Not "Hub: https://your.hub.url". A placeholder URL formatted exactly like a real
+            // one reads as configured at a glance, and this is the state a QR-provisioned
+            // device was silently left in -- so it is the loudest thing on the screen.
+            Chip(_statusChip, "NOT SET UP", Tone.Warn);
+            _statusHeadline.Text = "No hub configured";
+            _statusDetail.Text = "This device is reporting nowhere. Provision it with a QR code " +
+                                 "minted by the console, or set the hub URL under Advanced.";
+        }
+        else if (snapshot is null)
+        {
+            Chip(_statusChip, "STARTING", Tone.Info);
+            _statusHeadline.Text = "The agent is starting";
+            _statusDetail.Text = "If this does not change, open the app again -- that restarts it.";
+        }
+        else if (enrolled)
+        {
+            Chip(_statusChip, "MANAGED", Tone.Ok);
+            _statusHeadline.Text = snapshot.Buffered > 0 ? "Managed, but offline" : "Managed by FleetHub";
+            _statusDetail.Text = snapshot.Buffered > 0
+                ? $"The hub cannot be reached. {snapshot.Buffered} report(s) are waiting and will be sent when it can."
+                : "Reporting to the hub and accepting commands from the console.";
+        }
+        else
+        {
+            // The state that looks fine and is not. Said plainly, because on a phone there is
+            // no installer output to say it in.
+            Chip(_statusChip, "NOT ENROLLED", Tone.Warn);
+            _statusHeadline.Text = "Not enrolled";
+            _statusDetail.Text = hasSecret
+                ? "A fleet secret is set and enrolment is retried every 30 seconds."
+                : "This device reports to the console but will never accept a command. " +
+                  "Enroll it with a one-time code from Administration → Onboarding.";
+        }
+
+        _statusFacts.Text = string.Join("\n", new[]
+        {
+            $"Name in the console:  {name}",
+            $"Hub:  {(AgentConfig.IsHubConfigured ? AgentConfig.HubBase : "none")}",
+            enrolled && identity.AgentId is { Length: > 0 } id ? $"Agent id:  {id}" : null,
+        }.Where(l => l is not null));
+
+        _enrollButton.Visibility = AgentConfig.IsHubConfigured && !enrolled
+            ? ViewStates.Visible : ViewStates.Gone;
+
+        // ---- the checklist ----
+        _checklist.RemoveAllViews();
+        var managed = DeviceOwner.IsManaged(this);
+        var rows = new List<CheckRow>
+        {
+            new("Enrollment",
+                enrolled ? "Done" : "Needed", enrolled ? Tone.Ok : Tone.Warn,
+                enrolled
+                    ? "This device has its own credential and takes commands."
+                    : "Without it the console can see this device but cannot manage it.",
+                enrolled ? null : ("Enter code", ShowEnrollDialog)),
+            new("Location",
+                AndroidLocationReader.IsGranted(this) ? "Granted" : "Not granted",
+                AndroidLocationReader.IsGranted(this) ? Tone.Ok : Tone.Warn,
+                AndroidLocationReader.IsGranted(this)
+                    ? "The console can locate this device. Nothing is tracked in the background."
+                    : "A locate from the console will answer “unavailable” and the device " +
+                      "will not appear on the map.",
+                AndroidLocationReader.IsGranted(this) ? null : ("Grant location", GrantLocation)),
+            new("Notifications",
+                NotificationsAllowed() ? "On" : "Off",
+                NotificationsAllowed() ? Tone.Ok : Tone.Warn,
+                NotificationsAllowed()
+                    ? "Messages from the helpdesk and locate notices can be shown."
+                    : "Messages from the helpdesk come back unanswered, and the status " +
+                      "notification is hidden.",
+                NotificationsAllowed() ? null : ("Turn on", RequestNotificationsOrSettings)),
+            new("Battery optimisation",
+                IgnoringBatteryOptimisation() ? "Excluded" : "Active",
+                IgnoringBatteryOptimisation() ? Tone.Ok : Tone.Warn,
+                IgnoringBatteryOptimisation()
+                    ? "Android will not freeze the agent while the device is idle."
+                    : "The device may stop reporting overnight and read offline in the console.",
+                IgnoringBatteryOptimisation() ? null : ("Open battery settings", OpenBatterySettings)),
+            new("Usage access",
+                UsageStatsReader.IsGranted(this) ? "Granted" : "Not granted",
+                UsageStatsReader.IsGranted(this) ? Tone.Ok : Tone.Info,
+                UsageStatsReader.IsGranted(this)
+                    ? "Screen-time budgets can be enforced."
+                    : "Only needed for screen-time budgets. Blocked hours work without it.",
+                UsageStatsReader.IsGranted(this) ? null : ("Grant usage access", OpenUsageAccessSettings)),
+            new("Device owner",
+                managed ? "Fully managed" : "Not managed", managed ? Tone.Ok : Tone.Info,
+                managed
+                    ? "Lock, wipe, restart and app installs from the console work on this device."
+                    : "Installed as an ordinary app. Lock, wipe, restart and app installs need " +
+                      "the device provisioned by QR code, which starts with a factory reset.",
+                null),
+        };
+        for (var i = 0; i < rows.Count; i++)
+            _checklist.AddView(Render(rows[i], last: i == rows.Count - 1));
+    }
+
+    private enum Tone { Ok, Warn, Info }
+
+    private sealed record CheckRow(string Title, string State, Tone Tone, string Detail,
+        (string Label, Action Run)? Action);
+
+    private View Render(CheckRow row, bool last)
+    {
+        var view = LayoutInflater.Inflate(Resource.Layout.item_check, _checklist, false)!;
+        view.FindViewById<TextView>(Resource.Id.check_title)!.Text = row.Title;
+        Chip(view.FindViewById<TextView>(Resource.Id.check_chip)!, row.State, row.Tone);
+        view.FindViewById<TextView>(Resource.Id.check_detail)!.Text = row.Detail;
+        var button = view.FindViewById<Button>(Resource.Id.check_action)!;
+        if (row.Action is { } action)
+        {
+            button.Visibility = ViewStates.Visible;
+            button.Text = action.Label;
+            button.Click += (_, _) => action.Run();
+        }
+        view.FindViewById(Resource.Id.check_divider)!.Visibility =
+            last ? ViewStates.Invisible : ViewStates.Visible;
+        return view;
+    }
+
+    private void Chip(TextView chip, string text, Tone tone)
+    {
+        chip.Text = text;
+        var (background, colour) = tone switch
+        {
+            Tone.Ok => (Resource.Drawable.chip_ok, Resource.Color.ok),
+            Tone.Warn => (Resource.Drawable.chip_warn, Resource.Color.warn),
+            _ => (Resource.Drawable.chip_info, Resource.Color.info),
+        };
+        chip.SetBackgroundResource(background);
+        chip.SetTextColor(Resources!.GetColor(colour, Theme));
+    }
+
+    private bool NotificationsAllowed()
+        => GetSystemService(NotificationService) is NotificationManager manager
+           && manager.AreNotificationsEnabled();
+
+    private bool IgnoringBatteryOptimisation()
+        => GetSystemService(PowerService) is PowerManager power
+           && power.IsIgnoringBatteryOptimizations(PackageName);
+
+    // ------------------------------------------------------------------ enrolling
+
+    /// <summary>Ask for a one-time onboarding code and spend it.
+    ///
+    /// A dialog rather than a field on the screen, so nothing prompts for a credential until
+    /// somebody has decided to enrol. The field is upper-case and six characters because that
+    /// is what the hub mints (onboarding.ALPHABET); a typo is answered here without spending
+    /// one of the hub's rate-limited attempts.</summary>
+    private void ShowEnrollDialog()
+    {
+        if (!AgentConfig.IsHubConfigured)
+        {
+            Toast.MakeText(this, "Set the hub URL under Advanced first.", ToastLength.Long)?.Show();
+            SetAdvancedOpen(true);
+            return;
+        }
+
+        var field = new EditText(this)
+        {
+            Hint = "e.g. AB3K7Q",
+            InputType = InputTypes.ClassText | InputTypes.TextFlagCapCharacters
+                        | InputTypes.TextFlagNoSuggestions,
+            TextAlignment = TextAlignment.Center,
+            TextSize = 24,
+        };
+        field.SetFilters([new InputFilterLengthFilter(9), new InputFilterAllCaps()]);
+        var frame = new FrameLayout(this);
+        var pad = (int)(24 * Resources!.DisplayMetrics!.Density);
+        frame.SetPadding(pad, pad / 2, pad, 0);
+        frame.AddView(field);
+
+        var dialog = new AlertDialog.Builder(this)
+            .SetTitle("Enroll this device")!
+            .SetMessage("Enter the six-character code from Administration → Onboarding " +
+                        "in the FleetHub console. A code works once, for one device.")!
+            .SetView(frame)!
+            // Empty handlers: the positive button is rewired after Show, below.
+            .SetPositiveButton("Enroll", (_, _) => { })!
+            .SetNegativeButton("Cancel", (_, _) => { })!
+            .Create()!;
+        // The keyboard here IS wanted: somebody pressed Enroll and is about to type.
+        dialog.Window?.SetSoftInputMode(SoftInput.StateVisible);
+        dialog.Show();
+
+        // Wired after Show so a refusal keeps the dialog open with the code still in it --
+        // the default positive button dismisses first and asks questions afterwards.
+        var enroll = dialog.GetButton((int)DialogButtonType.Positive)!;
+        enroll.Click += async (_, _) =>
+        {
+            var code = field.Text ?? "";
+            if (FleetClient.NormalizeOnboardingCode(code) is null)
+            {
+                field.Error = "A code is six letters and digits (no 0, O, 1, I or L).";
+                return;
+            }
+            enroll.Enabled = false;
+            var outcome = await AgentService.RedeemCodeAsync(code, CancellationToken.None);
+            enroll.Enabled = true;
+            var message = Describe(outcome);
+            if (outcome is CodeRedeemOutcome.Enrolled or CodeRedeemOutcome.AlreadyEnrolled)
+            {
+                dialog.Dismiss();
+                Toast.MakeText(this, message, ToastLength.Long)?.Show();
+            }
+            else
+            {
+                field.Error = message;
+            }
+            RefreshStatus();
+        };
+    }
+
+    /// <summary>What to tell the person holding the device, per outcome. Each one names the
+    /// next thing to do, which is why the outcome is not a bool.</summary>
+    private static string Describe(CodeRedeemOutcome outcome) => outcome switch
+    {
+        CodeRedeemOutcome.Enrolled => "Enrolled. This device now takes commands from the console.",
+        CodeRedeemOutcome.AlreadyEnrolled => "This device is already enrolled.",
+        CodeRedeemOutcome.Malformed => "A code is six letters and digits (no 0, O, 1, I or L).",
+        CodeRedeemOutcome.Invalid => "That code is not valid. It may have been used already or " +
+                                     "have expired -- ask for a new one.",
+        CodeRedeemOutcome.NameTaken => "Another device is already enrolled under this name. The " +
+                                       "code was not used; rename this device in the console first.",
+        CodeRedeemOutcome.Rejected => "The hub refused this device's name. The code was not used.",
+        CodeRedeemOutcome.NotStored => "Enrolled, but the device could not save its credential. " +
+                                       "Try again with a new code.",
+        _ => "The hub could not be reached. Check the network and try again; the code was not used.",
+    };
+
+    // ------------------------------------------------------------------ advanced
 
     private void Save()
     {
@@ -188,9 +467,11 @@ public sealed class MainActivity : Activity
         // which is read once at composition.
         AgentService.Start(this);
 
-        Toast.MakeText(this, "Saved. Enrolment is retried every 30 seconds.", ToastLength.Long)?.Show();
+        Toast.MakeText(this, "Saved.", ToastLength.Short)?.Show();
         RefreshStatus();
     }
+
+    // ------------------------------------------------------------------ the switches
 
     /// <summary>Open the system's battery optimisation screen.
     ///
@@ -200,28 +481,9 @@ public sealed class MainActivity : Activity
     /// every device and puts the person in the screen their own manufacturer respects. Falls
     /// back to the app's settings page on a device that has neither.</summary>
     private void OpenBatterySettings()
-    {
-        var candidates = new[]
-        {
+        => OpenFirst("No battery settings screen on this device",
             global::Android.Provider.Settings.ActionIgnoreBatteryOptimizationSettings,
-            global::Android.Provider.Settings.ActionApplicationDetailsSettings,
-        };
-
-        foreach (var action in candidates)
-        {
-            try
-            {
-                var intent = new Intent(action);
-                if (action == global::Android.Provider.Settings.ActionApplicationDetailsSettings)
-                    intent.SetData(global::Android.Net.Uri.Parse("package:" + PackageName));
-                StartActivity(intent);
-                return;
-            }
-            catch { /* try the next one */ }
-        }
-
-        Toast.MakeText(this, "No battery settings screen on this device", ToastLength.Long)?.Show();
-    }
+            global::Android.Provider.Settings.ActionApplicationDetailsSettings);
 
     /// <summary>Open the usage-access screen -- roadmap #23 phase E.
     ///
@@ -232,17 +494,15 @@ public sealed class MainActivity : Activity
     /// nobody has been using. Curfews are unaffected; they need a clock, not a ledger.
     ///
     /// The list screen is opened rather than this app's row in it, because the per-app deep
-    /// link is not public API and several OEMs do not honour it. Falls back to the app's own
-    /// settings page, which is where a technician can reach the same switch by hand.</summary>
+    /// link is not public API and several OEMs do not honour it.</summary>
     private void OpenUsageAccessSettings()
-    {
-        var candidates = new[]
-        {
+        => OpenFirst("No usage access screen on this device",
             global::Android.Provider.Settings.ActionUsageAccessSettings,
-            global::Android.Provider.Settings.ActionApplicationDetailsSettings,
-        };
+            global::Android.Provider.Settings.ActionApplicationDetailsSettings);
 
-        foreach (var action in candidates)
+    private void OpenFirst(string none, params string[] actions)
+    {
+        foreach (var action in actions)
         {
             try
             {
@@ -254,18 +514,17 @@ public sealed class MainActivity : Activity
             }
             catch { /* try the next one */ }
         }
-
-        Toast.MakeText(this, "No usage access screen on this device", ToastLength.Long)?.Show();
+        Toast.MakeText(this, none, ToastLength.Long)?.Show();
     }
 
     /// <summary>Get this device the location permission -- roadmap #23 phase B.
     ///
-    /// **Not shaped like the two buttons above it, because location is not that kind of
-    /// permission.** Battery optimisation and usage access are special-access switches an app
-    /// can only point somebody at; location is an ordinary runtime permission, so on an
-    /// unmanaged device the platform puts the question directly in front of the person holding
-    /// it, and on a managed one the Device Owner answers it without a dialog at all. Both paths
-    /// end in the same place and this button takes whichever one this device has.
+    /// **Not shaped like the battery and usage buttons, because location is not that kind of
+    /// permission.** Those are special-access switches an app can only point somebody at;
+    /// location is an ordinary runtime permission, so on an unmanaged device the platform puts
+    /// the question directly in front of the person holding it, and on a managed one the
+    /// Device Owner answers it without a dialog at all. Both paths end in the same place and
+    /// this button takes whichever one this device has.
     ///
     /// **Both permissions are asked for together, because asking for FINE alone is a request
     /// Android 12 and later may ignore.** From API 31 approximate location is its own grant
@@ -280,9 +539,8 @@ public sealed class MainActivity : Activity
     /// **Not asked automatically on launch, unlike the notification permission**, and the
     /// difference is what a refusal costs. A reflexive "Don't allow" on notifications loses a
     /// status display; on location it loses the feature, and it is close to irreversible
-    /// without a walk through Settings. A technician who presses this button has read the line
-    /// above it and decided. A device where nobody pressed it answers a locate with
-    /// "unavailable" and the reason, which is the state this screen now shows.</summary>
+    /// without a walk through Settings. A technician who presses this button has read the row
+    /// above it and decided.</summary>
     private void GrantLocation()
     {
         if (AndroidLocationReader.IsGranted(this))
@@ -293,8 +551,8 @@ public sealed class MainActivity : Activity
 
         // A fully managed device does not need the dialog and must not be sent to Settings:
         // it can simply take the permission. Tried first so a technician provisioning a phone
-        // by QR sees the status line flip to granted while they are still holding it, rather
-        // than finding out at the first locate weeks later.
+        // by QR sees the row flip to granted while they are still holding it, rather than
+        // finding out at the first locate weeks later.
         if (DeviceOwner.GrantLocation(this, Logger()) && AndroidLocationReader.IsGranted(this))
         {
             Toast.MakeText(this, "Location granted -- this device can be located",
@@ -311,18 +569,13 @@ public sealed class MainActivity : Activity
             RequestLocation);
     }
 
-    /// <summary>What the system said to a runtime permission request.
-    ///
-    /// Only location is handled. The notification permission is asked on every launch and
-    /// nothing on this screen depends on the answer, so it has nothing to report; this one is
-    /// asked by a person pressing a button and expecting the screen to change.</summary>
+    /// <summary>What the system said to a runtime permission request.</summary>
     public override void OnRequestPermissionsResult(
         int requestCode, string[] permissions, Permission[] grantResults)
     {
         base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != RequestLocation) return;
-
         RefreshStatus();
+        if (requestCode != RequestLocation) return;
         if (AndroidLocationReader.IsGranted(this)) return;
 
         // ShouldShowRequestPermissionRationale is false both before the first ask and after the
@@ -341,6 +594,30 @@ public sealed class MainActivity : Activity
         Toast.MakeText(this, "Android will not ask again. Turn Location on for FleetHub Agent "
                              + "under Permissions.", ToastLength.Long)?.Show();
         OpenAppSettings();
+    }
+
+    /// <summary>The Notifications row's button: the dialog where Android will still show it,
+    /// the app's notification settings where it will not (below API 33 there is no dialog,
+    /// and after two refusals there is none either).</summary>
+    private void RequestNotificationsOrSettings()
+    {
+        if (OperatingSystem.IsAndroidVersionAtLeast(33)
+            && ShouldShowRequestPermissionRationale(global::Android.Manifest.Permission.PostNotifications))
+        {
+            RequestPermissions([global::Android.Manifest.Permission.PostNotifications],
+                RequestPostNotifications);
+            return;
+        }
+        try
+        {
+            var intent = new Intent(global::Android.Provider.Settings.ActionAppNotificationSettings);
+            intent.PutExtra(global::Android.Provider.Settings.ExtraAppPackage, PackageName);
+            StartActivity(intent);
+        }
+        catch (Exception)
+        {
+            OpenAppSettings();
+        }
     }
 
     /// <summary>This app's own row in Settings. Shared by the paths above, each of which has
@@ -377,62 +654,5 @@ public sealed class MainActivity : Activity
             return;
 
         RequestPermissions([global::Android.Manifest.Permission.PostNotifications], RequestPostNotifications);
-    }
-
-    private void RefreshStatus()
-    {
-        var identity = _state.LoadIdentity();
-        var name = _state.LoadMachineNameOverride();
-        var hasSecret = new AndroidEnrollmentSecretSource(this, _state).Read() is not null;
-
-        var lines = new List<string>
-        {
-            $"FleetHub Agent {AgentConfig.Version}",
-            // Not "Hub: https://your.hub.url". That line is read by somebody deciding whether
-            // this device is finished, and a placeholder URL formatted exactly like a real one
-            // reads as configured at a glance. This is the state a QR-provisioned device was
-            // silently left in, so it is now the loudest line on the screen.
-            AgentConfig.IsHubConfigured
-                ? $"Hub: {AgentConfig.HubBase}"
-                : "NO HUB CONFIGURED -- this device is reporting NOWHERE. Enter the hub URL "
-                  + "below, or provision it with a QR code minted by the console.",
-            $"Machine: {name ?? "(derived from this device)"}",
-            // Whether the QR provisioning actually took, and whether the one switch nobody can
-            // flip remotely has been flipped. Both are invisible otherwise, and both are things
-            // a technician holding the device can fix in the next thirty seconds.
-            DeviceOwner.Describe(this),
-            UsageStatsReader.IsGranted(this)
-                ? "Usage access granted -- screen-time budgets can be enforced."
-                : "Usage access NOT granted. Blocked hours still work; screen-time budgets " +
-                  "will never fire, because this device cannot see how long an app was used.",
-            // The permission the console's Locate button rests on, and one nothing used to
-            // ask for. Stated here for the same reason as the line above: it is granted per
-            // device, by a person, and its absence is otherwise visible only to whoever
-            // presses Locate and reads the reason that comes back.
-            AndroidLocationReader.IsGranted(this)
-                ? "Location granted -- this device can be located from the console."
-                : "Location NOT granted. A locate from the console will answer \"unavailable\" " +
-                  "instead of a position. Use the Grant location button below.",
-        };
-
-        if (identity.IsEnrolled)
-        {
-            lines.Add($"Enrolled as {identity.AgentId}");
-        }
-        else if (hasSecret)
-        {
-            lines.Add("Not enrolled yet -- retrying every 30 seconds.");
-        }
-        else
-        {
-            // The state that looks fine and is not. Said plainly, because on a phone there is
-            // no installer output to say it in.
-            lines.Add(
-                "NOT ENROLLED, and no enrollment secret is set. This device will appear in " +
-                "the console, chart its temperature and report its inventory -- and will " +
-                "never accept a command.");
-        }
-
-        _status.Text = string.Join("\n\n", lines);
     }
 }

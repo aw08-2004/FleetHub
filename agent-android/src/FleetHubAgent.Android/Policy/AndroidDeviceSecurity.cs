@@ -18,7 +18,8 @@ namespace FleetHubAgent.Android.Policy;
 /// not declare, so a missing one is discovered on a device that has already been factory reset
 /// and costs a second wipe to add.
 /// </summary>
-public sealed class AndroidDeviceSecurity(Context context, ILogger log) : IDeviceSecurity
+public sealed class AndroidDeviceSecurity(Context context, ILogger log)
+    : IDeviceSecurity, FleetHubAgent.Fleet.Executors.IDeviceReboot
 {
     /// <summary>Evaluated live rather than captured, for the same reason DeviceOwner.Features
     /// is: `adb shell dpm set-device-owner` can grant ownership to a running process, and a
@@ -70,6 +71,34 @@ public sealed class AndroidDeviceSecurity(Context context, ILogger log) : IDevic
         catch (Exception e)
         {
             log.LogError(e, "wipeData refused; this device has NOT been erased");
+        }
+    }
+
+    public bool CanReboot => DeviceOwner.IsManaged(context);
+
+    /// <summary>Restart the device -- RestartExecutor, 0.3.0.
+    ///
+    /// DevicePolicyManager.reboot exists from API 24 and this app's floor is 26, so there is no
+    /// version guard. It throws IllegalStateException while a call is in progress, which is the
+    /// one refusal a person can act on, so it is translated rather than passed through as a
+    /// Java exception name.</summary>
+    public string? Reboot()
+    {
+        var dpm = Manager();
+        if (dpm is null) return "this device has no device-policy service";
+        try
+        {
+            dpm.Reboot(DeviceOwner.Component(context));
+            return null;
+        }
+        catch (Java.Lang.IllegalStateException)
+        {
+            return "a phone call is in progress on the device";
+        }
+        catch (Exception e)
+        {
+            log.LogWarning("reboot refused: {Msg}", e.Message);
+            return e.Message;
         }
     }
 

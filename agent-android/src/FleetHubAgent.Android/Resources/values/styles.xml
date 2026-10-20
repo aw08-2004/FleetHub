@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app theme. The PLATFORM Material theme, not AppCompat or Material Components: those are
+     AndroidX libraries, and every managed phone downloads this APK again on every release. The
+     same argument keeps Play Services out (AndroidLocationReader). The platform theme gives
+     Material widgets on every device this app supports (API 26 and up), and values-night
+     switches it to the dark variant. -->
+<resources>
+  <style name="FleetHubTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+    <item name="android:colorPrimary">@color/brand</item>
+    <item name="android:colorPrimaryDark">@color/screen</item>
+    <item name="android:colorAccent">@color/brand</item>
+    <item name="android:windowBackground">@color/screen</item>
+    <item name="android:statusBarColor">@color/screen</item>
+    <item name="android:windowLightStatusBar">true</item>
+    <item name="android:textColorPrimary">@color/text</item>
+    <item name="android:textColorSecondary">@color/muted</item>
+  </style>
+</resources>

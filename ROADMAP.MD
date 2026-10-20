@@ -322,8 +322,14 @@ the `android` workload is missing here. Its change is one lambda in `AgentServic
 switch stays off until the agents sign** (see #29).
 - **Cut Windows agent 3.44.0** (`agent/release.ps1 -Version 3.44.0`) and **Linux 0.4.0**: both
   sign `/api/report`, and Windows also re-secures `agent.json`.
-- **Cut Android 0.3.0** after `dotnet build` of `FleetHubAgent.Android` on a machine with the
-  workload.
+- **Cut Android 0.3.0** (`agent-android/release.ps1 -Version 0.3.0 -NotesFile
+  .\release-notes\0.3.0.md`) **after hub 1.158.0 is deployed**. It now also carries code
+  enrollment, the new setup screen and icon, restart, the Wake-on-LAN relay, APK installs and the
+  network/posture blocks (#23, *0.3.0*). This machine has the workload now, under
+  `D:\tools\dotnet10` with the SDK in `D:\tools\android-sdk`. Then, on a phone: launcher icon;
+  no keyboard on launch; enrol with an Onboarding code; Grant location → Locate → pin on the Map;
+  on a device owner, a restart, an APK deploy, and a wake relayed from the phone; the phone's
+  Security posture card shows three checks.
 - **Then turn on Settings → Security → Only accept telemetry from enrolled agents**, once
   Administration → Onboarding → *Machines reporting without enrollment* is empty.
 - **Publish the hub 1.144.0 release** with `deploy/docker/release-notes/1.144.0.md`, which
@@ -4978,6 +4984,66 @@ rows. That is **every 0.2.2 beta device's pile**, and any 0.2.1 device's pile on
 reported on a later build. They are harmless and hold no usable credential. `delete_machine`
 clears them if one device's pile ever matters, and the device re-enrolls cleanly on 0.2.3.
 Orphans a loop creates after the deploy are pruned whether or not a report touches them.
+
+### 0.3.0: a setup screen that leads with status, code enrollment, and four device-owner powers · hub 1.158.0
+
+**What the owner reported (2026-10-20):** no phone appears on the Map or in its search; the app
+has Android's default icon; the screen opens on the enrollment secret; and the agent does less
+than it could.
+
+**The map was empty for two reasons, and only one was the agent's.** 0.2.3 never asked for the
+location permission (fixed on `main` before this, unreleased), so every locate answered
+`unavailable`. And the map lists only rows with coordinates, so a phone that had answered
+"unavailable" eleven times was absent from the map *and* the search, with nothing saying why.
+`/api/location/fleet` now also returns `unlocated`: every in-scope machine that reports the
+`locate` feature and has no fix, with its last attempt's status and detail, behind the same
+`filter_rows` scope as the fixes. The map lists them under *Not located yet* with a Locate button.
+**Periodic tracking was not added**; the on-demand design above is unchanged.
+
+**Enrollment by one-time code.** The agent spends an onboarding code itself
+(`POST /api/onboarding/redeem`, the route the Windows install script uses), through the same
+`AgentLoops` gate as the secret retry. hub/onboarding.py rejected an agent-side code for Windows
+because the install script does it there; a phone has no install script. The shared secret moved
+under *Advanced*. No hub change.
+
+**The setup screen is a layout resource with a status card and a checklist.** The old
+docstring's "nothing here is ever redesigned" was the argument for building it in code; this is
+the redesign. Text stays in C# English, as `values/strings.xml` records.
+
+**New commands, all derived into the capability report as before:** `restart` (device owner,
+`DevicePolicyManager.reboot`; answers first, reboots five seconds later at the earliest),
+`wake_machine` as a relay, and `deploy_package` for APKs (device owner; sha256 pin required;
+verified installed via `PackageManager` afterwards; refuses its own package). `restart`,
+`deploy_package` and the old "an MDM can do it" message left `CommandDispatcher.Impossible` --
+on a QR-provisioned phone this agent *is* that MDM. **New heartbeat blocks:** `network` (the
+Wi-Fi adapter) and `posture` (screen lock, encryption, patch level).
+
+**Hub side:** `packages.STEP_APK`. A package is Android exactly when it has an `apk` step, and then
+it may have nothing else, every payload must be pinned and detection must be `none`. The
+scheduler retires wrong-platform targets with the reason (`_platform_refusal`). Posture judges a
+machine that sent the `mobile` area on `MOBILE_CHECKS` (session lock, encryption, a new `os_patch`,
+CIS 7.3, `security.posture_patch_max_age_days` = 90) and everything else on the desktop checks.
+
+Rejected:
+
+- **AndroidX / Material Components for the new screen.** Megabytes on an APK every managed phone
+  downloads on every release, for widgets the platform Material theme already draws -- the same
+  argument that keeps Play Services out of locating.
+- **Periodic location to fill the map.** It answers the symptom by reversing the one promise the
+  location feature rests on. The empty map was a listing bug.
+- **One package installing on both platforms**, branching at the agent. Two agents reading one
+  recipe the same way is a correctness dependency nobody would test; two packages is the honest
+  shape.
+- **A placeholder MAC for unmanaged phones so they can relay.** `02:00:00:00:00:00` is every
+  phone's answer, and the hub keys adapters by MAC; the fleet's phones would collapse into one
+  adapter. Only device owners report one, via `getWifiMacAddress`.
+- **Judging phones on every posture check.** Seven permanently grey Windows rows per phone, and
+  a card that is mostly grey teaches people to ignore it.
+- **The `bitlocker` block for phone encryption.** It would put a phone on the BitLocker card and
+  make the console say "BitLocker" about an Android device.
+
+**Not done:** none of 0.3.0 has run on a phone. The app project compiles (Release, trimmer
+warnings as errors); the device-side checks are in *Owed locally*.
 
 ---
 
