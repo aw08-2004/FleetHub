@@ -1042,7 +1042,7 @@
 
     function pendingDraft() {
         const s = shell();
-        let text = s && s.takeDraft ? s.takeDraft() : null;
+        let text = s?.takeDraft?.() || null;
         try {
             const stored = sessionStorage.getItem(DRAFT_KEY);
             sessionStorage.removeItem(DRAFT_KEY);

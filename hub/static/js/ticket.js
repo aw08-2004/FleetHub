@@ -211,7 +211,13 @@
     /** What the assistant is sent. **The same line the old inline triage held: never who
      *  reported it, never the screenshots** -- the ticket text, its state and the facts. The
      *  assistant can read the ticket route itself if it needs more, through the same gates
-     *  as the operator. */
+     *  as the operator.
+     *
+     *  **The text came from a PC, and now reaches a model with tools** (PR #160 review), where
+     *  the old triage's model could only answer. So the message says the ticket is data, not
+     *  instructions -- a nudge, not the guard. The guard is the hub's: a new conversation is
+     *  always Ask mode, and every confirm-tier route is a card the operator clicks
+     *  (assistant_web.execute), whatever the message talked the model into. */
     function buildDraft() {
         var lines = [
             t('tickets.assistant_draft_intro', {
@@ -222,6 +228,7 @@
                 urgency: URGENCY_TEXT[ticket.urgency] || ticket.urgency,
                 status: STATUS_TEXT[ticket.status] || ticket.status
             }),
+            t('tickets.assistant_draft_untrusted'),
             '',
             t('tickets.description') + ':',
             ticket.body || t('tickets.no_description'),
@@ -240,7 +247,7 @@
         var text = buildDraft();
         var shell = null;
         try { shell = window.parent !== window ? window.parent.FleetShell : null; } catch (e) { /* ok */ }
-        if (shell && shell.askAssistant) {
+        if (shell?.askAssistant) {
             shell.askAssistant(text);
             return;
         }

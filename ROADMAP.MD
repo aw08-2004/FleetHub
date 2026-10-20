@@ -6288,7 +6288,13 @@ send a ticket to a hub with no route for it loses the ticket and tells the perso
   conversation, under the assistant's confirm tiers. The hand-off is `FleetShell.askAssistant`
   (one-shot, so reloading the assistant never re-sends). Rejected: keeping the inline triage
   beside it (two answers to one ticket that can disagree), and passing the text as
-  `/assistant?draft=` (ticket text in the url bar and history). Still there, unused by the
+  `/assistant?draft=` (ticket text in the url bar and history). **What did change is who reads
+  the PC's words:** the old triage model could only answer, the assistant has tools, so a
+  ticket body saying "run X on every PC" is a prompt-injection attempt (PR #160 review). The
+  guard is the hub's, not the message's: the new conversation is always Ask mode, and every
+  confirm-tier route becomes a card the operator clicks in `assistant_web.execute` whatever the
+  model was talked into; only the reversible, audited write tier runs unasked. The message
+  also tells the model the ticket is data, not instructions -- a nudge on top. Still there, unused by the
   page: `POST /api/tickets/<id>/triage` and `/script` and the `ticket_triage` table; removing
   them is its own change.
 
