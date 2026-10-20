@@ -92,6 +92,20 @@ public sealed class NewExecutorTests : IDisposable
     }
 
     [Fact]
+    public async Task A_command_whose_only_mac_is_malformed_fails_and_sends_nothing()
+    {
+        // The frame-level guard is pinned above; this is the command answering for it. A
+        // relay that "succeeded" here would retire the hub's wake request with nothing sent.
+        var json = JsonNode.Parse(
+            """{"macs":["00:1a:2b"],"broadcast":"127.0.0.1","port":40009,"target":"PC-1"}""")!;
+        var result = await new WakeMachineExecutor(NullLogger<WakeMachineExecutor>.Instance)
+            .ExecuteAsync(Cmd("wake_machine", json), null, default);
+        Assert.False(result.Success);
+        Assert.Contains("FAILED 00:1a:2b", result.Output);
+        Assert.Contains("could not wake PC-1", result.Output);
+    }
+
+    [Fact]
     public async Task Wake_sends_to_loopback_and_reports_success()
     {
         // 127.255.255.255 keeps the frame on this machine; what is under test is that a
