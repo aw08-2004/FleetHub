@@ -643,8 +643,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e)
         {
-            _log.LogWarning("Ignoring a malformed Group Policy document from the hub: {Msg}",
-                            e.Message);
+            _log.LogWarning(e, "Ignoring a malformed Group Policy document from the hub");
         }
     }
 

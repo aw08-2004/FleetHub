@@ -29,7 +29,8 @@
                 <div class="toolbar pc-pane-head">
                     <div>
                         <div class="stat-card__meta" id="pc-node-path"></div>
-                        <h2 class="section-title" id="pc-node-title"></h2>
+                        {# "All PCs" is what the page opens on; pc-tree.js renames it per node. #}
+                        <h2 class="section-title" id="pc-node-title">{{ t('pc_tree.all') }}</h2>
                     </div>
                     <div class="perm-row-actions" id="pc-node-actions"></div>
                 </div>
@@ -67,7 +68,7 @@
 {% if cap.MANAGE_PC_TREE in user_capabilities %}
 <dialog class="modal" id="pc-folder-dialog" aria-labelledby="pc-folder-title">
     <div class="modal__head">
-        <h2 class="modal__title" id="pc-folder-title"></h2>
+        <h2 class="modal__title" id="pc-folder-title">{{ t('pc_tree.dialog.new_title') }}</h2>
     </div>
     <div class="modal__body">
         <label class="setting__label" for="pc-folder-name">{{ t('pc_tree.dialog.name') }}</label>

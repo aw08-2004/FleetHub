@@ -252,6 +252,39 @@
         });
     }
 
+    // The `folder` selector's controls (roadmap #32), out of selectorRow so that stays one
+    // branch per kind. refreshTargetCount reports its own failure into the count label, so its
+    // promise is deliberately not awaited.
+    function appendFolderSelector(row, selector) {
+        if (pcFolders.length) {
+            var folderSelect = el('select', 'input');
+            pcFolders
+                .map(function (f) { return { id: f.id, label: pcFolderPath(f.id) }; })
+                .sort(function (a, b) { return a.label.localeCompare(b.label); })
+                .forEach(function (f) { folderSelect.appendChild(opt(String(f.id), f.label)); });
+            if (selector.folder_id == null) selector.folder_id = Number(folderSelect.value);
+            folderSelect.value = String(selector.folder_id);
+            folderSelect.addEventListener('change', function () {
+                selector.folder_id = Number(folderSelect.value);
+                void refreshTargetCount();
+            });
+            row.appendChild(folderSelect);
+        } else {
+            row.appendChild(el('span', 'stat-card__meta', t('permissions.editor.folder_none_defined')));
+        }
+        var folderLabel = el('label', 'stat-card__meta');
+        var folderBox = document.createElement('input');
+        folderBox.type = 'checkbox';
+        folderBox.checked = selector.include_children !== false;
+        folderBox.addEventListener('change', function () {
+            selector.include_children = folderBox.checked;
+            void refreshTargetCount();
+        });
+        folderLabel.appendChild(folderBox);
+        folderLabel.appendChild(document.createTextNode(' ' + t('rules.include_children')));
+        row.appendChild(folderLabel);
+    }
+
     function selectorRow(side, selector, index) {
         var row = el('div', 'toolbar');
         row.style.marginBottom = 'var(--space-2)';
@@ -309,33 +342,7 @@
                 row.appendChild(select);
             }
         } else if (selector.kind === 'folder') {
-            if (!pcFolders.length) {
-                row.appendChild(el('span', 'stat-card__meta', t('permissions.editor.folder_none_defined')));
-            } else {
-                var folderSelect = el('select', 'input');
-                pcFolders
-                    .map(function (f) { return { id: f.id, label: pcFolderPath(f.id) }; })
-                    .sort(function (a, b) { return a.label.localeCompare(b.label); })
-                    .forEach(function (f) { folderSelect.appendChild(opt(String(f.id), f.label)); });
-                if (selector.folder_id == null) selector.folder_id = Number(folderSelect.value);
-                folderSelect.value = String(selector.folder_id);
-                folderSelect.addEventListener('change', function () {
-                    selector.folder_id = Number(folderSelect.value);
-                    refreshTargetCount();
-                });
-                row.appendChild(folderSelect);
-            }
-            var folderLabel = el('label', 'stat-card__meta');
-            var folderBox = document.createElement('input');
-            folderBox.type = 'checkbox';
-            folderBox.checked = selector.include_children !== false;
-            folderBox.addEventListener('change', function () {
-                selector.include_children = folderBox.checked;
-                refreshTargetCount();
-            });
-            folderLabel.appendChild(folderBox);
-            folderLabel.appendChild(document.createTextNode(' ' + t('rules.include_children')));
-            row.appendChild(folderLabel);
+            appendFolderSelector(row, selector);
         } else if (selector.kind === 'field') {
             var name = el('input', 'input');
             name.type = 'text';

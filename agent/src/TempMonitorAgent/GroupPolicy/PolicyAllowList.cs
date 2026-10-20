@@ -39,39 +39,44 @@ public static class PolicyAllowList
     private static readonly char[] BadPathChars = ['/', '*', '?', '"', '<', '>', '|'];
 
     /// <summary>Why this value may not be written, or null when it may.</summary>
-    public static string? Refusal(PolicyValue value)
+    public static string? Refusal(PolicyValue value) =>
+        PathRefusal(value.Path) ?? NameRefusal(value.Name) ?? ContentRefusal(value);
+
+    /// <summary>Why <paramref name="path"/> is not a key policy may write, or null.</summary>
+    public static string? PathRefusal(string path)
     {
-        var path = value.Path;
         if (string.IsNullOrEmpty(path) || path.Length > MaxPathChars)
             return "the key path is empty or too long";
         if (!path.StartsWith(Root, StringComparison.OrdinalIgnoreCase) || path.Length <= Root.Length)
             return @"only keys under HKLM\SOFTWARE\Policies may be written";
-        foreach (var part in path.Split('\\'))
-        {
-            if (part.Length == 0 || part is "." or ".." || part.IndexOfAny(BadPathChars) >= 0
-                || part.Any(char.IsControl))
-                return "the key path has an empty or invalid component";
-        }
-        foreach (var denied in Denied)
-        {
-            if (path.Equals(denied, StringComparison.OrdinalIgnoreCase)
-                || path.StartsWith(denied + "\\", StringComparison.OrdinalIgnoreCase))
-                return $"{denied} is owned by FleetHub itself";
-        }
-        if (string.IsNullOrEmpty(value.Name) || value.Name.Length > MaxNameChars
-            || value.Name.Contains('\\') || value.Name.Any(char.IsControl))
-            return "the value name is not valid";
-        return value.Type switch
-        {
-            Dword => null,
-            String or ExpandString => value.Text.Length > MaxStringChars || value.Text.Contains('\0')
-                ? "the text is too long or contains a NUL" : null,
-            MultiString => value.Lines.Count > MaxLines
-                           || value.Lines.Any(l => l.Length > MaxStringChars || l.Contains('\0'))
-                ? "too many lines, or a line too long or containing a NUL" : null,
-            _ => "unknown value type",
-        };
+        if (path.Split('\\').Any(IsBadComponent))
+            return "the key path has an empty or invalid component";
+        var owned = Denied.FirstOrDefault(denied =>
+            path.Equals(denied, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(denied + "\\", StringComparison.OrdinalIgnoreCase));
+        return owned is null ? null : $"{owned} is owned by FleetHub itself";
     }
+
+    private static bool IsBadComponent(string part) =>
+        part.Length == 0 || part is "." or ".." || part.IndexOfAny(BadPathChars) >= 0
+        || part.Any(char.IsControl);
+
+    private static string? NameRefusal(string name) =>
+        string.IsNullOrEmpty(name) || name.Length > MaxNameChars || name.Contains('\\')
+        || name.Any(char.IsControl)
+            ? "the value name is not valid" : null;
+
+    private static bool IsBadText(string text) => text.Length > MaxStringChars || text.Contains('\0');
+
+    private static string? ContentRefusal(PolicyValue value) => value.Type switch
+    {
+        Dword => null,
+        String or ExpandString => IsBadText(value.Text)
+            ? "the text is too long or contains a NUL" : null,
+        MultiString => value.Lines.Count > MaxLines || value.Lines.Any(IsBadText)
+            ? "too many lines, or a line too long or containing a NUL" : null,
+        _ => "unknown value type",
+    };
 
     /// <summary>The id the hub and the agent both key one value on (gpo.setting_id): the
     /// first 16 hex characters of SHA-256 over <c>lower(path)|lower(name)</c>. Case-folded,

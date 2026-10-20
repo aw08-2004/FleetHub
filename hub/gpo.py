@@ -56,6 +56,7 @@ import time
 import directory
 import fleet
 import pc_tree
+import refusals
 import rules
 import scripts
 import settings
@@ -107,6 +108,7 @@ SCRIPT_QUEUED = "queued"
 SCRIPT_DONE = "done"
 SCRIPT_FAILED = "failed"
 SCRIPT_SKIPPED = "skipped"
+SCRIPT_RETRY = "retry"
 # A queued run whose command expired never reached the PC; it is retried rather than recorded
 # as failed. Bounded so a PC that never comes back is not re-queued forever.
 MAX_SCRIPT_ATTEMPTS = 3
@@ -292,123 +294,156 @@ def setting_id(path, name):
     return hashlib.sha256(f"{path.lower()}|{name.lower()}".encode("utf-8")).hexdigest()[:16]
 
 
-def _validate_registry_value(raw):
+class PolicyRejected(ValueError):
+    """A policy payload the model refuses. Raised by the small checks below and turned back
+    into the (error, clean) pair at the one public entry point, validate() -- so each check
+    stays a few lines long rather than one function returning from twenty places."""
+
+
+def _dword(name, value):
+    try:
+        number = int(str(value).strip(), 0) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError):
+        raise PolicyRejected(f"{name}: a DWORD needs a whole number")
+    if isinstance(value, bool) or not 0 <= number <= 0xFFFFFFFF:
+        raise PolicyRejected(f"{name}: a DWORD is 0 to 4294967295")
+    return number
+
+
+def _multi_string(name, value):
+    items = value if isinstance(value, list) else str(value or "").splitlines()
+    items = [str(i) for i in items]
+    if len(items) > MAX_MULTI_ITEMS:
+        raise PolicyRejected(f"{name}: at most {MAX_MULTI_ITEMS} lines")
+    if any(len(i) > MAX_STRING_CHARS or "\x00" in i for i in items):
+        raise PolicyRejected(f"{name}: a line is too long or contains a NUL")
+    return items
+
+
+def _string(name, value):
+    value = "" if value is None else str(value)
+    if len(value) > MAX_STRING_CHARS or "\x00" in value:
+        raise PolicyRejected(f"{name}: the text is longer than {MAX_STRING_CHARS} characters")
+    return value
+
+
+_VALUE_CLEANERS = {REG_DWORD: _dword, REG_MULTI_SZ: _multi_string,
+                   REG_SZ: _string, REG_EXPAND_SZ: _string}
+
+
+def _registry_value(raw):
     if not isinstance(raw, dict):
-        return "a registry value must be an object", None
+        raise PolicyRejected("a registry value must be an object")
     path = normalize_registry_path(raw.get("path"))
     error = registry_path_error(path)
     if error:
-        return error, None
+        raise PolicyRejected(error)
     name = str(raw.get("name") or "").strip()
     if not name:
-        return "a registry value needs a value name (the default value cannot be set)", None
+        raise PolicyRejected("a registry value needs a value name (the default value cannot be set)")
     if len(name) > MAX_VALUE_NAME_CHARS or "\\" in name or any(ord(c) < 32 for c in name):
-        return f"the value name {name!r} is not valid", None
+        raise PolicyRejected(f"the value name {name!r} is not valid")
     kind = str(raw.get("type") or "").strip()
-    if kind not in REGISTRY_TYPES:
-        return f"the value type must be one of {', '.join(REGISTRY_TYPES)}", None
-    value = raw.get("value")
-    if kind == REG_DWORD:
-        try:
-            number = int(str(value).strip(), 0) if isinstance(value, str) else int(value)
-        except (TypeError, ValueError):
-            return f"{name}: a DWORD needs a whole number", None
-        if isinstance(value, bool) or not 0 <= number <= 0xFFFFFFFF:
-            return f"{name}: a DWORD is 0 to 4294967295", None
-        value = number
-    elif kind == REG_MULTI_SZ:
-        items = value if isinstance(value, list) else str(value or "").splitlines()
-        items = [str(i) for i in items]
-        if len(items) > MAX_MULTI_ITEMS:
-            return f"{name}: at most {MAX_MULTI_ITEMS} lines", None
-        if any(len(i) > MAX_STRING_CHARS or "\x00" in i for i in items):
-            return f"{name}: a line is too long or contains a NUL", None
-        value = items
-    else:
-        value = "" if value is None else str(value)
-        if len(value) > MAX_STRING_CHARS or "\x00" in value:
-            return f"{name}: the text is longer than {MAX_STRING_CHARS} characters", None
-    return None, {"id": setting_id(path, name), "path": path, "name": name,
-                  "type": kind, "value": value}
+    cleaner = _VALUE_CLEANERS.get(kind)
+    if cleaner is None:
+        raise PolicyRejected(f"the value type must be one of {', '.join(REGISTRY_TYPES)}")
+    return {"id": setting_id(path, name), "path": path, "name": name, "type": kind,
+            "value": cleaner(name, raw.get("value"))}
+
+
+def _bounded_list(raw, what, limit):
+    raw = raw or []
+    if not isinstance(raw, list):
+        raise PolicyRejected(f"{what} must be a list")
+    if len(raw) > limit:
+        raise PolicyRejected(f"too many {what} (limit {limit})")
+    return raw
+
+
+def _agent_settings(raw):
+    clean = {}
+    for key, value in (raw or {}).items():
+        setting = settings.BY_KEY.get(str(key))
+        if setting is None or not setting.agent:
+            raise PolicyRejected(f"{key} is not a setting a policy can set")
+        # coerce_and_validate raises ValueError with an operator-facing sentence; validate()
+        # renders it through refusals.message, never str(e).
+        value = settings.coerce_and_validate(setting, value)
+        # None is "Not configured" -- the same as leaving the key out, not a value of its own.
+        if value is not None:
+            clean[setting.key] = value
+    return clean
+
+
+def _registry(raw):
+    clean, seen = [], set()
+    for entry in _bounded_list(raw, "registry values", MAX_REGISTRY_VALUES):
+        value = _registry_value(entry)
+        if value["id"] in seen:
+            raise PolicyRejected(f"{value['path']}\\{value['name']} is set twice in this policy")
+        seen.add(value["id"])
+        clean.append(value)
+    return clean
+
+
+def _script_entry(raw, script_specs):
+    entry = raw if isinstance(raw, dict) else {"name": raw}
+    script_name = str(entry.get("name") or "").strip().lower()
+    inputs = entry.get("inputs") or {}
+    if script_specs is not None:
+        error, inputs = scripts.validate_reference(script_specs, script_name, inputs)
+        if error:
+            raise PolicyRejected(error)
+    if not script_name:
+        raise PolicyRejected("a script entry needs a script")
+    return {"name": script_name, "inputs": inputs or {}}
+
+
+def _scripts(raw, script_specs):
+    clean = []
+    for entry in _bounded_list(raw, "scripts", MAX_SCRIPTS):
+        entry = _script_entry(entry, script_specs)
+        if any(s["name"] == entry["name"] for s in clean):
+            raise PolicyRejected(f"the script {entry['name']} is listed twice")
+        clean.append(entry)
+    return clean
+
+
+def _text(payload, key, what, limit, required=False):
+    text = str(payload.get(key) or "").strip()
+    if required and not text:
+        raise PolicyRejected(f"a policy needs a {what}")
+    if len(text) > limit:
+        raise PolicyRejected(f"the {what} is too long (limit {limit})")
+    return text
 
 
 def validate(payload, script_specs=None):
     """Check a policy object. Returns (error, clean). Errors are English, like every other
     model-layer refusal; the web layer passes them through.
 
+    **The error is rendered with refusals.message, never str(e).** A settings validator's
+    ValueError is the one exception here this module did not raise itself, and message() is
+    the filter every route shares -- it renders the sentence written, never a repr or a
+    traceback (CodeQL py/stack-trace-exposure, alerts #179/#180 on the first cut of this).
+
     `script_specs` is scripts.specs(); passing None skips the script-reference check (tests)."""
-    if not isinstance(payload, dict):
-        return "a policy must be an object", None
-    name = str(payload.get("name") or "").strip()
-    if not name:
-        return "a policy needs a name", None
-    if len(name) > NAME_MAX:
-        return f"the name is too long (limit {NAME_MAX})", None
-    description = str(payload.get("description") or "").strip()
-    if len(description) > DESCRIPTION_MAX:
-        return f"the description is too long (limit {DESCRIPTION_MAX})", None
-
-    raw_settings = payload.get("settings") or {}
-    if not isinstance(raw_settings, dict):
-        return "settings must be an object", None
-
-    agent_settings = {}
-    for key, raw in (raw_settings.get("agent_settings") or {}).items():
-        setting = settings.BY_KEY.get(str(key))
-        if setting is None or not setting.agent:
-            return f"{key} is not a setting a policy can set", None
-        try:
-            value = settings.coerce_and_validate(setting, raw)
-        except ValueError as e:
-            return str(e), None
-        if value is None:
-            # "Not configured" -- the same as leaving the key out, not a value of its own.
-            continue
-        agent_settings[setting.key] = value
-
-    registry = []
-    seen = set()
-    raw_registry = raw_settings.get("registry") or []
-    if not isinstance(raw_registry, list):
-        return "registry must be a list", None
-    if len(raw_registry) > MAX_REGISTRY_VALUES:
-        return f"too many registry values (limit {MAX_REGISTRY_VALUES})", None
-    for raw in raw_registry:
-        error, clean = _validate_registry_value(raw)
-        if error:
-            return error, None
-        if clean["id"] in seen:
-            return f"{clean['path']}\\{clean['name']} is set twice in this policy", None
-        seen.add(clean["id"])
-        registry.append(clean)
-
-    script_entries = []
-    raw_scripts = raw_settings.get("scripts") or []
-    if not isinstance(raw_scripts, list):
-        return "scripts must be a list", None
-    if len(raw_scripts) > MAX_SCRIPTS:
-        return f"too many scripts (limit {MAX_SCRIPTS})", None
-    for raw in raw_scripts:
-        entry = raw if isinstance(raw, dict) else {"name": raw}
-        script_name = str(entry.get("name") or "").strip().lower()
-        inputs = entry.get("inputs") or {}
-        if script_specs is not None:
-            error, inputs = scripts.validate_reference(script_specs, script_name, inputs)
-            if error:
-                return error, None
-        if not script_name:
-            return "a script entry needs a script", None
-        if any(s["name"] == script_name for s in script_entries):
-            return f"the script {script_name} is listed twice", None
-        script_entries.append({"name": script_name, "inputs": inputs or {}})
-
-    return None, {
-        "name": name,
-        "description": description,
-        "enabled": bool(payload.get("enabled", True)),
-        "settings": {"agent_settings": agent_settings, "registry": registry,
-                     "scripts": script_entries},
-    }
+    try:
+        if not isinstance(payload, dict):
+            raise PolicyRejected("a policy must be an object")
+        raw_settings = payload.get("settings") or {}
+        if not isinstance(raw_settings, dict):
+            raise PolicyRejected("settings must be an object")
+        return None, {
+            "name": _text(payload, "name", "name", NAME_MAX, required=True),
+            "description": _text(payload, "description", "description", DESCRIPTION_MAX),
+            "enabled": bool(payload.get("enabled", True)),
+            "settings": {"agent_settings": _agent_settings(raw_settings.get("agent_settings")),
+                         "registry": _registry(raw_settings.get("registry")),
+                         "scripts": _scripts(raw_settings.get("scripts"), script_specs)},
+        }
+    except ValueError as e:
+        return refusals.message(e), None
 
 
 def has_scripts(policy):
@@ -673,6 +708,43 @@ def forget_folder(db_path, folder_id):
     invalidate()
 
 
+def _ad_ou_of(db_path, machine, row):
+    if row is not None:
+        return row.get("ad_ou")
+    with get_conn(db_path) as conn:
+        found = conn.execute("SELECT ad_ou FROM machine_info WHERE machine = ?",
+                             (machine,)).fetchone()
+    return found["ad_ou"] if found else None
+
+
+def _ou_nodes(ad_ou):
+    """The AD domain, then each OU down to `ad_ou`, as nodes. The domain is the run of
+    trailing DC= components; a DN with none is rooted at its last component instead."""
+    components = directory.split_dn(ad_ou or "")
+    if not components:
+        return []
+    domain_len = 0
+    for component in reversed(components):
+        if not component.lower().startswith("dc="):
+            break
+        domain_len += 1
+    start = len(components) - max(domain_len, 1)
+    nodes = []
+    for index in range(start, -1, -1):
+        dn = ",".join(components[index:])
+        nodes.append((NODE_OU, directory.normalize_dn(dn), dn))
+    return nodes
+
+
+def _folder_nodes(db_path, machine, parents, filed):
+    folder_id = filed.get(machine) if filed is not None else pc_tree.folder_of(db_path, machine)
+    if folder_id is None:
+        return []
+    parents = parents if parents is not None else pc_tree._parents(db_path)
+    chain = list(reversed(pc_tree.ancestors(db_path, folder_id, parents))) + [folder_id]
+    return [(NODE_FOLDER, str(fid), "") for fid in chain]
+
+
 def nodes_for_machine(db_path, machine, row=None, parents=None, filed=None):
     """The tree nodes above `machine`, in PROCESSING order (farthest first):
 
@@ -681,34 +753,8 @@ def nodes_for_machine(db_path, machine, row=None, parents=None, filed=None):
 
     as [(kind, key, label)]. `row`, `parents` and `filed` let a caller resolving many PCs read
     machine_info and the folder tree once."""
-    nodes = [(NODE_ROOT, "", "")]
-    if row is None:
-        with get_conn(db_path) as conn:
-            found = conn.execute("SELECT ad_ou FROM machine_info WHERE machine = ?",
-                                 (machine,)).fetchone()
-        ad_ou = found["ad_ou"] if found else None
-    else:
-        ad_ou = row.get("ad_ou")
-    components = directory.split_dn(ad_ou or "")
-    if components:
-        domain_len = 0
-        for component in reversed(components):
-            if component.lower().startswith("dc="):
-                domain_len += 1
-            else:
-                break
-        start = len(components) - max(domain_len, 1)
-        for index in range(start, -1, -1):
-            dn = ",".join(components[index:])
-            nodes.append((NODE_OU, directory.normalize_dn(dn), dn))
-    folder_id = (filed.get(machine) if filed is not None
-                 else pc_tree.folder_of(db_path, machine))
-    if folder_id is not None:
-        parents = parents if parents is not None else pc_tree._parents(db_path)
-        chain = list(reversed(pc_tree.ancestors(db_path, folder_id, parents))) + [folder_id]
-        for fid in chain:
-            nodes.append((NODE_FOLDER, str(fid), ""))
-    return nodes
+    return ([(NODE_ROOT, "", "")] + _ou_nodes(_ad_ou_of(db_path, machine, row))
+            + _folder_nodes(db_path, machine, parents, filed))
 
 
 def machines_under_node(db_path, kind, key):
@@ -750,6 +796,31 @@ def _in_scope(link, machine):
     return scope is None or machine in scope or machine.lower() in {m.lower() for m in scope}
 
 
+def _links_by_node(links):
+    """{(kind, key): [links]} with each node's links in APPLY order: highest link order first,
+    so link order 1 is applied last within its node and wins, as in GPMC."""
+    by_node = {}
+    for link in links:
+        by_node.setdefault((link["node_kind"], link["node_key"]), []).append(link)
+    for node_links in by_node.values():
+        node_links.sort(key=lambda link: -link["link_order"])
+    return by_node
+
+
+def _block_cut(nodes, options):
+    """The index of the deepest node blocking inheritance (0 when none does). Non-enforced
+    links on nodes above it do not apply."""
+    blocked = [index for index, (kind, key, _label) in enumerate(nodes)
+               if options.get((kind, key), {}).get("block_inheritance")]
+    return blocked[-1] if blocked else 0
+
+
+def _usable(link, policies, machine):
+    policy = policies.get(link["gpo_id"])
+    return bool(link["enabled"] and policy is not None and policy["enabled"]
+                and _in_scope(link, machine))
+
+
 def applied_links(db_path, machine, *, nodes=None, links=None, options=None, policies=None):
     """The links that apply to `machine`, in APPLY order -- later ones win a conflict.
 
@@ -766,64 +837,49 @@ def applied_links(db_path, machine, *, nodes=None, links=None, options=None, pol
         # The common case on a hub that has never used this: no reads of where the PC sits.
         return []
     nodes = nodes if nodes is not None else nodes_for_machine(db_path, machine)
-
-    by_node = {}
-    for link in links:
-        by_node.setdefault((link["node_kind"], link["node_key"]), []).append(link)
-
-    cut = 0
-    for index, (kind, key, _label) in enumerate(nodes):
-        if options.get((kind, key), {}).get("block_inheritance"):
-            cut = index
-
-    def usable(link):
-        policy = policies.get(link["gpo_id"])
-        return (link["enabled"] and policy is not None and policy["enabled"]
-                and _in_scope(link, machine))
-
-    ordered = []
-    for index, (kind, key, label) in enumerate(nodes):
-        node_links = sorted(by_node.get((kind, key), []), key=lambda l: -l["link_order"])
-        for link in node_links:
-            if link["enforced"] or index < cut or not usable(link):
-                continue
-            ordered.append((link, index, label))
-    for index in range(len(nodes) - 1, -1, -1):
-        kind, key, label = nodes[index]
-        node_links = sorted(by_node.get((kind, key), []), key=lambda l: -l["link_order"])
-        for link in node_links:
-            if link["enforced"] and usable(link):
-                ordered.append((link, index, label))
+    by_node = _links_by_node(links)
+    cut = _block_cut(nodes, options)
+    indexed = list(enumerate(nodes))
+    plain = [(link, index, label) for index, (kind, key, label) in indexed if index >= cut
+             for link in by_node.get((kind, key), []) if not link["enforced"]]
+    enforced = [(link, index, label) for index, (kind, key, label) in reversed(indexed)
+                for link in by_node.get((kind, key), []) if link["enforced"]]
     return [{"link": link, "policy": policies[link["gpo_id"]], "depth": depth, "label": label}
-            for link, depth, label in ordered]
+            for link, depth, label in plain + enforced if _usable(link, policies, machine)]
+
+
+def _merge(applied):
+    """Fold the applied links' settings in apply order. Agent settings and registry values are
+    last-wins; scripts are additive -- two policies each asking for a different script both
+    mean it, and the same script from two policies runs once."""
+    agent_settings, registry, script_entries = {}, {}, {}
+    for item in applied:
+        policy = item["policy"]
+        winner = {"gpo_id": policy["id"], "gpo": policy["name"]}
+        body = policy["settings"]
+        agent_settings.update({key: {"value": value, **winner}
+                               for key, value in (body.get("agent_settings") or {}).items()})
+        registry.update({entry["id"]: {**entry, **winner} for entry in body.get("registry") or []})
+        for entry in body.get("scripts") or []:
+            script_entries.setdefault(entry["name"], {**entry, **winner})
+    return agent_settings, registry, script_entries
+
+
+def _public_applied(item):
+    link = item["link"]
+    return {"link_id": link["id"], "gpo_id": item["policy"]["id"], "gpo": item["policy"]["name"],
+            "node_kind": link["node_kind"], "node_key": link["node_key"],
+            "node_label": link["node_label"] or item["label"], "enforced": link["enforced"]}
 
 
 def rsop(db_path, machine, **cached):
     """The Resultant Set of Policy for one PC: what every setting ends up as and which policy
     won it, plus the links considered. The console's "why is this PC like this?" answer."""
     applied = applied_links(db_path, machine, **cached)
-    agent_settings = {}
-    registry = {}
-    script_entries = {}
-    for item in applied:
-        policy = item["policy"]
-        winner = {"gpo_id": policy["id"], "gpo": policy["name"]}
-        body = policy["settings"]
-        for key, value in (body.get("agent_settings") or {}).items():
-            agent_settings[key] = {"value": value, **winner}
-        for entry in body.get("registry") or []:
-            registry[entry["id"]] = {**entry, **winner}
-        # Scripts are additive, not "last wins": two policies each asking for a different script
-        # both mean it. The same script from two policies runs once.
-        for entry in body.get("scripts") or []:
-            script_entries.setdefault(entry["name"], {**entry, **winner})
+    agent_settings, registry, script_entries = _merge(applied)
     return {
         "machine": machine,
-        "links": [{"link_id": i["link"]["id"], "gpo_id": i["policy"]["id"],
-                   "gpo": i["policy"]["name"], "node_kind": i["link"]["node_kind"],
-                   "node_key": i["link"]["node_key"],
-                   "node_label": i["link"]["node_label"] or i["label"],
-                   "enforced": i["link"]["enforced"]} for i in applied],
+        "links": [_public_applied(item) for item in applied],
         "agent_settings": agent_settings,
         "registry": sorted(registry.values(), key=lambda e: (e["path"].lower(), e["name"].lower())),
         "scripts": sorted(script_entries.values(), key=lambda e: e["name"]),
@@ -869,26 +925,30 @@ def agent_supports(db_path, machine):
                             (machine,)).fetchone() is not None
 
 
+def _clean_state(entry, machine, now):
+    if not isinstance(entry, dict):
+        return None
+    sid = str(entry.get("id") or "")[:32]
+    status = str(entry.get("status") or "")
+    if not sid or status not in STATES:
+        return None
+    return (machine, sid, status, str(entry.get("detail") or "")[:500], now)
+
+
 def record_report(db_path, machine, payload, now=None):
-    """Store the per-value states an agent reported: {"states": [{id, status, detail}]}.
+    """Store the per-value states an agent reported: {"states": [{id, status, detail}],
+    "removed": [id, ...]}.
 
     Every entry is bounded and an unknown status is dropped rather than coerced -- the
     console reads these as statements about a PC's registry, and a made-up one is worse than
     a missing one. Returns the number of rows written."""
-    states = (payload or {}).get("states") if isinstance(payload, dict) else None
+    states = payload.get("states") if isinstance(payload, dict) else None
     if not isinstance(states, list):
         return 0
     now = int(now or time.time())
-    rows = []
-    for entry in states[:MAX_REGISTRY_VALUES * 2]:
-        if not isinstance(entry, dict):
-            continue
-        sid = str(entry.get("id") or "")[:32]
-        status = str(entry.get("status") or "")
-        if not sid or status not in STATES:
-            continue
-        rows.append((machine, sid, status, str(entry.get("detail") or "")[:500], now))
-    removed = [str(i)[:32] for i in ((payload or {}).get("removed") or [])
+    rows = [row for row in (_clean_state(e, machine, now)
+                            for e in states[:MAX_REGISTRY_VALUES * 2]) if row]
+    removed = [(machine, str(i)[:32]) for i in (payload.get("removed") or [])
                if isinstance(i, str)]
     with get_conn(db_path) as conn:
         conn.executemany(
@@ -896,9 +956,8 @@ def record_report(db_path, machine, payload, now=None):
             " reported_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(machine, setting_id) DO UPDATE SET"
             " status = excluded.status, detail = excluded.detail,"
             " reported_at = excluded.reported_at", rows)
-        for sid in removed:
-            conn.execute("DELETE FROM machine_gpo_registry_state WHERE machine = ?"
-                         " AND setting_id = ?", (machine, sid))
+        conn.executemany("DELETE FROM machine_gpo_registry_state WHERE machine = ?"
+                         " AND setting_id = ?", removed)
     return len(rows)
 
 
@@ -962,6 +1021,108 @@ def _command_outcome(db_path, command_id):
     return "pending", ""
 
 
+def _settled(run, outcome, detail, now):
+    """What a queued run becomes, as (status, detail, finished_at), or None while pending."""
+    if outcome == "done":
+        return SCRIPT_DONE, "", now
+    if outcome == "failed":
+        return SCRIPT_FAILED, detail, now
+    if outcome != "expired":
+        return None
+    # Never reached the PC. Retry while attempts last; then it is a failure worth showing
+    # rather than a silent forever-pending row.
+    if run["attempts"] >= MAX_SCRIPT_ATTEMPTS:
+        return SCRIPT_FAILED, "the PC did not pick the command up", now
+    return SCRIPT_RETRY, "", None
+
+
+def _settle_queued(db_path, now):
+    """Move every queued run whose command finished to its outcome. The command reads happen
+    outside any open connection: get_command opens its own."""
+    with get_conn(db_path) as conn:
+        pending = conn.execute("SELECT * FROM gpo_script_runs WHERE status = ?",
+                               (SCRIPT_QUEUED,)).fetchall()
+    updates = []
+    for run in pending:
+        result = _settled(run, *_command_outcome(db_path, run["command_id"]), now)
+        if result:
+            updates.append((*result, run["machine"], run["script_name"], run["script_hash"]))
+    with get_conn(db_path) as conn:
+        conn.executemany("UPDATE gpo_script_runs SET status = ?, detail = ?, finished_at = ?"
+                         " WHERE machine = ? AND script_name = ? AND script_hash = ?", updates)
+
+
+class _ScriptPass:
+    """One scheduler pass's shared reads, so each PC's resolution touches no table twice."""
+
+    def __init__(self, db_path, policies, ttl_seconds, now, capability_refusal):
+        self.db_path = db_path
+        self.ttl_seconds = ttl_seconds
+        self.now = now
+        self.capability_refusal = capability_refusal
+        self.cached = {"links": list_links(db_path), "options": node_options(db_path),
+                       "policies": {p["id"]: p for p in policies}}
+        self.parents = pc_tree._parents(db_path)
+        self.filed = pc_tree.assignments(db_path)
+        with get_conn(db_path) as conn:
+            self.rows = {r["machine"]: dict(r) for r in conn.execute(
+                "SELECT machine, ad_ou FROM machine_info")}
+            self.existing = {(r["machine"], r["script_name"], r["script_hash"]): dict(r)
+                             for r in conn.execute("SELECT * FROM gpo_script_runs")}
+        self.library = {}
+        self.queued = 0
+
+    def script(self, name):
+        if name not in self.library:
+            self.library[name] = scripts.get_script(self.db_path, name)
+        return self.library[name]
+
+    def wanted(self, machine):
+        row = self.rows.get(machine, {"machine": machine, "ad_ou": None})
+        nodes = nodes_for_machine(self.db_path, machine, row=row, parents=self.parents,
+                                  filed=self.filed)
+        return rsop(self.db_path, machine, nodes=nodes, **self.cached)["scripts"]
+
+    def machine(self, machine):
+        wanted = self.wanted(machine)
+        refusal = self.capability_refusal(machine) if wanted and self.capability_refusal else None
+        for entry in wanted:
+            if self.queued >= SCRIPTS_PER_TICK:
+                return
+            self.entry(machine, entry, refusal)
+
+    def entry(self, machine, entry, refusal):
+        script = self.script(entry["name"])
+        if script is None or not script["enabled"]:
+            return
+        key = (machine, entry["name"], script_hash(script))
+        run = self.existing.get(key)
+        if run is not None and run["status"] != SCRIPT_RETRY:
+            return
+        attempts = (run["attempts"] if run else 0) + 1
+        body, reason = ((None, refusal) if refusal
+                        else _render_script(script, entry.get("inputs"), machine))
+        if body is None:
+            _upsert_run(self.db_path, key, entry["gpo_id"], None, SCRIPT_SKIPPED, attempts,
+                        reason, self.now, self.now)
+            return
+        try:
+            command_id = fleet.create_command(
+                self.db_path, machine, "run_script",
+                {"script": body, "shell": script["shell"],
+                 "timeout_seconds": script["timeout_seconds"]},
+                # `gpo:<id>` -- stable across a rename, and the agent keys its shell session on
+                # it the way it does on `rule:<id>`.
+                issued_by=f"gpo:{entry['gpo_id']}", ttl_seconds=self.ttl_seconds)
+        except ValueError as e:
+            _upsert_run(self.db_path, key, entry["gpo_id"], None, SCRIPT_SKIPPED, attempts,
+                        refusals.message(e), self.now, self.now)
+            return
+        _upsert_run(self.db_path, key, entry["gpo_id"], command_id, SCRIPT_QUEUED, attempts,
+                    "", self.now, None)
+        self.queued += 1
+
+
 def script_tick(db_path, machines, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS, now=None,
                 capability_refusal=None):
     """One pass of the script scheduler over `machines` (the ONLINE ones -- a command for an
@@ -974,92 +1135,13 @@ def script_tick(db_path, machines, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS
     policies = list_gpos(db_path)
     if not any(p["enabled"] and has_scripts(p) for p in policies):
         return 0
-    cached = {"links": list_links(db_path), "options": node_options(db_path),
-              "policies": {p["id"]: p for p in policies}}
-    parents = pc_tree._parents(db_path)
-    filed = pc_tree.assignments(db_path)
-    with get_conn(db_path) as conn:
-        rows = {r["machine"]: dict(r) for r in conn.execute(
-            "SELECT machine, ad_ou FROM machine_info")}
-        pending = conn.execute("SELECT * FROM gpo_script_runs WHERE status = ?",
-                               (SCRIPT_QUEUED,)).fetchall()
-
-    # Settle what was queued before. Outside any open connection: get_command opens its own.
-    settled = []
-    for run in pending:
-        outcome, detail = _command_outcome(db_path, run["command_id"])
-        if outcome == "done":
-            settled.append((SCRIPT_DONE, "", now, run))
-        elif outcome == "failed":
-            settled.append((SCRIPT_FAILED, detail, now, run))
-        elif outcome == "expired":
-            # Never reached the PC. Retry while attempts last; then it is a failure worth
-            # showing rather than a silent forever-pending row.
-            if run["attempts"] >= MAX_SCRIPT_ATTEMPTS:
-                settled.append((SCRIPT_FAILED, "the PC did not pick the command up", now, run))
-            else:
-                settled.append(("retry", "", None, run))
-    with get_conn(db_path) as conn:
-        for status, detail, finished, run in settled:
-            if status == "retry":
-                conn.execute("UPDATE gpo_script_runs SET status = 'retry' WHERE machine = ?"
-                             " AND script_name = ? AND script_hash = ?",
-                             (run["machine"], run["script_name"], run["script_hash"]))
-            else:
-                conn.execute("UPDATE gpo_script_runs SET status = ?, detail = ?, finished_at = ?"
-                             " WHERE machine = ? AND script_name = ? AND script_hash = ?",
-                             (status, detail, finished, run["machine"], run["script_name"],
-                              run["script_hash"]))
-        existing = {(r["machine"], r["script_name"], r["script_hash"]): dict(r)
-                    for r in conn.execute("SELECT * FROM gpo_script_runs")}
-
-    library = {}
-    queued = 0
+    _settle_queued(db_path, now)
+    run = _ScriptPass(db_path, policies, ttl_seconds, now, capability_refusal)
     for machine in machines:
-        if queued >= SCRIPTS_PER_TICK:
+        if run.queued >= SCRIPTS_PER_TICK:
             break
-        row = rows.get(machine, {"machine": machine, "ad_ou": None})
-        nodes = nodes_for_machine(db_path, machine, row=row, parents=parents, filed=filed)
-        wanted = rsop(db_path, machine, nodes=nodes, **cached)["scripts"]
-        if not wanted:
-            continue
-        refusal = capability_refusal(machine) if capability_refusal else None
-        for entry in wanted:
-            if queued >= SCRIPTS_PER_TICK:
-                break
-            if entry["name"] not in library:
-                library[entry["name"]] = scripts.get_script(db_path, entry["name"])
-            script = library[entry["name"]]
-            if script is None or not script["enabled"]:
-                continue
-            digest = script_hash(script)
-            key = (machine, entry["name"], digest)
-            run = existing.get(key)
-            if run is not None and run["status"] != "retry":
-                continue
-            attempts = (run["attempts"] if run else 0) + 1
-            body, reason = (None, refusal) if refusal else _render_script(
-                script, entry.get("inputs"), machine)
-            if body is None:
-                _upsert_run(db_path, key, entry["gpo_id"], None, SCRIPT_SKIPPED, attempts,
-                            reason, now, now)
-                continue
-            try:
-                command_id = fleet.create_command(
-                    db_path, machine, "run_script",
-                    {"script": body, "shell": script["shell"],
-                     "timeout_seconds": script["timeout_seconds"]},
-                    # `gpo:<id>` -- stable across a rename, and the agent keys its shell
-                    # session on it the way it does on `rule:<id>`.
-                    issued_by=f"gpo:{entry['gpo_id']}", ttl_seconds=ttl_seconds)
-            except ValueError as e:
-                _upsert_run(db_path, key, entry["gpo_id"], None, SCRIPT_SKIPPED, attempts,
-                            str(e)[:500], now, now)
-                continue
-            _upsert_run(db_path, key, entry["gpo_id"], command_id, SCRIPT_QUEUED, attempts,
-                        "", now, None)
-            queued += 1
-    return queued
+        run.machine(machine)
+    return run.queued
 
 
 def _upsert_run(db_path, key, gpo_id, command_id, status, attempts, detail, queued_at,

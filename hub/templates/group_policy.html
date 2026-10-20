@@ -37,7 +37,9 @@
 {% if cap.MANAGE_GROUP_POLICY in user_capabilities %}
 <dialog class="modal gpo-modal" id="gpo-dialog" aria-labelledby="gpo-dialog-title">
     <div class="modal__head">
-        <h2 class="modal__title" id="gpo-dialog-title"></h2>
+        {# Starts with the "new" title so the heading is never empty; group-policy.js sets the
+           edit title when a policy is opened. #}
+        <h2 class="modal__title" id="gpo-dialog-title">{{ t('gpo.editor.new_title') }}</h2>
     </div>
     <div class="modal__body">
         <label class="setting__label" for="gpo-name">{{ t('gpo.editor.name') }}</label>

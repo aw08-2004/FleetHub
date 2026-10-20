@@ -132,7 +132,7 @@ public sealed class GroupPolicyRunner(ILogger<GroupPolicyRunner> log, AgentState
                 catch (Exception e) when (e is UnauthorizedAccessException or IOException
                                                or System.Security.SecurityException)
                 {
-                    _log.LogWarning("Could not remove policy value {Entry}: {Msg}", entry, e.Message);
+                    _log.LogWarning(e, "Could not remove policy value {Entry}", entry);
                 }
             }
 

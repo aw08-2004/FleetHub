@@ -119,7 +119,7 @@
         const parts = String(dn || '').split(/(?<!\\),/).map((p) => p.trim())
             .filter((p) => p && !/^dc=/i.test(p))
             .map((p) => p.replace(/^[a-z]+=/i, '').replace(/\\,/g, ','));
-        return parts.length ? parts.reverse().join(' / ') : String(dn || '');
+        return parts.length ? parts.toReversed().join(' / ') : String(dn || '');
     }
 
     function nodeLabel(kind, key, label) {
@@ -161,9 +161,13 @@
         return row;
     }
 
+    function toggleClass(key, hasChildren) {
+        if (!hasChildren) return 'perm-tree__toggle';
+        return collapsed.has(key) ? 'perm-tree__toggle is-closed' : 'perm-tree__toggle is-open';
+    }
+
     function toggle(key, hasChildren, label) {
-        const b = el('button', hasChildren
-            ? `perm-tree__toggle ${collapsed.has(key) ? 'is-closed' : 'is-open'}` : 'perm-tree__toggle');
+        const b = el('button', toggleClass(key, hasChildren));
         b.type = 'button';
         if (!hasChildren) {
             b.disabled = true;
@@ -293,11 +297,17 @@
 
     // ---------------------------------------------------------------- one node
 
+    // Which half of the tree a node is in, shown above its name.
+    function sectionLabel(kind) {
+        if (kind === 'ou') return t('pc_tree.ad');
+        if (kind === 'folder') return t('pc_tree.folders');
+        return '';
+    }
+
     function renderNode() {
         const { kind, key } = selected;
         const card = el('div', 'card');
-        card.appendChild(el('div', 'stat-card__meta', kind === 'ou' ? t('pc_tree.ad')
-            : kind === 'folder' ? t('pc_tree.folders') : ''));
+        card.appendChild(el('div', 'stat-card__meta', sectionLabel(kind)));
         card.appendChild(el('h2', 'section-title', nodeLabel(kind, key, selected.label)));
         if (kind === 'ou') card.appendChild(el('div', 'stat-card__meta gpo-mono', selected.label || key));
 
@@ -456,7 +466,8 @@
         host.style.marginTop = 'var(--space-4)';
         card.appendChild(host);
         pane.appendChild(card);
-        if (selected.machine) loadRsop(selected.machine, host);
+        // loadRsop reports its own failure into `host`, so nothing is left to catch here.
+        if (selected.machine) void loadRsop(selected.machine, host);
     }
 
     async function loadRsop(machine, host) {
@@ -554,37 +565,53 @@
 
     function agentSetting(key) { return data.agent_settings.find((s) => s.key === key); }
 
-    function valueInput(schema, value, onChange) {
-        if (schema.type === 'bool') {
-            const s = el('select', 'input gpo-row__value');
-            s.append(option('true', t('gpo.editor.bool_yes')), option('false', t('gpo.editor.bool_no')));
-            s.value = value === false ? 'false' : 'true';
-            s.addEventListener('change', () => onChange(s.value === 'true'));
-            onChange(s.value === 'true');
-            return s;
-        }
-        if (schema.choices && schema.choices.length) {
-            const s = el('select', 'input gpo-row__value');
-            schema.choices.forEach((c) => s.appendChild(option(c, (schema.choice_labels || {})[c] || c)));
-            s.value = value != null ? String(value) : String(schema.choices[0]);
-            s.addEventListener('change', () => onChange(s.value));
-            onChange(s.value);
-            return s;
-        }
+    // One editor control per agent-setting type. Each reports its starting value through
+    // onChange straight away, so a setting just added to the draft holds a real value rather
+    // than null -- which the server would read as "not configured" and drop.
+    function boolInput(value, onChange) {
+        const s = el('select', 'input gpo-row__value');
+        s.append(option('true', t('gpo.editor.bool_yes')), option('false', t('gpo.editor.bool_no')));
+        s.value = value === false ? 'false' : 'true';
+        s.addEventListener('change', () => onChange(s.value === 'true'));
+        onChange(s.value === 'true');
+        return s;
+    }
+
+    function choiceInput(schema, value, onChange) {
+        const s = el('select', 'input gpo-row__value');
+        const labels = schema.choice_labels || {};
+        schema.choices.forEach((c) => s.appendChild(option(c, labels[c] || c)));
+        s.value = String(value ?? schema.choices[0]);
+        s.addEventListener('change', () => onChange(s.value));
+        onChange(s.value);
+        return s;
+    }
+
+    function asText(initial) {
+        if (Array.isArray(initial)) return initial.join(', ');
+        return initial == null ? '' : String(initial);
+    }
+
+    function textInput(schema, value, onChange) {
         const input = el('input', 'input gpo-row__value');
         if (schema.type === 'int' || schema.type === 'float') {
             input.type = 'number';
             if (schema.min != null) input.min = schema.min;
             if (schema.max != null) input.max = schema.max;
         }
-        const initial = value != null ? value : schema.default;
-        input.value = Array.isArray(initial) ? initial.join(', ') : (initial == null ? '' : String(initial));
+        input.value = asText(value ?? schema.default);
         const read = () => (schema.type === 'str_list'
             ? input.value.split(',').map((v) => v.trim()).filter(Boolean)
             : input.value);
         input.addEventListener('input', () => onChange(read()));
         onChange(read());
         return input;
+    }
+
+    function valueInput(schema, value, onChange) {
+        if (schema.type === 'bool') return boolInput(value, onChange);
+        if (schema.choices?.length) return choiceInput(schema, value, onChange);
+        return textInput(schema, value, onChange);
     }
 
     function renderAgentRows() {
@@ -788,7 +815,8 @@
         });
     }
 
-    load();
+    // load() reports its own failure into the pane.
+    void load();
     // The editor is a <dialog>, which FleetLive waits on. `gpo` carries agents' reported state
     // and the script scheduler, so an open resultant-set view follows the PC.
     window.FleetLive.watch(['gpo', 'pc_tree', 'machines'], load);

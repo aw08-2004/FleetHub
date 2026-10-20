@@ -139,6 +139,11 @@ function renderTree() {
     treeHost.appendChild(renderBranch(null, new Set()));
 }
 
+function toggleClass(id, hasChildren) {
+    if (!hasChildren) return 'perm-tree__toggle';
+    return collapsed.has(id) ? 'perm-tree__toggle is-closed' : 'perm-tree__toggle is-open';
+}
+
 function renderBranch(parentId, seen) {
     const list = el('ul', 'perm-tree__list');
     childrenOf(parentId).forEach((group) => {
@@ -147,9 +152,7 @@ function renderBranch(parentId, seen) {
         const li = el('li');
         const row = el('div', 'perm-tree__row');
         const kids = childrenOf(group.id);
-        const toggle = el('button', kids.length
-            ? `perm-tree__toggle ${collapsed.has(group.id) ? 'is-closed' : 'is-open'}`
-            : 'perm-tree__toggle');
+        const toggle = el('button', toggleClass(group.id, kids.length > 0));
         toggle.type = 'button';
         if (kids.length) {
             toggle.setAttribute('aria-label', collapsed.has(group.id)
@@ -270,101 +273,104 @@ function grantingAncestor(group, capability) {
     return null;
 }
 
-function renderGroupRow(group, options) {
-    const showActions = !options || options.actions !== false;
-    const tr = el('tr');
-
-    const nameCell = el('td');
+// One builder per column, so each reads on its own and renderGroupRow is only the row.
+function nameCell(group) {
+    const cell = el('td');
     // The name drills in, the way double-clicking a container does in ADUC.
     const open = el('button', 'perm-link', group.name);
     open.type = 'button';
     open.addEventListener('click', () => selectGroup(group.id));
-    nameCell.appendChild(open);
-    if (group.description) {
-        nameCell.appendChild(el('div', 'stat-card__meta', group.description));
-    }
-    tr.appendChild(nameCell);
+    cell.appendChild(open);
+    if (group.description) cell.appendChild(el('div', 'stat-card__meta', group.description));
+    return cell;
+}
 
-    const capsCell = el('td');
+function capabilitiesCell(group) {
+    const cell = el('td');
     const inherited = group.inherited_capabilities || [];
     if (!group.capabilities.length && !inherited.length) {
-        capsCell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
+        cell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
     }
     group.capabilities.forEach((name) => {
         // The one capability worth calling out visually: it lets its holder grant
         // themselves everything else on this very page.
         const isAdmin = name === 'manage_permission_groups';
-        capsCell.appendChild(
-            el('span', isAdmin ? 'cap-badge cap-badge--admin' : 'cap-badge',
-               capabilityLabel(name)));
+        cell.appendChild(el('span', isAdmin ? 'cap-badge cap-badge--admin' : 'cap-badge',
+                            capabilityLabel(name)));
     });
     inherited.forEach((name) => {
         const badge = el('span', 'cap-badge cap-badge--inherited', capabilityLabel(name));
         const from = grantingAncestor(group, name);
         if (from) badge.title = t('permissions.editor.inherited_capability', { group: from.name });
-        capsCell.appendChild(badge);
+        cell.appendChild(badge);
     });
-    tr.appendChild(capsCell);
+    return cell;
+}
 
-    const machinesCell = el('td');
-    if (group.scope_mode === 'all') {
-        machinesCell.appendChild(
-            el('span', 'cap-badge cap-badge--admin', t('permissions.every_machine')));
-    } else if (!group.machines.length) {
-        machinesCell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
-    } else {
-        machinesCell.appendChild(el('span', null, String(group.machines.length)));
-        machinesCell.appendChild(el('div', 'stat-card__meta', group.machines.join(', ')));
-    }
+// Name the RULE as well as its current result: the count is what the OUs or folders resolve
+// to today, and an operator reading the row needs to know it will move on its own when
+// someone re-files a PC.
+function scopeRule(group) {
     if (group.scope_mode === 'ad_ou') {
-        // Name the RULE as well as its current result: the count above is what the OUs
-        // resolve to today, and an operator reading the row needs to know it will move on
-        // its own when someone re-files a PC in AD.
         const ous = group.ous || [];
-        machinesCell.appendChild(el('div', 'stat-card__meta',
-            ous.length ? t('permissions.from_ou', { ous: ous.join(', ') })
-                       : t('permissions.from_ou_empty')));
+        return ous.length ? t('permissions.from_ou', { ous: ous.join(', ') })
+                          : t('permissions.from_ou_empty');
     }
     if (group.scope_mode === 'folder') {
         const folders = group.folders || [];
-        machinesCell.appendChild(el('div', 'stat-card__meta',
-            folders.length ? t('permissions.from_folder', { folders: folders.map(folderLabel).join(', ') })
-                           : t('permissions.from_folder_empty')));
+        return folders.length
+            ? t('permissions.from_folder', { folders: folders.map(folderLabel).join(', ') })
+            : t('permissions.from_folder_empty');
     }
+    return null;
+}
+
+function machinesCell(group) {
+    const cell = el('td');
+    if (group.scope_mode === 'all') {
+        cell.appendChild(el('span', 'cap-badge cap-badge--admin', t('permissions.every_machine')));
+    } else if (group.machines.length) {
+        cell.appendChild(el('span', null, String(group.machines.length)));
+        cell.appendChild(el('div', 'stat-card__meta', group.machines.join(', ')));
+    } else {
+        cell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
+    }
+    const rule = scopeRule(group);
+    if (rule) cell.appendChild(el('div', 'stat-card__meta', rule));
     // Inherited scope last, and in its own line: it is real access this group's members hold,
     // and the one part of the row an edit HERE cannot take away.
     if (group.inherited_all) {
-        machinesCell.appendChild(el('div', 'cap-badge cap-badge--inherited',
-            t('permissions.inherited_every_machine')));
-    } else if ((group.inherited_machines || []).length) {
-        machinesCell.appendChild(el('div', 'stat-card__meta',
-            tPlural('permissions.inherited_machines', group.inherited_machines.length)));
+        cell.appendChild(el('div', 'cap-badge cap-badge--inherited',
+                            t('permissions.inherited_every_machine')));
+    } else if (group.inherited_machines?.length) {
+        cell.appendChild(el('div', 'stat-card__meta',
+                            tPlural('permissions.inherited_machines', group.inherited_machines.length)));
     }
-    tr.appendChild(machinesCell);
+    return cell;
+}
 
-    const membersCell = el('td');
+function membersCell(group) {
+    const cell = el('td');
     const dirGroups = group.directory_groups || [];
     if (!group.members.length && !dirGroups.length) {
-        membersCell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
+        cell.appendChild(el('span', 'stat-card__meta', t('permissions.none')));
     }
     if (group.members.length) {
-        membersCell.appendChild(el('div', 'stat-card__meta', group.members.join(', ')));
+        cell.appendChild(el('div', 'stat-card__meta', group.members.join(', ')));
     }
     if (dirGroups.length) {
         // Named separately from the emails: these are not people, and a group whose only
         // membership is a directory mapping would otherwise read as "nobody has this"
         // when it may in fact be the widest grant on the page.
-        membersCell.appendChild(el('div', 'stat-card__meta',
+        cell.appendChild(el('div', 'stat-card__meta',
             tPlural('permissions.directory_group_list', dirGroups.length,
                     { groups: dirGroups.join(', ') })));
     }
-    tr.appendChild(membersCell);
+    return cell;
+}
 
-    if (!showActions) {
-        tr.appendChild(el('td'));
-        return tr;
-    }
-    const actions = el('td');
+function actionsCell(group) {
+    const cell = el('td');
     const wrap = el('div', 'perm-row-actions');
     const edit = el('button', 'btn', t('common.edit'));
     edit.type = 'button';
@@ -373,9 +379,15 @@ function renderGroupRow(group, options) {
     remove.type = 'button';
     remove.addEventListener('click', () => deleteGroup(group, remove));
     wrap.append(edit, remove);
-    actions.appendChild(wrap);
-    tr.appendChild(actions);
+    cell.appendChild(wrap);
+    return cell;
+}
 
+function renderGroupRow(group, options) {
+    const showActions = !options || options.actions !== false;
+    const tr = el('tr');
+    tr.append(nameCell(group), capabilitiesCell(group), machinesCell(group), membersCell(group),
+              showActions ? actionsCell(group) : el('td'));
     return tr;
 }
 
@@ -575,7 +587,8 @@ function renderInheritedScope() {
         inheritedScopeEl.textContent = t('permissions.editor.inherited_scope_all');
         return;
     }
-    const machines = Array.from(new Set(ancestors.flatMap((a) => a.machines || []))).sort();
+    const machines = Array.from(new Set(ancestors.flatMap((a) => a.machines || [])))
+        .sort((x, y) => x.localeCompare(y));
     if (!machines.length) {
         inheritedScopeEl.hidden = true;
         return;

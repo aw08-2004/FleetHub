@@ -49,6 +49,10 @@ DESCRIPTION_MAX = 500
 # same reason: past it, nobody can say what a folder covers without drawing it.
 MAX_FOLDER_DEPTH = 8
 
+# Taking a PC out of every folder. Shared by filing, forget and rename, so all three agree on
+# what "unfiled" means.
+_UNFILE_SQL = "DELETE FROM pc_folder_machines WHERE machine = ?"
+
 
 def get_conn(db_path):
     conn = sqlite3.connect(db_path, timeout=30)
@@ -205,6 +209,46 @@ def member_sets(db_path, selectors):
     return out
 
 
+def _ou_name(components):
+    """How a node is labelled: a domain in DNS form (DC=ccmf,DC=com,DC=py -> ccmf.com.py),
+    the way ADUC shows it, and an OU by its own name, unescaped enough to read."""
+    if all(c.lower().startswith("dc=") for c in components):
+        return ".".join(c.split("=", 1)[-1] for c in components)
+    return components[0].split("=", 1)[-1].replace("\\,", ",")
+
+
+class _OuTreeBuilder:
+    """Nodes keyed on the case-folded DN, so two spellings of one OU land in one node."""
+
+    def __init__(self):
+        self.roots = {}
+        self.nodes = {}
+
+    def node_for(self, components):
+        key = ",".join(c.casefold() for c in components)
+        if key in self.nodes:
+            return self.nodes[key]
+        node = {"dn": ",".join(components), "name": _ou_name(components),
+                "machines": [], "children": []}
+        self.nodes[key] = node
+        # A domain is a root; so is a DN whose domain part is not purely trailing DC=
+        # components, which is simply rooted at its last component.
+        if len(components) == 1 or all(c.lower().startswith("dc=") for c in components):
+            self.roots[key] = node
+        else:
+            self.node_for(components[1:])["children"].append(node)
+        return node
+
+
+def _finish(node):
+    node["machines"].sort(key=str.lower)
+    node["children"].sort(key=lambda n: n["name"].lower())
+    for child in node["children"]:
+        _finish(child)
+    node["count"] = len(node["machines"]) + sum(c["count"] for c in node["children"])
+    return node
+
+
 def ou_tree(rows):
     """The AD half of the tree, built from `rows` of {machine, ad_ou}.
 
@@ -212,49 +256,15 @@ def ou_tree(rows):
     that holds none of your PCs then never appears, and its name is not disclosed.
 
     Returns a list of root nodes, one per domain, each
-    {"dn", "name", "machines": [direct PCs], "children": [...]}. The domain node's name is
-    its DNS form (DC=ccmf,DC=com,DC=py -> ccmf.com.py), the way ADUC shows it. Display case
-    is the first spelling seen; nodes are keyed on the normalised DN so two spellings of one
-    OU land in one node rather than two.
+    {"dn", "name", "machines": [direct PCs], "children": [...], "count"}. Display case is the
+    first spelling seen.
     """
-    roots = {}
-    nodes = {}
-
-    def node_for(components):
-        key = ",".join(c.casefold() for c in components)
-        if key in nodes:
-            return nodes[key]
-        is_domain = all(c.lower().startswith("dc=") for c in components)
-        name = (".".join(c.split("=", 1)[-1] for c in components) if is_domain
-                else components[0].split("=", 1)[-1].replace("\\,", ","))
-        node = {"dn": ",".join(components), "name": name, "machines": [], "children": []}
-        nodes[key] = node
-        if is_domain or len(components) == 1:
-            roots[key] = node
-        else:
-            node_for(components[1:])["children"].append(node)
-        return node
-
+    builder = _OuTreeBuilder()
     for row in rows:
-        ou = str(row.get("ad_ou") or "").strip()
-        if not ou:
-            continue
-        components = directory.split_dn(ou)
-        if not components:
-            continue
-        # A DN whose domain part is not purely trailing DC= components still gets a node; it
-        # is simply rooted at its last component rather than at a domain.
-        node_for(components)["machines"].append(row["machine"])
-
-    def finish(node):
-        node["machines"].sort(key=str.lower)
-        node["children"].sort(key=lambda n: n["name"].lower())
-        for child in node["children"]:
-            finish(child)
-        node["count"] = len(node["machines"]) + sum(c["count"] for c in node["children"])
-        return node
-
-    return sorted((finish(n) for n in roots.values()), key=lambda n: n["name"].lower())
+        components = directory.split_dn(str(row.get("ad_ou") or "").strip())
+        if components:
+            builder.node_for(components)["machines"].append(row["machine"])
+    return sorted((_finish(n) for n in builder.roots.values()), key=lambda n: n["name"].lower())
 
 
 # ================================
@@ -391,6 +401,27 @@ def delete_folder(db_path, folder_id, in_use=None):
     return folder
 
 
+def _unique_names(machines):
+    names = []
+    for machine in machines or []:
+        name = str(machine or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _file_one(conn, name, folder_id, now, actor):
+    if folder_id is None:
+        conn.execute(_UNFILE_SQL, (name,))
+    else:
+        conn.execute(
+            "INSERT INTO pc_folder_machines (machine, folder_id, filed_at, filed_by)"
+            " VALUES (?, ?, ?, ?) ON CONFLICT(machine) DO UPDATE SET"
+            " folder_id = excluded.folder_id, filed_at = excluded.filed_at,"
+            " filed_by = excluded.filed_by",
+            (name, folder_id, now, actor))
+
+
 def file_machines(db_path, machines, folder_id, actor=None):
     """File `machines` into `folder_id`, or take them out of any folder when it is None.
     Returns {machine: previous folder id or None} for the PCs that actually moved, so the
@@ -398,29 +429,13 @@ def file_machines(db_path, machines, folder_id, actor=None):
     if folder_id is not None and get_folder(db_path, folder_id) is None:
         raise ValueError("That folder does not exist.")
     folder_id = int(folder_id) if folder_id is not None else None
-    names = []
-    for machine in machines or []:
-        name = str(machine or "").strip()
-        if name and name not in names:
-            names.append(name)
     before = assignments(db_path)
-    moved = {}
+    moved = {name: before.get(name) for name in _unique_names(machines)
+             if before.get(name) != folder_id}
     now = int(time.time())
     with get_conn(db_path) as conn:
-        for name in names:
-            previous = before.get(name)
-            if previous == folder_id:
-                continue
-            if folder_id is None:
-                conn.execute("DELETE FROM pc_folder_machines WHERE machine = ?", (name,))
-            else:
-                conn.execute(
-                    "INSERT INTO pc_folder_machines (machine, folder_id, filed_at, filed_by)"
-                    " VALUES (?, ?, ?, ?) ON CONFLICT(machine) DO UPDATE SET"
-                    " folder_id = excluded.folder_id, filed_at = excluded.filed_at,"
-                    " filed_by = excluded.filed_by",
-                    (name, folder_id, now, actor))
-            moved[name] = previous
+        for name in moved:
+            _file_one(conn, name, folder_id, now, actor)
     if moved:
         permissions.invalidate()
     return moved
@@ -430,7 +445,7 @@ def forget_machine(db_path, machine):
     """Unfile a hard-deleted PC, so a hostname later reused by a different box does not
     silently land in the old box's folder -- and in every folder-scoped group's reach."""
     with get_conn(db_path) as conn:
-        removed = conn.execute("DELETE FROM pc_folder_machines WHERE machine = ?",
+        removed = conn.execute(_UNFILE_SQL,
                                (str(machine or "").strip(),)).rowcount or 0
     if removed:
         permissions.invalidate()
@@ -449,6 +464,6 @@ def rename_machine(db_path, old_machine, new_machine):
         moved = conn.execute(
             "UPDATE OR IGNORE pc_folder_machines SET machine = ? WHERE machine = ?",
             (new_machine, old_machine)).rowcount or 0
-        conn.execute("DELETE FROM pc_folder_machines WHERE machine = ?", (old_machine,))
+        conn.execute(_UNFILE_SQL, (old_machine,))
     permissions.invalidate()
     return moved

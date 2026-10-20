@@ -279,6 +279,39 @@ function renderTargets() {
     });
 }
 
+// The `folder` selector's controls (roadmap #32): a folder picker and "and sub-folders". Its own
+// function so selectorRow stays one branch per kind. refreshTargetCount reports its own
+// failure into the count label, so its promise is deliberately not awaited.
+function appendFolderSelector(row, selector) {
+    if (pcFolders.length) {
+        const select = el('select', 'input');
+        pcFolders
+            .map((f) => ({ id: f.id, label: pcFolderPath(f.id) }))
+            .sort((a, b) => a.label.localeCompare(b.label))
+            .forEach(({ id, label }) => select.appendChild(opt(String(id), label)));
+        selector.folder_id ??= Number(select.value);
+        select.value = String(selector.folder_id);
+        select.addEventListener('change', () => {
+            selector.folder_id = Number(select.value);
+            void refreshTargetCount();
+        });
+        row.appendChild(select);
+    } else {
+        row.appendChild(el('span', 'stat-card__meta', t('permissions.editor.folder_none_defined')));
+    }
+    const label = el('label', 'stat-card__meta');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = selector.include_children !== false;
+    box.addEventListener('change', () => {
+        selector.include_children = box.checked;
+        void refreshTargetCount();
+    });
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(' ' + t('rules.include_children')));
+    row.appendChild(label);
+}
+
 function selectorRow(side, selector, index) {
     const row = el('div', 'toolbar');
     row.style.marginBottom = 'var(--space-2)';
@@ -329,33 +362,7 @@ function selectorRow(side, selector, index) {
             row.appendChild(select);
         }
     } else if (selector.kind === 'folder') {
-        if (!pcFolders.length) {
-            row.appendChild(el('span', 'stat-card__meta', t('permissions.editor.folder_none_defined')));
-        } else {
-            const select = el('select', 'input');
-            pcFolders
-                .map((f) => ({ id: f.id, label: pcFolderPath(f.id) }))
-                .sort((a, b) => a.label.localeCompare(b.label))
-                .forEach(({ id, label }) => select.appendChild(opt(String(id), label)));
-            if (selector.folder_id == null) selector.folder_id = Number(select.value);
-            select.value = String(selector.folder_id);
-            select.addEventListener('change', () => {
-                selector.folder_id = Number(select.value);
-                refreshTargetCount();
-            });
-            row.appendChild(select);
-        }
-        const label = el('label', 'stat-card__meta');
-        const box = document.createElement('input');
-        box.type = 'checkbox';
-        box.checked = selector.include_children !== false;
-        box.addEventListener('change', () => {
-            selector.include_children = box.checked;
-            refreshTargetCount();
-        });
-        label.appendChild(box);
-        label.appendChild(document.createTextNode(' ' + t('rules.include_children')));
-        row.appendChild(label);
+        appendFolderSelector(row, selector);
     } else if (selector.kind === 'field') {
         const name = el('input', 'input');
         name.type = 'text';
@@ -977,7 +984,8 @@ function pcFolderPath(id) {
 
 function fillKindSelects() {
     loadDeviceGroups();
-    loadPcFolders();
+    // loadPcFolders falls back to no folders on failure, so nothing is left to catch.
+    void loadPcFolders();
     ['rule-target-kind', 'rule-exclude-kind'].forEach((id) => {
         const select = document.getElementById(id);
         select.textContent = '';

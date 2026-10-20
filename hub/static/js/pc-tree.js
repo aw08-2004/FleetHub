@@ -118,10 +118,13 @@
         return { row, item };
     }
 
+    function toggleClass(key, hasChildren) {
+        if (!hasChildren) return 'perm-tree__toggle';
+        return collapsed.has(key) ? 'perm-tree__toggle is-closed' : 'perm-tree__toggle is-open';
+    }
+
     function toggleFor(key, hasChildren, label) {
-        const toggle = el('button', hasChildren
-            ? `perm-tree__toggle ${collapsed.has(key) ? 'is-closed' : 'is-open'}`
-            : 'perm-tree__toggle');
+        const toggle = el('button', toggleClass(key, hasChildren));
         toggle.type = 'button';
         if (!hasChildren) {
             toggle.disabled = true;
@@ -154,7 +157,8 @@
             e.preventDefault();
             let machines = [];
             try { machines = JSON.parse(raw); } catch (err) { return; }
-            fileMachines(machines, folderId);
+            // fileMachines reports its own failure as a toast.
+            void fileMachines(machines, folderId);
         });
     }
 
@@ -506,17 +510,18 @@
         document.getElementById('pc-folder-cancel').addEventListener('click', () => dialog.close());
         document.getElementById('pc-folder-save').addEventListener('click', saveFolder);
         document.getElementById('pc-folder-name').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); saveFolder(); }
+            if (e.key === 'Enter') { e.preventDefault(); void saveFolder(); }
         });
         document.getElementById('pc-move').addEventListener('click', () => {
             const target = moveTarget.value;
             if (!target) return;
-            fileMachines(Array.from(ticked), target === 'none' ? null : Number(target));
+            void fileMachines(Array.from(ticked), target === 'none' ? null : Number(target));
         });
         dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
     }
 
-    load();
+    // load() reports its own failure into the table.
+    void load();
     // A PC enrolling or a directory sync moving one changes the tree too, not only a write here.
     window.FleetLive.watch(['pc_tree', 'machines', 'permissions'], load);
 })();
