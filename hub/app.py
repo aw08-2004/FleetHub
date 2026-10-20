@@ -3073,13 +3073,12 @@ def logout():
 # listener: unrestricted operators sit in FLEET_ROOM, scoped ones sit in one room per
 # machine they can see.
 #
-# Room membership is decided at CONNECT time, so a scope change (added to a group, a
-# machine added to their group) reaches an already-open tab on its next reconnect, not
-# instantly. That is the right trade for a telemetry feed -- the alternative is
-# re-resolving permissions on every emit, i.e. once per machine per few seconds -- but
-# it does mean a REVOKED operator keeps seeing live temperatures on an open tab until
-# they reload. Every actual action they could take is re-checked server-side per
-# request, so this is a stale view, not stale authority.
+# Room membership is decided at CONNECT time, not re-resolved on every emit -- that would be
+# once per machine per few seconds. Instead a permission change (or an AD sync that moved a
+# machine between OUs) ENDS every live socket within one flush, ~0.75s (_drop_live_sockets),
+# and the stock console reconnects through the check below. So a revoked operator stops
+# receiving telemetry at once rather than "until they reload", which is what this comment
+# said before hub 1.156.0. Every action they could take was always re-checked per request.
 FLEET_ROOM = "fleet:all"
 
 
