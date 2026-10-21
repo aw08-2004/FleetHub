@@ -193,7 +193,7 @@ the fix goes to `beta` like anything else.
 - [ ] **Translations.** The action, its description and *(no folder)* read correctly in German
   and Spanish.
 
-**Hub 1.163.0 — table search and column filters, card tables on phones, Ctrl+K placement**
+**Hub 1.163.0 — table search and column filters, card tables on phones, Ctrl+K placement** (#169)
 - [ ] **Ctrl+K.** Opens centred about an eighth of the way down, 640 px wide, with padding round
   the box and its rows; full width near the top on a phone. Same in the dark theme.
 - [ ] **Nothing else moved.** base.css's reset is in a cascade layer now, so every Tailwind
