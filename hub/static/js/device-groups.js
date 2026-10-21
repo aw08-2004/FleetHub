@@ -79,22 +79,6 @@
         return names.length ? names.join(' / ') : `#${id}`;
     }
 
-    // The values an `os` selector may name -- rules.TARGET_OS_VALUES, ordered for a person reading the list.
-    // Literal keys for the same reason as kindLabel.
-    const OS_CHOICES = ['windows', 'windows_11', 'windows_10', 'windows_server', 'windows_legacy',
-                        'linux', 'android'];
-    function osLabel(value) {
-        switch (value) {
-            case 'windows': return t('rules.target_os.windows');
-            case 'windows_11': return t('rules.target_os.windows_11');
-            case 'windows_10': return t('rules.target_os.windows_10');
-            case 'windows_server': return t('rules.target_os.windows_server');
-            case 'windows_legacy': return t('rules.target_os.windows_legacy');
-            case 'linux': return t('rules.target_os.linux');
-            case 'android': return t('rules.target_os.android');
-            default: return value;
-        }
-    }
 
     function describeSelector(selector) {
         switch (selector.kind) {
@@ -102,7 +86,7 @@
             case 'ad_ou': return `${kindLabel('ad_ou')}: ${selector.ou || ''}`;
             case 'folder': return `${kindLabel('folder')}: ${folderPath(selector.folder_id)}`;
             case 'field': return `${kindLabel('field')}: ${selector.field} = ${selector.value}`;
-            case 'os': return `${kindLabel('os')}: ${osLabel(selector.os)}`;
+            case 'os': return `${kindLabel('os')}: ${window.TargetOs.label(selector.os)}`;
             default: return kindLabel(selector.kind);
         }
     }
@@ -253,15 +237,7 @@
             label.append(box, document.createTextNode(' ' + t('device_groups.children')));
             row.appendChild(label);
         } else if (selector.kind === 'os') {
-            const select = el('select', 'input');
-            for (const value of OS_CHOICES) {
-                const option = el('option', null, osLabel(value));
-                option.value = value;
-                select.appendChild(option);
-            }
-            select.value = selector.os || 'windows';
-            select.addEventListener('change', () => { selector.os = select.value; schedulePreview(); });
-            row.appendChild(select);
+            row.appendChild(window.TargetOs.select(selector, schedulePreview));
         } else if (selector.kind === 'field') {
             row.appendChild(input(selector.field || '', 'location', (v) => { selector.field = v.trim(); }));
             row.appendChild(input(selector.value === undefined ? '' : String(selector.value), '', (v) => { selector.value = v; }));
@@ -333,7 +309,7 @@
             if (kind === 'ad_ou') { selector.ou = ''; selector.include_children = true; }
             if (kind === 'folder') { selector.folder_id = null; selector.include_children = true; }
             if (kind === 'field') { selector.field = ''; selector.value = ''; }
-            if (kind === 'os') selector.os = 'windows';
+            if (kind === 'os') selector.os = window.TargetOs.DEFAULT;
             draft.target[side].push(selector);
             renderSelectors();
             schedulePreview();

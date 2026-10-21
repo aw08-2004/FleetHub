@@ -91,6 +91,23 @@ def _bucket_from_caption(caption):
     return None
 
 
+def _bucket_by_build(bucket, caption, os_build):
+    """Let a parseable build decide 10 vs 11 vs legacy -- see normalize_os for why it beats
+    the caption. Only 10-vs-11 is decided this way; a Server or Linux caption is already
+    unambiguous, and no build number would improve it. A caption that matched nothing is
+    only trusted to be Windows if it says so."""
+    if bucket not in (None, "windows_10", "windows_11"):
+        return bucket
+    build = build_number(os_build)
+    if build is None or (bucket is None and "windows" not in caption.lower()):
+        return bucket
+    if build >= _WINDOWS_11_BUILD:
+        return "windows_11"
+    if build >= _WINDOWS_10_BUILD:
+        return "windows_10"
+    return "windows_legacy"
+
+
 def normalize_os(os_caption, os_build, ad_os):
     """Decide which operating system a machine is running, and say where that came from.
 
@@ -115,21 +132,7 @@ def normalize_os(os_caption, os_build, ad_os):
     """
     caption = str(os_caption or "").strip()
     if caption:
-        bucket = _bucket_from_caption(caption)
-        # Only 10-vs-11 is decided by the build; a Server or Linux caption is already
-        # unambiguous, and no build number would improve it.
-        if bucket in (None, "windows_10", "windows_11"):
-            try:
-                build = int(str(os_build or "").strip().split(".")[0])
-            except (TypeError, ValueError):
-                build = None
-            if build is not None and (bucket is not None or "windows" in caption.lower()):
-                if build >= _WINDOWS_11_BUILD:
-                    bucket = "windows_11"
-                elif build >= _WINDOWS_10_BUILD:
-                    bucket = "windows_10"
-                else:
-                    bucket = "windows_legacy"
+        bucket = _bucket_by_build(_bucket_from_caption(caption), caption, os_build)
         return {"bucket": bucket or "unknown", "label": caption, "source": "agent"}
 
     directory = str(ad_os or "").strip()
