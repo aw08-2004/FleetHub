@@ -522,7 +522,9 @@ def _post_chat(resolved, headers, body, timeout, *, refused_status=None):
                 # every check check_provider_url just made.
                 allow_redirects=False) as response:
             if response.status_code >= 400:
-                return _rejection(response, refused_status), None
+                # The key as sent, so _provider_reason can blank it whatever its length.
+                sent_key = str(headers.get("Authorization") or "").removeprefix("Bearer ")
+                return _rejection(response, refused_status, sent_key), None
             raw = bytearray()
             for chunk in response.iter_content(chunk_size=8192):
                 raw.extend(chunk)
@@ -553,14 +555,23 @@ def _post_chat(resolved, headers, body, timeout, *, refused_status=None):
 # proxy's HTML page, and the cap is the same promise MAX_RESPONSE_BYTES makes for answers.
 MAX_ERROR_BODY_BYTES = 8192
 MAX_REASON_CHARS = 300
-# Long opaque runs are blanked out of a provider's reason before it is shown: some gateways
-# echo the key they were sent ("Incorrect API key provided: sk-...") and the reason is
-# rendered in an operator's browser and kept in the transcript.
-_SECRETISH = re.compile(r"[A-Za-z0-9_\-]{40,}")
+# Secrets are blanked out of a provider's reason before it is shown: some gateways echo the
+# key they were sent ("Incorrect API key provided: sk-...") and the reason is rendered in an
+# operator's browser, kept in the transcript and written to the log. Two nets: the key this
+# hub actually sent, blanked by value whatever its length, and any long opaque run, for a
+# gateway that echoes some OTHER token. 32 rather than 40 (review, PR #166): some keys are
+# that short. Not lower -- a dated model id like claude-3-5-sonnet-20241022 is 26, and
+# blanking the model name out of "model X does not exist" would hide the actual fix.
+_SECRETISH = re.compile(r"[A-Za-z0-9_\-.~+=]{32,}")
 _CONTEXT_WORDS = ("context length", "context window", "context_length", "maximum context",
                   "too many tokens", "reduce the length", "prompt is too long",
                   "exceeds the maximum", "input is too long")
+# A tool REFUSAL needs both lists. Mentioning tools alone is not one: "messages with role
+# 'tool' must follow tool_calls" is a message-shape 400 from a server that does tools fine,
+# and calling it a refusal is the very misdiagnosis this code exists to stop (review, PR #166).
 _TOOL_WORDS = ("tool", "function call", "function_call")
+_REFUSAL_WORDS = ("support", "not enabled", "not allowed", "tool_choice", "unknown",
+                  "unrecognized", "extra")
 
 CONTEXT_EXCEEDED = ("the conversation no longer fits this model's context window -- start a "
                     "new conversation, or lower Assistant memory size in Settings -> AI")
@@ -587,7 +598,7 @@ def _reason_from_json(data):
         return ""
 
 
-def _provider_reason(response):
+def _provider_reason(response, secret=""):
     """The provider's own error message, bounded and cleaned, or "". NEVER raises.
 
     A body that is not JSON is used as text only if it is short -- a long one is an HTML
@@ -614,13 +625,15 @@ def _provider_reason(response):
         reason = ""
     reason = " ".join(str(reason).split())
     reason = "".join(ch for ch in reason if ch.isprintable())
+    if secret:
+        reason = reason.replace(secret, "[...]")
     reason = _SECRETISH.sub("[...]", reason)
     if len(reason) > MAX_REASON_CHARS:
         reason = reason[:MAX_REASON_CHARS] + "..."
     return reason
 
 
-def _rejection(response, refused_status):
+def _rejection(response, refused_status, secret=""):
     """The sentence for an HTTP error from the provider, built from what it actually said.
 
     The provider's reason is logged whole-ish (bounded) and shown to the operator, because
@@ -628,13 +641,14 @@ def _rejection(response, refused_status):
     not supporting tools. The two causes an operator can fix from Settings get OUR words.
     """
     status = response.status_code
-    reason = _provider_reason(response)
+    reason = _provider_reason(response, secret)
     print(f"[ai] provider answered HTTP {status}: {reason or '(no reason given)'}")
     lowered = reason.lower()
     if status in (400, 413, 422) and any(w in lowered for w in _CONTEXT_WORDS):
         return CONTEXT_EXCEEDED
     if status in (400, 422) and refused_status:
-        if any(w in lowered for w in _TOOL_WORDS):
+        if (any(w in lowered for w in _TOOL_WORDS)
+                and any(w in lowered for w in _REFUSAL_WORDS)):
             return f"{refused_status} (the provider said: {reason})"
         if not reason:
             # A server that rejects the request and says nothing at all. The tool list is

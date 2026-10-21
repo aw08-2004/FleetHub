@@ -433,6 +433,18 @@ def main():
             check("a 400 that IS about tools still says so", "tool list" in str(error))
             error = step(json.dumps({"detail": "bad key sk-" + "a" * 48}).encode())
             check("a key echoed in the reason is blanked out", "a" * 40 not in str(error))
+            error = step(json.dumps({"error": {"message": "messages with role 'tool' must "
+                                               "follow tool_calls"}}).encode())
+            check("a message-shape 400 that merely mentions tools is not a refusal",
+                  "tool list" not in str(error) and "must follow" in str(error))
+            error = step(b"")
+            check("a bare 400 keeps the tool sentence, hedged",
+                  "tool list" in str(error) and "without saying why" in str(error))
+            short_key = "k3y-" + "b" * 20
+            reason = ai._provider_reason(FakeResponse([json.dumps(
+                {"error": "Incorrect API key provided: " + short_key}).encode()]), short_key)
+            check("the key this hub sent is blanked whatever its length",
+                  short_key not in reason and "[...]" in reason)
             error = step(b"<html>" + b"x" * 20000 + b"</html>", status=502)
             check("an HTML error page is not pasted into the console",
                   error == "the AI provider returned HTTP 502")
