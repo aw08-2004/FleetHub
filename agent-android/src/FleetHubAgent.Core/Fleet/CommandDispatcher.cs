@@ -55,6 +55,12 @@ public sealed class CommandDispatcher
     /// read by an operator wondering why a scheduled job shows a failure against one machine
     /// every night. The real fix is on the hub: scope the profile so it does not target
     /// machines that cannot answer. Recorded in ROADMAP.MD #23.
+    ///
+    /// **`restart` and `deploy_package` left this table in 0.3.0**, and why is worth keeping:
+    /// both were listed as things "an MDM holding device-owner rights" could do, and on a phone
+    /// provisioned by QR this agent IS that device owner. The entries were true of an app and
+    /// wrong about this one. They have executors now (RestartExecutor, DeployPackageExecutor),
+    /// which refuse with the reason on a device that is not fully managed.
     /// </summary>
     private static readonly Dictionary<string, string> Impossible = new(StringComparer.Ordinal)
     {
@@ -68,21 +74,16 @@ public sealed class CommandDispatcher
         ["install_patches"] =
             "Android updates itself from the system updater, Play, or an MDM. An app cannot " +
             "install an OS update or patch another app.",
-        ["deploy_package"] =
-            "An app cannot install another app. That needs the package installer with the " +
-            "user accepting each install, or an MDM holding device-owner rights.",
         ["install_app"] =
-            "There is no winget equivalent an app may drive. Software reaches a managed " +
-            "Android device through its MDM or the Play store.",
+            "There is no winget on Android. To install an app on a fully managed device, " +
+            "make a package with an APK step and deploy it.",
         ["gpupdate"] =
             "Group Policy is a Windows directory feature and has no Android counterpart. " +
             "Configuration reaches this agent through managed configuration instead.",
-        ["restart"] =
-            "Android has no reboot API for an ordinary app. A device enrolled as device-owner " +
-            "through an MDM can be rebooted by that MDM.",
         ["shutdown"] =
             "Android has no power-off API for an ordinary app, and none for a device-owner " +
-            "app either -- a phone is powered off by its holder.",
+            "app either -- a phone is powered off by its holder. A fully managed device can " +
+            "be restarted instead.",
         ["run_script"] =
             "There is no shell for an app to run a script in. An app may only execute its own " +
             "code, inside its own sandbox, as its own unprivileged user.",

@@ -108,7 +108,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-19
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-20
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -190,6 +190,23 @@ this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchange
   api.github.com and vendor CDNs directly, without a proxy.
 - **#16 events, #18 sweep, #19 BitLocker:** the checks already written in their entries -- all
   three shipped in agent 3.37.0 and none has been confirmed on a real machine.
+
+**4c. Group Policy (#32), hub 1.159.0 then agent 3.48.0 on beta -- not released.** The agent half
+(`agent/src/TempMonitorAgent/GroupPolicy/`) compiles and its 24 tests pass, but it has only ever
+run against a dictionary standing in for HKLM. Owed, in this order: deploy the beta hub from the
+`beta` branch; cut the agent as a beta with
+`.\release.ps1 -Version 3.48.0 -Channel beta -NotesFile .\release-notes\3.48.0.md` (a MINOR --
+the hub reads `gpo_version` presence, so no hub constant changes; only PCs pinned to beta take
+it); then on one beta PC, elevated:
+- link a policy with `SOFTWARE\Policies\Microsoft\Edge\HideFirstRunExperience = 1` (DWORD) to
+  its OU; within about two minutes `reg query` shows it, the marker
+  `HKLM\SOFTWARE\FleetHub\GroupPolicy` lists it, and the resultant set says Applied;
+- set a value by hand first on a second PC and confirm it stays and reads Managed elsewhere;
+- unlink the policy and confirm the value and the marker are removed;
+- on a domain-joined PC, link a value a real domain GPO also sets and confirm the agent does not
+  fight `gpupdate /force`;
+- uninstall from the hub and confirm the values are gone afterwards.
+Scripts and agent settings need no agent release; check one run-once script on an online PC.
 
 **4b. Disk usage (#27), hub 1.138.0 then agent 3.40.0 -- released 2026-10-05**, tag
 `agent-v3.40.0` on `541c120`, manifest in `5767724`. What remains is the first-contact list
@@ -322,8 +339,14 @@ the `android` workload is missing here. Its change is one lambda in `AgentServic
 switch stays off until the agents sign** (see #29).
 - **Cut Windows agent 3.44.0** (`agent/release.ps1 -Version 3.44.0`) and **Linux 0.4.0**: both
   sign `/api/report`, and Windows also re-secures `agent.json`.
-- **Cut Android 0.3.0** after `dotnet build` of `FleetHubAgent.Android` on a machine with the
-  workload.
+- **Cut Android 0.3.0** (`agent-android/release.ps1 -Version 0.3.0 -NotesFile
+  .\release-notes\0.3.0.md`) **after hub 1.158.0 is deployed**. It now also carries code
+  enrollment, the new setup screen and icon, restart, the Wake-on-LAN relay, APK installs and the
+  network/posture blocks (#23, *0.3.0*). This machine has the workload now, under
+  `D:\tools\dotnet10` with the SDK in `D:\tools\android-sdk`. Then, on a phone: launcher icon;
+  no keyboard on launch; enrol with an Onboarding code; Grant location → Locate → pin on the Map;
+  on a device owner, a restart, an APK deploy, and a wake relayed from the phone; the phone's
+  Security posture card shows three checks.
 - **Then turn on Settings → Security → Only accept telemetry from enrolled agents**, once
   Administration → Onboarding → *Machines reporting without enrollment* is empty.
 - **Publish the hub 1.144.0 release** with `deploy/docker/release-notes/1.144.0.md`, which
@@ -533,6 +556,100 @@ the wire.
   service runs the new one.
 - **Next agent release:** `release.ps1` now publishes `FleetHubAgent.exe`; check the asset name
   on the release and that a PC still on `TempMonitorAgent.exe` self-updates and keeps that name.
+
+---
+
+## 🚧 32. Nested groups, the PC tree, and Group Policy   ·   **hub 1.159.0** + Windows agent (next MINOR after 3.47.0, unreleased)   ·   `permissions.py`, `pc_tree.py` / `pc_tree_web.py`, `gpo.py` / `gpo_web.py`, agent `GroupPolicy/`
+
+Asked for by the owner on 2026-10-20, with a screenshot of ADUC (`ccmf.com.py` →
+FILADELFIA → Usuarios → Cajas → RDP): "make the permission groups nested within other
+groups, for users and PCs ... a Group Policy Manager like Windows has for the computers ...
+browsable and inheriting like Active Directory Users and Computers". Split in two on purpose:
+the trees are hub-only and change nothing on an agent; Group Policy needs an agent MINOR.
+
+### Built · hub 1.159.0 -- the trees
+
+- **Permission groups nest.** `permission_groups.parent_id` (ALTER-if-missing; every existing
+  group stays top level, so nobody's access moved on upgrade). A member of a subgroup holds the
+  subgroup's grants **plus every ancestor's**; resolved once per cache build
+  (`_resolve_inheritance`) and joined into the member's group list by `_with_ancestors`, so
+  `Access`, `effective_permissions` callers, sharing and recordings needed no change. Inherited
+  grants are stored BESIDE the own fields (`inherited_capabilities`, `inherited_machines`,
+  `inherited_all`), never merged into them -- the editor saves own fields only, so a group moved
+  out from under its parent cannot keep the parent's grants. Depth cap 8; cycles, self-parent
+  and over-deep moves refused at write; a hand-made cycle inherits NOTHING (fail closed). A
+  group with subgroups cannot be deleted (409, naming them). `invites._check_creator_ceiling`
+  checks `effective_grant`, inheritance included. `members_of_machine` counts inherited scope.
+- **The PC tree** (`/pc-tree`, `manage_pc_tree`). Two halves: the AD OU tree, derived on read
+  from `machine_info.ad_ou` and narrowed to the caller's scope (an OU with none of your PCs is
+  not disclosed); and hub **folders** (`pc_folders`, `pc_folder_machines`), nested, a PC in at
+  most one. Filing is a grant -- a folder can be a permission scope -- so the filer must hold
+  every PC filed, and every PC under a folder being moved.
+- **`folder` scope mode** for permission groups and a **`folder` target selector** for rules,
+  watchdogs and device groups, both through `pc_tree.machines_in_folders` (subtree included by
+  default). Every tree write invalidates the permissions cache in the model, and the web layer
+  re-points live sockets through the same hook an AD sync uses.
+- **Fixed in passing:** the rules `ad_ou` selector was a lowercase string `endswith`, so
+  `OU=Cajas` reached `OU=NoCajas` -- the exact bug noted for permission scope under #4. It now
+  uses `directory.ou_contains`, the same component-wise test permissions use.
+
+**Rejected:**
+- *A child narrowing its parent* (intersection) -- `effective_permissions` already rejects
+  intersection because adding someone to a group would then depend on every other group.
+  A child only adds.
+- *A separate "user OU" container object* -- a group with no grants already is one.
+- *Re-parenting or cascading on delete* -- both are silent grant changes. Refused instead.
+- *Several folders per PC* -- "which folder is this PC in?" would become a list, and a
+  folder-scoped grant would depend on every folder a PC was ever dropped into.
+- *Editing AD OUs from the hub* -- AD is the source of truth for that half; two trees that
+  disagree about where a PC is would be worse than one read-only one.
+- *Nesting DEVICE groups* -- still the 1.114.0 reasoning: folders give the tree, and a device
+  group may now include a folder selector, which is not nesting.
+- *Reusing `manage_device_groups`* for filing -- a folder is a scope, a device group is not.
+
+### Built · hub 1.159.0 + agent (unreleased) -- Group Policy
+
+- **The model is Windows' on purpose** (`gpo.py`): policy objects linked to tree nodes -- every
+  PC, an AD OU (keyed by normalised DN), a hub folder. Processing order is every PC -> AD
+  domain -> OUs top-down -> hub folders top-down, last wins; link order 1 wins within a node;
+  Block inheritance drops non-enforced links from above; enforced links ignore blocks and the
+  HIGHER enforced link wins. Folders come after AD: the hub's own, more specific statement.
+  `rsop()` is the single resolver; the page's resultant-set view asks it rather than
+  re-deriving precedence in JS.
+- **Agent settings** (`agent=True` settings) merge into the heartbeat `config` block per PC,
+  with the overrides folded into `config_version` -- so they work on every agent in the field.
+  Values go through `settings.coerce_and_validate`, so bounds are the settings page's.
+- **Registry values** under `HKLM\\SOFTWARE\\Policies` only (WindowsUpdate and FleetHub's own key
+  refused), checked by the hub AND by the agent (`PolicyAllowList.cs`). Delivered as
+  `gpo_document`/`gpo_version` on the watchdog pattern: presence of `gpo_version` is the
+  capability, recorded in `machine_gpo_agent` so the console can say "agent too old" instead of
+  "pending"; an empty document is always sent. `GroupPolicyRunner` keeps a registry marker
+  (`HKLM\\SOFTWARE\\FleetHub\\GroupPolicy`) plus the last value written: an existing value it did
+  not write is `managed_elsewhere` and untouched; a value it wrote that something else changed
+  is let go; a deleted one is put back; removal deletes only what still holds our value. Marker
+  first on write, value first on removal. A lost state file waits for the hub rather than
+  stripping every value at boot. States ride the heartbeat with ack-after-success
+  (`GroupPolicyReporter`), unlike the watchdog reporter.
+- **Scripts** run once per (PC, script, body hash) via `run_script`, issued as `gpo:<id>`, from a
+  60-second hub scheduler over ONLINE PCs, at most 50 per tick; an expired command retries up
+  to 3 times. Only `{{sys.machine}}` is offered; anything else skips with a reason.
+- **Gates** (`gpo_web.py`): `view` reads, `manage_group_policy` writes, plus `issue_commands`
+  for anything touching scripts. Every write's reach must be in the writer's scope -- a node's
+  PCs, or every PC under every node a policy is linked to (`machines_linked`, a deliberate
+  superset so re-enabling a policy is covered). Links persist `author_scope`, re-stamped on edit.
+- Delete guards: a folder with policy links, and a script a policy runs, cannot be deleted.
+  Agent self-uninstall and `agent-install.ps1 -Uninstall` remove the values the agent wrote.
+
+**Rejected:** an ADMX parser (large; the raw value is what every template resolves to); authoring
+real Windows GPOs (SYSVOL is not ours, the agent is not assumed domain-joined); arbitrary
+registry paths (HKLM is the trust root); HKCU (hives load only at sign-in); a `MIN_GPO_AGENT`
+constant (presence of `gpo_version` is the capability, the watchdog precedent -- and the agent
+half ships unreleased, so there is no minor yet); scripts "last wins" (two policies asking for
+two scripts both mean it); a per-node settings layer separate from policy objects (one
+precedence rule, not two).
+
+**Owed:** the agent half needs the next agent MINOR (release.ps1), deployed after the hub, and a
+first contact on a real Windows PC -- see *Owed locally*.
 
 ---
 
@@ -4979,6 +5096,66 @@ reported on a later build. They are harmless and hold no usable credential. `del
 clears them if one device's pile ever matters, and the device re-enrolls cleanly on 0.2.3.
 Orphans a loop creates after the deploy are pruned whether or not a report touches them.
 
+### 0.3.0: a setup screen that leads with status, code enrollment, and four device-owner powers · hub 1.158.0
+
+**What the owner reported (2026-10-20):** no phone appears on the Map or in its search; the app
+has Android's default icon; the screen opens on the enrollment secret; and the agent does less
+than it could.
+
+**The map was empty for two reasons, and only one was the agent's.** 0.2.3 never asked for the
+location permission (fixed on `main` before this, unreleased), so every locate answered
+`unavailable`. And the map lists only rows with coordinates, so a phone that had answered
+"unavailable" eleven times was absent from the map *and* the search, with nothing saying why.
+`/api/location/fleet` now also returns `unlocated`: every in-scope machine that reports the
+`locate` feature and has no fix, with its last attempt's status and detail, behind the same
+`filter_rows` scope as the fixes. The map lists them under *Not located yet* with a Locate button.
+**Periodic tracking was not added**; the on-demand design above is unchanged.
+
+**Enrollment by one-time code.** The agent spends an onboarding code itself
+(`POST /api/onboarding/redeem`, the route the Windows install script uses), through the same
+`AgentLoops` gate as the secret retry. hub/onboarding.py rejected an agent-side code for Windows
+because the install script does it there; a phone has no install script. The shared secret moved
+under *Advanced*. No hub change.
+
+**The setup screen is a layout resource with a status card and a checklist.** The old
+docstring's "nothing here is ever redesigned" was the argument for building it in code; this is
+the redesign. Text stays in C# English, as `values/strings.xml` records.
+
+**New commands, all derived into the capability report as before:** `restart` (device owner,
+`DevicePolicyManager.reboot`; answers first, reboots five seconds later at the earliest),
+`wake_machine` as a relay, and `deploy_package` for APKs (device owner; sha256 pin required;
+verified installed via `PackageManager` afterwards; refuses its own package). `restart`,
+`deploy_package` and the old "an MDM can do it" message left `CommandDispatcher.Impossible` --
+on a QR-provisioned phone this agent *is* that MDM. **New heartbeat blocks:** `network` (the
+Wi-Fi adapter) and `posture` (screen lock, encryption, patch level).
+
+**Hub side:** `packages.STEP_APK`. A package is Android exactly when it has an `apk` step, and then
+it may have nothing else, every payload must be pinned and detection must be `none`. The
+scheduler retires wrong-platform targets with the reason (`_platform_refusal`). Posture judges a
+machine that sent the `mobile` area on `MOBILE_CHECKS` (session lock, encryption, a new `os_patch`,
+CIS 7.3, `security.posture_patch_max_age_days` = 90) and everything else on the desktop checks.
+
+Rejected:
+
+- **AndroidX / Material Components for the new screen.** Megabytes on an APK every managed phone
+  downloads on every release, for widgets the platform Material theme already draws -- the same
+  argument that keeps Play Services out of locating.
+- **Periodic location to fill the map.** It answers the symptom by reversing the one promise the
+  location feature rests on. The empty map was a listing bug.
+- **One package installing on both platforms**, branching at the agent. Two agents reading one
+  recipe the same way is a correctness dependency nobody would test; two packages is the honest
+  shape.
+- **A placeholder MAC for unmanaged phones so they can relay.** `02:00:00:00:00:00` is every
+  phone's answer, and the hub keys adapters by MAC; the fleet's phones would collapse into one
+  adapter. Only device owners report one, via `getWifiMacAddress`.
+- **Judging phones on every posture check.** Seven permanently grey Windows rows per phone, and
+  a card that is mostly grey teaches people to ignore it.
+- **The `bitlocker` block for phone encryption.** It would put a phone on the BitLocker card and
+  make the console say "BitLocker" about an Android device.
+
+**Not done:** none of 0.3.0 has run on a phone. The app project compiles (Release, trimmer
+warnings as errors); the device-side checks are in *Owed locally*.
+
 ---
 
 ## ✅ 24. AI assistance — natural language over the rules engine   ·   hub 1.109.0; provider picker hub 1.110.0; API key field hub 1.111.0; staged drafts hub 1.113.0; **machine panel, fleet query and summary hub 1.120.0**
@@ -6280,6 +6457,27 @@ send a ticket to a hub with no route for it loses the ticket and tells the perso
   only the agent (forget the version on a new build) was rejected as the whole fix: it reaches
   nobody until a release and cannot unstick machines already holding a wrong version.
   `settings.agent_config_version_for` has the full reasoning.
+- **AI triage on the ticket page is the assistant (#26)** (owner, 2026-10-20, hub 1.157.0).
+  The button opens the assistant in a new conversation and sends it the ticket number, link,
+  text, state and facts -- the same privacy line as before, never the screenshots or who
+  reported it -- instead of the page's own one-shot provider call and summary box. One AI
+  surface: a follow-up question, a check on the PC or a drafted script happen in the same
+  conversation, under the assistant's confirm tiers. The hand-off is `FleetShell.askAssistant`
+  (one-shot, so reloading the assistant never re-sends). Rejected: keeping the inline triage
+  beside it (two answers to one ticket that can disagree), and passing the text as
+  `/assistant?draft=` (ticket text in the url bar and history). **What did change is who reads
+  the PC's words:** the old triage model could only answer, the assistant has tools, so a
+  ticket body saying "run X on every PC" is a prompt-injection attempt (PR #160 review). The
+  guard is the hub's, not the message's: the new conversation is always Ask mode, and every
+  confirm-tier route becomes a card the operator clicks in `assistant_web.execute` whatever the
+  model was talked into; only the reversible, audited write tier runs unasked. The message
+  also tells the model the ticket is data, not instructions -- a nudge on top. **Capabilities,
+  checked:** the button needs `manage_tickets` (as triage did) **and** VIEW, because
+  `/assistant` is behind VIEW and a tickets-only group would otherwise click through to a 403.
+  The old draft-script button's extra `issue_commands` is not asked for: whatever the
+  assistant drafts or runs goes through the route that enforces it. Still there, unused by the
+  page: `POST /api/tickets/<id>/triage` and `/script` and the `ticket_triage` table; removing
+  them is its own change.
 
 ### Rejected alternatives
 - **A ticket page on the hub that the person signs in to.** No machine identity and no

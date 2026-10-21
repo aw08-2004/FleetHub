@@ -83,6 +83,8 @@ def _register_sidebar_stubs(app):
                            ("reports", "reports_page"),
                            ("policy", "policy_page"),
                            ("device_groups", "device_groups_page"),
+                           ("pc_tree", "pc_tree_page"),
+                           ("gpo", "group_policy_page"),
                            ("watchdogs", "watchdogs_page"),
                            ("tickets", "tickets_page")):
         bp = Blueprint(name, __name__)
@@ -282,6 +284,53 @@ def main():
         CURRENT_USER = "nobody@x.com"
         check("someone with no capability sees nothing at all",
               c.get("/api/location/fleet").status_code == 403)
+        CURRENT_USER = "super@x.com"
+
+        print("\n== Devices that can be located and have no position are listed, not hidden ==")
+        # The first fleet of phones on 0.2.3 answered every locate "the permission has not been
+        # granted", and the map showed nothing at all -- not the phones, not the reason.
+        for name in ("PHONE-3", "PHONE-4"):
+            capabilities.record_capabilities(db_path, name, {
+                "platform": "android", "commands": ["locate_device"],
+                "features": [capabilities.FEATURE_LOCATE]})
+        location.record_fix(db_path, "PHONE-4",
+                            {"error": "the location permission has not been granted"},
+                            command_id="refused", now=2100)
+        body = c.get("/api/location/fleet").get_json()
+        waiting = {u["machine"]: u for u in body["unlocated"]}
+        check("a locatable device nobody has asked is listed as never asked",
+              "PHONE-3" in waiting and waiting["PHONE-3"]["status"] is None)
+        check("one that answered without a position is listed WITH its reason",
+              waiting.get("PHONE-4", {}).get("status") == location.STATUS_UNAVAILABLE
+              and "permission" in waiting["PHONE-4"]["detail"])
+        check("a device that has a fix is on the map, not in this list",
+              "PHONE-2" not in waiting and "PHONE-1" not in waiting)
+        check("a PC that cannot locate is in neither", "PC-01" not in waiting)
+        # The list is "devices that can be located", decided by the `locate` feature and not by
+        # platform. Only the Android agent reports it today; an agent on another platform that
+        # learned to locate would belong here too, and must not need a hub change to appear.
+        capabilities.record_capabilities(db_path, "LAPTOP-9", {
+            "platform": "linux", "commands": ["locate_device"],
+            "features": [capabilities.FEATURE_LOCATE]})
+        waiting = {u["machine"] for u in c.get("/api/location/fleet").get_json()["unlocated"]}
+        check("any platform that reports locate is listed, not only phones", "LAPTOP-9" in waiting)
+        check("the payload says whether this operator may ask", body["can_locate"] is True)
+        fleet.create_command(db_path, machine="PHONE-3", command_type=location.COMMAND_TYPE,
+                             params={"timeout_seconds": 45}, issued_by="super@x.com")
+        waiting = {u["machine"]: u for u in c.get("/api/location/fleet").get_json()["unlocated"]}
+        check("a locate in flight shows as pending, read in one query for the whole list",
+              waiting["PHONE-3"]["pending"] == fleet.STATUS_PENDING
+              and waiting["PHONE-4"]["pending"] is None)
+        check("open_requests agrees with open_request",
+              location.open_requests(db_path, ["PHONE-3", "PHONE-4"])
+              == {"PHONE-3": location.open_request(db_path, "PHONE-3")["status"]})
+        CURRENT_USER = "finder@x.com"
+        body = c.get("/api/location/fleet").get_json()
+        check("the list is scoped like the fixes -- no way to enumerate other groups' phones",
+              body["unlocated"] == [])
+        CURRENT_USER = "tech@x.com"
+        check("an operator without locate_device is told they cannot ask",
+              c.get("/api/location/fleet").get_json()["can_locate"] is False)
         CURRENT_USER = "super@x.com"
 
         print("\n== The map's tile source travels with the fixes ==")

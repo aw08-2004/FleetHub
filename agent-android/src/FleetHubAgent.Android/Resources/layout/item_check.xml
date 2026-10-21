@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One row of the setup checklist: what the item is, a state chip, why it matters, and the
+     one button that fixes it. Inflated once per item by MainActivity. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:paddingTop="14dp">
+
+  <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="horizontal"
+      android:gravity="center_vertical">
+
+    <TextView
+        android:id="@+id/check_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textColor="@color/text"
+        android:textSize="15sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/check_chip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="3dp"
+        android:paddingBottom="3dp"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+  </LinearLayout>
+
+  <TextView
+      android:id="@+id/check_detail"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_marginTop="4dp"
+      android:textColor="@color/muted"
+      android:textSize="13sp" />
+
+  <Button
+      android:id="@+id/check_action"
+      android:layout_width="wrap_content"
+      android:layout_height="40dp"
+      android:layout_marginTop="10dp"
+      android:minWidth="0dp"
+      android:paddingStart="16dp"
+      android:paddingEnd="16dp"
+      android:background="@drawable/button_secondary"
+      android:textAllCaps="false"
+      android:textColor="@color/brand"
+      android:textSize="14sp"
+      android:visibility="gone" />
+
+  <View
+      android:id="@+id/check_divider"
+      android:layout_width="match_parent"
+      android:layout_height="1dp"
+      android:layout_marginTop="14dp"
+      android:background="@color/card_border" />
+</LinearLayout>

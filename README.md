@@ -40,7 +40,7 @@ web console to monitor, support and manage the fleet.
   permissions.
 - **Tickets:** a Tickets page for problems people report from their own PC, each with the
   machine's facts frozen at that moment, automatic labels (OS, recent hub patches and
-  installs, low disk) and an optional suggest-only AI triage. Needs the `view_tickets` /
+  installs, low disk) and a button that hands the ticket to the AI assistant. Needs the `view_tickets` /
   `manage_tickets` capabilities; the agent tray that files them is still to come.
 
 ## Quick start
@@ -124,7 +124,8 @@ Read these before you deploy. [SECURITY.MD](SECURITY.MD) has the full model.
 |---|---|
 | Installer options, onboarding, updates, Docker, release signing | [docs/installation.md](docs/installation.md) |
 | Console, telemetry tuning, alerts, assistant, audit log, event logs, reports | [docs/monitoring.md](docs/monitoring.md) |
-| Sign-in (OIDC), permission groups, invite links, Active Directory | [docs/access.md](docs/access.md) |
+| Sign-in (OIDC), permission groups, invite links, Active Directory, the PC tree | [docs/access.md](docs/access.md) |
+| Group Policy: settings, registry values and scripts linked to the PC tree | [docs/group-policy.md](docs/group-policy.md) |
 | Commands, terminal, processes, disk usage, Wake-on-LAN, network discovery | [docs/managing-machines.md](docs/managing-machines.md) |
 | Remote view and control, TURN, session recording | [docs/remote-control.md](docs/remote-control.md) |
 | Package deployment | [docs/packages.md](docs/packages.md) |

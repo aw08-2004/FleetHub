@@ -215,8 +215,8 @@ def main():
             "secure_boot": {"state": "on", "error": ""}}}, headers=one_auth)
         sec = c.get("/api/reports/machines/PC-01").get_json()["sections"]
         checks = {ch["id"]: ch for ch in sec["security"]["data"]["checks"]}
-        check("every posture check is on the sheet, in order",
-              [ch["id"] for ch in sec["security"]["data"]["checks"]] == list(posture.CHECK_IDS))
+        check("every desktop posture check is on the sheet, in order",
+              [ch["id"] for ch in sec["security"]["data"]["checks"]] == list(posture.DESKTOP_CHECKS))
         check("...the firewall fails and names the profile",
               checks["firewall"]["status"] == "fail"
               and checks["firewall"]["params"]["profiles"] == ["private"])

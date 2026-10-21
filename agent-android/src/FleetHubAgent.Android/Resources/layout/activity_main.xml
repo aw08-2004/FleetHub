@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The setup screen. Structure and styling only: every word on it is set from MainActivity,
+     which is where the agent keeps its English (see values/strings.xml for why). There is no
+     text field on the screen as it opens, which is what keeps the keyboard from appearing the
+     moment the app is launched. The two that exist live in the collapsed Advanced section and
+     in the enrollment dialog, and appear only when somebody asks for them. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+  <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="vertical"
+      android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingTop="8dp"
+        android:paddingBottom="16dp">
+
+      <ImageView
+          android:id="@+id/logo"
+          android:layout_width="48dp"
+          android:layout_height="48dp"
+          android:src="@mipmap/ic_launcher"
+          android:importantForAccessibility="no" />
+
+      <LinearLayout
+          android:layout_width="0dp"
+          android:layout_height="wrap_content"
+          android:layout_weight="1"
+          android:layout_marginStart="12dp"
+          android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/version"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+      </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/status_card"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/card_background"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+      <TextView
+          android:id="@+id/status_chip"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:paddingStart="10dp"
+          android:paddingEnd="10dp"
+          android:paddingTop="3dp"
+          android:paddingBottom="3dp"
+          android:textSize="12sp"
+          android:textStyle="bold" />
+
+      <TextView
+          android:id="@+id/status_headline"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="10dp"
+          android:textColor="@color/text"
+          android:textSize="18sp"
+          android:textStyle="bold" />
+
+      <TextView
+          android:id="@+id/status_detail"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="4dp"
+          android:textColor="@color/muted"
+          android:textSize="14sp" />
+
+      <TextView
+          android:id="@+id/status_facts"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="12dp"
+          android:lineSpacingExtra="4dp"
+          android:textColor="@color/text"
+          android:textIsSelectable="true"
+          android:textSize="14sp" />
+
+      <Button
+          android:id="@+id/enroll_button"
+          android:layout_width="match_parent"
+          android:layout_height="48dp"
+          android:layout_marginTop="16dp"
+          android:background="@drawable/button_primary"
+          android:textAllCaps="false"
+          android:textColor="@color/brand_on"
+          android:textSize="15sp"
+          android:visibility="gone" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/checklist_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="8dp"
+        android:textColor="@color/muted"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:id="@+id/checklist"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/card_background"
+        android:orientation="vertical" />
+
+    <TextView
+        android:id="@+id/advanced_toggle"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="24dp"
+        android:background="?android:attr/selectableItemBackground"
+        android:gravity="center_vertical"
+        android:textColor="@color/brand"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:id="@+id/advanced_panel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/card_background"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:visibility="gone">
+
+      <TextView
+          android:id="@+id/hub_label"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:textColor="@color/muted"
+          android:textSize="13sp" />
+
+      <EditText
+          android:id="@+id/hub_field"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:inputType="textUri"
+          android:importantForAutofill="no"
+          android:textColor="@color/text" />
+
+      <TextView
+          android:id="@+id/secret_label"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="12dp"
+          android:textColor="@color/muted"
+          android:textSize="13sp" />
+
+      <EditText
+          android:id="@+id/secret_field"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:inputType="textPassword"
+          android:importantForAutofill="no"
+          android:textColor="@color/text" />
+
+      <TextView
+          android:id="@+id/advanced_hint"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="8dp"
+          android:textColor="@color/muted"
+          android:textSize="12sp" />
+
+      <Button
+          android:id="@+id/save_button"
+          android:layout_width="match_parent"
+          android:layout_height="48dp"
+          android:layout_marginTop="12dp"
+          android:background="@drawable/button_secondary"
+          android:textAllCaps="false"
+          android:textColor="@color/text" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/footer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="16dp"
+        android:textColor="@color/muted"
+        android:textSize="12sp" />
+  </LinearLayout>
+</ScrollView>

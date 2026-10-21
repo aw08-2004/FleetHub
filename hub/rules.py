@@ -2889,7 +2889,15 @@ TARGET_FIELD = "field"
 # rule aimed at a group follows the group's edits -- and still goes through the save-time
 # scope check and the evaluation-time scoped_targets exactly like any other selector.
 TARGET_GROUP = "group"
-TARGET_KINDS = (TARGET_ALL, TARGET_MACHINES, TARGET_AD_OU, TARGET_FIELD, TARGET_GROUP)
+# A folder of the hub's own PC tree (pc_tree.py), by id, optionally with every folder beneath
+# it. The twin of TARGET_AD_OU for PCs AD does not file, and of permissions.SCOPE_FOLDER --
+# the same containment, resolved through pc_tree.machines_in_folders, so "the PCs this rule
+# reaches" and "the PCs this group grants" cannot disagree about what a folder holds. Unlike
+# a device group, a folder is not a target spec, so a device group naming one is not nesting
+# and is allowed.
+TARGET_FOLDER = "folder"
+TARGET_KINDS = (TARGET_ALL, TARGET_MACHINES, TARGET_AD_OU, TARGET_FIELD, TARGET_GROUP,
+                TARGET_FOLDER)
 TARGET_TEXT_KEY = "rules.target"
 
 MAX_TARGET_SELECTORS = 25
@@ -2963,6 +2971,17 @@ def _validate_selector(selector, extra=None):
         # selector naming a deleted group matches nothing, and deleting a group that a rule
         # aims at is refused upstream (rules_using_group).
         return None, {"kind": TARGET_GROUP, "group_id": group_id}
+    if kind == TARGET_FOLDER:
+        try:
+            folder_id = int(selector.get("folder_id"))
+        except (TypeError, ValueError):
+            return "a folder selector needs a folder", None
+        if folder_id <= 0:
+            return "a folder selector needs a folder", None
+        # Existence unchecked for the reason given for groups above; deleting a folder a rule
+        # names is refused upstream (rules_using_folder).
+        return None, {"kind": TARGET_FOLDER, "folder_id": folder_id,
+                      "include_children": bool(selector.get("include_children", True))}
     # TARGET_FIELD
     name = str(selector.get("field") or "").strip()
     var = lookup_variable(f"field.{name}", extra)
@@ -2982,34 +3001,84 @@ def _all_machines(db_path):
     return [dict(r) for r in rows]
 
 
-def _selector_matches(selector, machine_row, field_values, group_members=None):
-    kind = selector.get("kind")
-    if kind == TARGET_ALL:
-        return True
-    name = machine_row.get("machine")
-    if kind == TARGET_MACHINES:
-        wanted = {m.lower() for m in selector.get("machines", [])}
-        return str(name or "").lower() in wanted
-    if kind == TARGET_AD_OU:
-        want = str(selector.get("ou") or "").strip().lower()
-        # Match against the OU when we have one, and fall back to the DN -- a machine's DN
-        # ENDS WITH its OU, which is also what makes the sub-OU case a suffix test rather
-        # than a second query.
-        have_ou = str(machine_row.get("ad_ou") or "").strip().lower()
-        have_dn = str(machine_row.get("ad_dn") or "").strip().lower()
-        if selector.get("include_children", True):
-            return bool((have_ou and have_ou.endswith(want))
-                        or (have_dn and have_dn.endswith(want)))
-        return have_ou == want
-    if kind == TARGET_GROUP:
-        members = (group_members or {}).get(selector.get("group_id")) or set()
-        return str(name or "").lower() in members
-    if kind == TARGET_FIELD:
-        have = (field_values.get(name) or {}).get(selector.get("field"))
-        if have is None:
-            return False
-        return _loose_equal(have, selector.get("value")) is True
-    return False
+def _name_of(row):
+    return str(row.get("machine") or "").lower()
+
+
+def _match_machines(selector, row, _ctx):
+    return _name_of(row) in {m.lower() for m in selector.get("machines", [])}
+
+
+def _match_ad_ou(selector, row, _ctx):
+    # Imported here for the reason resolve_targets imports device_groups: directory reaches
+    # this module through settings -> ai, so a top-level import is a cycle.
+    import directory
+    want = str(selector.get("ou") or "").strip()
+    have_ou = str(row.get("ad_ou") or "").strip()
+    have_dn = str(row.get("ad_dn") or "").strip()
+    if not want:
+        return False
+    # COMPONENT-WISE containment, the same test permission scoping uses. This was a lowercase
+    # string endswith until hub 1.159.0, which let `OU=Cajas,DC=x` reach `OU=NoCajas,DC=x` --
+    # the bug ROADMAP names for permission scope, here in targeting, and the two had to agree
+    # once a folder-and-OU tree put them side by side. Falls back to the DN when no OU was
+    # stored: a DN is the OU plus one leaf CN, so OU containment of the DN is containment of
+    # the machine.
+    if not selector.get("include_children", True):
+        return bool(have_ou) and directory.normalize_dn(have_ou) == directory.normalize_dn(want)
+    return any(have and directory.ou_contains(want, have) for have in (have_ou, have_dn))
+
+
+def _match_group(selector, row, ctx):
+    return _name_of(row) in (ctx["groups"].get(selector.get("group_id")) or set())
+
+
+def _match_folder(selector, row, ctx):
+    key = (selector.get("folder_id"), bool(selector.get("include_children", True)))
+    return _name_of(row) in (ctx["folders"].get(key) or set())
+
+
+def _match_field(selector, row, ctx):
+    have = (ctx["fields"].get(row.get("machine")) or {}).get(selector.get("field"))
+    return have is not None and _loose_equal(have, selector.get("value")) is True
+
+
+_MATCHERS = {
+    TARGET_ALL: lambda _selector, _row, _ctx: True,
+    TARGET_MACHINES: _match_machines,
+    TARGET_AD_OU: _match_ad_ou,
+    TARGET_GROUP: _match_group,
+    TARGET_FOLDER: _match_folder,
+    TARGET_FIELD: _match_field,
+}
+
+
+def _selector_matches(selector, machine_row, ctx):
+    """Does one selector match one machine row? `ctx` carries what resolve_targets read once
+    for the whole pass: {"fields", "groups", "folders"}. An unknown kind matches nothing."""
+    matcher = _MATCHERS.get(selector.get("kind"))
+    return bool(matcher and matcher(selector, machine_row, ctx))
+
+
+def _resolution_context(db_path, selectors, rows):
+    """Everything a pass over `rows` needs beyond the rows themselves, read only when some
+    selector asks for it."""
+    kinds = {s.get("kind") for s in selectors}
+    ctx = {"fields": {}, "groups": {}, "folders": {}}
+    if TARGET_FIELD in kinds:
+        ctx["fields"] = _all_field_values(db_path)
+    if TARGET_GROUP in kinds:
+        # Imported here rather than at the top: device_groups imports this module for the
+        # target grammar, and a top-level import in both directions is a circular import.
+        import device_groups
+        ctx["groups"] = device_groups.member_sets(
+            db_path, [s.get("group_id") for s in selectors if s.get("kind") == TARGET_GROUP], rows)
+    if TARGET_FOLDER in kinds:
+        import pc_tree     # lazily, for the same cycle reason as device_groups above
+        ctx["folders"] = pc_tree.member_sets(
+            db_path, [(s.get("folder_id"), bool(s.get("include_children", True)))
+                      for s in selectors if s.get("kind") == TARGET_FOLDER])
+    return ctx
 
 
 def resolve_targets(db_path, target, machines=None):
@@ -3022,30 +3091,13 @@ def resolve_targets(db_path, target, machines=None):
     rows = machines if machines is not None else _all_machines(db_path)
     include = (target or {}).get("include") or []
     exclude = (target or {}).get("exclude") or []
+    ctx = _resolution_context(db_path, include + exclude, rows)
 
-    needs_fields = any(s.get("kind") == TARGET_FIELD for s in include + exclude)
-    field_values = _all_field_values(db_path) if needs_fields else {}
+    def wanted(row):
+        return (any(_selector_matches(s, row, ctx) for s in include)
+                and not any(_selector_matches(s, row, ctx) for s in exclude))
 
-    group_ids = [s.get("group_id") for s in include + exclude if s.get("kind") == TARGET_GROUP]
-    if group_ids:
-        # Imported here rather than at the top: device_groups imports this module for the
-        # target grammar, and a top-level import in both directions is a circular import.
-        import device_groups
-        group_members = device_groups.member_sets(db_path, group_ids, rows)
-    else:
-        group_members = {}
-
-    selected = []
-    for row in rows:
-        name = row.get("machine")
-        if not name:
-            continue
-        if not any(_selector_matches(s, row, field_values, group_members) for s in include):
-            continue
-        if any(_selector_matches(s, row, field_values, group_members) for s in exclude):
-            continue
-        selected.append(name)
-    return sorted(selected)
+    return sorted(row["machine"] for row in rows if row.get("machine") and wanted(row))
 
 
 def _all_field_values(db_path):
@@ -3573,6 +3625,22 @@ def rules_using_group(db_path, group_id):
                for side in ("include", "exclude") for s in target.get(side) or []):
             using.append({"id": rule["id"], "name": rule["name"]})
     return using
+
+
+def targets_name_folder(target, folder_ids):
+    """Does this target spec include or exclude any of `folder_ids`? Shared by every module
+    that stores a target (rules, device groups, watchdogs), so pc_tree's delete refusal asks
+    each of them the same question."""
+    wanted = {int(f) for f in folder_ids}
+    return any(s.get("kind") == TARGET_FOLDER and s.get("folder_id") in wanted
+               for side in ("include", "exclude") for s in (target or {}).get(side) or [])
+
+
+def rules_using_folder(db_path, folder_ids):
+    """Every rule whose target names any of `folder_ids`, as [{id, name}]. Used to refuse a
+    folder's deletion, for the reason rules_using_group gives."""
+    return [{"id": r["id"], "name": r["name"]} for r in list_rules(db_path)
+            if targets_name_folder(r.get("target"), folder_ids)]
 
 
 def rules_using_script(db_path, script_name):

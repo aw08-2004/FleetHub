@@ -26,6 +26,14 @@ instead carry an ordered list of steps, each with its own timeout and accepted e
 | `winget` | `winget install --id …`, with its own trust chain |
 | `extract` | unpacks a `.zip` into a folder later steps can point at |
 | `pnputil` | stages and installs a folder of `.inf` files |
+| `apk` | installs an Android app, silently, on a fully managed Android device |
+
+**An `apk` step makes the package Android-only**, and then it may hold nothing else: every
+payload must be an upload or a URL pinned by sha256 (the device installs it with no prompt),
+and the detection rule must be *none* -- the device checks with Android that the app is
+installed at the version the APK declares. The scheduler keeps each package on its own
+platform: a phone is never sent a Windows package and a PC never an APK, and either target is
+marked failed with the reason. See [android.md](android.md).
 
 Payloads are **named slots**, so steps say which file they mean: `{drivers}` is the
 payload named `drivers`, `{work}` is the attempt's own directory, and an `extract` step

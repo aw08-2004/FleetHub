@@ -168,6 +168,39 @@ public sealed class AgentState
         }
     }
 
+    // --- Group Policy (roadmap #32) ----------------------------------------
+    /// <summary>The policy document and the values last written, or null when this machine
+    /// has never held one -- or the file cannot be read, which GroupPolicyRunner treats as
+    /// "wait for the hub" rather than "remove everything".</summary>
+    public TempMonitorAgent.GroupPolicy.StoredGroupPolicyState? LoadGroupPolicyState()
+    {
+        try
+        {
+            if (File.Exists(AgentConfig.GroupPolicyStatePath))
+            {
+                var json = File.ReadAllText(AgentConfig.GroupPolicyStatePath);
+                return JsonSerializer.Deserialize<TempMonitorAgent.GroupPolicy.StoredGroupPolicyState>(json);
+            }
+        }
+        catch { /* ignore -- see the docstring */ }
+        return null;
+    }
+
+    public void SaveGroupPolicyState(TempMonitorAgent.GroupPolicy.StoredGroupPolicyState state)
+    {
+        try
+        {
+            EnsureStateDir();
+            AtomicWrite(AgentConfig.GroupPolicyStatePath, JsonSerializer.Serialize(state, JsonOpts));
+        }
+        catch
+        {
+            // A write that fails costs the record of what was written, so a value somebody
+            // changes later is overwritten once rather than let go. Throwing would cost the
+            // whole pass, which is worse.
+        }
+    }
+
     private static void AtomicWrite(string path, string contents, bool privateFile = false)
     {
         var tmp = path + ".tmp";

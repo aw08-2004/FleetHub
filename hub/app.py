@@ -124,6 +124,10 @@ from watchdogs_web import create_watchdogs_blueprint
 from tickets_web import create_tickets_blueprint
 import device_groups
 from device_groups_web import create_device_groups_blueprint
+import pc_tree
+from pc_tree_web import create_pc_tree_blueprint
+import gpo
+from gpo_web import create_gpo_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
@@ -164,7 +168,7 @@ if _env_acl_note:
 # ================================
 # Bump on every push to main and restart the hub service -- shown in the
 # dashboard header so a stale/un-restarted deployment is obvious at a glance.
-HUB_VERSION = "1.156.6"
+HUB_VERSION = "1.159.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2727,6 +2731,18 @@ app.register_blueprint(create_wipe_blueprint(DB_PATH, login_required, access))
 # scope covers every PC it resolves to -- see device_groups_web.py.
 app.register_blueprint(create_device_groups_blueprint(DB_PATH, login_required, access))
 
+# The PC tree: AD OUs beside the hub's own nested folders. A folder is a permission scope as
+# well as a target, so a write re-points scope through the same hook an AD sync uses -- the
+# lambda because that hook is defined further down this module.
+app.register_blueprint(create_pc_tree_blueprint(
+    DB_PATH, login_required, access,
+    on_scope_change=lambda: _directory_scope_changed()))
+
+# Group Policy on the PC tree (roadmap #32): `view` reads, `manage_group_policy` writes, plus
+# `issue_commands` for a policy that runs a script, and the writer's scope must cover every PC
+# a write can reach -- see gpo_web.py.
+app.register_blueprint(create_gpo_blueprint(DB_PATH, login_required, access))
+
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
 # catalogue comes from the machine's own Windows Update and winget, and the command carries
@@ -3885,6 +3901,10 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # silently drop machines out of operators' scopes -- a permission change nobody
     # made, discovered only when someone couldn't reach a PC they'd always managed.
     permissions.rename_machine(DB_PATH, dropped, survivor)
+    # And its folder in the PC tree, which is a permission scope too.
+    pc_tree.rename_machine(DB_PATH, dropped, survivor)
+    # And its policy history, or every run-once policy script runs a second time on it.
+    gpo.rename_machine(DB_PATH, dropped, survivor)
     # Same reasoning for deployment targets: the merged-away hostname is the survivor, so
     # a deploy aimed at the old name must follow it rather than stall forever on a
     # machine that no longer exists.
@@ -4626,6 +4646,38 @@ def start_firmware_scheduler():
                      name="firmware_scheduler").start()
 
 
+# A minute: a policy script is "run once when the PC joins the node", and nobody is waiting on
+# it the way they wait on a deploy. Not a setting -- there is no value an operator would tune.
+GPO_SCRIPT_INTERVAL_SECONDS = 60
+
+
+def gpo_scheduler():
+    """Run Group Policy library scripts once per PC per version of the script (gpo.py).
+
+    ONLINE machines only, on the firmware scheduler's reasoning: a run_script queued at a dark
+    PC burns its TTL and comes back as a retry, and enough of those would read as a failure on
+    a PC that was merely switched off. A PC that comes back gets its scripts on the next pass.
+    """
+    while True:
+        try:
+            online = sorted(entry["machine"] for entry in backup_machine_roster()
+                            if entry["online"])
+            queued = gpo.script_tick(
+                DB_PATH, online,
+                ttl_seconds=settings.get_int(DB_PATH, "fleet.command_ttl_seconds"),
+                capability_refusal=lambda m: capabilities.refusal_for(DB_PATH, m, "run_script"))
+            if queued:
+                print(f"[gpo] Queued {queued} policy script run(s).")
+                mark_changed("gpo")
+        except Exception as e:
+            print(f"[gpo] Scheduler pass failed: {e}")
+        time.sleep(GPO_SCRIPT_INTERVAL_SECONDS)
+
+
+def start_gpo_scheduler():
+    threading.Thread(target=gpo_scheduler, daemon=True, name="gpo_scheduler").start()
+
+
 def patch_machine_facts():
     """{machine: {"model", "os_build"}} for the patch scheduler's item rows.
 
@@ -4876,7 +4928,9 @@ machine_status_tracker = changes.StatusTracker()
 # `detail` of the OPEN rows is hashed in as well, because one writer changes it without moving
 # `updated_at` on purpose: alerts.sync_ticket_alert refreshes a ticket alert's count and ids
 # while keeping its place in a newest-first list (raised in review on PR #158). Open rows only,
-# so the read stays a handful of rows however long the history grows.
+# so the read stays a handful of rows however long the history grows. The details go in as a
+# Python hash(), which is salted per process: fine for comparing one pass with the last inside
+# this hub, and meaningless anywhere else, so never persist it or compare it across restarts.
 _ALERTS_SIGNATURE_SQL = (
     "SELECT COUNT(*), MAX(id), MAX(updated_at), MAX(COALESCE(episode_ended_at, 0)), "
     "SUM(status = 'open') FROM alerts")
@@ -5417,6 +5471,8 @@ watchdogs.init_watchdogs_db(DB_PATH)
 # After alerts: a ticket raises `ticket_new` / `ticket_overdue` rows (roadmap #31).
 tickets.init_tickets_db(DB_PATH)
 device_groups.init_device_groups_db(DB_PATH)
+pc_tree.init_pc_tree_db(DB_PATH)
+gpo.init_gpo_db(DB_PATH)
 ai.init_ai_db(DB_PATH)
 assistant.init_assistant_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
@@ -6568,6 +6624,9 @@ def delete_machine(machine):
     # reused by a different physical box, it must not silently inherit this one's
     # access grants -- a stale grant is invisible until it's abused.
     permissions.forget_machine(DB_PATH, machine_name)
+    # Same hazard through the PC tree: a reused hostname must not land in the old box's folder.
+    pc_tree.forget_machine(DB_PATH, machine_name)
+    gpo.forget_machine(DB_PATH, machine_name)
     # And drop its deployment targets, so a deploy isn't left stuck at 9/10 waiting on a
     # machine whose command rows fleet.delete_machine has just removed.
     packages.forget_machine(DB_PATH, machine_name)
@@ -7453,6 +7512,7 @@ start_sweep_worker()
 start_change_notices()
 start_directory_sync_scheduler()
 start_rule_evaluator()
+start_gpo_scheduler()
 
 application = app
 

@@ -9,7 +9,7 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version -- the field keeps that name
     /// because every agent in the field already sends it. Also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
-    public const string Version = "3.46.1";
+    public const string Version = "3.47.0";
 
     /// <summary>Reads a FLEETHUB_* setting, falling back to the pre-rename TEMP_MONITOR_*
     /// name. Machines installed before the FleetHub rename still have the old machine-level
@@ -448,6 +448,10 @@ public static class AgentConfig
     /// pre-rename migration list above, and correctly so: no install that predates the
     /// rename ever had one.</summary>
     public static string WatchdogStatePath => Path.Combine(ProgramDataDir, "watchdogs.json");
+    /// <summary>The Group Policy registry document and the values last written (roadmap #32).
+    /// The registry marker is what says which values are ours; this file says what we wrote
+    /// there, which is how a value somebody else changed afterwards is recognised and let go.</summary>
+    public static string GroupPolicyStatePath => Path.Combine(ProgramDataDir, "group_policy.json");
     /// <summary>The disk-usage folder trees and the last-scan time (roadmap #27). Readable
     /// by SYSTEM and Administrators only: a tree names every folder on a volume, including
     /// other users' -- see StateDirectory.HardenPrivate.</summary>

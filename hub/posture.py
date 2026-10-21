@@ -37,6 +37,7 @@ as one document, exactly like `machine_bios`).
 
 Kept free of Flask so it can be unit-tested standalone; posture_web.py wires HTTP on top.
 """
+import calendar
 import json
 import sqlite3
 import time
@@ -63,11 +64,35 @@ CHECKS = (
     ("encryption", "3.6"),
     ("secure_boot", ""),
     ("tpm", ""),
+    ("os_patch", "7.3"),
 )
 CHECK_IDS = tuple(c for c, _ in CHECKS)
 
 AREAS = ("antivirus", "defender", "firewall", "autorun", "session_lock", "accounts",
-         "secure_boot", "tpm")
+         "secure_boot", "tpm", "mobile")
+
+#: **Which checks apply depends on what the machine is**, decided by whether it sent the
+#: `mobile` area (the Android agent, 0.3.0+). A phone has no antivirus registry, no firewall
+#: profiles, no AutoRun, no local Administrators group and no TPM an app can read, and judging
+#: it on those would be seven grey "unknown" rows on every phone -- a card that is mostly grey
+#: teaches the same lesson as one that is mostly red. Its three are the ones a phone CAN
+#: answer: does the screen lock, is the storage encrypted, how old is the security patch.
+#:
+#: `os_patch` is the reverse case and is not judged on a PC. Windows Update state is roadmap
+#: #14's, with its own card and its own evidence; a second, coarser verdict here would be two
+#: answers to one question.
+MOBILE_CHECKS = ("session_lock", "encryption", "os_patch")
+DESKTOP_CHECKS = tuple(c for c in CHECK_IDS if c != "os_patch")
+
+#: The platform a machine must have REPORTED (hub/capabilities.py) for its `mobile` area to
+#: count. The area is machine-supplied, and on its own it would let any report choose to be
+#: judged on three checks instead of ten -- a PC sending a stray `mobile` object would stop
+#: being flagged for antivirus being off. The capability report is the hub's own record of what
+#: a machine is, the one packages._platform_refusal also reads (raised in review of PR #161).
+PLATFORM_ANDROID = "android"
+
+#: What Android's DevicePolicyManager.getStorageEncryptionStatus can say, as the agent maps it.
+MOBILE_ENCRYPTION = frozenset({"active", "inactive", "unsupported", "unknown"})
 
 FIREWALL_PROFILES = ("domain", "private", "public")
 SECURE_BOOT_STATES = frozenset({"on", "off", "unsupported", "unknown"})
@@ -147,6 +172,18 @@ def _area(payload, name):
     return raw if isinstance(raw, dict) else {}
 
 
+def _patch_date(value):
+    """Android's security patch level, `YYYY-MM-DD`, or None. Checked for shape because the
+    verdict does date arithmetic on it, and a vendor string that is not a date must read as
+    "not reported" rather than as a patch from the year 0."""
+    text = _text(value, 10)
+    try:
+        time.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return text
+
+
 def clean_posture(payload):
     """Normalise a reported posture, or None if it is not one at all.
 
@@ -201,6 +238,7 @@ def clean_posture(payload):
     secure_boot = _area(payload, "secure_boot")
     boot_state = _text(secure_boot.get("state")).lower()
     tpm = _area(payload, "tpm")
+    mobile = _area(payload, "mobile")
 
     def err(area):
         return _text(area.get("error"), MAX_ERROR_CHARS)
@@ -226,6 +264,11 @@ def clean_posture(payload):
         "tpm": {"present": _bool(tpm.get("present")), "enabled": _bool(tpm.get("enabled")),
                 "activated": _bool(tpm.get("activated")),
                 "spec_version": _text(tpm.get("spec_version"), 40), "error": err(tpm)},
+        "mobile": {"security_patch": _patch_date(mobile.get("security_patch")),
+                   "encryption": (_text(mobile.get("encryption"), 20).lower()
+                                  if _text(mobile.get("encryption"), 20).lower()
+                                  in MOBILE_ENCRYPTION else None),
+                   "error": err(mobile)},
     }
     # Whether the agent sent each area at all. **Without this an absent area is
     # indistinguishable from one that was read and found empty** -- both clean to nulls, empty
@@ -291,6 +334,7 @@ def thresholds_from_settings(db_path):
     return {
         "signature_max_age_days": settings.get(db_path, "security.posture_signature_max_age_days"),
         "lock_max_seconds": settings.get(db_path, "security.posture_lock_max_seconds"),
+        "patch_max_age_days": settings.get(db_path, "security.posture_patch_max_age_days"),
         "admin_allowlist": list(settings.get(db_path, "security.posture_admin_allowlist") or []),
     }
 
@@ -463,8 +507,12 @@ def _check_admin_accounts(p, t):
     return _verdict(STATUS_PASS, "admins_ok", count=len(members))
 
 
-def _check_encryption(_p, _t, encryption):
-    """CIS 3.6, judged from BitLocker's own report (roadmap #19) rather than re-collected."""
+def _check_encryption(p, _t, encryption):
+    """CIS 3.6, judged from BitLocker's own report (roadmap #19) rather than re-collected --
+    or, on a phone, from what Android says about its own storage."""
+    mobile = p.get("mobile") or {}
+    if _sent(mobile):
+        return _check_device_encryption(mobile)
     support = (encryption or {}).get("support")
     if support is None:
         return _verdict(STATUS_UNKNOWN, "enc_not_reported")
@@ -479,6 +527,47 @@ def _check_encryption(_p, _t, encryption):
     if volumes and all(v.get("protection") == "on" for v in volumes):
         return _verdict(STATUS_PASS, "enc_all", count=len(volumes))
     return _verdict(STATUS_UNKNOWN, "not_reported")
+
+
+#: A phone's storage encryption state, as the agent maps getStorageEncryptionStatus, to its
+#: verdict. Anything else -- including "unknown" -- falls through to _unknown.
+_DEVICE_ENCRYPTION = {
+    "active": (STATUS_PASS, "enc_device"),
+    "inactive": (STATUS_FAIL, "enc_device_off"),
+    "unsupported": (STATUS_FAIL, "enc_device_unsupported"),
+}
+
+
+def _check_device_encryption(mobile):
+    """CIS 3.6 on a phone, from what Android says about its own storage."""
+    verdict = _DEVICE_ENCRYPTION.get(mobile.get("encryption"))
+    return _verdict(*verdict) if verdict else _unknown(mobile)
+
+
+def _check_os_patch(p, t, now=None):
+    """CIS 7.3 on a phone: is the Android security patch recent enough.
+
+    The patch level is a DATE the vendor stamps on each monthly security release, so its age
+    is the honest measure of how far behind a device is -- a phone that still says 2025-11
+    in October 2026 has missed eleven months of fixes, whatever its version number says.
+    """
+    mobile = p.get("mobile") or {}
+    if not _sent(mobile) or not mobile.get("security_patch"):
+        return _unknown(mobile)
+    limit = int(t.get("patch_max_age_days") or DEFAULT_PATCH_MAX_AGE_DAYS)
+    # timegm, not mktime: the patch date is a calendar date and `now` is UTC epoch, so reading
+    # it in the hub's local zone would skew the age by up to a day at the limit.
+    patched = calendar.timegm(time.strptime(mobile["security_patch"], "%Y-%m-%d"))
+    age = max(0, int(((now if now is not None else time.time()) - patched) // 86400))
+    if age <= limit:
+        return _verdict(STATUS_PASS, "patch_current", date=mobile["security_patch"])
+    return _verdict(STATUS_FAIL, "patch_stale", date=mobile["security_patch"], days=age,
+                    max=limit)
+
+
+#: Matches the settings default. Ninety days is three missed monthly bulletins; vendors that
+#: still support a device ship at least quarterly, so past that it has stopped being patched.
+DEFAULT_PATCH_MAX_AGE_DAYS = 90
 
 
 def _check_secure_boot(p, _t):
@@ -513,19 +602,29 @@ _EVALUATORS = {
     "admin_accounts": _check_admin_accounts,
     "secure_boot": _check_secure_boot,
     "tpm": _check_tpm,
+    "os_patch": _check_os_patch,
 }
 
 
-def evaluate(posture, thresholds, encryption=None):
+def evaluate(posture, thresholds, encryption=None, platform=""):
     """Every check's verdict for one machine, in CHECKS order. Pure.
 
     `posture` is a cleaned document (as stored); `encryption` is bitlocker.get_inventory's
-    answer, passed in so this module never reaches into another's tables. A check whose
+    answer, passed in so this module never reaches into another's tables. `platform` is the
+    machine's reported capability platform, passed in for the same reason: the `mobile` area
+    counts only on a machine the hub knows to be Android -- see PLATFORM_ANDROID. A check whose
     evaluator raises is reported unknown rather than taking the rest with it -- a stored
     document from an older hub is the realistic way to get here.
     """
+    if platform != PLATFORM_ANDROID and posture.get("mobile"):
+        # Dropped rather than ignored check by check: the encryption and patch evaluators read
+        # the area too, and one of them consulting it on a PC would be the same escape hatch.
+        posture = {**posture, "mobile": {}}
     out = []
+    applicable = MOBILE_CHECKS if _sent(posture.get("mobile") or {}) else DESKTOP_CHECKS
     for check_id, cis in CHECKS:
+        if check_id not in applicable:
+            continue
         try:
             if check_id == "encryption":
                 verdict = _check_encryption(posture, thresholds, encryption)
@@ -544,7 +643,7 @@ def counts(checks):
     return tally
 
 
-def fleet_summary(db_path, machines, thresholds, encryption_for):
+def fleet_summary(db_path, machines, thresholds, encryption_for, platform_for=None):
     """Per-check pass/fail/unknown counts over the machines that have reported.
 
     `machines` is the caller's visible set, already scoped by the web layer -- always a list,
@@ -562,12 +661,17 @@ def fleet_summary(db_path, machines, thresholds, encryption_for):
         stored = get_posture(db_path, machine)
         if stored["posture"] is None:
             continue
-        for check in evaluate(stored["posture"], thresholds, encryption_for(machine)):
+        platform = platform_for(machine) if platform_for else ""
+        for check in evaluate(stored["posture"], thresholds, encryption_for(machine), platform):
             row = rows[check["id"]]
             row[check["status"]] += 1
             if check["status"] == STATUS_FAIL:
                 row["failing"].append(machine)
-    return {"checks": [rows[c] for c in CHECK_IDS], "reporting": len(visible),
+    # `os_patch` only exists for phones; a fleet with none would otherwise show a row of
+    # zeroes for a check nothing in it can be judged on.
+    shown = [c for c in CHECK_IDS
+             if c != "os_patch" or any(rows[c][s] for s in (STATUS_PASS, STATUS_FAIL, STATUS_UNKNOWN))]
+    return {"checks": [rows[c] for c in shown], "reporting": len(visible),
             "not_reported": max(0, len(wanted) - len(visible))}
 
 

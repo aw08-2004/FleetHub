@@ -438,6 +438,29 @@ if ($Uninstall) {
         Remove-Item -LiteralPath $markerKey -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    # And the Group Policy registry values (roadmap #32). GroupPolicyRunner.Release in the agent
+    # is the full rule -- it also leaves a value somebody changed after FleetHub set it -- and
+    # runs when the hub uninstalls the agent. This is the installer's copy, for an uninstall
+    # by hand: it removes only values listed in the marker, only under SOFTWARE\Policies, and
+    # never the FleetHub or Windows Update keys. A domain GPO's values are never on the marker.
+    $gpoMarkerKey = "HKLM:\SOFTWARE\FleetHub\GroupPolicy"
+    $gpoMarked = (Get-ItemProperty -LiteralPath $gpoMarkerKey -Name Written -ErrorAction SilentlyContinue).Written
+    if ($gpoMarked) {
+        foreach ($entry in @($gpoMarked)) {
+            $at = $entry.IndexOf('|')
+            if ($at -le 0) { continue }
+            $path = $entry.Substring(0, $at)
+            $name = $entry.Substring($at + 1)
+            if ($path -notmatch '^SOFTWARE\\Policies\\.' -or $path -match '\.\.' -or
+                $path -match '^SOFTWARE\\Policies\\(FleetHub|Microsoft\\Windows\\WindowsUpdate)(\\|$)') { continue }
+            Remove-ItemProperty -LiteralPath "HKLM:\$path" -Name $name -ErrorAction SilentlyContinue
+            Ok "Removed Group Policy value $path\$name"
+        }
+    }
+    if (Test-Path -LiteralPath $gpoMarkerKey) {
+        Remove-Item -LiteralPath $gpoMarkerKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     Warn "Left PawnIO driver and the rest of %ProgramData%\FleetHub\Agent (logs) in place."
     Write-Host "`nDone.`n" -ForegroundColor Green
     exit

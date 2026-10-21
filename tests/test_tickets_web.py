@@ -23,6 +23,7 @@ The silent failures this file exists to catch:
 Run from the repo root so `import app` resolves.
 """
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -296,6 +297,39 @@ def test_hourly_cap(pc1, pc2):
     check("...and another machine is not", submit(pc1, urgency="low").status_code == 201)
 
 
+def test_ticket_page_wiring():
+    print("\n-- the ticket page's script and template agree --")
+    # ticket.js wires its buttons with getElementById(...).addEventListener at load, so an id
+    # the template no longer has throws and takes the WHOLE page down -- the thread, the facts,
+    # everything. That is exactly what removing the inline triage box (hub 1.157.0) could have
+    # left behind. Static, so no browser is needed.
+    hub = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub")
+    with open(os.path.join(hub, "static", "js", "ticket.js"), encoding="utf-8") as f:
+        script = f.read()
+    with open(os.path.join(hub, "templates", "ticket.html"), encoding="utf-8") as f:
+        template = f.read()
+    ids = set(re.findall(r"getElementById\('([\w-]+)'\)", script))
+    missing = sorted(i for i in ids if f'id="{i}"' not in template)
+    check(f"every id ticket.js looks up is in ticket.html (missing: {missing})", not missing)
+    check("the AI card hands the ticket to the assistant",
+          "ticket-ask-assistant" in ids and 'id="ticket-ask-assistant"' in template)
+    # The privacy line the old triage held: the reporter (reporter_name, reporter_sid,
+    # reporter_kind) and the screenshots (attachments) never reach a provider. An ALLOW-list
+    # of the ticket fields the message reads, not a search for "reporter": a new field under
+    # another name would sail past a deny-word (PR #160 review).
+    draft = script[script.index("function buildDraft"):script.index("function askAssistant")]
+    facts = script[script.index("function factLines"):script.index("function renderFacts")]
+    sent = set(re.findall(r"\bticket\.(\w+)", draft + facts))
+    allowed = {"id", "subject", "machine", "urgency", "status", "body", "facts"}
+    check(f"the assistant message reads only {sorted(allowed)} (also read: {sorted(sent - allowed)})",
+          sent <= allowed)
+    check("...and the facts helper the message shares reads nothing but ticket.facts",
+          set(re.findall(r"\bticket\.(\w+)", facts)) <= {"facts"})
+    check("...and the PC's text goes inside a fence it cannot close",
+          "tickets.assistant_draft_untrusted" in draft and "defuse(ticket.body" in draft
+          and "defuse(ticket.subject)" in draft and "defuse(ticket.machine)" in draft)
+
+
 def main():
     setup()
     pc1 = _enroll("PC-1")
@@ -304,6 +338,7 @@ def main():
     test_phase_d(pc1, pc2, ticket_id)
     test_console_gates(ticket_id, shot_id, pc2)
     test_hourly_cap(pc1, pc2)
+    test_ticket_page_wiring()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

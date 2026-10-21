@@ -105,6 +105,11 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// with no watchdogs is in.</summary>
     public WatchdogRunner? Watchdogs { get; set; }
 
+    /// <summary>The Group Policy runner (roadmap #32), handed over after construction for the
+    /// reason <see cref="Watchdogs"/> is. Null means no <c>gpo_version</c> is sent, which is
+    /// exactly how the hub tells an agent that cannot apply registry policy from one that can.</summary>
+    public TempMonitorAgent.GroupPolicy.GroupPolicyRunner? GroupPolicy { get; set; }
+
     /// <summary>Takes the agent off this PC when the hub says its machine was deleted with
     /// "uninstall the agent" ticked (roadmap #30). Handed over after construction for the
     /// reason <see cref="Watchdogs"/> is. Null means the reason is heard and nothing happens.</summary>
@@ -295,6 +300,17 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
                 var states = WatchdogReporter.TakeIfChanged();
                 if (states is not null) body["watchdog"] = states;
             }
+            // Group Policy (roadmap #32), on the watchdog terms above: the version on every
+            // heartbeat, its presence the capability. The states are kept by the reporter until
+            // this heartbeat succeeds (see GroupPolicyReporter), so they are cloned into the
+            // body for the one-parent reason given for `bitlocker`.
+            JsonObject? policyStates = null;
+            if (GroupPolicy is { } policy)
+            {
+                body["gpo_version"] = policy.Version;
+                policyStates = TempMonitorAgent.GroupPolicy.GroupPolicyReporter.TakeIfChanged();
+                if (policyStates is not null) body["gpo"] = policyStates.DeepClone();
+            }
             // What this build can do (roadmap #23), the first capabilities block a Windows agent
             // has sent. **Features only, never `commands`**: the hub reads an absent command
             // list as "can run anything" and a present one as the whole truth, so listing
@@ -339,6 +355,8 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
                 TempMonitorAgent.Software.SoftwareInventoryReporter.AckSent(installed);
             if (posture is not null && !PostureRejected(text))
                 TempMonitorAgent.Security.PostureInventoryReporter.AckSent(posture);
+            if (policyStates is not null)
+                TempMonitorAgent.GroupPolicy.GroupPolicyReporter.AckSent(policyStates);
             ApplyConfigFromHeartbeat(text);
             ApplyProcessWatchFromHeartbeat(text);
             ApplyEscrowRequestFromHeartbeat(text);
@@ -346,6 +364,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             ApplyChannelFromHeartbeat(text);
             ApplyEventSubscriptionsFromHeartbeat(text);
             ApplyWatchdogsFromHeartbeat(text);
+            ApplyGroupPolicyFromHeartbeat(text);
             ApplyTicketMarkerFromHeartbeat(text, ct);
             return true;
         }
@@ -598,6 +617,33 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         {
             _log.LogWarning("Ignoring a malformed watchdog document from the hub: {Msg}",
                             e.Message);
+        }
+    }
+
+    /// <summary>
+    /// Adopt a Group Policy registry document the heartbeat carried (roadmap #32), on exactly
+    /// the watchdog document's terms: its own try/catch, an absent block ignored, an EMPTY one
+    /// applied -- that is how unlinking a policy makes this PC remove what it wrote -- and the
+    /// reporter invalidated so the hub hears the state of every value in the new document.
+    /// Only adopted here; the registry is written on the policy loop (Worker).
+    /// </summary>
+    private void ApplyGroupPolicyFromHeartbeat(string body)
+    {
+        if (GroupPolicy is not { } runner) return;
+        try
+        {
+            var root = JsonNode.Parse(body)?.AsObject();
+            if (root is null) return;
+            if (!root.TryGetPropertyValue("gpo_document", out var node) || node is null) return;
+            var version = root["gpo_version"]?.GetValue<string>() ?? "";
+            var document = TempMonitorAgent.GroupPolicy.PolicyDocument.Parse(node, version);
+            if (document is null) return;
+            runner.Apply(document);
+            TempMonitorAgent.GroupPolicy.GroupPolicyReporter.Invalidate();
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning(e, "Ignoring a malformed Group Policy document from the hub");
         }
     }
 

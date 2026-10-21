@@ -25,30 +25,43 @@ public class TicketPipeTests
         public readonly List<string> FetchedFor = [];
         public readonly List<(long Id, string Type)> Uploaded = [];
         public readonly List<(long Id, string Sid, string Body)> Replies = [];
+        /// <summary>Every uplink call that ran with a thread token on it -- see
+        /// <see cref="Nothing_the_service_sends_for_a_tray_runs_as_the_tray"/>.</summary>
+        public readonly List<string> CalledImpersonating = [];
         /// <summary>What "My tickets" returns. Big enough, in the stall test, that a push no
         /// longer fits in the pipe's buffer and has to wait for the tray to read.</summary>
         public JsonArray Tickets = [];
 
+        private void NoteToken(string call)
+        {
+            using var token = WindowsIdentity.GetCurrent(ifImpersonating: true);
+            if (token is not null) lock (CalledImpersonating) CalledImpersonating.Add(call);
+        }
+
         public Task<TicketSubmitResult> SubmitTicketAsync(JsonObject payload, CancellationToken ct)
         {
+            NoteToken("submit");
             lock (Submitted) Submitted.Add(payload);
             return Task.FromResult(new TicketSubmitResult(201, 42, null, null));
         }
 
         public Task<bool> UploadTicketScreenshotAsync(long id, byte[] image, string type, CancellationToken ct)
         {
+            NoteToken("upload");
             lock (Uploaded) Uploaded.Add((id, type));
             return Task.FromResult(true);
         }
 
         public Task<JsonArray?> FetchMyTicketsAsync(string sid, CancellationToken ct)
         {
+            NoteToken("fetch");
             lock (FetchedFor) FetchedFor.Add(sid);
             return Task.FromResult<JsonArray?>((JsonArray)Tickets.DeepClone());
         }
 
         public Task<TicketSubmitResult> ReplyToTicketAsync(long id, string sid, string body, CancellationToken ct)
         {
+            NoteToken("reply");
             lock (Replies) Replies.Add((id, sid, body));
             return Task.FromResult(new TicketSubmitResult(201, id, null, null));
         }
@@ -130,6 +143,53 @@ public class TicketPipeTests
         // The connection is gone, and so is the session's tray as far as the supervisor knows.
         for (int i = 0; i < 50 && server.SessionsWithTray().Count > 0; i++) await Task.Delay(100);
         Assert.Empty(server.SessionsWithTray());
+        cts.Cancel();
+        await serving;
+    }
+
+    /// <summary>
+    /// Issue #153: every ticket arrived and none of its screenshots did, on every PC, with
+    /// "Host desconocido" (WSAHOST_NOT_FOUND) in the agent log and the name resolving fine
+    /// everywhere else. Reading the caller's name inside RunAsClient left the tray's
+    /// Identification-level token in an AsyncLocal, so .NET re-applied it to every thread the
+    /// connection ran on, and nothing in that flow could resolve a name. The ticket POST
+    /// only got through because it rode the heartbeat's already-open connection.
+    ///
+    /// Asserted on the token rather than on a DNS lookup: the lookup needs a network and a
+    /// name, and the token is the cause either way. **The submit is sent after a delay**, so
+    /// its continuation resumes on a fresh pool thread -- the leak showed up exactly there.
+    /// </summary>
+    [Fact]
+    public async Task Nothing_the_service_sends_for_a_tray_runs_as_the_tray()
+    {
+        if (!RunningInteractively()) return;
+        var hub = new FakeHub();
+        var server = new TicketPipeServer(NullLogger<TicketPipeServer>.Instance, hub)
+        {
+            PipeName = $"FleetHub.Tickets.Test.{Guid.NewGuid():N}",
+        };
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var serving = server.RunAsync(cts.Token);
+
+        using (var pipe = new NamedPipeClientStream(".", server.PipeName, PipeDirection.InOut,
+                                                    PipeOptions.Asynchronous, TokenImpersonationLevel.Identification))
+        {
+            await pipe.ConnectAsync(5000, cts.Token);
+            await TrayProtocol.WriteAsync(pipe, new JsonObject { ["type"] = "hello", ["version"] = "test" }, cts.Token);
+            await Next(pipe, TrayProtocol.Policy);
+            await Next(pipe, TrayProtocol.Tickets);
+
+            await Task.Delay(500, cts.Token);
+            await TrayProtocol.WriteAsync(pipe, new JsonObject
+            {
+                ["type"] = TrayProtocol.Submit, ["req"] = 1, ["subject"] = "Screen is blank",
+                ["screenshots"] = new JsonArray(Convert.ToBase64String([0xFF, 0xD8, 0xFF, 0xE0])),
+            }, cts.Token);
+            Assert.True((await Next(pipe, TrayProtocol.Result))["ok"]!.GetValue<bool>());
+        }
+
+        Assert.Single(hub.Uploaded);
+        Assert.Empty(hub.CalledImpersonating);
         cts.Cancel();
         await serving;
     }

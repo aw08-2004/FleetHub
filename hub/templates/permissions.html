@@ -31,7 +31,16 @@
     </p>
 </div>
 
-<div id="groups-host"></div>
+{# Two panes, the way Active Directory Users and Computers lays out a domain: the group tree
+   on the left, and on the right the selected group with the groups beneath it. Selecting
+   "All groups" lists the top level. #}
+<div class="perm-layout">
+    <nav class="card perm-tree" id="group-tree" aria-label="{{ t('permissions.tree.label') }}"></nav>
+    <div class="perm-pane">
+        <div id="group-detail"></div>
+        <div id="groups-host"></div>
+    </div>
+</div>
 
 <dialog class="modal" id="group-modal">
     <form method="dialog" id="group-form">
@@ -47,14 +56,22 @@
             <input class="input" id="group-description" maxlength="200" autocomplete="off"
                    placeholder="{{ t('permissions.editor.description_placeholder') }}" style="width: 100%;">
 
+            <label class="setting__label" for="group-parent" style="margin-top: var(--space-4);">{{ t('permissions.editor.parent') }}</label>
+            <select class="input" id="group-parent" style="width: 100%;">
+                <option value="">{{ t('permissions.editor.parent_none') }}</option>
+            </select>
+            <p class="setting__help">{{ t('permissions.editor.parent_help') }}</p>
+
             <h3 class="perm-subhead">{{ t('permissions.editor.capabilities') }}</h3>
             <div id="capability-list"></div>
 
             <h3 class="perm-subhead">{{ t('permissions.editor.machines') }}</h3>
+            <p class="setting__help" id="inherited-scope" hidden></p>
             <div class="perm-scope-modes">
                 <label class="checkbox"><input type="radio" name="scope-mode" value="list" checked> {{ t('permissions.editor.scope_list') }}</label>
                 <label class="checkbox"><input type="radio" name="scope-mode" value="all"> {{ t('permissions.editor.scope_all') }}</label>
                 <label class="checkbox"><input type="radio" name="scope-mode" value="ad_ou"> {{ t('permissions.editor.scope_ad_ou') }}</label>
+                <label class="checkbox"><input type="radio" name="scope-mode" value="folder"> {{ t('permissions.editor.scope_folder') }}</label>
             </div>
             <div id="machine-picker">
                 <div class="chip-list" id="machine-chips"></div>
@@ -75,6 +92,18 @@
                     <button class="btn" type="button" id="ou-add">{{ t('permissions.editor.add') }}</button>
                 </div>
                 <p class="setting__help" id="ou-resolved"></p>
+            </div>
+            <div id="folder-picker" hidden>
+                <p class="setting__help">
+                    {{ t('permissions.editor.folder_help') }}
+                </p>
+                <div class="chip-list" id="folder-chips"></div>
+                <div class="chip-add">
+                    <select class="input" id="folder-select" aria-label="{{ t('permissions.editor.folder_choose') }}">
+                        <option value="">{{ t('permissions.editor.folder_choose') }}</option>
+                    </select>
+                </div>
+                <p class="setting__help" id="folder-resolved"></p>
             </div>
 
             <h3 class="perm-subhead">{{ t('permissions.editor.members') }}</h3>

@@ -1031,6 +1031,46 @@
         if (e.key === 'Escape' && !modeMenu.hidden) { setMenu(false); modeBtn.focus(); }
     });
 
+    // ---------------- A message handed over by another page ----------------
+    // The ticket page's "Ask the assistant" (roadmap #31) leaves its text with the shell
+    // (FleetShell.askAssistant) and this takes it: always a NEW conversation, sent at once --
+    // a ticket dropped into whatever chat happened to be open would mix two jobs in one
+    // history. Without the shell (the ticket opened as a bare page) the text comes through
+    // sessionStorage instead, the same one-shot either way.
+    const DRAFT_KEY = 'tempmonitor:assistant:draft';
+    let booted = false;
+
+    function pendingDraft() {
+        const s = shell();
+        let text = s?.takeDraft?.() || null;
+        try {
+            const stored = sessionStorage.getItem(DRAFT_KEY);
+            sessionStorage.removeItem(DRAFT_KEY);
+            text = text || stored;
+        } catch (e) { /* private window: the shell path is the only one */ }
+        return text;
+    }
+
+    /** Returns whether a draft was taken. Waits for boot: a draft sent while boot was still
+     *  reopening the remembered chat would be shown in a thread boot then replaced. */
+    async function takeDraft() {
+        if (!booted) return false;
+        const text = pendingDraft();
+        if (!text) return false;
+        if (!ready) {
+            // Switched off since the ticket page was rendered: the off notice already says why.
+            input.value = text;
+            autosize();
+            return true;
+        }
+        setDrawer(false);
+        await openChat(null);
+        await send(text);
+        return true;
+    }
+
+    window.addEventListener('fleet:draft', () => { void takeDraft(); });
+
     // ---------------- Boot ----------------
     async function boot() {
         renderMode();
@@ -1048,8 +1088,11 @@
             }
         } catch (e) { /* the first send will say what is wrong */ }
         await loadChats();
-        const saved = recall(CHAT_KEY);
-        if (saved && chats.some((c) => c.id === saved)) await openChat(saved);
+        booted = true;
+        if (!(await takeDraft())) {
+            const saved = recall(CHAT_KEY);
+            if (saved && chats.some((c) => c.id === saved)) await openChat(saved);
+        }
         // A chat started, renamed or deleted in another tab. Only the list: the open thread
         // already follows its own run on the 800 ms poll, and re-reading it here would race it.
         window.FleetLive.watch(['assistant'], loadChats, { minInterval: 3000 });

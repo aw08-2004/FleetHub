@@ -825,7 +825,8 @@ def target_prompt(db_path):
     listed = ", ".join(sorted(fields)) if fields else "(none defined)"
     return ("Target kinds: " + ", ".join(rules.TARGET_KINDS) + ".\n"
             "There are NO TAGS. A group of machines is an explicit list, an Active Directory\n"
-            "OU, or a custom field selector. Custom fields defined on this hub: " + listed
+            "OU, a hub PC folder (by folder_id), or a custom field selector. Custom fields\n"
+            "defined on this hub: " + listed
             + ".")
 
 

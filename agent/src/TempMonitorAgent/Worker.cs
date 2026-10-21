@@ -55,6 +55,7 @@ public sealed class Worker : BackgroundService
     private readonly ShellSessionManager _shells;
     private readonly PtySessionManager _ptys;
     private readonly WatchdogRunner _watchdogs;
+    private readonly TempMonitorAgent.GroupPolicy.GroupPolicyRunner _groupPolicy;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll
     /// loop from re-dispatching something already running.</summary>
@@ -84,7 +85,7 @@ public sealed class Worker : BackgroundService
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
         TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
         SelfUpdater updater, ShellSessionManager shells, PtySessionManager ptys,
-        WatchdogRunner watchdogs)
+        WatchdogRunner watchdogs, TempMonitorAgent.GroupPolicy.GroupPolicyRunner groupPolicy)
     {
         _log = log;
         _state = state;
@@ -96,6 +97,7 @@ public sealed class Worker : BackgroundService
         _shells = shells;
         _ptys = ptys;
         _watchdogs = watchdogs;
+        _groupPolicy = groupPolicy;
         _enrollmentSecret = ReadEnrollmentSecret();
     }
 
@@ -126,6 +128,7 @@ public sealed class Worker : BackgroundService
             Task.Run(() => ProcessLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => UpdateLoopAsync(stoppingToken), CancellationToken.None),
             Task.Run(() => WatchdogLoopAsync(stoppingToken), CancellationToken.None),
+            Task.Run(() => GroupPolicyLoopAsync(stoppingToken), CancellationToken.None),
         };
 
         // One loop failing outright must not silently leave the agent half-running, so wait
@@ -555,6 +558,31 @@ public sealed class Worker : BackgroundService
                 _log.LogWarning(e, "Watchdog pass failed");
             }
             if (!await DelayAsync(WatchdogRunner.TickSeconds, ct)) break;
+        }
+    }
+
+    /// <summary>Keep this PC's HKLM\SOFTWARE\Policies values matching the Group Policy
+    /// document the hub resolved for it (roadmap #32).
+    ///
+    /// Its own loop rather than a step on the heartbeat, on the watchdog's reasoning: the
+    /// document is persisted, so a PC that reboots into a network outage keeps its policy, and
+    /// a slow registry write is never felt by the heartbeat that keeps the PC online. A PC that
+    /// has never held a document does nothing here (GroupPolicyRunner.Tick).</summary>
+    private async Task GroupPolicyLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                _groupPolicy.Tick();
+            }
+            catch (Exception e)
+            {
+                // Per-value failures are reported by the runner; reaching here means the pass
+                // itself threw. Logged and continued, like the watchdog loop.
+                _log.LogWarning(e, "Group Policy pass failed");
+            }
+            if (!await DelayAsync(TempMonitorAgent.GroupPolicy.GroupPolicyRunner.TickSeconds, ct)) break;
         }
     }
 

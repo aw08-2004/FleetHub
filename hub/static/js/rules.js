@@ -279,6 +279,39 @@ function renderTargets() {
     });
 }
 
+// The `folder` selector's controls (roadmap #32): a folder picker and "and sub-folders". Its own
+// function so selectorRow stays one branch per kind. refreshTargetCount reports its own
+// failure into the count label, so its promise is deliberately not awaited.
+function appendFolderSelector(row, selector) {
+    if (pcFolders.length) {
+        const select = el('select', 'input');
+        pcFolders
+            .map((f) => ({ id: f.id, label: pcFolderPath(f.id) }))
+            .sort((a, b) => a.label.localeCompare(b.label))
+            .forEach(({ id, label }) => select.appendChild(opt(String(id), label)));
+        selector.folder_id ??= Number(select.value);
+        select.value = String(selector.folder_id);
+        select.addEventListener('change', () => {
+            selector.folder_id = Number(select.value);
+            void refreshTargetCount();
+        });
+        row.appendChild(select);
+    } else {
+        row.appendChild(el('span', 'stat-card__meta', t('permissions.editor.folder_none_defined')));
+    }
+    const label = el('label', 'stat-card__meta');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = selector.include_children !== false;
+    box.addEventListener('change', () => {
+        selector.include_children = box.checked;
+        void refreshTargetCount();
+    });
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(' ' + t('rules.include_children')));
+    row.appendChild(label);
+}
+
 function selectorRow(side, selector, index) {
     const row = el('div', 'toolbar');
     row.style.marginBottom = 'var(--space-2)';
@@ -328,6 +361,8 @@ function selectorRow(side, selector, index) {
             });
             row.appendChild(select);
         }
+    } else if (selector.kind === 'folder') {
+        appendFolderSelector(row, selector);
     } else if (selector.kind === 'field') {
         const name = el('input', 'input');
         name.type = 'text';
@@ -923,12 +958,38 @@ async function loadDeviceGroups() {
     }
 }
 
+// PC-tree folders for the `folder` selector -- loaded alongside the device groups, and stale
+// in the same harmless way: a selector stores the folder's id.
+let pcFolders = [];
+async function loadPcFolders() {
+    try {
+        pcFolders = (await api('/api/pc-tree')).folders || [];
+        if (draft) renderTargets();
+    } catch (e) {
+        pcFolders = [];
+    }
+}
+
+function pcFolderPath(id) {
+    const names = [];
+    const seen = new Set();
+    let current = pcFolders.find((f) => f.id === id);
+    while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        names.unshift(current.name);
+        current = pcFolders.find((f) => f.id === current.parent_id);
+    }
+    return names.length ? names.join(' / ') : `#${id}`;
+}
+
 function fillKindSelects() {
     loadDeviceGroups();
+    // loadPcFolders falls back to no folders on failure, so nothing is left to catch.
+    void loadPcFolders();
     ['rule-target-kind', 'rule-exclude-kind'].forEach((id) => {
         const select = document.getElementById(id);
         select.textContent = '';
-        ['all', 'machines', 'ad_ou', 'field', 'group'].forEach((kind) => {
+        ['all', 'machines', 'ad_ou', 'folder', 'field', 'group'].forEach((kind) => {
             // "Every PC" as an EXCLUSION would exclude everything, which is never what
             // anybody means; leave it out rather than let a rule be built that targets none.
             if (id === 'rule-exclude-kind' && kind === 'all') return;
@@ -969,6 +1030,7 @@ document.getElementById('rule-add-clause').addEventListener('click', () => {
         if (kind === 'machines') selector.machines = [];
         if (kind === 'ad_ou') { selector.ou = ''; selector.include_children = true; }
         if (kind === 'group') selector.group_id = deviceGroups.length ? deviceGroups[0].id : null;
+        if (kind === 'folder') { selector.folder_id = null; selector.include_children = true; }
         if (kind === 'field') { selector.field = ''; selector.value = ''; }
         draft.target[side].push(selector);
         renderTargets();
