@@ -3644,7 +3644,17 @@
       "ad_ou": "AD organisational unit",
       "field": "By custom field",
       "group": "Device group",
-      "folder": "PC folder"
+      "folder": "PC folder",
+      "os": "Operating system"
+    },
+    "target_os": {
+      "windows": "Any Windows",
+      "linux": "Any Linux",
+      "android": "Android",
+      "windows_11": "Windows 11",
+      "windows_10": "Windows 10",
+      "windows_legacy": "Windows 8.1 and older",
+      "windows_server": "Windows Server"
     },
     "variable": {
       "sys.machine": {
@@ -3793,6 +3803,30 @@
       },
       "ad.disabled": {
         "label": "Disabled in AD"
+      },
+      "os.name": {
+        "label": "Operating system"
+      },
+      "os.family": {
+        "label": "OS family",
+        "description": "windows, linux or android. Agent-reported first, Active Directory as the fallback."
+      },
+      "os.release": {
+        "label": "OS release",
+        "description": "windows_11, windows_10, windows_server, windows_legacy, linux or android -- the same buckets the Dashboard counts."
+      },
+      "os.version": {
+        "label": "OS version"
+      },
+      "os.build": {
+        "label": "OS build number"
+      },
+      "os.arch": {
+        "label": "OS architecture"
+      },
+      "os.source": {
+        "label": "OS reported by",
+        "description": "agent when the machine reported its own OS, ad when only Active Directory did."
       },
       "proc.count": {
         "label": "Running processes"

@@ -825,9 +825,9 @@ def target_prompt(db_path):
     listed = ", ".join(sorted(fields)) if fields else "(none defined)"
     return ("Target kinds: " + ", ".join(rules.TARGET_KINDS) + ".\n"
             "There are NO TAGS. A group of machines is an explicit list, an Active Directory\n"
-            "OU, a hub PC folder (by folder_id), or a custom field selector. Custom fields\n"
-            "defined on this hub: " + listed
-            + ".")
+            "OU, a hub PC folder (by folder_id), an operating system, or a custom field\n"
+            "selector. An `os` selector names one of: " + ", ".join(rules.TARGET_OS_VALUES)
+            + ". Custom fields defined on this hub: " + listed + ".")
 
 
 def action_prompt(db_path):
@@ -1487,8 +1487,8 @@ def list_requests(db_path, limit=100):
 REDACTED = "(withheld)"
 
 # The text variables that describe what a machine IS rather than whose it is. Deliberately
-# short: `bios.support` is a vendor support state, `ad.os` an operating system name, and
-# everything absent here -- hostname, serial, service tag, asset tag, signed-in account,
+# short: `bios.support` is a vendor support state, `ad.os` and `os.*` an operating system,
+# and everything absent here -- hostname, serial, service tag, asset tag, signed-in account,
 # domain, IP, MAC, OU, DN, owner, every custom field, every probe -- is withheld while the
 # setting is off.
 SHAREABLE_TEXT = frozenset((
@@ -1496,6 +1496,7 @@ SHAREABLE_TEXT = frozenset((
     "hw.model", "hw.manufacturer",
     "bios.version", "bios.vendor", "bios.support",
     "ad.os",
+    "os.name", "os.family", "os.release", "os.version", "os.arch", "os.source",
 ))
 
 

@@ -123,6 +123,12 @@ was rendering while marked `hidden` because a `display: flex` outranked the UA s
 deployed hub, whether or not `HUB_AUTO_UPDATE` is on. A push that only touches docs or
 `tests/` needs no bump, because there is nothing for a hub to install.
 
+**Beta first (since 2026-10-21).** Changes land on `beta`, never directly on `main`, so in
+practice every bump is made on `beta` and is the next number after *`beta`'s*, which runs
+ahead of `main`'s. `main` takes `beta`'s number as it stands when the one `beta` → `main` PR
+merges, after everything in ROADMAP.MD → *On beta, waiting for confirmation* is ticked. `main`
+skipping the numbers it never ran is fine; the rule above is only that none repeats.
+
 The same number is the hub's **container image tag**. `.github/workflows/hub-image.yml`
 publishes `ghcr.io/<owner>/temp_monitor-hub:X.Y.Z` from `main`, and `beta-X.Y.Z` from
 `beta`. It **fails** if `HUB_VERSION` is not three numeric components, or if that tag already

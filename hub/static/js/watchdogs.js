@@ -39,7 +39,7 @@
 
     // The selector kinds this page offers. Taken from the server's target vocabulary rather
     // than hardcoded, except for the ORDER, which is a UI decision.
-    var SELECTOR_KINDS = ['all', 'machines', 'group', 'ad_ou', 'folder', 'field'];
+    var SELECTOR_KINDS = ['all', 'machines', 'group', 'ad_ou', 'folder', 'os', 'field'];
     // PC-tree folders for the `folder` selector, loaded with the device groups.
     var pcFolders = [];
 
@@ -55,6 +55,7 @@
         }
         return names.length ? names.join(' / ') : '#' + id;
     }
+
 
     async function api(path, options) {
         var resp = await fetch(path, options);
@@ -285,6 +286,15 @@
         row.appendChild(folderLabel);
     }
 
+    // Kinds whose controls live in their own function rather than inline in selectorRow -- one
+    // lookup branch there instead of one per kind, as in rules.js.
+    var SELECTOR_CONTROLS = {
+        folder: appendFolderSelector,
+        os: function (row, selector) {
+            row.appendChild(window.TargetOs.select(selector, function () { void refreshTargetCount(); }));
+        }
+    };
+
     function selectorRow(side, selector, index) {
         var row = el('div', 'toolbar');
         row.style.marginBottom = 'var(--space-2)';
@@ -341,8 +351,8 @@
                 });
                 row.appendChild(select);
             }
-        } else if (selector.kind === 'folder') {
-            appendFolderSelector(row, selector);
+        } else if (Object.hasOwn(SELECTOR_CONTROLS, selector.kind)) {
+            SELECTOR_CONTROLS[selector.kind](row, selector);
         } else if (selector.kind === 'field') {
             var name = el('input', 'input');
             name.type = 'text';

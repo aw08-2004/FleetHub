@@ -44,6 +44,7 @@ import alerts
 import capabilities
 import events
 import fleet
+import os_buckets
 import scripts
 
 # ---------------------------------------------------------------------------------------
@@ -134,6 +135,9 @@ DURATION_UNITS = (UNIT_SECONDS, UNIT_DAYS)
 #                  must not conclude "0 processes" from "nobody was looking".
 #   ad     172800  directory.sync_once runs on its own schedule; 2 days survives a weekend
 #                  with the sync disabled.
+#   os       None  The agent reports its OS on hello (machine_info.os_*), and an OS does not
+#                  drift between reports -- an upgrade arrives as a new hello. Same reasoning
+#                  as bios: an old caption is not a wrong one.
 #   event    3600  machine_event_state.reported_at is stamped on every event report, empty
 #                  ones included, and the report rides the same heartbeat as everything else.
 #                  events.STALE_AFTER_SECONDS is what the console already calls a stale event
@@ -146,6 +150,7 @@ AGE_NETWORK = 10800
 AGE_BIOS = None
 AGE_PROC = 300
 AGE_AD = 172800
+AGE_OS = None
 AGE_EVENT = events.STALE_AFTER_SECONDS
 
 GROUP_SYS = "sys"
@@ -156,6 +161,7 @@ GROUP_SESSION = "session"
 GROUP_NET = "net"
 GROUP_BIOS = "bios"
 GROUP_AD = "ad"
+GROUP_OS = "os"
 GROUP_PROC = "proc"
 GROUP_EVENT = "event"
 GROUP_FIELD = "field"
@@ -221,6 +227,23 @@ STATIC_VARIABLES = (
     Var("ad.owner", KIND_TEXT, GROUP_AD, AGE_AD),
     Var("ad.os", KIND_TEXT, GROUP_AD, AGE_AD),
     Var("ad.disabled", KIND_BOOL, GROUP_AD, AGE_AD),
+    # -- os: what the machine is running, agent first and AD as the fallback ------------
+    # Before these the only OS a rule or a device group could see was ad.os -- the
+    # directory's `operatingSystem` attribute. So "every Windows PC" missed every machine
+    # that is not in AD, and lagged every one whose directory record had not caught up with
+    # an upgrade. These read os_buckets.normalize_os, the same function the Dashboard counts
+    # with, so a rule and the "Operating systems" card cannot disagree about a machine.
+    #
+    # os.family and os.release are SLUGS (`windows`, `windows_11`), not display names: a
+    # rule compares them, and `os.release == "windows_11"` must not break the day somebody
+    # rewords the Dashboard's label. os.name is the raw caption for `contains`/`matches`.
+    Var("os.name", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.family", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.release", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.version", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.build", KIND_NUMBER, GROUP_OS, AGE_OS),
+    Var("os.arch", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.source", KIND_TEXT, GROUP_OS, AGE_OS),
     # -- proc: present only while an operator has the Processes card open ---------------
     Var("proc.count", KIND_NUMBER, GROUP_PROC, AGE_PROC),
     Var("proc.cpu_cores", KIND_NUMBER, GROUP_PROC, AGE_PROC),
@@ -1023,6 +1046,9 @@ def resolve_machine_vars(db_path, machine, *, now=None, diagnostics=None, live=N
         _put(out, STATIC_BY_NAME[name], _text(info.get(column)), ad_age)
     _put(out, STATIC_BY_NAME["ad.disabled"], _bool(info.get("ad_disabled")), ad_age)
 
+    # -- OS ------------------------------------------------------------------------------
+    _resolve_os(info, out)
+
     # -- custom fields, probes, then derived --------------------------------------------
     # Order is load-bearing: a derived variable may be a formula over a custom field or a
     # probe value, so both must already be in `out` before the formulas run.
@@ -1031,6 +1057,27 @@ def resolve_machine_vars(db_path, machine, *, now=None, diagnostics=None, live=N
     _resolve_derived(db_path, out, {**field_variables(db_path), **probe_variables(db_path),
                                     **derived_variables(db_path)})
     return out
+
+
+def _resolve_os(info, out):
+    """os.* from machine_info's agent-reported columns, falling back to ad_os.
+
+    The bucket and the label come from one normalize_os call, so os.release can never say
+    Windows 11 while os.name and the Dashboard say 10. version/build/arch are agent-only --
+    the directory has no build number -- and read UNKNOWN on a machine only AD describes,
+    rather than borrowing a value from a source that never said it.
+    """
+    described = os_buckets.normalize_os(info.get("os_caption"), info.get("os_build"),
+                                        info.get("ad_os"))
+    bucket = described["bucket"]
+    _put(out, STATIC_BY_NAME["os.name"], _text(described["label"]))
+    _put(out, STATIC_BY_NAME["os.family"], _text(os_buckets.family_of(bucket)))
+    _put(out, STATIC_BY_NAME["os.release"], bucket if bucket != "unknown" else UNKNOWN)
+    _put(out, STATIC_BY_NAME["os.source"], _text(described["source"]))
+    _put(out, STATIC_BY_NAME["os.version"], _text(info.get("os_version")))
+    build = os_buckets.build_number(info.get("os_build"))
+    _put(out, STATIC_BY_NAME["os.build"], build if build is not None else UNKNOWN)
+    _put(out, STATIC_BY_NAME["os.arch"], _text(info.get("os_arch")))
 
 
 def _resolve_remote(db_path, machine, out, now):
@@ -2896,8 +2943,31 @@ TARGET_GROUP = "group"
 # a device group, a folder is not a target spec, so a device group naming one is not nesting
 # and is allowed.
 TARGET_FOLDER = "folder"
+# By operating system (hub 1.160.0): an os_buckets family (`windows`) or one bucket
+# (`windows_11`). The selector that was missing for the commonest group of all -- "every
+# Windows PC" -- which until now could only be approximated by an AD OU, and so missed every
+# machine outside the directory. Matches the agent's own report first and AD second, through
+# the same normalize_os the Dashboard counts with.
+#
+# Rejected: capabilities.platform_of. It is the closed, enforcement-grade vocabulary, but
+# every Windows agent in the field predates it and reports no platform at all, so a
+# `platform == windows` selector would have matched almost nothing on the day it shipped.
+# Rejected too: a free-text "OS contains" selector. It reads naturally and fails quietly --
+# "Windows 10" also matches the early Windows 11 builds WMI still calls Windows 10, which is
+# exactly the misfiling normalize_os exists to undo. A rule that wants the raw caption has
+# os.name in its condition.
+TARGET_OS = "os"
 TARGET_KINDS = (TARGET_ALL, TARGET_MACHINES, TARGET_AD_OU, TARGET_FIELD, TARGET_GROUP,
-                TARGET_FOLDER)
+                TARGET_FOLDER, TARGET_OS)
+# What an `os` selector may name: the three families, then the Windows buckets. `unknown` is
+# left out on purpose -- "the machines we know nothing about" is a to-do list, not a target,
+# and aiming a script at it is aiming it at whatever enrolled last. linux and android are
+# both a family and a bucket, so they appear once.
+TARGET_OS_VALUES = ((os_buckets.FAMILY_WINDOWS, os_buckets.FAMILY_LINUX,
+                     os_buckets.FAMILY_ANDROID)
+                    + tuple(b for b in os_buckets.OS_BUCKETS
+                            if b not in ("unknown", os_buckets.FAMILY_LINUX,
+                                         os_buckets.FAMILY_ANDROID)))
 TARGET_TEXT_KEY = "rules.target"
 
 MAX_TARGET_SELECTORS = 25
@@ -2982,6 +3052,11 @@ def _validate_selector(selector, extra=None):
         # names is refused upstream (rules_using_folder).
         return None, {"kind": TARGET_FOLDER, "folder_id": folder_id,
                       "include_children": bool(selector.get("include_children", True))}
+    if kind == TARGET_OS:
+        value = str(selector.get("os") or "").strip().lower()
+        if value not in TARGET_OS_VALUES:
+            return f"an OS selector needs one of {', '.join(TARGET_OS_VALUES)}", None
+        return None, {"kind": TARGET_OS, "os": value}
     # TARGET_FIELD
     name = str(selector.get("field") or "").strip()
     var = lookup_variable(f"field.{name}", extra)
@@ -2996,8 +3071,12 @@ def _validate_selector(selector, extra=None):
 
 
 def _all_machines(db_path):
+    # The whole row rather than the columns a selector reads today. An explicit list was
+    # tried for the os selector and is the trap: every selector added later needs its column
+    # added here AND in watchdogs._machine_row, and the one that is missed reads every machine
+    # as `unknown` and quietly matches nothing. The extra columns cost nothing at fleet size.
     with get_conn(db_path) as conn:
-        rows = conn.execute("SELECT machine, ad_ou, ad_dn FROM machine_info").fetchall()
+        rows = conn.execute("SELECT * FROM machine_info").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -3038,6 +3117,13 @@ def _match_folder(selector, row, ctx):
     return _name_of(row) in (ctx["folders"].get(key) or set())
 
 
+def _match_os(selector, row, _ctx):
+    bucket = os_buckets.normalize_os(row.get("os_caption"), row.get("os_build"),
+                                     row.get("ad_os"))["bucket"]
+    want = selector.get("os")
+    return want == bucket or want == os_buckets.family_of(bucket)
+
+
 def _match_field(selector, row, ctx):
     have = (ctx["fields"].get(row.get("machine")) or {}).get(selector.get("field"))
     return have is not None and _loose_equal(have, selector.get("value")) is True
@@ -3049,6 +3135,7 @@ _MATCHERS = {
     TARGET_AD_OU: _match_ad_ou,
     TARGET_GROUP: _match_group,
     TARGET_FOLDER: _match_folder,
+    TARGET_OS: _match_os,
     TARGET_FIELD: _match_field,
 }
 

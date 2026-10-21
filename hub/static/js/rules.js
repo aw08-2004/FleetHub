@@ -312,6 +312,16 @@ function appendFolderSelector(row, selector) {
     row.appendChild(label);
 }
 
+
+// Kinds whose controls live in their own function rather than inline in selectorRow -- one
+// lookup branch there instead of one per kind, which is what kept selectorRow readable (and
+// under SonarCloud's complexity gate) when `os` arrived beside `folder`.
+const SELECTOR_CONTROLS = {
+    folder: appendFolderSelector,
+    os: (row, selector) => row.appendChild(
+        window.TargetOs.select(selector, () => void refreshTargetCount())),
+};
+
 function selectorRow(side, selector, index) {
     const row = el('div', 'toolbar');
     row.style.marginBottom = 'var(--space-2)';
@@ -361,8 +371,8 @@ function selectorRow(side, selector, index) {
             });
             row.appendChild(select);
         }
-    } else if (selector.kind === 'folder') {
-        appendFolderSelector(row, selector);
+    } else if (Object.hasOwn(SELECTOR_CONTROLS, selector.kind)) {
+        SELECTOR_CONTROLS[selector.kind](row, selector);
     } else if (selector.kind === 'field') {
         const name = el('input', 'input');
         name.type = 'text';
@@ -989,7 +999,7 @@ function fillKindSelects() {
     ['rule-target-kind', 'rule-exclude-kind'].forEach((id) => {
         const select = document.getElementById(id);
         select.textContent = '';
-        ['all', 'machines', 'ad_ou', 'folder', 'field', 'group'].forEach((kind) => {
+        ['all', 'machines', 'ad_ou', 'folder', 'os', 'field', 'group'].forEach((kind) => {
             // "Every PC" as an EXCLUSION would exclude everything, which is never what
             // anybody means; leave it out rather than let a rule be built that targets none.
             if (id === 'rule-exclude-kind' && kind === 'all') return;
@@ -1032,6 +1042,7 @@ document.getElementById('rule-add-clause').addEventListener('click', () => {
         if (kind === 'group') selector.group_id = deviceGroups.length ? deviceGroups[0].id : null;
         if (kind === 'folder') { selector.folder_id = null; selector.include_children = true; }
         if (kind === 'field') { selector.field = ''; selector.value = ''; }
+        if (kind === 'os') selector.os = window.TargetOs.DEFAULT;
         draft.target[side].push(selector);
         renderTargets();
         refreshTargetCount();

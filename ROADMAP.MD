@@ -63,6 +63,16 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 > reusing `manage_rules` (editing a group changes what other people's rules reach); resolving
 > a deployment's group live (a deployment must not change targets after it was confirmed).
 >
+> **Hub 1.160.0 — target and condition by operating system.** Groups and rules could see an
+> OS only through `ad.os`, so "every Windows PC" missed every machine outside AD. A new `os`
+> selector (any Windows / Linux / Android, or one of the Dashboard's buckets) and `os.*`
+> condition variables (`os.family`, `os.release`, `os.name`, `os.version`, `os.build`,
+> `os.arch`, `os.source`) read the agent's own report first and AD second, through the same
+> `normalize_os` the Dashboard counts with — moved to `os_buckets.py` so `rules.py` can stay
+> app-free. *Rejected:* `capabilities.platform_of` (every Windows agent in the field reports
+> no platform, so it would match almost nothing); a free-text "OS contains" selector (it
+> misfiles the early Windows 11 builds WMI still calls Windows 10); `os=unknown` as a target.
+>
 > **Hub 1.140.0 — console review.** A review against seeded edge-case data fixed numbers the
 > console was getting wrong and the navigation around them:
 > - **Values.** A missing reading is no longer drawn as 0 (fan "Driven at 0%", flat-0 live
@@ -107,6 +117,50 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 > history — they record what shipped at the time. Nothing new goes into that column.
 
 ---
+
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-21
+
+**How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
+`beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
+below what an operator has to confirm on a beta hub or a beta PC. Nothing goes to `main` until
+every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main` PR, which
+empties this list. A box that fails stays open with what went wrong written next to it, and
+the fix goes to `beta` like anything else.
+
+`main` is at hub **1.158.0**. `beta` is ahead by:
+
+**Hub 1.159.0 — nested permission groups, PC tree, Group Policy** (#163)
+- [ ] **Existing access unchanged.** After the beta hub updates, every existing permission
+  group is still top-level and every operator sees exactly the PCs they saw before.
+- [ ] **Nested groups.** Make a subgroup under a real group; a member of it gets the parent's
+  capabilities and machines, shown as dashed/locked "inherited" badges; the subgroup cannot
+  remove anything the parent grants. An invite into the subgroup grants what it says.
+- [ ] **PC tree.** Operate → PC tree shows the AD OUs from the last sync (read-only) beside the
+  hub folders. Create nested folders; file PCs by *Move selected to…* and by dragging; a PC is
+  in one folder at most. An operator with only View sees only their own PCs.
+- [ ] **Folder-scoped permission group.** Scope a group to a folder; its members reach exactly
+  the PCs in it and beneath it, and moving a PC in or out changes that at once.
+- [ ] **PC folder target** in a rule, a watchdog and a device group, with and without
+  *and sub-folders*; the preview count matches the tree.
+- [ ] **AD OU matching fix.** Any rule aimed at an OU whose name is the tail of another OU's
+  (`OU=Cajas` vs `OU=NoCajas`) now reaches fewer PCs -- check those rules still reach what
+  they should.
+- [ ] **Delete refusals.** Deleting a non-empty folder, or one a rule / watchdog / group /
+  permission group / policy link names, is refused and names what is in the way.
+- [ ] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
+  item 4c below (apply, Managed elsewhere, unlink removes).
+
+**Hub 1.160.0 — target and condition by operating system** (#164)
+- [ ] **"Any Windows" group.** Device Groups → New → *Operating system* → *Any Windows*. The
+  member count equals the Dashboard's Windows buckets added together, and includes a Windows
+  PC that is not in AD.
+- [ ] **Release buckets.** *Windows 11* / *Windows 10* / *Windows Server* match the Dashboard's
+  Operating systems card one for one.
+- [ ] **Exclusion.** *Any Windows* except *Windows Server* drops the servers and nothing else.
+- [ ] **Conditions.** The rule editor lists the OS variables; `os.family == "windows"` previews
+  true on a Windows PC, and `os.build < 19045` finds the PCs behind 22H2.
+- [ ] **Watchdog target.** A watchdog aimed at *Any Windows* reaches the same PCs as the group.
+- [ ] **Translations.** The new selector and variables read correctly in German and Spanish.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-20
 

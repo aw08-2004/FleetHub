@@ -73,5 +73,6 @@
 {% endif %}
 {% endblock %}
 {% block page_scripts %}
+<script src="{{ url_for('static', filename='js/target-os.js') }}?v={{ hub_version }}"></script>
 <script src="{{ url_for('static', filename='js/device-groups.js') }}"></script>
 {% endblock %}

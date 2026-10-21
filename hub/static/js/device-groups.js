@@ -54,6 +54,7 @@
             case 'ad_ou': return t('rules.target.ad_ou');
             case 'field': return t('rules.target.field');
             case 'folder': return t('rules.target.folder');
+            case 'os': return t('rules.target.os');
             default: return kind;
         }
     }
@@ -78,12 +79,14 @@
         return names.length ? names.join(' / ') : `#${id}`;
     }
 
+
     function describeSelector(selector) {
         switch (selector.kind) {
             case 'machines': return `${kindLabel('machines')}: ${(selector.machines || []).join(', ')}`;
             case 'ad_ou': return `${kindLabel('ad_ou')}: ${selector.ou || ''}`;
             case 'folder': return `${kindLabel('folder')}: ${folderPath(selector.folder_id)}`;
             case 'field': return `${kindLabel('field')}: ${selector.field} = ${selector.value}`;
+            case 'os': return `${kindLabel('os')}: ${window.TargetOs.label(selector.os)}`;
             default: return kindLabel(selector.kind);
         }
     }
@@ -170,7 +173,7 @@
         for (const [id, side] of [['device-group-include-kind', 'include'], ['device-group-exclude-kind', 'exclude']]) {
             const select = document.getElementById(id);
             select.replaceChildren();
-            for (const kind of ['all', 'machines', 'ad_ou', 'folder', 'field']) {
+            for (const kind of ['all', 'machines', 'ad_ou', 'folder', 'os', 'field']) {
                 // "Every PC" as an exclusion would exclude everything -- same call rules.js makes.
                 if (side === 'exclude' && kind === 'all') continue;
                 const option = el('option', null, kindLabel(kind));
@@ -233,6 +236,8 @@
             box.addEventListener('change', () => { selector.include_children = box.checked; schedulePreview(); });
             label.append(box, document.createTextNode(' ' + t('device_groups.children')));
             row.appendChild(label);
+        } else if (selector.kind === 'os') {
+            row.appendChild(window.TargetOs.select(selector, schedulePreview));
         } else if (selector.kind === 'field') {
             row.appendChild(input(selector.field || '', 'location', (v) => { selector.field = v.trim(); }));
             row.appendChild(input(selector.value === undefined ? '' : String(selector.value), '', (v) => { selector.value = v; }));
@@ -304,6 +309,7 @@
             if (kind === 'ad_ou') { selector.ou = ''; selector.include_children = true; }
             if (kind === 'folder') { selector.folder_id = null; selector.include_children = true; }
             if (kind === 'field') { selector.field = ''; selector.value = ''; }
+            if (kind === 'os') selector.os = window.TargetOs.DEFAULT;
             draft.target[side].push(selector);
             renderSelectors();
             schedulePreview();

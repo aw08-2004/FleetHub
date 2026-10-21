@@ -3521,7 +3521,17 @@
       "ad_ou": "Unidad organizativa de AD",
       "field": "Por campo personalizado",
       "group": "Grupo de dispositivos",
-      "folder": "Carpeta de equipos"
+      "folder": "Carpeta de equipos",
+      "os": "Sistema operativo"
+    },
+    "target_os": {
+      "windows": "Cualquier Windows",
+      "linux": "Cualquier Linux",
+      "android": "Android",
+      "windows_11": "Windows 11",
+      "windows_10": "Windows 10",
+      "windows_legacy": "Windows 8.1 y anteriores",
+      "windows_server": "Windows Server"
     },
     "variable": {
       "sys.machine": {
@@ -3670,6 +3680,30 @@
       },
       "ad.disabled": {
         "label": "Deshabilitado en AD"
+      },
+      "os.name": {
+        "label": "Sistema operativo"
+      },
+      "os.family": {
+        "label": "Familia del sistema operativo",
+        "description": "windows, linux o android. Primero lo que informa el agente, Active Directory como respaldo."
+      },
+      "os.release": {
+        "label": "Versión principal del sistema operativo",
+        "description": "windows_11, windows_10, windows_server, windows_legacy, linux o android -- los mismos grupos que cuenta el panel."
+      },
+      "os.version": {
+        "label": "Versión del sistema operativo"
+      },
+      "os.build": {
+        "label": "Número de compilación del sistema operativo"
+      },
+      "os.arch": {
+        "label": "Arquitectura del sistema operativo"
+      },
+      "os.source": {
+        "label": "Sistema operativo informado por",
+        "description": "agent cuando el equipo informó su propio sistema operativo, ad cuando solo lo hizo Active Directory."
       },
       "proc.count": {
         "label": "Procesos en ejecución"
