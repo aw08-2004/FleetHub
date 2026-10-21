@@ -118,6 +118,50 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-21
+
+**How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
+`beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
+below what an operator has to confirm on a beta hub or a beta PC. Nothing goes to `main` until
+every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main` PR, which
+empties this list. A box that fails stays open with what went wrong written next to it, and
+the fix goes to `beta` like anything else.
+
+`main` is at hub **1.158.0**. `beta` is ahead by:
+
+**Hub 1.159.0 — nested permission groups, PC tree, Group Policy** (#163)
+- [ ] **Existing access unchanged.** After the beta hub updates, every existing permission
+  group is still top-level and every operator sees exactly the PCs they saw before.
+- [ ] **Nested groups.** Make a subgroup under a real group; a member of it gets the parent's
+  capabilities and machines, shown as dashed/locked "inherited" badges; the subgroup cannot
+  remove anything the parent grants. An invite into the subgroup grants what it says.
+- [ ] **PC tree.** Operate → PC tree shows the AD OUs from the last sync (read-only) beside the
+  hub folders. Create nested folders; file PCs by *Move selected to…* and by dragging; a PC is
+  in one folder at most. An operator with only View sees only their own PCs.
+- [ ] **Folder-scoped permission group.** Scope a group to a folder; its members reach exactly
+  the PCs in it and beneath it, and moving a PC in or out changes that at once.
+- [ ] **PC folder target** in a rule, a watchdog and a device group, with and without
+  *and sub-folders*; the preview count matches the tree.
+- [ ] **AD OU matching fix.** Any rule aimed at an OU whose name is the tail of another OU's
+  (`OU=Cajas` vs `OU=NoCajas`) now reaches fewer PCs -- check those rules still reach what
+  they should.
+- [ ] **Delete refusals.** Deleting a non-empty folder, or one a rule / watchdog / group /
+  permission group / policy link names, is refused and names what is in the way.
+- [ ] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
+  item 4c below (apply, Managed elsewhere, unlink removes).
+
+**Hub 1.160.0 — target and condition by operating system** (#164)
+- [ ] **"Any Windows" group.** Device Groups → New → *Operating system* → *Any Windows*. The
+  member count equals the Dashboard's Windows buckets added together, and includes a Windows
+  PC that is not in AD.
+- [ ] **Release buckets.** *Windows 11* / *Windows 10* / *Windows Server* match the Dashboard's
+  Operating systems card one for one.
+- [ ] **Exclusion.** *Any Windows* except *Windows Server* drops the servers and nothing else.
+- [ ] **Conditions.** The rule editor lists the OS variables; `os.family == "windows"` previews
+  true on a Windows PC, and `os.build < 19045` finds the PCs behind 22H2.
+- [ ] **Watchdog target.** A watchdog aimed at *Any Windows* reaches the same PCs as the group.
+- [ ] **Translations.** The new selector and variables read correctly in German and Spanish.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-20
 
 **Read this first when working on the machine that holds the signing key.** Everything below

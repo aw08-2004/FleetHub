@@ -30,10 +30,19 @@ Four canonical docs already exist. Go to them by question, not by default:
 
 ## Versioning — the rules that break production
 
-- **Bump `HUB_VERSION` (near the top of `hub/app.py`) on every push to `main` that touches `hub/`.** Do it
+- **Beta first, always (since 2026-10-21).** Every change -- hub, agent, client -- goes to the
+  `beta` branch first: branch from `origin/beta`, open the PR **into `beta`**, never into `main`.
+  Each one adds what an operator must check to ROADMAP.MD → *On beta, waiting for
+  confirmation*. Only when everything on that list is confirmed does `beta` reach `main`, as
+  **one** `beta` → `main` PR that empties the list. Agent betas are cut with
+  `-Channel beta`. Nothing is pushed to or PR'd into `main` directly.
+- **Bump `HUB_VERSION` (near the top of `hub/app.py`) on every push to `beta` that touches `hub/`.** Do it
   as part of the change, unasked; the comment two lines above it says the same thing. The hub
-  compares `main`'s value against the running one, so a push without a bump never reaches a
-  deployed hub. Docs-only and `tests/`-only pushes need no bump.
+  compares its channel branch's value against the running one, so a push without a bump never
+  reaches a deployed hub. The number is the next one after **`beta`'s** value, not `main`'s --
+  `beta` is ahead, and a number `beta` already shipped is a reuse. The `beta` → `main` PR
+  carries `beta`'s number as it stands; `main` skipping numbers is fine, repeating one is not.
+  Docs-only and `tests/`-only pushes need no bump.
 - **Every `HUB_VERSION` bump writes `deploy/docker/release-notes/<version>.md` in the same
   change.** Same release-please layout as `agent/release-notes/README.md`, written for the
   operators. The hub has no GitHub releases, so this file *is* the release notes: the sidebar's
