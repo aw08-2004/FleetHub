@@ -176,7 +176,7 @@ the fix goes to `beta` like anything else.
 - [ ] **Other rejections** show the provider's own reason, with no API key in it.
 - [ ] **Translations.** The button and the message read correctly in German and Spanish.
 
-**Hub 1.162.0 — a rule that moves PCs into a PC-tree folder** (PR pending)
+**Hub 1.162.0 — a rule that moves PCs into a PC-tree folder** (#168)
 - [ ] **It files.** A rule `os.release == "windows_11"` → *Move to a PC folder* → *Win11*.
   Within one evaluation tick the matching PCs show under *Win11* in the PC tree, nothing else
   moved, and the PC's filing says `rule:<id>`.
