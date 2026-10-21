@@ -312,6 +312,23 @@ function appendFolderSelector(row, selector) {
     row.appendChild(label);
 }
 
+// The values an `os` selector may name -- rules.TARGET_OS_VALUES, ordered for a person reading the list.
+// Literal keys, not t(`rules.target_os.${value}`): tests/test_i18n.py only sees literals.
+const OS_CHOICES = ['windows', 'windows_11', 'windows_10', 'windows_server', 'windows_legacy',
+                    'linux', 'android'];
+function osLabel(value) {
+    switch (value) {
+        case 'windows': return t('rules.target_os.windows');
+        case 'windows_11': return t('rules.target_os.windows_11');
+        case 'windows_10': return t('rules.target_os.windows_10');
+        case 'windows_server': return t('rules.target_os.windows_server');
+        case 'windows_legacy': return t('rules.target_os.windows_legacy');
+        case 'linux': return t('rules.target_os.linux');
+        case 'android': return t('rules.target_os.android');
+        default: return value;
+    }
+}
+
 function selectorRow(side, selector, index) {
     const row = el('div', 'toolbar');
     row.style.marginBottom = 'var(--space-2)';
@@ -347,6 +364,13 @@ function selectorRow(side, selector, index) {
         label.appendChild(box);
         label.appendChild(document.createTextNode(' ' + t('rules.include_children')));
         row.appendChild(label);
+    } else if (selector.kind === 'os') {
+        const select = el('select', 'input');
+        OS_CHOICES.forEach((value) => select.appendChild(opt(value, osLabel(value))));
+        if (!selector.os) selector.os = 'windows';
+        select.value = selector.os;
+        select.addEventListener('change', () => { selector.os = select.value; refreshTargetCount(); });
+        row.appendChild(select);
     } else if (selector.kind === 'group') {
         if (!deviceGroups.length) {
             row.appendChild(el('span', 'stat-card__meta', t('device_groups.none_defined')));
@@ -989,7 +1013,7 @@ function fillKindSelects() {
     ['rule-target-kind', 'rule-exclude-kind'].forEach((id) => {
         const select = document.getElementById(id);
         select.textContent = '';
-        ['all', 'machines', 'ad_ou', 'folder', 'field', 'group'].forEach((kind) => {
+        ['all', 'machines', 'ad_ou', 'folder', 'os', 'field', 'group'].forEach((kind) => {
             // "Every PC" as an EXCLUSION would exclude everything, which is never what
             // anybody means; leave it out rather than let a rule be built that targets none.
             if (id === 'rule-exclude-kind' && kind === 'all') return;
@@ -1032,6 +1056,7 @@ document.getElementById('rule-add-clause').addEventListener('click', () => {
         if (kind === 'group') selector.group_id = deviceGroups.length ? deviceGroups[0].id : null;
         if (kind === 'folder') { selector.folder_id = null; selector.include_children = true; }
         if (kind === 'field') { selector.field = ''; selector.value = ''; }
+        if (kind === 'os') selector.os = 'windows';
         draft.target[side].push(selector);
         renderTargets();
         refreshTargetCount();

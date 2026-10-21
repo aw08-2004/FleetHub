@@ -63,6 +63,16 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 > reusing `manage_rules` (editing a group changes what other people's rules reach); resolving
 > a deployment's group live (a deployment must not change targets after it was confirmed).
 >
+> **Hub 1.160.0 — target and condition by operating system.** Groups and rules could see an
+> OS only through `ad.os`, so "every Windows PC" missed every machine outside AD. A new `os`
+> selector (any Windows / Linux / Android, or one of the Dashboard's buckets) and `os.*`
+> condition variables (`os.family`, `os.release`, `os.name`, `os.version`, `os.build`,
+> `os.arch`, `os.source`) read the agent's own report first and AD second, through the same
+> `normalize_os` the Dashboard counts with — moved to `os_buckets.py` so `rules.py` can stay
+> app-free. *Rejected:* `capabilities.platform_of` (every Windows agent in the field reports
+> no platform, so it would match almost nothing); a free-text "OS contains" selector (it
+> misfiles the early Windows 11 builds WMI still calls Windows 10); `os=unknown` as a target.
+>
 > **Hub 1.140.0 — console review.** A review against seeded edge-case data fixed numbers the
 > console was getting wrong and the navigation around them:
 > - **Values.** A missing reading is no longer drawn as 0 (fan "Driven at 0%", flat-0 live

@@ -39,7 +39,7 @@
 
     // The selector kinds this page offers. Taken from the server's target vocabulary rather
     // than hardcoded, except for the ORDER, which is a UI decision.
-    var SELECTOR_KINDS = ['all', 'machines', 'group', 'ad_ou', 'folder', 'field'];
+    var SELECTOR_KINDS = ['all', 'machines', 'group', 'ad_ou', 'folder', 'os', 'field'];
     // PC-tree folders for the `folder` selector, loaded with the device groups.
     var pcFolders = [];
 
@@ -54,6 +54,23 @@
             current = pcFolders.find(function (f) { return f.id === parent; });
         }
         return names.length ? names.join(' / ') : '#' + id;
+    }
+
+    // The values an `os` selector may name -- rules.TARGET_OS_VALUES, ordered for a person reading the list.
+    // Literal keys, not t(`rules.target_os.${value}`): tests/test_i18n.py only sees literals.
+    var OS_CHOICES = ['windows', 'windows_11', 'windows_10', 'windows_server', 'windows_legacy',
+                      'linux', 'android'];
+    function osLabel(value) {
+        switch (value) {
+            case 'windows': return t('rules.target_os.windows');
+            case 'windows_11': return t('rules.target_os.windows_11');
+            case 'windows_10': return t('rules.target_os.windows_10');
+            case 'windows_server': return t('rules.target_os.windows_server');
+            case 'windows_legacy': return t('rules.target_os.windows_legacy');
+            case 'linux': return t('rules.target_os.linux');
+            case 'android': return t('rules.target_os.android');
+            default: return value;
+        }
     }
 
     async function api(path, options) {
@@ -343,6 +360,16 @@
             }
         } else if (selector.kind === 'folder') {
             appendFolderSelector(row, selector);
+        } else if (selector.kind === 'os') {
+            var osSelect = el('select', 'input');
+            OS_CHOICES.forEach(function (value) { osSelect.appendChild(opt(value, osLabel(value))); });
+            if (!selector.os) selector.os = 'windows';
+            osSelect.value = selector.os;
+            osSelect.addEventListener('change', function () {
+                selector.os = osSelect.value;
+                refreshTargetCount();
+            });
+            row.appendChild(osSelect);
         } else if (selector.kind === 'field') {
             var name = el('input', 'input');
             name.type = 'text';

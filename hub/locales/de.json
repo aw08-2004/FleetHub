@@ -3521,7 +3521,17 @@
       "ad_ou": "AD-Organisationseinheit",
       "field": "Nach eigenem Feld",
       "group": "Gerätegruppe",
-      "folder": "PC-Ordner"
+      "folder": "PC-Ordner",
+      "os": "Betriebssystem"
+    },
+    "target_os": {
+      "windows": "Beliebiges Windows",
+      "linux": "Beliebiges Linux",
+      "android": "Android",
+      "windows_11": "Windows 11",
+      "windows_10": "Windows 10",
+      "windows_legacy": "Windows 8.1 und älter",
+      "windows_server": "Windows Server"
     },
     "variable": {
       "sys.machine": {
@@ -3670,6 +3680,30 @@
       },
       "ad.disabled": {
         "label": "In AD deaktiviert"
+      },
+      "os.name": {
+        "label": "Betriebssystem"
+      },
+      "os.family": {
+        "label": "Betriebssystemfamilie",
+        "description": "windows, linux oder android. Zuerst vom Agenten gemeldet, Active Directory als Rückfall."
+      },
+      "os.release": {
+        "label": "Betriebssystem-Release",
+        "description": "windows_11, windows_10, windows_server, windows_legacy, linux oder android -- dieselben Gruppen, die das Dashboard zählt."
+      },
+      "os.version": {
+        "label": "Betriebssystemversion"
+      },
+      "os.build": {
+        "label": "Betriebssystem-Buildnummer"
+      },
+      "os.arch": {
+        "label": "Betriebssystemarchitektur"
+      },
+      "os.source": {
+        "label": "Betriebssystem gemeldet von",
+        "description": "agent, wenn der Rechner sein Betriebssystem selbst gemeldet hat, ad, wenn nur Active Directory es kennt."
       },
       "proc.count": {
         "label": "Laufende Prozesse"

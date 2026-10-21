@@ -52,7 +52,8 @@ def seed_schema():
             last_uptime_seconds INTEGER, primary_sensor_name TEXT, service_tag TEXT,
             manufacturer TEXT, boot_epoch INTEGER,
             ad_dn TEXT, ad_ou TEXT, ad_object_guid TEXT, ad_owner TEXT, ad_os TEXT,
-            ad_disabled INTEGER, ad_last_logon TEXT, ad_synced_at INTEGER);
+            ad_disabled INTEGER, ad_last_logon TEXT, ad_synced_at INTEGER,
+            os_caption TEXT, os_version TEXT, os_build TEXT, os_arch TEXT);
         CREATE TABLE remote_inventory (
             machine TEXT PRIMARY KEY, sessions_json TEXT NOT NULL,
             displays_json TEXT NOT NULL, reported_at INTEGER NOT NULL);
@@ -583,6 +584,7 @@ print("\n-- targeting --")
 import fleet
 import alerts
 import scripts
+import os_buckets
 
 fleet.init_fleet_db(DB)
 alerts.init_alerts_db(DB)
@@ -640,6 +642,75 @@ check("unknown selector kind is refused", err is not None)
 err, _ = rules.validate_target({"include": [{"kind": "field", "field": "nosuch",
                                              "value": "x"}]}, EXTRA)
 check("field selector on an unknown field is refused", err is not None)
+
+# -- by operating system (hub 1.159.0) --------------------------------------------------
+# The selector exists because the only OS a group could be built from was AD's. So the
+# machine that matters here is OS-WIN11-NOAD: the agent says Windows 11 and the directory
+# knows nothing about it, which is exactly the PC an "every Windows PC" group used to miss.
+conn = sqlite3.connect(DB)
+for name, caption, build, ad_os in (
+        ("OS-WIN11-NOAD", "Microsoft Windows 11 Pro", "26100", None),
+        # Early Windows 11: WMI still says "Windows 10". The build decides.
+        ("OS-WIN11-OLDCAP", "Microsoft Windows 10 Pro", "22000", None),
+        ("OS-WIN10", "Microsoft Windows 10 Enterprise", "19045", "Windows 10 Pro"),
+        # AD only -- an agent too old to report OS. AD is the fallback, not ignored.
+        ("OS-ADONLY", None, None, "Windows Server 2022 Standard"),
+        ("OS-UBUNTU", "Ubuntu 24.04 LTS", "6.8.0-45-generic", None),
+        ("OS-NOTHING", None, None, None)):
+    conn.execute("INSERT OR REPLACE INTO machine_info (machine, os_caption, os_build, ad_os) "
+                 "VALUES (?, ?, ?, ?)", (name, caption, build, ad_os))
+conn.commit()
+conn.close()
+
+any_windows = targets({"include": [{"kind": "os", "os": "windows"}]})
+check("os=windows takes an agent-reported Windows PC that AD has never heard of",
+      "OS-WIN11-NOAD" in any_windows)
+check("os=windows takes a Windows PC known only to AD",
+      "OS-ADONLY" in any_windows)
+check("os=windows leaves Linux and the undescribed out",
+      "OS-UBUNTU" not in any_windows and "OS-NOTHING" not in any_windows)
+
+win11 = targets({"include": [{"kind": "os", "os": "windows_11"}]})
+check("os=windows_11 follows the build, not a caption that still says 10",
+      "OS-WIN11-OLDCAP" in win11 and "OS-WIN10" not in win11)
+
+check("the agent beats AD when both have spoken",
+      targets({"include": [{"kind": "os", "os": "windows_10"}]}) == ["OS-WIN10"])
+
+err, clean = rules.validate_target({"include": [{"kind": "os", "os": " Windows "}]}, EXTRA)
+check("an os selector is normalised", err is None and clean["include"][0]["os"] == "windows")
+err, _ = rules.validate_target({"include": [{"kind": "os", "os": "unknown"}]}, EXTRA)
+check("os=unknown is refused -- not a target, a to-do list", err is not None)
+err, _ = rules.validate_target({"include": [{"kind": "os", "os": "Windows 11"}]}, EXTRA)
+check("a display name is refused rather than silently matching nothing", err is not None)
+
+minus_server = targets({"include": [{"kind": "os", "os": "windows"}],
+                        "exclude": [{"kind": "os", "os": "windows_server"}]})
+check("every Windows PC except the servers",
+      "OS-WIN10" in minus_server and "OS-ADONLY" not in minus_server)
+
+check("every non-unknown os bucket is a selectable os value",
+      all(b in rules.TARGET_OS_VALUES for b in os_buckets.OS_BUCKETS if b != "unknown"))
+
+# The condition side: the same facts as variables.
+osv = rules.resolve_machine_vars(DB, "OS-WIN11-OLDCAP", now=NOW)
+check("os.family / os.release are slugs off the same bucketer",
+      osv["os.family"].value == "windows" and osv["os.release"].value == "windows_11")
+check("os.name is the raw caption", osv["os.name"].value == "Microsoft Windows 10 Pro")
+check("os.build is a number a rule can compare", osv["os.build"].value == 22000)
+check("os.source says the agent reported it", osv["os.source"].value == "agent")
+check("os.family == windows evaluates true",
+      rules.evaluate(parse('os.family == "windows"')[1], osv) is True)
+
+adv = rules.resolve_machine_vars(DB, "OS-ADONLY", now=NOW)
+check("an AD-only machine still has a family, and says AD told us",
+      adv["os.family"].value == "windows" and adv["os.source"].value == "ad")
+check("but no build -- the directory never had one", not adv["os.build"].known)
+
+nov = rules.resolve_machine_vars(DB, "OS-NOTHING", now=NOW)
+check("an undescribed machine is UNKNOWN, not 'not Windows'",
+      not nov["os.family"].known and not nov["os.release"].known
+      and rules.evaluate(parse('os.family != "windows"')[1], nov) is not True)
 
 
 # =======================================================================================
