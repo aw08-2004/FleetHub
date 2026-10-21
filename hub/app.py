@@ -166,8 +166,10 @@ if _env_acl_note:
 # ================================
 # CONFIG
 # ================================
-# Bump on every push to main and restart the hub service -- shown in the
-# dashboard header so a stale/un-restarted deployment is obvious at a glance.
+# Bump on every push to beta that touches hub/ -- to the next number after BETA's, which runs
+# ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
+# Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
+# deployment is obvious at a glance.
 HUB_VERSION = "1.160.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
