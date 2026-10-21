@@ -44,7 +44,8 @@
         <h2 class="section-title">{{ t('tickets.facts') }}</h2>
         <p class="stat-card__meta">{{ t('tickets.facts_help') }}</p>
         <div class="table-scroll">
-            <table class="data-table">
+            {# Two columns of name/value facts: no table tools, no card layout. #}
+            <table class="data-table" data-table-tools="off">
                 <thead>
                     <tr><th scope="col">{{ t('tickets.fact_name') }}</th><th scope="col">{{ t('tickets.fact_value') }}</th></tr>
                 </thead>

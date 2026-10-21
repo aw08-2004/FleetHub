@@ -193,6 +193,25 @@ the fix goes to `beta` like anything else.
 - [ ] **Translations.** The action, its description and *(no folder)* read correctly in German
   and Spanish.
 
+**Hub 1.163.0 — table search and column filters, card tables on phones, Ctrl+K placement**
+- [ ] **Ctrl+K.** Opens centred about an eighth of the way down, 640 px wide, with padding round
+  the box and its rows; full width near the top on a phone. Same in the dark theme.
+- [ ] **Nothing else moved.** base.css's reset is in a cascade layer now, so every Tailwind
+  margin and padding utility in the console started working. Look over Devices (the bulk bar),
+  the PC tree and the alert cards for spacing that changed for the worse.
+- [ ] **Devices.** *Filters* opens a row of boxes under the headers; *Manufacturer* `dell` plus
+  *OS* `windows 10` narrows the list, the count says "N of M", *Select all* ticks only those,
+  *Export* contains only those, and a 30 s refresh keeps the filter.
+- [ ] **Other tables.** Device Groups, Watchdogs, Rules and a machine-page tab: a search box
+  appears above any table with more than five rows, filters combine, *Clear filters* resets.
+  Audit, Tickets, Users, Event logs and Processes show *Filters* but no second search box.
+- [ ] **Phone.** At phone width every one of those tables is a stack of labelled cards, the
+  page never scrolls sideways, and a filtered-out row is really gone.
+- [ ] **Untouched tables.** An alert's duplicate-machine picker, the sensor list, a ticket's
+  facts and a printed device report look as they did.
+- [ ] **Translations.** The search box, *Filters*, *Clear filters* and the count read correctly
+  in German and Spanish.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-20
 
 **Read this first when working on the machine that holds the signing key.** Everything below

@@ -1867,7 +1867,15 @@
     "hub_error": "El hub devolvió un error (HTTP {status}).",
     "request_failed": "{url} devolvió {status}",
     "intro_more": "Más",
-    "intro_less": "Menos"
+    "intro_less": "Menos",
+    "table_search": "Buscar en esta tabla",
+    "table_filters": "Filtros",
+    "table_filter_column": "Filtrar por {column}",
+    "table_clear": "Borrar filtros",
+    "table_count": {
+      "one": "{visible} de {count} fila",
+      "other": "{visible} de {count} filas"
+    }
   },
   "packages": {
     "preset": {

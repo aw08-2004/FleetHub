@@ -453,6 +453,9 @@ function renderDuplicateSerial(alert) {
 
     const table = document.createElement('table');
     table.className = 'data-table';
+    // No table tools: a handful of radio rows inside a card, and cardLines() reads this table
+    // as a direct child of the card, which the tools' scroll wrapper would break.
+    table.dataset.tableTools = 'off';
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
     for (const label of [

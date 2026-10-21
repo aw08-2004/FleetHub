@@ -12,9 +12,18 @@ The silent failures this file exists to catch:
   * **An unpinned or unverified CLI.** The build script downloads an executable. A version
     without a digest beside it is a binary trusted on first sight.
   * **The binary getting committed.** 110 MB in git history, on every clone, forever.
+  * **An unlayered reset outranking every utility.** Tailwind writes its utilities into
+    `@layer utilities`, and an unlayered rule beats any layered one whatever its specificity.
+    base.css's `* { margin: 0; padding: 0 }` was unlayered, so from 1.114.0 to 1.162.0 every
+    margin and padding utility in the console was dead -- the Ctrl+K palette sat pinned to
+    the top-left corner with its rows against its border, and nothing errored.
+  * **A class with no CSS behind it**, because app.css was not rebuilt after it was written.
 
-What this cannot check is whether app.css is up to date with the classes in the templates --
-that needs the CLI, which the test environment does not have. Rebuild after changing classes.
+What this cannot check in full is whether app.css is up to date -- that needs the CLI, which
+the test environment does not have. It checks the classes most likely to be missing and least
+likely to be anything but Tailwind: arbitrary values and variants (`[`, `:` or `/` in the
+name). A plain `flex` or `hidden` is also a components.css or JS-hook name, so it cannot be
+told apart from one here. Rebuild after changing classes.
 
 Run from the repo root.
 """
@@ -95,11 +104,93 @@ def test_the_cli_is_pinned_and_verified():
     check("the downloaded binary is gitignored", "tools/.bin/" in read(".gitignore"))
 
 
+def test_the_reset_is_below_the_utilities():
+    print("\n-- base.css's reset is layered, so utilities can override it --")
+    base_css = read("hub", "static", "css", "base.css")
+    # Every rule outside a layer block, at the top level: the universal reset must not be one.
+    unlayered = re.sub(r"@layer\s+reset\s*\{(?:[^{}]|\{[^{}]*\})*\}", "", base_css)
+    unlayered = re.sub(r"/\*.*?\*/", "", unlayered, flags=re.S)
+    check("base.css wraps its reset in @layer reset", re.search(r"@layer\s+reset\s*\{", base_css) is not None)
+    check("...and no unlayered `* {` rule is left", not re.search(r"(^|\})\s*\*\s*\{", unlayered))
+    page = read("hub", "templates", "base.html")
+    # Layer order is order of first appearance: base.css must name `reset` before app.css
+    # names theme and utilities, or the reset becomes the HIGHEST layer.
+    check("base.css is linked before app.css, so `reset` is the lowest layer",
+          0 <= page.find("css/base.css") < page.find("css/app.css"))
+
+
+def css_escape(name):
+    """The selector Tailwind writes for a class: everything outside [A-Za-z0-9_-] escaped."""
+    return "".join(c if c.isalnum() or c in "-_" else "\\" + c for c in name)
+
+
+def tailwind_only(token):
+    """An arbitrary-value or variant class: a name only Tailwind could have produced."""
+    if not token or "{" in token or "}" in token or "://" in token:
+        return False
+    return bool(re.search(r"[\[:/]", token)) and re.match(r"^[a-z!-]", token) is not None
+
+
+TEMPLATE_CLASS = re.compile(r'\bclass="([^"]*)"')
+JINJA = re.compile(r"\{\{.*?\}\}|\{%.*?%\}")
+# The places a JS file names classes: className = '...', classList.add/remove/toggle('...'),
+# and common.js's el('tag', '...').
+JS_CLASS = re.compile(
+    r"(?:className\s*=\s*|classList\.(?:add|remove|toggle)\(\s*|\bel\(\s*'[a-z0-9]+'\s*,\s*)"
+    r"(['\"])([^'\"]*)\1")
+
+
+def used_classes():
+    """(where, class) for every Tailwind-only class in a template or a JS class literal."""
+    found = set()
+    for folder, _, files in os.walk(os.path.join(ROOT, "hub", "templates")):
+        for name in files:
+            if not name.endswith(".html"):
+                continue
+            path = os.path.join(folder, name)
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            for attr in TEMPLATE_CLASS.findall(text):
+                for token in JINJA.sub(" ", attr).split():
+                    if tailwind_only(token):
+                        found.add((os.path.relpath(path, ROOT), token))
+    js = os.path.join(ROOT, "hub", "static", "js")
+    for name in os.listdir(js):
+        if not name.endswith(".js"):
+            continue
+        path = os.path.join(js, name)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        for _, value in JS_CLASS.findall(text):
+            for token in value.split():
+                if tailwind_only(token):
+                    found.add((os.path.relpath(path, ROOT), token))
+    return sorted(found)
+
+
+def test_built_file_has_every_arbitrary_class():
+    print("\n-- every arbitrary-value / variant class in use has CSS in app.css --")
+    path = os.path.join(CSS, "app.css")
+    if not os.path.isfile(path):
+        check("app.css exists to check against", False)
+        return
+    built = read("hub", "static", "css", "app.css")
+    used = used_classes()
+    check("the scan finds the palette's classes (the scan itself works)",
+          any(token == "mt-[12vh]" for _, token in used))
+    missing = [(where, token) for where, token in used if "." + css_escape(token) not in built]
+    for where, token in missing:
+        print(f"       missing: {token}  ({where})")
+    check(f"all {len(used)} are in app.css -- else run tools/build_css.ps1", not missing)
+
+
 def main():
     test_the_output_is_committed_and_linked()
     test_no_preflight()
     test_colours_come_from_the_tokens()
     test_the_cli_is_pinned_and_verified()
+    test_the_reset_is_below_the_utilities()
+    test_built_file_has_every_arbitrary_class()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

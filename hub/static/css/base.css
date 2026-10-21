@@ -1,7 +1,16 @@
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
+/* The reset sits in its own cascade layer, declared here -- first in the page -- so it is the
+   LOWEST layer, below app.css's theme and utilities. Unlayered, it beat every Tailwind margin
+   and padding utility in the console whatever their specificity (an unlayered rule outranks
+   any layered one), which is why the Ctrl+K palette sat pinned to the top-left corner with
+   its rows jammed against its border from 1.114.0 to 1.162.0: `mx-auto mt-[12vh]` and every
+   px-/py- in it were in app.css all along and simply lost. components.css is unlayered and
+   still overrides the reset exactly as before. */
+@layer reset {
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
 }
 
 html, body {
