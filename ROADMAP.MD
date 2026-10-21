@@ -651,6 +651,15 @@ precedence rule, not two).
 **Owed:** the agent half needs the next agent MINOR (release.ps1), deployed after the hub, and a
 first contact on a real Windows PC -- see *Owed locally*.
 
+**Not done -- uninstall asymmetry** (raised in review on #162). The agent's own release
+(`GroupPolicyRunner.Release`, run by SelfUninstaller when the hub deletes a device) removes a
+marked value only while it still holds what FleetHub wrote. `agent-install.ps1 -Uninstall`, the
+by-hand path, removes every value on the marker without that check, because the last-written
+values live in `group_policy.json` and the script does not read it. So a value a domain GPO took
+over after FleetHub set it is deleted by a manual uninstall until the next `gpupdate` restores
+it. Follow-up: have the script read `Written` from `group_policy.json` and compare before
+deleting, the way it already compares the update-control values to 1.
+
 ---
 
 ## ✅ Live console -- every page updates without a refresh   ·   hub 1.156.0
