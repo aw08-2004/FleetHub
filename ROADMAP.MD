@@ -191,11 +191,13 @@ this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchange
 - **#16 events, #18 sweep, #19 BitLocker:** the checks already written in their entries -- all
   three shipped in agent 3.37.0 and none has been confirmed on a real machine.
 
-**4c. Group Policy (#32), hub 1.159.0 then the next agent MINOR -- not released.** The agent half
+**4c. Group Policy (#32), hub 1.159.0 then agent 3.48.0 on beta -- not released.** The agent half
 (`agent/src/TempMonitorAgent/GroupPolicy/`) compiles and its 24 tests pass, but it has only ever
-run against a dictionary standing in for HKLM. Owed, in this order: deploy the hub; cut the agent
-with `agent/release.ps1` (a MINOR -- the hub reads `gpo_version` presence, so no hub constant
-changes); then on one PC, elevated:
+run against a dictionary standing in for HKLM. Owed, in this order: deploy the beta hub from the
+`beta` branch; cut the agent as a beta with
+`.\release.ps1 -Version 3.48.0 -Channel beta -NotesFile .\release-notes\3.48.0.md` (a MINOR --
+the hub reads `gpo_version` presence, so no hub constant changes; only PCs pinned to beta take
+it); then on one beta PC, elevated:
 - link a policy with `SOFTWARE\Policies\Microsoft\Edge\HideFirstRunExperience = 1` (DWORD) to
   its OU; within about two minutes `reg query` shows it, the marker
   `HKLM\SOFTWARE\FleetHub\GroupPolicy` lists it, and the resultant set says Applied;
