@@ -10,9 +10,14 @@ name: "Claude review"
 # Costs API credits on every run, and `synchronize` means every push to an open PR is a run.
 # If that gets expensive on a long-lived branch, drop `synchronize` and it will review each PR
 # once when it opens.
+#
+# Beta as well as main: since 2026-10-21 every change is a PR into beta first, and main only
+# ever receives the one beta -> main PR (CLAUDE.md). A review that ran on main alone would see
+# each change once, as part of a diff too large to review, after beta hubs were already
+# running it.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, beta]
     types: [opened, synchronize]
 
 # Skip a review that is already obsolete: pushing three commits in a minute should produce one
