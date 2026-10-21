@@ -170,7 +170,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.161.0"
+HUB_VERSION = "1.162.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2397,6 +2397,7 @@ def _on_command_result(command_id, machine, success, result, output=None):
         DB_PATH, command_id,
         status=fleet.STATUS_DONE if success else fleet.STATUS_FAILED,
         result=result, config=_rules_config(), deliver=notify.deliver, audit=_rules_audit,
+        on_scope_change=_directory_scope_changed,
     )
 
 
@@ -4949,8 +4950,11 @@ def _rules_audit(actor, action, target, detail, level=None):
 
 
 def evaluate_rules_once(now=None):
+    # on_scope_change: a move_to_folder action can file a PC into a folder that is a
+    # permission scope, so it re-points scoping through the same hook the PC tree page uses.
     return rules.evaluate_once(DB_PATH, resolve_rule_vars, now=now, config=_rules_config(),
-                               deliver=notify.deliver, audit=_rules_audit)
+                               deliver=notify.deliver, audit=_rules_audit,
+                               on_scope_change=_directory_scope_changed)
 
 
 def collect_probes_once(now=None):

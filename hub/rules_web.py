@@ -10,7 +10,9 @@ Two gates, and the difference between them is the point:
   * **Writing** is `manage_rules`, and writing a rule that issues COMMANDS additionally
     requires `issue_commands` -- enforced down in rules.validate_actions rather than here,
     so that a follow-up action nested inside a message's on_response map gets exactly the
-    same check as a top-level one.
+    same check as a top-level one. A rule that files PCs into PC-tree folders likewise needs
+    `manage_pc_tree` (hub 1.162.0): a folder can be a permission scope, so filing is a grant,
+    and it takes the same capability filing by hand does.
 
 Scope is enforced on TARGETS in two places, and both are needed.
 
@@ -95,6 +97,9 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
 
     def _may_issue_commands():
         return access.can(permissions.ISSUE_COMMANDS)
+
+    def _may_file_pcs():
+        return access.can(permissions.MANAGE_PC_TREE)
 
     def _actor():
         return access.email() or "unknown"
@@ -649,7 +654,7 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
             return jsonify({"error": error}), 400
         error, rule = rules.save_rule(
             db_path, body, actor=_actor(), extra=_extra(), author_scope=_author_scope(),
-            allow_command=_may_issue_commands(),
+            allow_command=_may_issue_commands(), allow_pc_tree=_may_file_pcs(),
             max_targets_cap=config["max_targets_per_tick"],
             command_cooldown_floor=config["command_cooldown_floor_seconds"],
         )
@@ -686,7 +691,7 @@ def create_rules_blueprint(db_path, login_required, access, resolve_vars, rules_
         error, rule = rules.save_rule(
             db_path, body, rule_id=rule_id, actor=_actor(), extra=_extra(),
             author_scope=_author_scope(),
-            allow_command=_may_issue_commands(),
+            allow_command=_may_issue_commands(), allow_pc_tree=_may_file_pcs(),
             max_targets_cap=config["max_targets_per_tick"],
             command_cooldown_floor=config["command_cooldown_floor_seconds"],
         )

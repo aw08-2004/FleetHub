@@ -957,7 +957,11 @@ def action_prompt(db_path):
     """
     names = [s["name"] for s in scripts.list_scripts(db_path)]
     listed = ", ".join(sorted(names)) if names else "(none defined)"
-    return ("Action types: " + ", ".join(rules.ACTION_TYPES) + ".\n"
+    # move_to_folder is left out: the drafter never knows folder ids, and validated_draft
+    # refuses it anyway (allow_pc_tree fails closed), so offering it would only buy a
+    # repair round.
+    offered = [a for a in rules.ACTION_TYPES if a != rules.ACTION_MOVE_TO_FOLDER]
+    return ("Action types: " + ", ".join(offered) + ".\n"
             "Commands a rule may issue: " + ", ".join(rules.offered_commands()) + ".\n"
             "Scripts in the library: " + listed + ".\n"
             "A rule has no schedule and cannot kill a process, and there is no action for\n"

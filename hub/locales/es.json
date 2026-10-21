@@ -3415,8 +3415,13 @@
       "script": {
         "label": "Ejecutar un script guardado",
         "description": "Ejecuta uno de sus scripts guardados en el equipo. Edite el script una vez y todas las reglas que lo usan lo siguen."
+      },
+      "move_to_folder": {
+        "label": "Mover a una carpeta de equipos",
+        "description": "Archiva el equipo en la carpeta que elijas, o lo saca de todas las carpetas. Una carpeta puede conceder acceso, así que esto cambia quién puede llegar al equipo. Requiere el permiso Gestionar árbol de equipos."
       }
     },
+    "action_folder_none": "(sin carpeta) -- sacarlo de todas las carpetas",
     "command": {
       "gpupdate": {
         "label": "Actualizar directivas de grupo",
