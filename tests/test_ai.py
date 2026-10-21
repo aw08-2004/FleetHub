@@ -437,6 +437,11 @@ def main():
                                                "follow tool_calls"}}).encode())
             check("a message-shape 400 that merely mentions tools is not a refusal",
                   "tool list" not in str(error) and "must follow" in str(error))
+            error = step(json.dumps({"error": "unknown tool 'x'"}).encode())
+            check("an unknown tool NAME is not a refusal of the tool list",
+                  "tool list" not in str(error) and "unknown tool" in str(error))
+            error = step(json.dumps({"detail": "unknown field: tools"}).encode())
+            check("...but an unknown `tools` FIELD is", "tool list" in str(error))
             error = step(b"")
             check("a bare 400 keeps the tool sentence, hedged",
                   "tool list" in str(error) and "without saying why" in str(error))

@@ -570,8 +570,10 @@ _CONTEXT_WORDS = ("context length", "context window", "context_length", "maximum
 # 'tool' must follow tool_calls" is a message-shape 400 from a server that does tools fine,
 # and calling it a refusal is the very misdiagnosis this code exists to stop (review, PR #166).
 _TOOL_WORDS = ("tool", "function call", "function_call")
-_REFUSAL_WORDS = ("support", "not enabled", "not allowed", "tool_choice", "unknown",
-                  "unrecognized", "extra")
+# "unknown field"/"unknown parameter", never bare "unknown": "unknown tool 'x'" is a call to
+# a tool name the request did not offer, from a server that does tools (review, PR #166).
+_REFUSAL_WORDS = ("support", "not enabled", "not allowed", "tool_choice", "unknown field",
+                  "unknown parameter", "unrecognized", "extra")
 
 CONTEXT_EXCEEDED = ("the conversation no longer fits this model's context window -- start a "
                     "new conversation, or lower Assistant memory size in Settings -> AI")
