@@ -162,6 +162,20 @@ the fix goes to `beta` like anything else.
 - [ ] **Watchdog target.** A watchdog aimed at *Any Windows* reaches the same PCs as the group.
 - [ ] **Translations.** The new selector and variables read correctly in German and Spanish.
 
+**Hub 1.161.0 — Send to assistant on alerts; the provider's real reason on a 400** (#166)
+- [ ] **Button on cards.** With the assistant on, every alert card has *Send to assistant*;
+  clicking it opens a new conversation carrying that card's title, text and machine, and the
+  assistant investigates it. With the assistant off, or for an operator without View, there
+  is no button.
+- [ ] **Bundles.** A group of related alerts has the button on its header, and the message
+  carries the header's cause line plus every member card.
+- [ ] **Context overflow.** Raise *Assistant memory size* well past what the model's context
+  window holds (or run a long investigation on a small model) until the provider answers 400: the console says
+  the conversation no longer fits the context window, not that tool calls are unsupported,
+  and the hub log has an `[ai] provider answered HTTP 400:` line with the provider's reason.
+- [ ] **Other rejections** show the provider's own reason, with no API key in it.
+- [ ] **Translations.** The button and the message read correctly in German and Spanish.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-20
 
 **Read this first when working on the machine that holds the signing key.** Everything below
