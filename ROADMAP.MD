@@ -176,6 +176,23 @@ the fix goes to `beta` like anything else.
 - [ ] **Other rejections** show the provider's own reason, with no API key in it.
 - [ ] **Translations.** The button and the message read correctly in German and Spanish.
 
+**Hub 1.162.0 — a rule that moves PCs into a PC-tree folder** (#168)
+- [ ] **It files.** A rule `os.release == "windows_11"` → *Move to a PC folder* → *Win11*.
+  Within one evaluation tick the matching PCs show under *Win11* in the PC tree, nothing else
+  moved, and the PC's filing says `rule:<id>`.
+- [ ] **No churn.** Leave it running past a cooldown: the PCs stay put, and the rule's fire
+  history shows `moved: false` rather than a re-file each time.
+- [ ] **Unfile.** *(no folder)* takes a matching PC out of every folder.
+- [ ] **The gate.** An operator with Manage rules but not Manage PC tree cannot save the rule
+  (the error says so), including as a message's *Yes* follow-up.
+- [ ] **Delete refusal.** Deleting *Win11* is refused and names the rule.
+- [ ] **Scope follows.** A permission group scoped to *Win11* gains the moved PCs at once, and a
+  member of it sees them without reloading.
+- [ ] **New action defaults.** Adding the action picks the first folder by path; it never starts
+  on *(no folder)* unless there are no folders.
+- [ ] **Translations.** The action, its description and *(no folder)* read correctly in German
+  and Spanish.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-20
 
 **Read this first when working on the machine that holds the signing key.** Everything below
@@ -657,6 +674,18 @@ the trees are hub-only and change nothing on an agent; Group Policy needs an age
   watchdogs and device groups, both through `pc_tree.machines_in_folders` (subtree included by
   default). Every tree write invalidates the permissions cache in the model, and the web layer
   re-points live sockets through the same hook an AD sync uses.
+- **Hub 1.162.0 — a rule can file PCs** (`move_to_folder` action): into a folder, or with
+  `folder_id: null` out of every folder. It is gated like filing by hand, because it is the same
+  grant. The author needs `manage_pc_tree`, checked in `validate_actions` so a message's
+  follow-up is covered, and the gate **fails closed** for callers that never pass it, the AI
+  drafter included. The machine is already inside the author's scope via `scoped_targets`. A
+  PC already in place is not refiled; a fire that did move one is audited as `pc_folder.file` (as
+  filing by hand is) and re-points live sockets; and
+  `rules_using_folder` now counts action references, so a folder a rule files into cannot be
+  deleted.
+  *Rejected:* the command kill switch (nothing is sent to a PC; the capability is the fence),
+  a "move to device group" twin (a group is a filter, not a container), and writing to AD (the
+  OU half is AD's, read-only by design).
 - **Fixed in passing:** the rules `ad_ou` selector was a lowercase string `endswith`, so
   `OU=Cajas` reached `OU=NoCajas` -- the exact bug noted for permission scope under #4. It now
   uses `directory.ou_contains`, the same component-wise test permissions use.

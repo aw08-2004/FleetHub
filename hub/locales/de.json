@@ -3415,8 +3415,13 @@
       "script": {
         "label": "Gespeichertes Skript ausführen",
         "description": "Führt eines Ihrer gespeicherten Skripte auf dem PC aus. Bearbeiten Sie das Skript einmal, und jede Regel, die es verwendet, folgt."
+      },
+      "move_to_folder": {
+        "label": "In einen PC-Ordner verschieben",
+        "description": "Legt den PC im gewählten Ordner ab oder nimmt ihn aus jedem Ordner heraus. Ein Ordner kann Zugriff gewähren, daher ändert das, wer den PC erreichen kann. Erfordert die Berechtigung PC-Baum verwalten."
       }
     },
+    "action_folder_none": "(kein Ordner) -- aus jedem Ordner herausnehmen",
     "command": {
       "gpupdate": {
         "label": "Gruppenrichtlinien aktualisieren",

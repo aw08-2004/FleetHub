@@ -3538,8 +3538,13 @@
       "script": {
         "label": "Run a saved script",
         "description": "Runs one of your saved scripts on the PC. Edit the script once and every rule using it follows."
+      },
+      "move_to_folder": {
+        "label": "Move to a PC folder",
+        "description": "Files the PC into the folder you pick, or takes it out of every folder. A folder can grant access, so this changes who can reach the PC. Needs the Manage PC tree permission."
       }
     },
+    "action_folder_none": "(no folder) -- take it out of every folder",
     "command": {
       "gpupdate": {
         "label": "Refresh group policy",

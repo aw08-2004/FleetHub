@@ -9,7 +9,10 @@ The silent failures this file exists to catch:
     an OU holding none of their PCs must not appear in the response at all.
   * **Write routes that only check `view`.** The page hides its controls, and the API must
     refuse anyway.
-  * **A folder deleted while a rule or a permission group names it.** 409, naming them.
+  * **A folder deleted while a rule or a permission group names it.** 409, naming them --
+    including a rule that only FILES into it (move_to_folder, hub 1.162.0).
+  * **A rule that files PCs, saved by someone who may not file them.** Filing is a grant, so
+    the rules API needs manage_pc_tree for it exactly as /api/pc-tree/file does.
   * **The group editor unable to say "move this group to the top level".** JSON null and ""
     for parent_id both mean top level; an absent key means unchanged.
 
@@ -71,6 +74,9 @@ def setup():
     permissions.create_group(
         app.DB_PATH, name="Filers", capabilities=[permissions.VIEW, permissions.MANAGE_PC_TREE],
         machines=["PC-1", "PC-3"], members=["filer@example.com"], actor="root@example.com")
+    permissions.create_group(
+        app.DB_PATH, name="Rule writers", capabilities=[permissions.VIEW, permissions.MANAGE_RULES],
+        machines=["PC-1"], members=["ruler@example.com"], actor="root@example.com")
 
 
 def test_gates_and_reads():
@@ -167,6 +173,28 @@ def test_folder_scope_and_delete(cajas, sub):
     check("...and deletes once that group no longer scopes by folder", r.status_code == 200)
 
 
+def test_move_action_over_http():
+    print("\n-- a rule that files PCs needs manage_pc_tree, and pins its folder --")
+    root = client_for("root@example.com")
+    folder = root.post("/api/pc-tree/folders", json={"name": "Win11"}).get_json()
+    rule = {"name": "File Win11", "condition_text": "sys.uptime_days > 7",
+            "target": {"include": [{"kind": "machines", "machines": ["PC-1"]}]},
+            "actions": [{"type": "move_to_folder", "params": {"folder_id": folder["id"]}}],
+            "for_seconds": 0, "cooldown_seconds": 0}
+    r = client_for("ruler@example.com").post("/api/rules", json=rule)
+    check("manage_rules alone cannot save a rule that files PCs",
+          r.status_code == 400 and "permission" in r.get_json()["error"])
+    r = root.post("/api/rules", json=rule)
+    check("an operator who may file PCs can", r.status_code == 201)
+    r = root.delete(f"/api/pc-tree/folders/{folder['id']}")
+    check("deleting the folder that rule files into is a 409 naming it",
+          r.status_code == 409 and "File Win11" in r.get_json()["error"])
+    with sqlite3.connect(app.DB_PATH) as conn:
+        conn.execute("DELETE FROM rules")
+    r = root.delete(f"/api/pc-tree/folders/{folder['id']}")
+    check("...and deletes once no rule files into it", r.status_code == 200)
+
+
 def test_group_parent_over_http():
     print("\n-- the group API reads parent_id by key --")
     root = client_for("root@example.com")
@@ -191,6 +219,7 @@ def main():
     test_gates_and_reads()
     cajas, sub = test_filing_scope()
     test_folder_scope_and_delete(cajas, sub)
+    test_move_action_over_http()
     test_group_parent_over_http()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
