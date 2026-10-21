@@ -643,7 +643,7 @@ err, _ = rules.validate_target({"include": [{"kind": "field", "field": "nosuch",
                                              "value": "x"}]}, EXTRA)
 check("field selector on an unknown field is refused", err is not None)
 
-# -- by operating system (hub 1.159.0) --------------------------------------------------
+# -- by operating system (hub 1.160.0) --------------------------------------------------
 # The selector exists because the only OS a group could be built from was AD's. So the
 # machine that matters here is OS-WIN11-NOAD: the agent says Windows 11 and the directory
 # knows nothing about it, which is exactly the PC an "every Windows PC" group used to miss.
