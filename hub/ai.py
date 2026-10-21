@@ -566,12 +566,32 @@ CONTEXT_EXCEEDED = ("the conversation no longer fits this model's context window
                     "new conversation, or lower Assistant memory size in Settings -> AI")
 
 
+def _reason_from_json(data):
+    """The message out of a parsed error body, in whichever shape this server uses.
+
+    OpenAI-shaped servers say {"error": {"message": ...}}; Ollama, vLLM and FastAPI-based
+    gateways say {"error": "..."}, {"message": ...} or {"detail": ...}.
+    """
+    error = data.get("error")
+    if isinstance(error, dict):
+        reason = error.get("message") or error.get("msg") or ""
+    else:
+        reason = error if isinstance(error, str) else ""
+    reason = reason or data.get("message") or data.get("detail") or ""
+    if isinstance(reason, str):
+        return reason
+    # FastAPI's 422 is a list of {"loc", "msg"}; the first msg is the useful part.
+    try:
+        return str(reason[0].get("msg") or "")
+    except (TypeError, IndexError, KeyError, AttributeError):
+        return ""
+
+
 def _provider_reason(response):
     """The provider's own error message, bounded and cleaned, or "". NEVER raises.
 
-    OpenAI-shaped servers say {"error": {"message": ...}}; Ollama, vLLM and FastAPI-based
-    gateways say {"error": "..."}, {"message": ...} or {"detail": ...}. A body that is not
-    JSON is used as text only if it is short -- a long one is an HTML page, not a reason.
+    A body that is not JSON is used as text only if it is short -- a long one is an HTML
+    page, not a reason.
     """
     raw = bytearray()
     try:
@@ -582,26 +602,16 @@ def _provider_reason(response):
     except Exception:                                   # noqa: BLE001
         return ""
     text = bytes(raw[:MAX_ERROR_BODY_BYTES]).decode("utf-8", "replace")
-    reason = ""
     try:
         data = json.loads(text)
     except ValueError:
         data = None
     if isinstance(data, dict):
-        error = data.get("error")
-        if isinstance(error, dict):
-            reason = error.get("message") or error.get("msg") or ""
-        elif isinstance(error, str):
-            reason = error
-        reason = reason or data.get("message") or data.get("detail") or ""
-        if not isinstance(reason, str):
-            # FastAPI's 422 is a list of {"loc", "msg"}; the first msg is the useful part.
-            try:
-                reason = str(reason[0].get("msg") or "")
-            except (TypeError, IndexError, KeyError, AttributeError):
-                reason = ""
+        reason = _reason_from_json(data)
     elif "<" not in text and len(text) <= MAX_REASON_CHARS:
         reason = text
+    else:
+        reason = ""
     reason = " ".join(str(reason).split())
     reason = "".join(ch for ch in reason if ch.isprintable())
     reason = _SECRETISH.sub("[...]", reason)

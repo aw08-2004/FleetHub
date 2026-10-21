@@ -53,7 +53,7 @@ function defuse(text) {
 function cardLines(card) {
     const lines = [];
     const title = card.firstElementChild;
-    if (title && title.tagName === 'DIV') lines.push(title.textContent.trim());
+    if (title?.tagName === 'DIV') lines.push(title.textContent.trim());
     for (const p of card.querySelectorAll(':scope > p.stat-card__meta')) {
         if (p.textContent.trim()) lines.push(p.textContent.trim());
     }
