@@ -278,9 +278,13 @@ jobs:
               | gh "${target[@]}" --repo "$GITHUB_REPOSITORY" --body-file -
           fi
 
+      # From beta, not the default branch: every change goes to beta first and reaches main
+      # only through the one beta -> main PR (CLAUDE.md). A fix cut from main would carry
+      # main's HUB_VERSION -- behind beta's -- and its PR would skip the beta hubs entirely.
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: beta
           fetch-depth: 0
 
       # A resumed or follow-up run picks up the earlier pushed work instead of starting over.
@@ -340,7 +344,7 @@ jobs:
             unrelated to the reported problem.
 
             If the branch already exists, it holds earlier work -- a try that was cut off,
-            or a finished fix. It is checked out. Read `git log origin/main..HEAD`, the issue
+            or a finished fix. It is checked out. Read `git log origin/beta..HEAD`, the issue
             comments and, if there is an open PR, `gh pr view <n> --comments`, and continue
             from there -- do not start over.
 
@@ -365,7 +369,8 @@ jobs:
                found, where, and what you would suggest, then end with outcome "diagnosed".
                A precise diagnosis is a good outcome; a guessed fix is not.
             3. Fix. Otherwise work on the branch above (create it with `git checkout -b` if
-               it does not exist). Make the smallest change that fixes the cause, in the
+               it does not exist -- it starts from `beta`, which is checked out). The
+               HUB_VERSION bump is the next number after beta's, not main's. Make the smallest change that fixes the cause, in the
                style of the file you are editing, and add a test that fails without it.
                **Commit and push after each coherent step** (`git push -u origin <branch>`),
                with a real house-style message -- this run can be cut off at any moment, and
@@ -375,7 +380,7 @@ jobs:
                If either fails, fix it or fall back to step 2's comment.
             5. Ship. If a PR is already open for the branch, push to the branch to update it
                (never open a second one), reply on the PR with what changed, and end with
-               outcome "updated_pr". Otherwise open a PR from the branch against main with
+               outcome "updated_pr". Otherwise open a PR from the branch against beta (`--base beta`, never main) with
                .github/pull_request_template.md filled in and
                "Fixes #${{ steps.plan.outputs.issue }}" in the body. Say plainly that agent
                tests were not run (they need Windows). Then comment the PR link on the issue

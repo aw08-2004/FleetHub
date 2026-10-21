@@ -1,10 +1,12 @@
 name: "CodeQL"
 
+# Beta as well as main, because beta is where changes land first and where beta hubs pull
+# from -- a finding on main alone would arrive after the code had been running on beta.
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   pull_request:
-    branches: [main]
+    branches: [main, beta]
   schedule:
     # Weekly, so newly published queries reach the default branch without a push.
     - cron: "23 4 * * 1"

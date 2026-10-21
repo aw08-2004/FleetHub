@@ -16,7 +16,7 @@ name: "Hub image"
 # nobody (VERSIONING.md; it has bitten twice). Overwriting the tag would be worse: two
 # different images under one version. Pull requests only build, to catch a broken
 # Dockerfile, a stale requirements.lock or a hub/ entry the Dockerfile does not copy before
-# it reaches main.
+# it reaches a branch that publishes -- beta included, since every change lands there first.
 #
 # **Plain docker and curl, no third-party actions.** A job holding `packages: write` should not
 # run code from tags someone else can move, and the docker/* actions bought nothing here that
@@ -41,7 +41,7 @@ on:
     paths:
       - "hub/**"
   pull_request:
-    branches: [main]
+    branches: [main, beta]
     paths:
       - "hub/**"
       - "tools/lock_hub_requirements.py"
