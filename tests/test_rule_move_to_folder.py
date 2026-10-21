@@ -26,6 +26,11 @@ import pc_tree
 import permissions
 import rules
 
+NOW = 1_700_000_000
+# Every action in this file is dispatched with the fleet-wide actions switch on, unless the
+# check is about that switch.
+ACTIONS_ON = {"actions_enabled": True}
+
 PASS = 0
 FAIL = 0
 
@@ -38,9 +43,6 @@ def check(name, cond):
     else:
         FAIL += 1
         print(f"  [XX] {name}")
-
-
-NOW = 1_700_000_000
 
 
 def move(folder_id):
@@ -112,9 +114,8 @@ def main():
               and rules.rule_can_run([move(win11["id"])], False) == (True, None))
 
         print("\n== Dispatch files the PC, once ==")
-        cfg = {"actions_enabled": True}
         out = rules.dispatch_actions(db, [move(win11["id"])], "PC1", {}, rule=saved,
-                                     now=NOW, config=cfg)
+                                     now=NOW, config=ACTIONS_ON)
         check("the PC is filed into the folder", pc_tree.folder_of(db, "PC1") == win11["id"])
         check("...and the fire record says it moved, and from where",
               out[0].get("moved") is True and out[0].get("previous_folder_id") is None)
@@ -124,20 +125,20 @@ def main():
         conn.close()
         check("...filed BY the rule, so the tree says who did it", filed_by == f"rule:{saved['id']}")
         out = rules.dispatch_actions(db, [move(win11["id"])], "PC1", {}, rule=saved,
-                                     now=NOW + 60, config=cfg)
+                                     now=NOW + 60, config=ACTIONS_ON)
         check("a PC already there is moved: False -- no rewrite on every cooldown",
               out[0].get("moved") is False)
-        rules.dispatch_actions(db, [move(other["id"])], "PC1", {}, rule=saved, now=NOW, config=cfg)
+        rules.dispatch_actions(db, [move(other["id"])], "PC1", {}, rule=saved, now=NOW, config=ACTIONS_ON)
         check("a second folder moves it (a PC is in one folder at most)",
               pc_tree.folder_of(db, "PC1") == other["id"])
-        out = rules.dispatch_actions(db, [move(None)], "PC1", {}, rule=saved, now=NOW, config=cfg)
+        out = rules.dispatch_actions(db, [move(None)], "PC1", {}, rule=saved, now=NOW, config=ACTIONS_ON)
         check("null takes it out of every folder",
               pc_tree.folder_of(db, "PC1") is None and out[0].get("moved") is True)
-        out = rules.dispatch_actions(db, [move(None)], "PC2", {}, rule=saved, now=NOW, config=cfg)
+        out = rules.dispatch_actions(db, [move(None)], "PC2", {}, rule=saved, now=NOW, config=ACTIONS_ON)
         check("unfiling a PC that is in no folder is a no-op, not an error",
               out[0].get("moved") is False and "error" not in out[0])
         out = rules.dispatch_actions(db, [move(999), {"type": "snooze", "params": {"seconds": 60}}],
-                                     "PC1", {}, rule=saved, now=NOW, config=cfg)
+                                     "PC1", {}, rule=saved, now=NOW, config=ACTIONS_ON)
         check("a missing folder is a recorded skip, not a raise",
               out[0].get("skipped") and "error" not in out[0])
         check("...and the action after it still runs", "snoozed_until" in out[1])
@@ -146,18 +147,26 @@ def main():
         check("the fleet-wide actions switch still stops it",
               out[0].get("skipped") and pc_tree.folder_of(db, "PC2") is None)
 
-        print("\n== Live scope is re-pointed only when something moved ==")
-        calls = []
-        moved_rec = [{"type": "move_to_folder", "moved": True}]
-        still_rec = [{"type": "move_to_folder", "moved": False}]
-        check("a fire that moved a PC asks for a scope refresh", rules._moved_any(moved_rec))
-        check("one that moved nothing does not", not rules._moved_any(still_rec))
+        print("\n== Live scope is re-pointed, and the move audited, only when something moved ==")
+        check("a record that moved a PC counts as a scope change",
+              rules.moved_any([{"type": "move_to_folder", "moved": True}]))
+        check("one that moved nothing does not",
+              not rules.moved_any([{"type": "move_to_folder", "moved": False}]))
+        audited = []
         fire = {"rule": saved, "machine": "PC2", "variables": {}, "allowed": True,
                 "block_reason": None}
-        rules._fire(db, fire, now=NOW, config=cfg, on_scope_change=lambda: calls.append(1))
-        check("_fire calls on_scope_change after a real move", calls == [1])
-        rules._fire(db, fire, now=NOW + 1, config=cfg, on_scope_change=lambda: calls.append(1))
-        check("...and not again when the PC was already there", calls == [1])
+        moved = rules._fire(db, fire, now=NOW, config=ACTIONS_ON,
+                            audit=lambda *a, **k: audited.append(a))
+        check("_fire reports a real move, which evaluate_once turns into scope_changed", moved is True)
+        files = [a for a in audited if a[1] == "pc_folder.file"]
+        check("...and audits it under the action name filing by hand uses, naming rule and folder",
+              len(files) == 1 and files[0][0] == f"rule:{saved['id']}" and files[0][2] == "PC2"
+              and files[0][3]["folder_id"] == win11["id"])
+        audited.clear()
+        moved = rules._fire(db, fire, now=NOW + 1, config=ACTIONS_ON,
+                            audit=lambda *a, **k: audited.append(a))
+        check("...and reports nothing, and audits no move, when the PC was already there",
+              moved is False and not [a for a in audited if a[1] == "pc_folder.file"])
 
         print("\n== A folder a rule files into cannot be deleted ==")
         using = rules.rules_using_folder(db, [win11["id"]])

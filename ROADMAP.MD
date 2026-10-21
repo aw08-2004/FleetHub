@@ -679,7 +679,8 @@ the trees are hub-only and change nothing on an agent; Group Policy needs an age
   grant. The author needs `manage_pc_tree`, checked in `validate_actions` so a message's
   follow-up is covered, and the gate **fails closed** for callers that never pass it, the AI
   drafter included. The machine is already inside the author's scope via `scoped_targets`. A
-  PC already in place is not refiled, a fire that did move one re-points live sockets, and
+  PC already in place is not refiled; a fire that did move one is audited as `pc_folder.file` (as
+  filing by hand is) and re-points live sockets; and
   `rules_using_folder` now counts action references, so a folder a rule files into cannot be
   deleted.
   *Rejected:* the command kill switch (nothing is sent to a PC; the capability is the fence),

@@ -3350,11 +3350,13 @@ def validate_actions(actions, extra=None, allow_command=True, _nested=False,
     as a top-level action -- a user clicking "Yes" is still a rule issuing a reboot, and a
     check that only guarded the top level would be trivially sidestepped by nesting.
 
-    `allow_pc_tree` is the author's MANAGE_PC_TREE capability, threaded the same way and for
-    the same reason: a "Yes" that files the PC into a folder is still a rule granting it.
-    **It defaults to False, unlike allow_command**, so a caller that never heard of it -- the
-    AI drafter, a migration -- refuses a filing action instead of granting one. allow_command
-    defaults the other way only because it predates every caller that now passes it.
+    `allow_pc_tree` is the author's MANAGE_PC_TREE capability, for move_to_folder. Checked
+    ONCE, here at the top level, over iter_actions -- so a "Yes" that files the PC into a
+    folder is caught exactly like a top-level move, without threading a second flag through
+    every validator the way allow_command is. **It defaults to False, unlike allow_command**,
+    so a caller that never heard of it -- the AI drafter, a migration -- refuses a filing action
+    instead of granting one. allow_command defaults the other way only because it predates
+    every caller that now passes it.
     """
     if not isinstance(actions, list):
         return "actions must be a list", None
@@ -3364,16 +3366,18 @@ def validate_actions(actions, extra=None, allow_command=True, _nested=False,
         return f"too many actions (limit {MAX_ACTIONS})", None
     normalised = []
     for action in actions:
-        err, clean = _validate_action(action, extra, allow_command, _nested, script_specs,
-                                      allow_pc_tree=allow_pc_tree)
+        err, clean = _validate_action(action, extra, allow_command, _nested, script_specs)
         if err:
             return err, None
         normalised.append(clean)
+    # Nested calls come from _validate_show_message; the top-level call walks their result.
+    if not _nested and not allow_pc_tree and any(
+            a.get("type") == ACTION_MOVE_TO_FOLDER for a in iter_actions(normalised)):
+        return "you do not have permission to create a rule that files PCs into folders", None
     return None, normalised
 
 
-def _validate_action(action, extra, allow_command, nested, script_specs=None, *,
-                     allow_pc_tree=False):
+def _validate_action(action, extra, allow_command, nested, script_specs=None):
     if not isinstance(action, dict):
         return "action must be an object", None
     kind = action.get("type")
@@ -3454,11 +3458,10 @@ def _validate_action(action, extra, allow_command, nested, script_specs=None, *,
         return None, {"type": kind, "params": {"script": script_name, "inputs": clean_inputs}}
 
     if kind == ACTION_SHOW_MESSAGE:
-        return _validate_show_message(action, extra, allow_command, nested, script_specs,
-                                      allow_pc_tree=allow_pc_tree)
+        return _validate_show_message(action, extra, allow_command, nested, script_specs)
 
     if kind == ACTION_MOVE_TO_FOLDER:
-        return _validate_move(params, allow_pc_tree)
+        return _validate_move(params)
 
     if kind == ACTION_WEBHOOK:
         return _validate_webhook(params)
@@ -3521,29 +3524,30 @@ MIN_MESSAGE_TIMEOUT = 30
 MAX_MESSAGE_TIMEOUT = 12 * 3600
 
 
-def _validate_move(params, allow_pc_tree):
-    if not allow_pc_tree:
-        return "you do not have permission to create a rule that files PCs into folders", None
+_NEEDS_FOLDER = "a folder action needs a folder"
+
+
+def _validate_move(params):
+    """move_to_folder's params. The capability is checked by validate_actions, not here."""
     raw = params.get("folder_id")
     if raw is None:
         return None, {"type": ACTION_MOVE_TO_FOLDER, "params": {"folder_id": None}}
     # bool is an int in Python, and `True` is not folder 1; int(1.5) is 1, and a value that
     # truncates into some other folder's id is the worst way for this to be wrong.
     if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
-        return "a folder action needs a folder", None
+        return _NEEDS_FOLDER, None
     try:
         folder_id = int(raw)
     except (TypeError, ValueError):
-        return "a folder action needs a folder", None
+        return _NEEDS_FOLDER, None
     if folder_id <= 0:
-        return "a folder action needs a folder", None
+        return _NEEDS_FOLDER, None
     # Existence unchecked, as for the folder target selector: this validator is pure, and
     # deleting a folder a rule files into is refused upstream (rules_using_folder).
     return None, {"type": ACTION_MOVE_TO_FOLDER, "params": {"folder_id": folder_id}}
 
 
-def _validate_show_message(action, extra, allow_command, nested, script_specs=None, *,
-                           allow_pc_tree=False):
+def _validate_show_message(action, extra, allow_command, nested, script_specs=None):
     if nested:
         # A message whose answer opens another message is a loop with a human in it. One
         # level of follow-up is expressive enough for every case the feature exists for.
@@ -3607,7 +3611,7 @@ def _validate_show_message(action, extra, allow_command, nested, script_specs=No
         if not followups:
             continue
         err, clean = validate_actions(followups, extra, allow_command, _nested=True,
-                                      script_specs=script_specs, allow_pc_tree=allow_pc_tree)
+                                      script_specs=script_specs)
         if err:
             return f"response to '{outcome}': {err}", None
         normalised_response[outcome] = clean
@@ -4113,8 +4117,7 @@ DEFAULT_CONFIG = {
 }
 
 
-def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audit=None,
-                  on_scope_change=None):
+def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audit=None):
     """One evaluation pass over every enabled rule. Returns a summary dict.
 
     `resolve(machine) -> {name: Value}` is supplied by the caller (app.py) because building a
@@ -4128,9 +4131,10 @@ def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audi
     `level` is optional and defaults to the security level; it is passed only for entries that
     are operational rather than security-relevant (see handle_message_result).
 
-    `on_scope_change()` is called after a fire that moved a PC between folders. A folder can be
-    a permission scope, so live sockets resolved against the old tree have to be re-resolved --
-    app.py passes the hook the PC tree page and the AD sync already use.
+    The summary's `scope_changed` is True when a move_to_folder action actually moved a PC. A
+    folder can be a permission scope, so app.py then re-points live sockets through the hook
+    the PC tree page and the AD sync already use. Reported rather than called back so this
+    module needs no hook of its own.
 
     The pass is deliberately ordered read -> decide -> dispatch -> write, with no database
     connection held across the dispatch step. fleet.create_command opens its OWN connection,
@@ -4139,7 +4143,8 @@ def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audi
     """
     now = int(now if now is not None else time.time())
     config = {**DEFAULT_CONFIG, **(config or {})}
-    summary = {"rules": 0, "evaluated": 0, "matched": 0, "fired": 0, "capped": [], "errors": []}
+    summary = {"rules": 0, "evaluated": 0, "matched": 0, "fired": 0, "capped": [], "errors": [],
+               "scope_changed": False}
 
     active = [r for r in list_rules(db_path) if r["enabled"]]
     if not active:
@@ -4248,8 +4253,8 @@ def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audi
     # -- dispatch, with no connection held ------------------------------------------------
     for fire in pending:
         try:
-            _fire(db_path, fire, now=now, config=config, deliver=deliver, audit=audit,
-                  on_scope_change=on_scope_change)
+            if _fire(db_path, fire, now=now, config=config, deliver=deliver, audit=audit):
+                summary["scope_changed"] = True
             summary["fired"] += 1
             state_writes.append((fire["rule"]["id"], fire["machine"],
                                  fire["matched_since"], 1, now))
@@ -4302,8 +4307,9 @@ def _write_state(db_path, writes, now):
                 )
 
 
-def _fire(db_path, fire, *, now, config, deliver=None, audit=None, on_scope_change=None):
-    """Run one rule's actions against one machine and record the fire."""
+def _fire(db_path, fire, *, now, config, deliver=None, audit=None):
+    """Run one rule's actions against one machine and record the fire. Returns True when a
+    move_to_folder action moved the PC -- see evaluate_once's `scope_changed`."""
     rule = fire["rule"]
     machine = fire["machine"]
     variables = fire["variables"]
@@ -4314,8 +4320,6 @@ def _fire(db_path, fire, *, now, config, deliver=None, audit=None, on_scope_chan
         rule=rule, now=now, config=config, deliver=deliver,
         allowed=fire["allowed"], block_reason=fire["block_reason"], fire_id=fire_id,
     )
-    if on_scope_change and _moved_any(dispatched):
-        on_scope_change()
 
     # The show_message id WINS over any other command this fire issued. This column exists
     # for exactly one job -- handle_message_result looks an incoming answer up by it -- and a
@@ -4337,7 +4341,8 @@ def _fire(db_path, fire, *, now, config, deliver=None, audit=None, on_scope_chan
               {"rule_id": rule["id"], "rule": rule["name"],
                "actions": [d.get("type") for d in dispatched],
                "command_id": command_id})
-    return fire_id
+    _audit_moves(audit, rule, machine, dispatched)
+    return moved_any(dispatched)
 
 
 def _record_fire(db_path, rule_id, machine, now):
@@ -4475,8 +4480,24 @@ def _dispatch_move(db_path, params, machine, rule):
     return {"folder_id": folder_id, "moved": False}
 
 
-def _moved_any(dispatched):
+def moved_any(dispatched):
+    """Did any of these dispatch records move a PC between folders? Public because app.py asks
+    it of handle_message_result's `actions`, to re-point live scope after an answered move."""
     return any(d.get("type") == ACTION_MOVE_TO_FOLDER and d.get("moved") for d in dispatched)
+
+
+def _audit_moves(audit, rule, machine, dispatched):
+    """One `pc_folder.file` audit entry per PC a rule moved -- the same action name filing by
+    hand writes (pc_tree_web), so "who moved this PC" finds rule moves too. A folder can be a
+    permission scope, so this is a grant changing hands, and the rule_fired entry's list of
+    action types does not say where the PC went."""
+    if not audit:
+        return
+    for d in dispatched:
+        if d.get("type") == ACTION_MOVE_TO_FOLDER and d.get("moved"):
+            audit(f"rule:{rule['id']}", "pc_folder.file", machine,
+                  {"rule_id": rule["id"], "rule": rule["name"], "folder_id": d.get("folder_id"),
+                   "previous_folder_id": d.get("previous_folder_id")})
 
 
 def _dispatch_script(db_path, params, machine, variables, *, rule, config):
@@ -4570,7 +4591,7 @@ def _dispatch_message(db_path, action, machine, variables, *, rule, now, config,
 
 
 def handle_message_result(db_path, command_id, *, status=None, result=None, now=None,
-                          config=None, deliver=None, audit=None, on_scope_change=None):
+                          config=None, deliver=None, audit=None):
     """Route a show_message command's answer to its follow-up actions.
 
     Called from the agent command-result endpoint. Returns None when the command was not a
@@ -4629,8 +4650,7 @@ def handle_message_result(db_path, command_id, *, status=None, result=None, now=
                                   rule=rule, now=now, config=config, deliver=deliver,
                                   allowed=allowed, block_reason=block_reason,
                                   fire_id=row["id"])
-    if on_scope_change and _moved_any(dispatched):
-        on_scope_change()
+    _audit_moves(audit, rule, machine, dispatched)
     with get_conn(db_path) as conn:
         conn.execute(
             "UPDATE rule_fires SET detail=? WHERE id=?",

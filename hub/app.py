@@ -2393,12 +2393,15 @@ def _on_command_result(command_id, machine, success, result, output=None):
             return None
     except Exception as e:
         print(f"[location] Could not record a fix for {machine}: {e}")
-    return rules.handle_message_result(
+    answered = rules.handle_message_result(
         DB_PATH, command_id,
         status=fleet.STATUS_DONE if success else fleet.STATUS_FAILED,
         result=result, config=_rules_config(), deliver=notify.deliver, audit=_rules_audit,
-        on_scope_change=_directory_scope_changed,
     )
+    # A "Yes" that moved the PC into a folder re-points scoping, as a fired move does.
+    if answered and rules.moved_any(answered.get("actions") or []):
+        _directory_scope_changed()
+    return answered
 
 
 app.register_blueprint(create_fleet_blueprint(
@@ -4950,11 +4953,13 @@ def _rules_audit(actor, action, target, detail, level=None):
 
 
 def evaluate_rules_once(now=None):
-    # on_scope_change: a move_to_folder action can file a PC into a folder that is a
-    # permission scope, so it re-points scoping through the same hook the PC tree page uses.
-    return rules.evaluate_once(DB_PATH, resolve_rule_vars, now=now, config=_rules_config(),
-                               deliver=notify.deliver, audit=_rules_audit,
-                               on_scope_change=_directory_scope_changed)
+    summary = rules.evaluate_once(DB_PATH, resolve_rule_vars, now=now, config=_rules_config(),
+                                  deliver=notify.deliver, audit=_rules_audit)
+    # A move_to_folder action can file a PC into a folder that is a permission scope, so
+    # re-point scoping through the same hook the PC tree page uses.
+    if summary.get("scope_changed"):
+        _directory_scope_changed()
+    return summary
 
 
 def collect_probes_once(now=None):
