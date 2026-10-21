@@ -35,7 +35,11 @@ Four canonical docs already exist. Go to them by question, not by default:
   Each one adds what an operator must check to ROADMAP.MD → *On beta, waiting for
   confirmation*. Only when everything on that list is confirmed does `beta` reach `main`, as
   **one** `beta` → `main` PR that empties the list. Agent betas are cut with
-  `-Channel beta`. Nothing is pushed to or PR'd into `main` directly.
+  `-Channel beta`. Nothing is pushed to or PR'd into `main` directly -- **with one exception:
+  `.github/workflows/` changes go to `main` as well**, in a workflow-only PR with the same
+  bytes as on `beta`. The Claude action skips any run whose workflow file differs from the
+  default branch's copy, and issue/schedule triggers always run `main`'s copy, so a workflow
+  change that waited for the release would sit inert on `beta` (it did on #164).
 - **Bump `HUB_VERSION` (near the top of `hub/app.py`) on every push to `beta` that touches `hub/`.** Do it
   as part of the change, unasked; the comment two lines above it says the same thing. The hub
   compares its channel branch's value against the running one, so a push without a bump never
