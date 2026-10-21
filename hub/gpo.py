@@ -1009,11 +1009,29 @@ def script_hash(script):
                   "timeout": script["timeout_seconds"]})
 
 
+# What a PC name may look like before it is written into code that runs as SYSTEM: a hostname,
+# and nothing a shell reads as syntax. Narrower than app.is_valid_machine_name, which also
+# admits a space -- harmless on a page, but enough to split an unquoted argument in a script.
+_SAFE_MACHINE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
 def _render_script(script, inputs, machine):
     """The body with its inputs filled in, or (None, reason). Only `sys.machine` is offered
     as a variable: a policy script runs on joining a node, not on a condition, so the rule
     engine's live readings have no meaning here -- and an unresolvable name skips the run
-    rather than sending "unknown" into code (rules.render_template_checked)."""
+    rather than sending "unknown" into code (rules.render_template_checked).
+
+    **A PC whose name is not a plain hostname is skipped, not rendered** (raised in review on
+    #162). The name is what the agent reported, substituted verbatim into a SYSTEM script.
+    Ingest already refuses quotes and shell punctuation (app.is_valid_machine_name), but that
+    check lives in another module, allows spaces, and a scheduler that fires on every PC
+    joining a node is a wider blast radius than a rule firing on a condition -- so the check
+    the code depends on sits beside the code that depends on it. Rejected: quoting the name
+    for the shell, which would be a different escape per shell and still wrong inside a
+    string the author already quoted."""
+    if not _SAFE_MACHINE_NAME.match(str(machine or "")):
+        return None, ("the PC name is not a plain hostname (letters, digits, '.', '_' or '-'), "
+                      "so it is not written into a script")
     variables = {"sys.machine": machine}
     namespace = dict(variables)
     for item in script["inputs"]:

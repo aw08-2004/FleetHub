@@ -39,7 +39,9 @@ deleted), the agent removes it, as long as it still holds what FleetHub wrote.
 
 **Scripts** run through the normal command queue, on PCs that are online, as
 `gpo:<policy id>`. The only variable a policy script can use is `{{sys.machine}}`; a script that
-needs a live reading is skipped with a reason rather than run with "unknown" in it. A script a
+needs a live reading is skipped with a reason rather than run with "unknown" in it. A PC whose
+name is not a plain hostname (letters, digits, `.`, `_`, `-`) is skipped too, so a name is never
+written into code that a shell could read as syntax. A script a
 policy uses cannot be deleted from the library.
 
 ## Which policy wins

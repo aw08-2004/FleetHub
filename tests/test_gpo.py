@@ -267,6 +267,13 @@ def main():
               runs["needs_reading"]["status"] == gpo.SCRIPT_SKIPPED
               and "sys.uptime_days" in runs["needs_reading"]["detail"])
         check("the other PC got nothing", gpo.script_runs(db, "OFI-1") == [])
+        body, reason = gpo._render_script(scripts.get_script(db, "setup"), {},
+                                          'x"; Remove-Item C:\\ -Recurse #')
+        check("a PC name with shell syntax in it is never written into a script",
+              body is None and "plain hostname" in reason)
+        body, reason = gpo._render_script(scripts.get_script(db, "setup"), {}, "PC 7")
+        check("...nor is one with a space, which would split an unquoted argument",
+              body is None)
         check("a second tick queues nothing", gpo.script_tick(db, ["CAJA-1"]) == 0)
         with fleet.get_conn(db) as conn:
             conn.execute("UPDATE commands SET status = ? WHERE id = ?",
