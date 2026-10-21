@@ -411,6 +411,31 @@ def main():
             ai.requests.post = lambda *a, **k: FakeResponse([b""], status=503)
             error, text = ai.complete(CONFIG, [{"role": "user", "content": "hi"}])
             check("an HTTP error is reported by its status", "503" in str(error))
+
+            # A 400 used to be "refused the tool list" whatever it said, so a model that had
+            # just made a dozen tool calls was blamed for not supporting them, and the real
+            # reason was thrown away unread.
+            def step(body, status=400):
+                ai.requests.post = lambda *a, **k: FakeResponse([body], status=status)
+                return ai.complete_chat(CONFIG, [{"role": "user", "content": "hi"}],
+                                        [{"type": "function", "function": {"name": "x"}}])[0]
+
+            error = step(json.dumps({"error": {"message": "This model's maximum context "
+                                               "length is 8192 tokens."}}).encode())
+            check("a context overflow is not reported as a tool refusal",
+                  "tool list" not in str(error) and "context window" in str(error))
+            error = step(json.dumps({"error": "invalid message: content must not be empty"})
+                         .encode())
+            check("any other 400 carries the provider's own reason",
+                  "tool list" not in str(error) and "content must not be empty" in str(error))
+            error = step(json.dumps({"error": {"message": "tools are not supported by "
+                                               "this model"}}).encode())
+            check("a 400 that IS about tools still says so", "tool list" in str(error))
+            error = step(json.dumps({"detail": "bad key sk-" + "a" * 48}).encode())
+            check("a key echoed in the reason is blanked out", "a" * 40 not in str(error))
+            error = step(b"<html>" + b"x" * 20000 + b"</html>", status=502)
+            check("an HTML error page is not pasted into the console",
+                  error == "the AI provider returned HTTP 502")
         finally:
             ai.requests.post = real_post
 
