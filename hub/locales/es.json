@@ -2611,6 +2611,8 @@
       "before_connecting": "Se elige antes de conectar",
       "monitor": "Pantalla",
       "quality": "Calidad",
+      "preset_auto": "Automático",
+      "auto_rung": "Automático {kbps} kbps",
       "preset_quality": "Calidad",
       "preset_balanced": "Equilibrado",
       "preset_speed": "Velocidad",

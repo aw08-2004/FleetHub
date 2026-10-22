@@ -118,7 +118,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-21
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-22
 
 **How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
 `beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
@@ -212,7 +212,22 @@ the fix goes to `beta` like anything else.
 - [ ] **Translations.** The search box, *Filters*, *Clear filters* and the count read correctly
   in German and Spanish.
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-20
+**Hub 1.164.0 — a relayed remote screen keeps up with a slow link; Auto quality** (#171)
+- [ ] **No replay.** On a phone over mobile data, on a session that reads **Live (via hub)**,
+  drag a window around and let go. The picture stops within about 1–2 s instead of carrying on
+  moving for several; it may hold still a moment, then jump to the present.
+- [ ] **Auto steps down.** Same session, preset **Auto** (the default): the line under the
+  picture shows `Auto … kbps`, and on the slow link the number falls (2500 → 1500 → 800 …)
+  rather than the picture falling further behind.
+- [ ] **Auto steps back up.** On Wi-Fi again, the number climbs back within about 15–30 s per
+  step, and does not flap between two values every few seconds.
+- [ ] **Presets.** Quality, Balanced and Speed still switch live, and Quality on a good LAN
+  looks visibly sharper and smoother than before (30 fps, 12 Mbps).
+- [ ] **Nothing else moved.** A desktop switch to the logon screen during a relayed session
+  still shows its badge, and clicks still land where they should after the jump.
+- [ ] **Translations.** *Auto* and the `Auto … kbps` line read correctly in German and Spanish.
+
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-22
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -578,6 +593,21 @@ one PC in a test window with both switches on:
   policy, and closes *applied*. A second tick in the same window makes no second run.
 - Untick *Only FleetHub installs updates*: the values are removed. Uninstall the agent on an
   owned PC: the values are removed, foreign values left alone.
+
+**16. WebRTC never connects, so every remote session rides the hub relay (#2), owed on the hub
+host and its router.** Diagnosed 2026-10-22 from `remote-helper.log` on FCOM1109 (details under
+#2, *Field finding 2026-10-22*). No code change: coturn is not reachable from outside the hub's
+network. On the hub host:
+- `wsl -d FleetHubTurn -- systemctl is-active coturn` says `active`, the `FleetHub - TURN (WSL)`
+  task is **Running**, and `Get-NetFirewallHyperVRule` lets 3478 in (turn/README troubleshooting).
+- The router forwards **3478/udp, 3478/tcp and 49160–49200/udp** to 192.168.1.108, the way it
+  already forwards 443.
+- Add `stun:stun.cloudflare.com:3478` (or any public STUN) beside the relay's own in
+  **Settings → Remote Control → STUN servers**, so a TURN outage no longer takes `srflx` with it.
+- Then open a session from a phone on mobile data. `remote-helper.log` should list a `relay`
+  candidate of its own and one from the browser, the pill should read **Live**, not
+  **Live (via hub)**, and coturn's log should count two allocations. Only then is the shared
+  secret tested at all: 401s mean the hub's `.env` and `/etc/turnserver.conf` differ.
 
 ---
 
@@ -2143,6 +2173,50 @@ agent long-polls. `remote_relay.py` (in memory) + routes in `remote_web.py`;
   because a lost key-up is a key held down. A per-frame backpressure check was tried first and
   threw away every new viewer's first GOP (seen replaying real encoder output), so it is
   judged per batch.
+  **Hub 1.164.0: a lagging viewer jumps to live instead of replaying.** The batch check above
+  never fired on a phone over mobile data: the backlog sat in the network and in the hub's
+  buffer while the decoder kept up, so a viewer behind but still inside the 240-record buffer
+  got every frame since its cursor and showed motion seconds after the operator had stopped.
+  Now the hub starts every read at the newest keyframe past the cursor (control records in
+  between are still delivered), stamps each record on arrival and sends the first frame's age as
+  `X-Relay-Lag-Ms`. The browser adds the body's transfer time, and past 800 ms holds the
+  picture and asks for a keyframe (throttled to one per 2 s) rather than playing old deltas.
+  *Rejected:* dropping deltas to catch up without a keyframe (garbage until the next IDR), and
+  skipping only in the browser (the hub would still push the whole backlog down the slow link).
+- **Auto quality · hub 1.164.0.** The agent encodes at a fixed fps and bitrate with no
+  congestion control, so skipping frames alone turns a too-slow link into a jumpy picture. The
+  new default preset **Auto** (`remote-quality.js`) steps down a five-rung ladder (6 Mbps to
+  0.4 Mbps) when two of the last three lag samples exceed 1 s, waits 15 s of calm before
+  stepping up, cools down 5 s after every change (each one rebuilds the encoder), and doubles
+  the wait after a step up that comes straight back down. The fixed presets got more headroom
+  at the same time (quality 30 fps / 12 Mbps, balanced 20 / 6, speed 12 / 2 at 75 %): the
+  bitrate is the encoder's target, not a cap, so the old ones never used a good link's room.
+  No agent change -- it already honours `{t:'cfg'}` and `{t:'key'}` live.
+  *Rejected:* a bandwidth estimate from bytes per second (the long-poll's batches are too lumpy,
+  and lag is what the operator feels). **Open:** Auto has no signal on WebRTC and holds its
+  starting rung there; feeding it from `getStats()` (jitter buffer delay, frames dropped) is the
+  missing half.
+- **Field finding 2026-10-22: the fallback had become the only path.** The owner reported
+  "WebRTC is not working yet somehow", worst from a phone on mobile data. Every session in
+  FCOM1109's `remote-helper.log` from 2026-10-15 on reached the relay through the 20 s timer,
+  and each shows the same thing. The agent (10.4.1.21, behind 190.112.171.42) gathered one
+  `host` candidate and nothing else. The browser sent only `host` candidates as `<uuid>.local`,
+  with no `srflx` and no `relay`, so neither side reached STUN, let alone TURN. Every URL timed
+  out: `stun`/`turn` at 192.168.1.108:3478 and :3479, because a LAN literal does not route from
+  another site; `temp.arkeanos.net:3478` over UDP; and TCP TURN to 190.112.169.128:3478 was
+  refused. A probe from the same PC on 2026-10-22 agreed: no STUN answer from either coturn
+  address, over UDP or TCP. Google's and Cloudflare's STUN answered at once, so outbound UDP
+  works there, and the NAT mapping is endpoint-independent and port-preserving.
+  `https://temp.arkeanos.net` answered from 190.112.169.128, so 443 is forwarded and 3478 is
+  not, or coturn is down. The one session that did connect over WebRTC (2026-10-19) had the
+  browser on the agent PC itself, host to host. **Nothing in the code is wrong**; the fix is
+  owed item 16. The secret is untested, since no request ever reached coturn to be refused.
+  Two smaller things came out of it. The installer's only STUN URL is the relay's own, so one
+  outage removes `srflx` and `relay` together: hence a public STUN beside it. And the hub
+  re-issued the 192.168.1.108 literals to an agent that reached it from a public address, so it
+  sees a private `remote_addr` and `select_urls_for_peer` never narrows anything. That costs
+  gathering time, not connections. It is probably Docker's port publishing hiding the source,
+  and is unconfirmed.
 - **Security.** The hub sees the picture in the clear (SRTP through coturn it could not), so the
   switch is audited (`remote_session_relay`, once per session), frames live in memory only,
   `remote.relay_fallback` turns it off, and a machine borrowed from another hub is never

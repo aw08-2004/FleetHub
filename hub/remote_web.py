@@ -488,14 +488,17 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         """Long-poll the agent's frames. Binary, in remote_relay's framing; the cursor and the
         relay's state ride in headers so the body stays the frames and nothing else."""
         if not _relay_session_live(sess):
-            records, cursor, state = [], 0, "closed"
+            records, cursor, state, lag_ms = [], 0, "closed", 0
         else:
-            records, cursor, state = remote_relay.read_down(
+            records, cursor, state, lag_ms = remote_relay.read_down_with_lag(
                 session_id, request.args.get("after", 0))
         resp = Response(remote_relay.frame_records(records),
                         mimetype="application/octet-stream")
         resp.headers["X-Relay-Next"] = str(cursor)
         resp.headers["X-Relay-State"] = state
+        # How far behind live the first frame is, on the hub's clock -- the browser's cue to
+        # freeze-and-jump and to step quality down (remote-relay.js, remote-quality.js).
+        resp.headers["X-Relay-Lag-Ms"] = str(lag_ms)
         resp.headers["Cache-Control"] = "no-store"
         return resp
 

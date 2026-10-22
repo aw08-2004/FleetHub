@@ -2611,6 +2611,8 @@
       "before_connecting": "Vor dem Verbinden zu wählen",
       "monitor": "Bildschirm",
       "quality": "Qualität",
+      "preset_auto": "Automatisch",
+      "auto_rung": "Automatisch {kbps} kbit/s",
       "preset_quality": "Qualität",
       "preset_balanced": "Ausgewogen",
       "preset_speed": "Geschwindigkeit",

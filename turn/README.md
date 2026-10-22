@@ -306,6 +306,7 @@ Read the candidate types first — they decide which row below applies:
 | Nothing listening on 3478 on the host; coturn log has **no requests at all** since boot | On Windows/Docker: started from the Linux `docker-compose.yml`. See trap 1 above. |
 | coturn logs `check_stun_auth: Cannot find credentials of user <...>` or clients get **401** | The secret differs between the hub's `.env` and coturn's copy. A rotation from the UI updates only the hub — see [Rotating the secret](#rotating-the-secret-from-the-ui). |
 | Allocations **succeed** (`Global turn allocation count incremented`) but the agent still reports `peer connection state: failed` | The relay's media path, not auth. On Windows/Docker see trap 2 above. Otherwise check that the whole **relay UDP range** (not just 3478) is open and forwarded, and that the external IP is the real public IP. |
+| **Every** session ends on the hub relay; both sides gather only `host` candidates (the browser's arrive as `<uuid>.local`); `remote-helper.log` says `Connection attempt to ICE server ... timed out` for **every** STUN and TURN URL, and TCP TURN is `ConnectionRefused` or times out -- while the console itself loads fine on the same hostname | coturn is not reachable from the internet at all. The console working proves only that **443** is forwarded; 3478 is a separate forward. On the hub host check coturn is running (`wsl -d FleetHubTurn -- systemctl is-active coturn`, then the boot-task, Hyper-V firewall and `wsl --shutdown` rows below), then forward **3478/udp, 3478/tcp and 49160–49200/udp** from the router to the relay host's LAN address. No `srflx` anywhere means STUN is dead too -- it is the same coturn -- so add an independent public STUN URL beside it (below the table). A secret mismatch cannot be the cause yet: it shows up as 401s, and no request has reached coturn. Found in the field 2026-10-22 (ROADMAP #2). |
 | Fails from one particular site, works everywhere else; that site's machines gather no `srflx` and no `relay` | That network drops UDP. Add `turn:<public-host>:3478?transport=tcp` in **Settings → Remote Control** — coturn already listens on 3478/tcp and the firewall rules already open it, but an ICE agent only tries TCP when a URL asks for it. |
 | Works on the LAN, fails only cross-NAT | TURN is not actually being used or not reachable — the LAN case succeeds on host candidates alone and proves nothing about the relay. Always validate with a machine on a genuinely different network. |
 | Works cross-NAT, fails when **one** peer is on the relay's own LAN | That peer is hairpinning off the router to reach the relay. Add `turn:<lan-ip>:3478` — the same public listener reached by its LAN address. See [Two listeners, four URLs](#two-listeners-four-urls). |
@@ -325,3 +326,19 @@ A useful property of the coturn log: `Global turn allocation count incremented` 
 **twice** within a second or two means *both* peers reached the relay and authenticated. If you
 see that and ICE still fails, you have conclusively ruled out reachability of 3478, the shared
 secret, and the credential scheme — the problem is downstream in the media path.
+
+**A second STUN server that is not this relay.** The installer seeds `stun:<host>:3478` -- the
+same coturn as the TURN URLs -- so when the relay is unreachable a session loses its `srflx`
+candidates in the same stroke and is left with `host` only, which connects nothing off the LAN.
+Adding a public one such as `stun:stun.cloudflare.com:3478` to **Settings → Remote Control →
+STUN servers** keeps `srflx` alive through a TURN outage, and two peers behind well-behaved NATs
+then connect directly without the relay at all. It does not replace TURN: a phone on mobile
+data usually sits behind carrier-grade NAT, which hands each destination a new port, and only a
+relay candidate gets through that. The cost is that the STUN provider sees each peer's public
+address -- which is all a STUN request carries.
+
+**Checking reachability from outside, without a session.** A STUN Binding request is 20 bytes,
+needs no credential, and coturn answers it on 3478 before any auth. Sent from a machine off the
+hub's network, *no answer* on UDP and a refused or timed-out TCP connect is the "not reachable
+from the internet" row above; an answer carrying your public address is a live listener and
+moves the search on to the secret and the relay range.

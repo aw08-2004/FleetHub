@@ -2725,6 +2725,8 @@
       "before_connecting": "Chosen before connecting",
       "monitor": "Monitor",
       "quality": "Quality",
+      "preset_auto": "Auto",
+      "auto_rung": "Auto {kbps} kbps",
       "preset_quality": "Quality",
       "preset_balanced": "Balanced",
       "preset_speed": "Speed",
