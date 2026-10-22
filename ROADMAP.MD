@@ -127,107 +127,20 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.158.0**. `beta` is ahead by:
+`main` is at hub **1.165.0**, the same as `beta`. The `beta` → `main` PR of 2026-10-22 carried
+hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
+hub that day, except the two items still open below.
 
-**Hub 1.159.0 — nested permission groups, PC tree, Group Policy** (#163)
-- [ ] **Existing access unchanged.** After the beta hub updates, every existing permission
-  group is still top-level and every operator sees exactly the PCs they saw before.
-- [ ] **Nested groups.** Make a subgroup under a real group; a member of it gets the parent's
-  capabilities and machines, shown as dashed/locked "inherited" badges; the subgroup cannot
-  remove anything the parent grants. An invite into the subgroup grants what it says.
-- [ ] **PC tree.** Operate → PC tree shows the AD OUs from the last sync (read-only) beside the
-  hub folders. Create nested folders; file PCs by *Move selected to…* and by dragging; a PC is
-  in one folder at most. An operator with only View sees only their own PCs.
-- [ ] **Folder-scoped permission group.** Scope a group to a folder; its members reach exactly
-  the PCs in it and beneath it, and moving a PC in or out changes that at once.
-- [ ] **PC folder target** in a rule, a watchdog and a device group, with and without
-  *and sub-folders*; the preview count matches the tree.
-- [ ] **AD OU matching fix.** Any rule aimed at an OU whose name is the tail of another OU's
-  (`OU=Cajas` vs `OU=NoCajas`) now reaches fewer PCs -- check those rules still reach what
-  they should.
-- [ ] **Delete refusals.** Deleting a non-empty folder, or one a rule / watchdog / group /
-  permission group / policy link names, is refused and names what is in the way.
+**Hub 1.159.0 — Group Policy, waiting on agent 3.48.0** (#163)
 - [ ] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
   item 4c below (apply, Managed elsewhere, unlink removes).
+  The hub half is on `main` and does nothing on its own: a PC is only sent a policy document
+  once its agent reports `gpo_version`, and no released agent does yet.
 
-**Hub 1.160.0 — target and condition by operating system** (#164)
-- [ ] **"Any Windows" group.** Device Groups → New → *Operating system* → *Any Windows*. The
-  member count equals the Dashboard's Windows buckets added together, and includes a Windows
-  PC that is not in AD.
-- [ ] **Release buckets.** *Windows 11* / *Windows 10* / *Windows Server* match the Dashboard's
-  Operating systems card one for one.
-- [ ] **Exclusion.** *Any Windows* except *Windows Server* drops the servers and nothing else.
-- [ ] **Conditions.** The rule editor lists the OS variables; `os.family == "windows"` previews
-  true on a Windows PC, and `os.build < 19045` finds the PCs behind 22H2.
-- [ ] **Watchdog target.** A watchdog aimed at *Any Windows* reaches the same PCs as the group.
-- [ ] **Translations.** The new selector and variables read correctly in German and Spanish.
-
-**Hub 1.161.0 — Send to assistant on alerts; the provider's real reason on a 400** (#166)
-- [ ] **Button on cards.** With the assistant on, every alert card has *Send to assistant*;
-  clicking it opens a new conversation carrying that card's title, text and machine, and the
-  assistant investigates it. With the assistant off, or for an operator without View, there
-  is no button.
-- [ ] **Bundles.** A group of related alerts has the button on its header, and the message
-  carries the header's cause line plus every member card.
-- [ ] **Context overflow.** Raise *Assistant memory size* well past what the model's context
-  window holds (or run a long investigation on a small model) until the provider answers 400: the console says
-  the conversation no longer fits the context window, not that tool calls are unsupported,
-  and the hub log has an `[ai] provider answered HTTP 400:` line with the provider's reason.
-- [ ] **Other rejections** show the provider's own reason, with no API key in it.
-- [ ] **Translations.** The button and the message read correctly in German and Spanish.
-
-**Hub 1.162.0 — a rule that moves PCs into a PC-tree folder** (#168)
-- [ ] **It files.** A rule `os.release == "windows_11"` → *Move to a PC folder* → *Win11*.
-  Within one evaluation tick the matching PCs show under *Win11* in the PC tree, nothing else
-  moved, and the PC's filing says `rule:<id>`.
-- [ ] **No churn.** Leave it running past a cooldown: the PCs stay put, and the rule's fire
-  history shows `moved: false` rather than a re-file each time.
-- [ ] **Unfile.** *(no folder)* takes a matching PC out of every folder.
-- [ ] **The gate.** An operator with Manage rules but not Manage PC tree cannot save the rule
-  (the error says so), including as a message's *Yes* follow-up.
-- [ ] **Delete refusal.** Deleting *Win11* is refused and names the rule.
-- [ ] **Scope follows.** A permission group scoped to *Win11* gains the moved PCs at once, and a
-  member of it sees them without reloading.
-- [ ] **New action defaults.** Adding the action picks the first folder by path; it never starts
-  on *(no folder)* unless there are no folders.
-- [ ] **Translations.** The action, its description and *(no folder)* read correctly in German
-  and Spanish.
-
-**Hub 1.163.0 — table search and column filters, card tables on phones, Ctrl+K placement** (#169)
-- [ ] **Ctrl+K.** Opens centred about an eighth of the way down, 640 px wide, with padding round
-  the box and its rows; full width near the top on a phone. Same in the dark theme.
-- [ ] **Nothing else moved.** base.css's reset is in a cascade layer now, so every Tailwind
-  margin and padding utility in the console started working. Look over Devices (the bulk bar),
-  the PC tree and the alert cards for spacing that changed for the worse.
-- [ ] **Devices.** *Filters* opens a row of boxes under the headers; *Manufacturer* `dell` plus
-  *OS* `windows 10` narrows the list, the count says "N of M", *Select all* ticks only those,
-  *Export* contains only those, and a 30 s refresh keeps the filter.
-- [ ] **Other tables.** Device Groups, Watchdogs, Rules and a machine-page tab: a search box
-  appears above any table with more than five rows, filters combine, *Clear filters* resets.
-  Audit, Tickets, Users, Event logs and Processes show *Filters* but no second search box.
-- [ ] **Phone.** At phone width every one of those tables is a stack of labelled cards, the
-  page never scrolls sideways, and a filtered-out row is really gone.
-- [ ] **Untouched tables.** An alert's duplicate-machine picker, the sensor list, a ticket's
-  facts and a printed device report look as they did.
-- [ ] **Translations.** The search box, *Filters*, *Clear filters* and the count read correctly
-  in German and Spanish.
-
-**Hub 1.164.0 — a relayed remote screen keeps up with a slow link; Auto quality** (#171)
-- [ ] **No replay.** On a phone over mobile data, on a session that reads **Live (via hub)**,
-  drag a window around and let go. The picture stops within about 1–2 s instead of carrying on
-  moving for several; it may hold still a moment, then jump to the present.
-- [ ] **Auto steps down.** Same session, preset **Auto** (the default): the line under the
-  picture shows `Auto … kbps`, and on the slow link the number falls (2500 → 1500 → 800 …)
-  rather than the picture falling further behind.
-- [ ] **Auto steps back up.** On Wi-Fi again, the number climbs back within about 15–30 s per
-  step, and does not flap between two values every few seconds.
-- [ ] **Presets.** Quality, Balanced and Speed still switch live, and Quality on a good LAN
-  looks visibly sharper and smoother than before (30 fps, 12 Mbps).
-- [ ] **Nothing else moved.** A desktop switch to the logon screen during a relayed session
-  still shows its badge, and clicks still land where they should after the jump.
-- [ ] **Translations.** *Auto* and the `Auto … kbps` line read correctly in German and Spanish.
-
-**Hub 1.165.0 — provided TURN relays: a pasted iceServers block, or a Cloudflare TURN key** (#172)
+**Hub 1.165.0 — provided TURN relays, reached `main` unconfirmed** (#172)
+The owner sent it to `main` with the rest on 2026-10-22 without a beta pass, so these checks
+are owed on the production hub instead. Nothing changes until a pasted block or a Cloudflare
+key is saved in Settings.
 - [ ] **Pasted block.** Generate a credential with Cloudflare's `generate-ice-servers` (a long
   TTL), paste the whole response into **Settings → Remote Control → Provided ICE servers** and
   save. The card counts the servers and URLs, and the credential appears nowhere on the page.
@@ -323,10 +236,10 @@ this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchange
 - **#16 events, #18 sweep, #19 BitLocker:** the checks already written in their entries -- all
   three shipped in agent 3.37.0 and none has been confirmed on a real machine.
 
-**4c. Group Policy (#32), hub 1.159.0 then agent 3.48.0 on beta -- not released.** The agent half
+**4c. Group Policy (#32), hub 1.159.0 (on `main` since 2026-10-22) then agent 3.48.0 on beta -- agent not released.** The agent half
 (`agent/src/TempMonitorAgent/GroupPolicy/`) compiles and its 24 tests pass, but it has only ever
-run against a dictionary standing in for HKLM. Owed, in this order: deploy the beta hub from the
-`beta` branch; cut the agent as a beta with
+run against a dictionary standing in for HKLM. Owed, in this order: ~~deploy the beta hub from the
+`beta` branch~~ (done, 1.165.0); cut the agent as a beta with
 `.\release.ps1 -Version 3.48.0 -Channel beta -NotesFile .\release-notes\3.48.0.md` (a MINOR --
 the hub reads `gpo_version` presence, so no hub constant changes; only PCs pinned to beta take
 it); then on one beta PC, elevated:
