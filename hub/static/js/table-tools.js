@@ -253,6 +253,18 @@
         else apply(state);
     }
 
+    /** A page that replaces its <thead> wholesale (a header re-render) takes the filter row with
+     *  it. No page does today; this keeps the boxes, and what is typed in them, from silently
+     *  vanishing when one does. Columns are re-read: the new header may differ. */
+    function reattachFilters(state) {
+        const table = state.table;
+        if (table.tHead && state.filterTr.parentNode === table.tHead) return;
+        state.cols = columns(table);
+        state.filterTr = filterRow(state);
+        if (!table.tHead) table.createTHead();
+        table.tHead.appendChild(state.filterTr);
+    }
+
     function setOpen(state, open) {
         state.open = open;
         state.filterTr.hidden = !open;
@@ -411,6 +423,7 @@
         // "applying" flag around apply(). Observer callbacks are microtasks, so the flag was
         // always false again by the time one ran, and it guarded nothing.
         const observer = new MutationObserver(() => {
+            reattachFilters(state);
             labelCells(state);
             apply(state);
         });
