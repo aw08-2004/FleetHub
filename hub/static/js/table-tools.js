@@ -131,7 +131,7 @@
     }
 
     function active(state) {
-        return !!state.query || Object.values(state.columns).some((v) => v);
+        return !!state.query || Object.values(state.columns).some(Boolean);
     }
 
     // ---------------- Filtering (DOM mode) ----------------
@@ -164,7 +164,10 @@
         const body = state.table.tBodies[0];
         if (!body) return;
         let tr = body.querySelector(':scope > tr.data-table__no-match');
-        if (!on) { if (tr) tr.remove(); return; }
+        if (!on) {
+            tr?.remove();
+            return;
+        }
         if (!tr) {
             tr = document.createElement('tr');
             tr.className = 'data-table__no-match';
@@ -400,8 +403,8 @@
 
     // ---------------- Auto-enhance ----------------
     function scan(root) {
-        if (!root || !root.querySelectorAll) return;
-        const tables = root.matches && root.matches('table.data-table')
+        if (!root?.querySelectorAll) return;
+        const tables = root.matches?.('table.data-table')
             ? [root]
             : root.querySelectorAll('table.data-table');
         for (const table of tables) {
@@ -414,8 +417,8 @@
      *  Take the toolbar and the empty scroll box with it, or each refresh leaves another
      *  orphaned search box above the new table. */
     function sweep(node) {
-        if (!node || !node.querySelectorAll) return;
-        const tables = node.matches && node.matches('table.data-table') ? [node] : node.querySelectorAll('table.data-table');
+        if (!node?.querySelectorAll) return;
+        const tables = node.matches?.('table.data-table') ? [node] : node.querySelectorAll('table.data-table');
         for (const table of tables) {
             const state = states.get(table);
             if (!state || state.mutating || table.isConnected) continue;
