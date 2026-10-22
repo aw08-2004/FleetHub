@@ -254,6 +254,9 @@ def main():
         check("the cursor and state ride in headers",
               r.headers.get("X-Relay-State") == "open"
               and int(r.headers.get("X-Relay-Next")) >= 2)
+        lag = r.headers.get("X-Relay-Lag-Ms")
+        check("and so does how far behind live the first frame is (remote-quality.js reads it)",
+              lag is not None and lag.isdigit())
 
         r = c.post(f"/api/remote/session/{sid}/relay/up",
                    json={"messages": [{"t": "m", "x": 0.25, "y": 0.75}, {"t": "cad"}]})

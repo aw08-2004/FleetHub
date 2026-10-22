@@ -74,8 +74,9 @@
         <label class="remote-field">
             <span class="remote-field__label">{{ t('machine.remote.quality') }}</span>
             <select class="remote-field__control" data-remote="preset">
+                <option value="auto" selected>{{ t('machine.remote.preset_auto') }}</option>
                 <option value="quality">{{ t('machine.remote.preset_quality') }}</option>
-                <option value="balanced" selected>{{ t('machine.remote.preset_balanced') }}</option>
+                <option value="balanced">{{ t('machine.remote.preset_balanced') }}</option>
                 <option value="speed">{{ t('machine.remote.preset_speed') }}</option>
                 <option value="custom">{{ t('machine.remote.preset_custom') }}</option>
             </select>

@@ -63,7 +63,13 @@ the operator's scope; every session start/stop is in the audit log.
   built, so changing them needs a new session, and the UI disables them while connected rather
   than letting a change silently do nothing. Monitor, quality preset (or raw fps / bitrate /
   resolution scale), **fullscreen** and **view only** change **live** mid-session over the
-  control data channel. View-only is an accident guard on the viewer, not a permission: it stops
+  control data channel. The presets are **Auto** (the default), Quality (30 fps, 12 Mbps),
+  Balanced (20 fps, 6 Mbps), Speed (12 fps, 2 Mbps at 75 % scale) and Custom. The bitrate is
+  what the encoder aims for, not a ceiling. **Auto** starts at 15 fps / 2.5 Mbps and, on a
+  session relayed through the hub, steps down as far as 6 fps / 0.4 Mbps when the picture
+  falls behind live, and back up to 20 fps / 6 Mbps once the link keeps up; the current
+  bitrate is shown next to the picture size. Over a direct WebRTC connection Auto stays at its
+  starting level. View-only is an accident guard on the viewer, not a permission: it stops
   *this browser* sending input, and does not stop anyone else driving the machine.
 - **Consent** is `unattended` by default (connects immediately, standard RMM) or `attended`
   (the logged-in user must approve first). Set it in **Settings → Remote Control**.
@@ -127,6 +133,13 @@ the operator's scope; every session start/stop is in the audit log.
   and authenticated against the relay, which rules out reachability, the shared secret and the
   credential scheme in one stroke. Always confirm with a machine on a genuinely different
   network — a LAN test succeeds on host candidates alone and proves nothing about TURN.
+  The `local ICE candidate:` and `remote ICE candidate:` lines name each side's candidate
+  **types**, and they decide the case: `host` only on both sides (the browser's show as
+  `<uuid>.local`), with `Connection attempt to ICE server ... timed out` for every URL, means
+  neither peer reached coturn at all, so every session falls back to the hub. The console loading
+  on the same hostname proves nothing here, because 443 and 3478 are separate port forwards.
+  See the first row of the [troubleshooting table](../turn/README.md#troubleshooting); it also
+  says why a second, public STUN URL beside the relay's own is worth adding.
 - **When WebRTC cannot connect at all, the session falls back to the hub** (hub 1.141.0 +
   agent 3.42.0). If the connection fails — or has not connected twenty seconds after the
   agent's offer — the viewer asks the hub to carry the session instead: the agent POSTs its
@@ -140,6 +153,10 @@ the operator's scope; every session start/stop is in the audit log.
   another hub, nor by an agent older than 3.42.0 (it does not say it can relay, so the viewer
   never asks). A dead relay is still worth fixing — the fallback is slower — and the diagnosis
   above is unchanged; `remote-helper.log` now also says when and why a session switched.
+  A relayed viewer that falls behind (a phone on mobile data, typically) **jumps to the
+  present** instead of replaying old motion (hub 1.164.0): the hub skips to the newest
+  keyframe, and the picture holds still for a moment rather than showing movement that has
+  already happened.
 
 - **Diagnosing capture before you involve a browser.** Two agent-binary self-tests, both
   runnable on the machine itself: `--desktop-probe [seconds]` prints the input desktop as it
