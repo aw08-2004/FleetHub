@@ -62,18 +62,30 @@ internal sealed class ConPtyProcess : IDisposable
     {
         get
         {
-            if (_disposed || _process is null || _process.IsInvalid) return true;
-            return GetExitCodeProcess(_process.DangerousGetHandle(), out var code) && code != STILL_ACTIVE;
+            if (_disposed) return true;
+            return ProcessExited(_process);
         }
     }
+
+    /// <summary>The exit check without the <c>_disposed</c> short-circuit, so Dispose can ask
+    /// it. Dispose sets <c>_disposed</c> first, and asking <see cref="HasExited"/> from there
+    /// answered "exited" every time -- TerminateProcess never ran and the root shell was left
+    /// to ClosePseudoConsole, which the class remarks say must not be the one to end it.</summary>
+    private static bool ProcessExited(SafeProcessHandle? process) =>
+        process is null || process.IsInvalid || process.IsClosed
+        || (GetExitCodeProcess(process, out var code) && code != STILL_ACTIVE);
 
     /// <summary>Exit code of the hosted process, or null while it is still running.</summary>
     public int? ExitCode
     {
         get
         {
-            if (_process is null || _process.IsInvalid) return null;
-            if (!GetExitCodeProcess(_process.DangerousGetHandle(), out var code)) return null;
+            // One read of the field: Dispose nulls it from another thread, and the SafeHandle
+            // overloads below keep the handle alive across the call, so a read racing Dispose
+            // fails cleanly instead of asking a closed (and possibly reused) raw handle.
+            var process = _process;
+            if (process is null || process.IsInvalid || process.IsClosed) return null;
+            if (!GetExitCodeProcess(process, out var code)) return null;
             return code == STILL_ACTIVE ? null : (int)code;
         }
     }
@@ -201,8 +213,8 @@ internal sealed class ConPtyProcess : IDisposable
         try { if (ProcessId > 0) ProcessTree.KillDescendants(ProcessId); } catch { }
         try
         {
-            if (_process is { IsInvalid: false } && !HasExited)
-                TerminateProcess(_process.DangerousGetHandle(), 1);
+            if (_process is { IsInvalid: false } process && !ProcessExited(process))
+                TerminateProcess(process, 1);
         }
         catch { }
 
@@ -336,10 +348,10 @@ internal sealed class ConPtyProcess : IDisposable
         out PROCESS_INFORMATION lpProcessInformation);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+    private static extern bool GetExitCodeProcess(SafeProcessHandle hProcess, out uint lpExitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+    private static extern bool TerminateProcess(SafeProcessHandle hProcess, uint uExitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);

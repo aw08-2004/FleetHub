@@ -136,6 +136,16 @@ hub that day, except the two items still open below.
   item 4c below (apply, Managed elsewhere, unlink removes).
   The hub half is on `main` and does nothing on its own: a PC is only sent a policy document
   once its agent reports `gpo_version`, and no released agent does yet.
+  **Update 2026-10-22:** 3.48.0 was cut on `main` as a stable release (tag `agent-v3.48.0`,
+  not `-Channel beta`), so it skipped the beta pass and reaches every stable PC. Nothing
+  changes on a PC until a policy with registry values is linked above it, so the on-PC checks
+  in item 4c are now owed on one test OU of production PCs before linking anything wider.
+
+**Agent, unreleased — terminal teardown ends the shell itself** (SonarCloud S3869)
+- [ ] **Closing a terminal ends its shell.** On a beta PC, open a terminal from the console,
+  run `ping -t localhost`, close the tab, and check in Task Manager that neither the shell
+  nor `ping` survives. `ConPtyProcess.Dispose` asked `HasExited` after setting `_disposed`, so
+  `TerminateProcess` never ran and the root shell was left to `ClosePseudoConsole`.
 
 **Hub 1.165.0 — provided TURN relays, reached `main` unconfirmed** (#172)
 The owner sent it to `main` with the rest on 2026-10-22 without a beta pass, so these checks
