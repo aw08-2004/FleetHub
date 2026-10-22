@@ -999,7 +999,7 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             return jsonify({"error": f"iceServers: {problem}"}), 400
         if not servers:
             return jsonify({"error": "iceServers: no servers in the pasted JSON"}), 400
-        refused = _write_env({ICE_SERVERS_JSON_ENV: json.dumps(servers, separators=(",", ":"))})
+        refused = _write_env({ICE_SERVERS_JSON_ENV: remote.serialise_ice_servers(servers)})
         if refused:
             return refused
         url_count = sum(len(s["urls"]) for s in servers)

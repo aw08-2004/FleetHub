@@ -651,16 +651,39 @@ def ice_url_problem(text):
 # **Commas inside a string are never touched.** The first version stripped `,\s*([}\]])` blind,
 # and was wrong in exactly the place that matters: a credential containing `,}` was quietly
 # rewritten, re-serialised and stored, and the result was a 401 at allocation time that nobody
-# sees -- the failure the Save check exists to prevent. This pattern matches a whole JSON string
-# OR a trailing comma, leftmost first, so a string is consumed (and handed back unchanged)
-# before any comma inside it can be seen. Only tried after a strict parse fails, so valid JSON
-# is never touched.
-_STRING_OR_TRAILING_COMMA_RE = re.compile(r'"(?:\\.|[^"\\])*"|,(\s*[}\]])')
+# sees -- the failure the Save check exists to prevent. So every string is skipped whole, by
+# json's own scanstring (the C scanner json.loads itself uses), before a comma can be looked at.
+#
+# The second version was a single regex matching "a string OR a trailing comma". It was correct,
+# but CodeQL rightly flagged it as polynomial: an unterminated `"\"\"\"...` is re-scanned from
+# every quote. This loop is linear -- each character is visited once. Only tried after a strict
+# parse fails, so valid JSON is never touched.
+_NON_SPACE_RE = re.compile(r"\S")
+
+
+def _string_end(text, quote_at):
+    """Index just past the JSON string opening at `quote_at`. An unterminated or malformed string
+    runs to the end of the text: leaving it alone is all the repair should do with it."""
+    try:
+        return json.decoder.scanstring(text, quote_at + 1)[1]
+    except ValueError:
+        return len(text)
 
 
 def _strip_trailing_commas(text):
-    return _STRING_OR_TRAILING_COMMA_RE.sub(
-        lambda m: m.group(0) if m.group(1) is None else m.group(1), text)
+    out, i = [], 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '"':
+            end = _string_end(text, i)
+            out.append(text[i:end])
+            i = end
+            continue
+        nxt = _NON_SPACE_RE.search(text, i + 1) if ch == "," else None
+        if not (nxt and nxt.group() in "}]"):
+            out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _load_ice_json(raw):
@@ -741,6 +764,23 @@ def check_ice_servers_json(text):
             return None, problem
         servers.append(server)
     return servers, None
+
+
+def serialise_ice_servers(servers):
+    """The one-line form REMOTE_ICE_SERVERS_JSON is stored in.
+
+    **`$` and `#` are written as JSON \\u escapes.** envfile writes `KEY=value` unquoted, and
+    load_dotenv expands `${...}` in an unquoted value and treats ` #` as the start of a comment.
+    So a provider credential holding either worked for the running process -- apply_to_environ
+    mirrors the raw string -- and was silently mangled at the next restart, when the block failed
+    to parse and the relay vanished from every session. In compact JSON both characters can only
+    occur inside a string, where `\\u0024` and `\\u0023` mean exactly the same thing, so the stored
+    line has neither and the credential parses back byte-for-byte. Rejected: refusing them at
+    Save (it turns down a valid credential), and quoting the value (envfile's other keys are
+    unquoted, and a hand-quoted value is the operator's to own).
+    """
+    text = json.dumps(servers, separators=(",", ":"))
+    return text.replace("$", "\\u0024").replace("#", "\\u0023")
 
 
 def parse_ice_servers_json(text):

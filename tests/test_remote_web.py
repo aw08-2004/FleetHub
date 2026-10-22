@@ -401,8 +401,10 @@ def main():
 
         print("\n== Provided relays: a pasted iceServers block ==")
         # A credential with every character that could trip a .env round-trip: an inline-comment
-        # marker, an equals sign, both quotes and a comma.
-        tricky = "c#r=e'd\"x,y"
+        # marker (bare and after a space), a ${...} load_dotenv would expand, an equals sign, both
+        # quotes and a comma. dotenv_values interpolates by default, exactly as load_dotenv does
+        # at boot -- so this is the restart, not just the running process.
+        tricky = "c#r=e'd\"x,y ${HOME} #z"
         paste = ('{"iceServers": [{"urls": ["stun:stun.cloudflare.com:3478", '
                  '"turn:turn.cloudflare.com:3478?transport=udp"], '
                  '"username": "xxxx", "credential": ' + json.dumps(tricky) + ',}]}')
@@ -416,6 +418,8 @@ def main():
         stored = dotenv_values(env_path).get("REMOTE_ICE_SERVERS_JSON")
         check("...stored as one .env line that python-dotenv reads back intact",
               json.loads(stored)[0]["credential"] == tricky)
+        check("...with no raw $ or # on that line for load_dotenv to expand or cut at",
+              "$" not in stored and "#" not in stored)
         check("...and applied to the live env", os.environ.get("REMOTE_ICE_SERVERS_JSON") == stored)
         st = c.get("/api/remote/turn/status").get_json()
         check("status counts the pasted servers and their URLs",

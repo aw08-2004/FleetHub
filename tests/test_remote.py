@@ -7,6 +7,7 @@ import hmac
 import os
 import sys
 import tempfile
+import json
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
@@ -217,6 +218,16 @@ def main():
         check("whitespace between the comma and the bracket is fine too",
               remote.parse_ice_servers_json('[ {"urls": "stun:s.example:3478" } ,\n ]')
               == [{"urls": ["stun:s.example:3478"]}])
+        # CodeQL flagged the previous one-regex repair as polynomial on exactly this input: an
+        # unterminated string of escaped quotes, re-scanned from every quote.
+        started = time.time()
+        expect_raise("an unterminated string of 100k escaped quotes is refused", ValueError,
+                     lambda: remote.parse_ice_servers_json('{"urls": "' + '\\"' * 100000))
+        check("...in linear time, not polynomial", time.time() - started < 2)
+        check("serialise_ice_servers writes $ and # as escapes that parse back identically",
+              json.loads(remote.serialise_ice_servers([{"urls": ["stun:s:1"], "u": "a ${X} #b"}]))
+              == [{"urls": ["stun:s:1"], "u": "a ${X} #b"}]
+              and not set("$#") & set(remote.serialise_ice_servers([{"u": "a ${X} #b"}])))
         check("check_ice_servers_json returns its problem instead of raising",
               remote.check_ice_servers_json("{oops")[0] is None
               and remote.check_ice_servers_json("{oops")[1] == "not valid JSON")
