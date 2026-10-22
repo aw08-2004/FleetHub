@@ -352,7 +352,10 @@ def _collect_down(relay, after, max_bytes):
     cursor = after
     lag_ms = None
     for seq, kind, flags, payload, arrived in buffered[index:]:
-        if out and size + len(payload) > max_bytes:
+        # Test `cursor`, not `out`: the lead-in alone must never fill the batch, or a lead-in
+        # plus a keyframe over the cap would hand out the lead-in with no frame and leave the
+        # cursor where it was -- the same lead-in again on every poll, forever.
+        if cursor != after and size + len(payload) > max_bytes:
             break
         out.append((kind, flags, payload))
         size += len(payload)

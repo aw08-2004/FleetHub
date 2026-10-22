@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 import time
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import remote_relay as rr
@@ -141,19 +142,26 @@ def test_lagging_viewer_jumps_to_newest_keyframe():
     check("the cursor lands on the last record", cursor2 == cursor + 7)
 
     rr.push_down("s9", [video(b"d5"), video(b"d6")])
-    records, _, _ = rr.read_down("s9", cursor2, wait_seconds=0)
+    records, cursor3, _ = rr.read_down("s9", cursor2, wait_seconds=0)
     check("with no keyframe ahead it continues straight on",
           [p for _, _, p in records] == [b"d5", b"d6"])
+
+    # A lead-in plus a keyframe over the byte cap still hands out the keyframe and moves the
+    # cursor, rather than repeating the lead-in alone on every poll (review of #171).
+    rr.push_down("s9", [control(b'{"t":"status"}'), video(b"K4" * 8, key=True)])
+    records, cursor4, _ = rr.read_down("s9", cursor3, wait_seconds=0, max_bytes=20)
+    check("an oversized first frame still goes out after its lead-in",
+          [p for _, _, p in records] == [b'{"t":"status"}', b"K4" * 8] and cursor4 > cursor3)
     rr.close_relay("s9")
 
 
 def test_lag_is_reported():
     print("the lag of the first frame handed out is reported")
     rr.open_relay("s10", "PC-01")
-    real = rr.time.monotonic
     clock = [1000.0]
-    rr.time.monotonic = lambda: clock[0]
-    try:
+    # mock.patch.object rather than pytest's monkeypatch: the house runner executes this file
+    # as a plain script, where fixtures do not exist, and the patch still undoes itself.
+    with mock.patch.object(rr.time, "monotonic", lambda: clock[0]):
         rr.push_down("s10", [control(b'{"t":"geom","w":1}'), video(b"K", key=True)])
         clock[0] += 1.5
         rr.push_down("s10", [video(b"d1")])
@@ -167,9 +175,7 @@ def test_lag_is_reported():
         check("a caught-up viewer reads as live", lag3 == 0)
         check("read_down keeps its three-value shape for older callers",
               len(rr.read_down("s10", 0, wait_seconds=0)) == 3)
-    finally:
-        rr.time.monotonic = real
-        rr.close_relay("s10")
+    rr.close_relay("s10")
 
 
 def test_bounded_buffer():
