@@ -5,6 +5,10 @@ while every request succeeds**: a viewer handed delta frames it cannot decode be
 buffer was not rewound to a keyframe, a viewer resynchronised past the `geom` record so clicks
 map to nothing, or a long-poll that keeps waiting after its session closed. Each of those looks
 healthy from the network tab -- 200s all round -- and only the picture says otherwise.
+
+Its twin since hub 1.163.0 is **a screen that is live-looking but seconds old**: a viewer
+behind but still inside the buffer, fed every stale frame in order, so a phone kept showing the
+mouse moving after the operator had let go.
 """
 import os
 import sys
@@ -114,6 +118,58 @@ def test_fallen_behind_viewer_resyncs():
     check("the resync starts at a keyframe", payloads and payloads[0] == b"K-late")
     check("and skips the deltas a decoder could not use", len(payloads) == 5)
     rr.close_relay("s2")
+
+
+def test_lagging_viewer_jumps_to_newest_keyframe():
+    print("a viewer behind but inside the buffer jumps to the newest keyframe")
+    rr.open_relay("s9", "PC-01")
+    rr.push_down("s9", [video(b"K1", key=True)])
+    _, cursor, _ = rr.read_down("s9", 0, wait_seconds=0)
+    rr.push_down("s9", [video(b"d1"), video(b"d2"), video(b"K2", key=True), video(b"d3"),
+                        control(b'{"t":"status","desktop":"Winlogon"}'),
+                        video(b"K3", key=True), video(b"d4")])
+    records, cursor2, _ = rr.read_down("s9", cursor, wait_seconds=0)
+    payloads = [p for _, _, p in records]
+    check("it starts at the NEWEST keyframe, not the next one",
+          [p for k, _, p in records if k == rr.KIND_VIDEO] == [b"K3", b"d4"])
+    check("the stale deltas and the older keyframe are not sent",
+          not {b"d1", b"d2", b"K2", b"d3"} & set(payloads))
+    check("a control record jumped over is still delivered, ahead of the picture",
+          payloads[0] == b'{"t":"status","desktop":"Winlogon"}')
+    check("no geometry is injected -- this is a jump, not a resync",
+          sum(1 for k, _, _ in records if k == rr.KIND_CONTROL) == 1)
+    check("the cursor lands on the last record", cursor2 == cursor + 7)
+
+    rr.push_down("s9", [video(b"d5"), video(b"d6")])
+    records, _, _ = rr.read_down("s9", cursor2, wait_seconds=0)
+    check("with no keyframe ahead it continues straight on",
+          [p for _, _, p in records] == [b"d5", b"d6"])
+    rr.close_relay("s9")
+
+
+def test_lag_is_reported():
+    print("the lag of the first frame handed out is reported")
+    rr.open_relay("s10", "PC-01")
+    real = rr.time.monotonic
+    clock = [1000.0]
+    rr.time.monotonic = lambda: clock[0]
+    try:
+        rr.push_down("s10", [control(b'{"t":"geom","w":1}'), video(b"K", key=True)])
+        clock[0] += 1.5
+        rr.push_down("s10", [video(b"d1")])
+        clock[0] += 0.25
+        records, cursor, state, lag = rr.read_down_with_lag("s10", 0, wait_seconds=0)
+        check("the age is the first VIDEO record's, on the hub's clock", lag == 1750)
+        _, _, _, lag2 = rr.read_down_with_lag("s10", cursor, wait_seconds=0)
+        check("an empty poll reports no lag", lag2 == 0)
+        rr.push_down("s10", [video(b"d2")])
+        _, _, _, lag3 = rr.read_down_with_lag("s10", cursor, wait_seconds=0)
+        check("a caught-up viewer reads as live", lag3 == 0)
+        check("read_down keeps its three-value shape for older callers",
+              len(rr.read_down("s10", 0, wait_seconds=0)) == 3)
+    finally:
+        rr.time.monotonic = real
+        rr.close_relay("s10")
 
 
 def test_bounded_buffer():
@@ -235,6 +291,8 @@ def main():
     test_requires_open()
     test_new_viewer_starts_at_newest_keyframe()
     test_fallen_behind_viewer_resyncs()
+    test_lagging_viewer_jumps_to_newest_keyframe()
+    test_lag_is_reported()
     test_bounded_buffer()
     test_up_stream()
     test_close_wakes_waiters()

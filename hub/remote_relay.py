@@ -66,7 +66,8 @@ MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 
 #: Down-stream buffer per session. Bounded by count AND bytes: count bounds a burst of tiny
 #: delta frames, bytes bounds a run of keyframes. Old records fall off the front; a viewer that
-#: falls behind the front is resynchronised to the newest keyframe (see read_down).
+#: falls behind the front is resynchronised to the newest keyframe (see _start_index), and so is
+#: one still inside the buffer the moment a newer keyframe is waiting for it.
 MAX_DOWN_RECORDS = 240
 MAX_DOWN_BYTES = 24 * 1024 * 1024
 
@@ -95,7 +96,9 @@ class Relay:
         self.session_id = session_id
         self.machine = machine
         self.cond = threading.Condition()
-        self.down = collections.deque()   # (seq, kind, flags, payload)
+        # (seq, kind, flags, payload, arrived) -- `arrived` is time.monotonic() when the record
+        # reached the hub, so read_down can tell a viewer how far behind live it is.
+        self.down = collections.deque()
         self.down_bytes = 0
         self.down_next = 1
         self.up = collections.deque()     # (seq, message_json_str)
@@ -232,8 +235,9 @@ def push_down(session_id, records):
     with relay.cond:
         if relay.closed:
             return None
+        arrived = time.monotonic()
         for kind, flags, payload in records:
-            relay.down.append((relay.down_next, kind, flags, payload))
+            relay.down.append((relay.down_next, kind, flags, payload, arrived))
             relay.down_next += 1
             relay.down_bytes += len(payload)
             relay.bytes_in += len(payload)
@@ -241,7 +245,7 @@ def push_down(session_id, records):
                 relay.last_geom = payload
         while relay.down and (len(relay.down) > MAX_DOWN_RECORDS
                               or relay.down_bytes > MAX_DOWN_BYTES):
-            _, _, _, old = relay.down.popleft()
+            old = relay.down.popleft()[3]
             relay.down_bytes -= len(old)
         relay._touch()
         relay.cond.notify_all()
@@ -252,21 +256,37 @@ def _start_index(relay, after):
     """Where a viewer whose cursor is `after` should start reading, and whether that is a
     resync. Must be called with relay.cond held.
 
-    Three cases:
-      * `after` is inside the buffer -> continue straight on from it.
+    Four cases:
+      * `after` is inside the buffer and a keyframe is waiting past it -> jump to the NEWEST
+        such keyframe. Not a resync: the control records jumped over are still delivered (see
+        _collect_down).
+      * `after` is inside the buffer with no keyframe ahead -> continue straight on from it.
       * `after` is 0 (a new viewer) or has fallen off the front (a viewer that stalled) ->
         start at the NEWEST keyframe, because a decoder can only begin at one and every frame
         before the newest is latency nobody wants on a remote-control screen.
       * no keyframe buffered yet -> start at the front and let the browser discard deltas until
         the keyframe arrives (the agent re-keys on relay open, so this is brief).
+
+    **The in-buffer jump is what keeps a slow viewer live.** Before it, a viewer behind but not
+    yet off the front -- up to MAX_DOWN_RECORDS, about 16 s at 15 fps -- was handed every frame
+    since its cursor, and a phone on mobile data replayed seconds-old motion after the operator
+    had stopped moving the mouse. Jumping to a keyframe is always decodable: the agent never
+    emits B-frames, and an IDR depends on nothing before it. Rejected: dropping deltas to catch
+    up without a keyframe (garbage until the next IDR), and skipping only in the browser (the
+    hub would still push the whole backlog down the very link that is too slow for it).
     """
     if not relay.down:
         return 0, False
     oldest = relay.down[0][0]
     if after >= oldest - 1 and after != 0:
-        return max(0, after - oldest + 1), False
+        start = max(0, after - oldest + 1)
+        for i in range(len(relay.down) - 1, start, -1):
+            _, kind, flags, _, _ = relay.down[i]
+            if kind == KIND_VIDEO and flags & FLAG_KEYFRAME:
+                return i, False
+        return start, False
     for i in range(len(relay.down) - 1, -1, -1):
-        _, kind, flags, _ = relay.down[i]
+        _, kind, flags, _, _ = relay.down[i]
         if kind == KIND_VIDEO and flags & FLAG_KEYFRAME:
             return i, True
     return 0, True
@@ -301,8 +321,17 @@ def _wait_for(relay, queue, after, wait_seconds):
 
 
 def _collect_down(relay, after, max_bytes):
-    """The records a viewer at cursor `after` gets next, and its new cursor. Caller holds
-    relay.cond. See _start_index for where a new or lagging viewer starts."""
+    """The records a viewer at cursor `after` gets next, its new cursor, and how far behind live
+    that is in milliseconds. Caller holds relay.cond. See _start_index for where a new or
+    lagging viewer starts.
+
+    When the viewer jumps forward inside the buffer, the CONTROL records it jumps over are still
+    delivered ahead of the keyframe -- a `geom` or a desktop-switch status is not superseded by
+    a newer picture the way a delta is, and losing one leaves clicks mapped to the wrong size.
+
+    The lag is the age, on the hub's own clock, of the first video record handed out: one
+    clock, so nothing depends on the agent's or the phone's time being right. Zero when no
+    video goes out."""
     index, resync = _start_index(relay, after)
     out, size = [], 0
     if resync and relay.last_geom is not None:
@@ -310,14 +339,23 @@ def _collect_down(relay, after, max_bytes):
         # frame -- see Relay.last_geom.
         out.append((KIND_CONTROL, 0, relay.last_geom))
         size += len(relay.last_geom)
+    buffered = list(relay.down)
+    if not resync and after and buffered:
+        for _, kind, flags, payload, _ in buffered[max(0, after - buffered[0][0] + 1):index]:
+            if kind == KIND_CONTROL:
+                out.append((kind, flags, payload))
+                size += len(payload)
     cursor = after
-    for seq, kind, flags, payload in list(relay.down)[index:]:
+    lag_ms = None
+    for seq, kind, flags, payload, arrived in buffered[index:]:
         if out and size + len(payload) > max_bytes:
             break
         out.append((kind, flags, payload))
         size += len(payload)
         cursor = seq
-    return out, cursor
+        if lag_ms is None and kind == KIND_VIDEO:
+            lag_ms = int((time.monotonic() - arrived) * 1000)
+    return out, cursor, lag_ms or 0
 
 
 def read_down(session_id, after, wait_seconds=DEFAULT_WAIT_SECONDS, max_bytes=MAX_UPLOAD_BYTES):
@@ -327,17 +365,29 @@ def read_down(session_id, after, wait_seconds=DEFAULT_WAIT_SECONDS, max_bytes=MA
     (kind, flags, payload). Waits up to `wait_seconds` for something to arrive; an empty list
     with state "open" just means "ask again".
     """
+    records, cursor, state, _ = read_down_with_lag(session_id, after, wait_seconds, max_bytes)
+    return records, cursor, state
+
+
+def read_down_with_lag(session_id, after, wait_seconds=DEFAULT_WAIT_SECONDS,
+                       max_bytes=MAX_UPLOAD_BYTES):
+    """read_down, plus how many milliseconds behind live the first frame handed out is.
+
+    The console route sends the lag to the browser, which freezes-and-jumps instead of playing
+    old motion and steps the stream's quality down (remote-quality.js). The lag was the missing
+    signal: a slow link backs up in the network and in this buffer, never in the browser's
+    decoder, so the decoder-queue check in remote-relay.js could not see it."""
     after = _cursor(after)
     relay = get_relay(session_id)
     if relay is None:
-        return [], after, "closed"
+        return [], after, "closed", 0
     with relay.cond:
         outcome = _wait_for(relay, relay.down, after, wait_seconds)
         if outcome != "ready":
-            return [], after, "closed" if outcome == "closed" else "open"
-        out, cursor = _collect_down(relay, after, max_bytes)
+            return [], after, "closed" if outcome == "closed" else "open", 0
+        out, cursor, lag_ms = _collect_down(relay, after, max_bytes)
         relay._touch()
-        return out, cursor, "open"
+        return out, cursor, "open", lag_ms
 
 
 # --------------------------------------------------------------------------- up stream

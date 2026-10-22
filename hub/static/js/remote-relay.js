@@ -36,6 +36,17 @@
     const MAX_DECODE_QUEUE = 8;
     const RETRY_MS = 1000;
 
+    // How far behind live (X-Relay-Lag-Ms, measured on the hub's clock) a batch may start before
+    // the viewer stops playing it and waits for a fresh keyframe instead. The decoder-queue check
+    // above cannot see this: on a slow phone link the backlog sits in the network and the hub's
+    // buffer, the decoder keeps up with whatever arrives, and the operator watched seconds-old
+    // motion after letting go of the mouse. A frozen picture that jumps to the present beats
+    // a moving one that is lying about it.
+    const MAX_LAG_MS = 800;
+    // Keyframe requests are throttled: each one makes the agent rebuild its encoder, and a slow
+    // link reports "behind" on every poll until the requested keyframe gets through.
+    const KEY_REQUEST_MS = 2000;
+
     function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
     /** True if this browser can play a relayed session at all. */
@@ -91,6 +102,7 @@
      *  opts.downUrl    (after) => URL of the frames long-poll
      *  opts.upUrl      () => URL to POST input batches to
      *  opts.onControl  (jsonText) for each status record from the agent
+     *  opts.onLag      (ms) how far behind live each batch with video started (remote-quality.js)
      *  opts.onFirstFrame ()  once the first frame is on screen
      *  opts.onClosed   ()    when the hub says the relay is gone (session ended)
      */
@@ -108,6 +120,7 @@
         // Wall-clock microseconds. The decoder needs increasing timestamps, and the stream's
         // real cadence varies with the agent's capture rate, so "now" is as honest as anything.
         let lastTimestamp = 0;
+        let lastKeyRequest = -Infinity;
 
         const upQueue = [];
         let upBusy = false;
@@ -187,10 +200,19 @@
                 return RETRY;
             }
             try {
+                // The hub's lag is the frames' age when it SENT them. On a slow link the body
+                // itself takes a while to arrive, and that wait is exactly the delay the
+                // operator sees -- so it is added on, or a link too slow for the bitrate would
+                // report itself as live.
+                const headersAt = performance.now();
+                const buffer = await response.arrayBuffer();
+                const bodyMs = performance.now() - headersAt;
+                const hubLag = Number.parseInt(response.headers.get('X-Relay-Lag-Ms') || '', 10);
                 return {
-                    buffer: await response.arrayBuffer(),
+                    buffer,
                     next: Number.parseInt(response.headers.get('X-Relay-Next') || '', 10),
                     state: response.headers.get('X-Relay-State'),
+                    lag: Number.isFinite(hubLag) ? hubLag + Math.round(bodyMs) : NaN,
                 };
             } catch (e) {
                 return RETRY;
@@ -198,15 +220,32 @@
         }
 
         const statusText = new TextDecoder();
-        function applyBatch(buffer) {
+        function requestKey() {
+            const now = performance.now();
+            if (now - lastKeyRequest < KEY_REQUEST_MS) return;
+            lastKeyRequest = now;
+            send({ t: 'key' });
+        }
+
+        function applyBatch(buffer, lagMs) {
+            const records = parseRecords(buffer);
             if (!waitingForKey && decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
                 waitingForKey = true;
-                send({ t: 'key' });
+                requestKey();
             }
-            for (const record of parseRecords(buffer)) {
+            const firstVideo = records.find((r) => r.kind === KIND_VIDEO);
+            if (firstVideo && lagMs > MAX_LAG_MS) {
+                // The hub already started this batch at the newest keyframe it had. If that is
+                // a keyframe, it is the freshest picture there is: show it. If it is a delta,
+                // there was no keyframe to jump to -- hold the picture still until one comes.
+                if ((firstVideo.flags & FLAG_KEYFRAME) === 0) waitingForKey = true;
+                requestKey();
+            }
+            for (const record of records) {
                 if (record.kind === KIND_VIDEO) decodeVideo(record);
                 else if (record.kind === KIND_CONTROL) opts.onControl?.(statusText.decode(record.payload));
             }
+            if (firstVideo && Number.isFinite(lagMs)) opts.onLag?.(lagMs);
         }
 
         async function downLoop() {
@@ -215,7 +254,7 @@
                 if (stopped) return;
                 if (batch === GONE) { finish(); return; }
                 if (batch === RETRY) continue;
-                applyBatch(batch.buffer);
+                applyBatch(batch.buffer, batch.lag);
                 if (Number.isFinite(batch.next)) after = batch.next;
                 if (batch.state === 'closed') { finish(); return; }
             }
