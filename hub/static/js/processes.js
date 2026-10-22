@@ -443,6 +443,8 @@
 
         const table = document.createElement('table');
         table.className = 'data-table data-table--sortable process-table';
+        // Column filters only: the tab has its own process search (table-tools.js).
+        table.dataset.tableTools = 'filters';
         const thead = document.createElement('thead');
         const headRow = document.createElement('tr');
         headRow.append(

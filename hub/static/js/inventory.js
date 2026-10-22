@@ -75,6 +75,10 @@ let statusFilter = loadStatusFilter();
 let allRows = [];          // the last fetch, unfiltered/unsorted
 let visibleRows = [];      // what render() last put on screen, in order
 let searchQuery = '';
+// Per-column filters from the table's filter row (table-tools.js, hub 1.163.0), keyed by the
+// header's data-sort. Filtered here, over the data, rather than by hiding rendered rows: the
+// count, "select all" and Export all mean "the rows on screen", and they read visibleRows.
+let columnFilters = {};
 let sort = loadSort();     // { key, dir: 'asc' | 'desc' }
 const selected = new Set();
 // The device group the list is narrowed to (hub 1.114.0): its id, and the lowercased names it
@@ -189,11 +193,30 @@ function matchesSearch(row) {
     // The group filter first: a search inside a group narrows the group, never widens it.
     if (groupMembers && !groupMembers.has(String(row.machine).toLowerCase())) return false;
     if (!matchesStatus(row, statusFilter)) return false;
+    for (const [key, value] of Object.entries(columnFilters)) {
+        if (!columnText(row, key).toLowerCase().includes(value)) return false;
+    }
     if (!searchQuery) return true;
     return SEARCH_FIELDS.some((field) => {
         const value = row[field];
         return value && String(value).toLowerCase().includes(searchQuery);
     });
+}
+
+// What a column filter is matched against: the text the cell shows, not the sort key -- a
+// status sorts as a number and a temperature as a float, and "online" or "45" typed in the
+// box has to match what the operator is looking at. Last seen matches the stamp itself
+// ("2026-10"), which is the tooltip; "3m ago" changes under the filter every minute.
+function columnText(row, key) {
+    switch (key) {
+        case 'status': {
+            const pill = document.createElement('span');
+            setMachineStatusPill(pill, row);
+            return pill.textContent;
+        }
+        case 'temp': return formatTemp(row.temp);
+        default: return (row[key] === null || row[key] === undefined) ? '' : String(row[key]);
+    }
 }
 
 // ---- actions on one machine -----------------------------------------------------
@@ -477,7 +500,7 @@ function render() {
 
     // Pluralised through tPlural rather than a trailing `s`: the count and its noun agree
     // differently per language, and a hand-built "machine(s)" cannot be translated at all.
-    if ((searchQuery || statusFilter || groupMembers) && total) {
+    if ((searchQuery || statusFilter || groupMembers || Object.keys(columnFilters).length) && total) {
         countEl.textContent = tPlural('inventory.count_filtered', total, { visible: visibleRows.length });
     } else if (total) {
         countEl.textContent = tPlural('inventory.count', total);
@@ -581,6 +604,29 @@ searchInput.addEventListener('input', () => {
     searchQuery = searchInput.value.trim().toLowerCase();
     render();
 });
+
+// The column filter row and its toggle. The toggle goes in this page's toolbar beside the
+// search box it already has, rather than a second toolbar with a second search box.
+function setColumnFilters(columns) {
+    columnFilters = {};
+    for (const [key, value] of Object.entries(columns)) {
+        const v = String(value || '').trim().toLowerCase();
+        if (v) columnFilters[key] = v;
+    }
+}
+
+if (window.FleetTable) {
+    const tools = FleetTable.enhance(inventoryBody.closest('table'), {
+        toolbar: document.querySelector('#devices-root > .toolbar'),
+        search: false,
+        onChange(state) {
+            setColumnFilters(state.columns);
+            render();
+        },
+    });
+    // Filters restored from this tab's session; applied by the first loadInventory() render.
+    if (tools) setColumnFilters(tools.columns);
+}
 
 document.getElementById('inventory-export').addEventListener('click', () => exportCsv(visibleRows));
 document.getElementById('inventory-bulk-export').addEventListener('click', () => {

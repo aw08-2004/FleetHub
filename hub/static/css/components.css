@@ -2035,6 +2035,172 @@ label.checkbox input {
     max-width: 480px;
 }
 
+/* ============ Table tools (table-tools.js, hub 1.163.0) ============
+   The search box, Filters toggle and per-column filter row every .data-table gets. The
+   toolbar sits above the table's scroll box rather than in it, so it stays put while a wide
+   table scrolls sideways under it. */
+.table-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+/* .btn is inline-flex, which outranks the UA's [hidden] rule: without this the Clear button
+   and a hidden toolbar would never go away. */
+.table-tools[hidden],
+.table-tools [hidden],
+.toolbar .table-tools__clear[hidden] {
+    display: none;
+}
+
+.table-tools__search {
+    flex: 1 1 260px;
+    min-width: 0;
+    max-width: 420px;
+}
+
+.table-tools__toggle.is-active {
+    background: var(--accent-soft);
+    color: var(--text);
+}
+
+/* How many column filters are on -- visible with the row folded away, so a filter cannot hide
+   rows without saying so. */
+.table-tools__badge:not(:empty) {
+    min-width: 1.5em;
+    padding: 0 0.4em;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-contrast);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+    text-align: center;
+}
+
+.data-table__filters[hidden] {
+    display: none;
+}
+
+.data-table__filters th {
+    padding-top: 0;
+    padding-bottom: var(--space-2);
+    font-weight: 400;
+}
+
+.data-table__filter.input {
+    width: 100%;
+    min-width: 6rem;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+}
+
+/* ============ Card tables (phones) ============
+   Below 640px every enhanced table (.data-table--cards, added by table-tools.js) is a stack of
+   cards of "label  value" lines: the header row goes, each row is a card, each cell is a line
+   labelled from its data-label. Wide tables used to push the whole document sideways at phone
+   width, header and nav with it. Keyed off the class table-tools.js adds, not .data-table:
+   only a table whose cells carry labels can be read this way. The column filters, when open,
+   stand above the cards as a column of boxes. Devices layers its own corner placement
+   (.data-table--stack, below) on top. */
+@media (max-width: 640px) {
+    .data-table--cards,
+    .data-table--cards thead,
+    .data-table--cards tbody {
+        display: block;
+    }
+
+    .data-table--cards thead tr:not(.data-table__filters) {
+        display: none;
+    }
+
+    .data-table--cards .data-table__filters:not([hidden]) {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+        padding: 0 0 var(--space-3);
+    }
+
+    .data-table--cards .data-table__filters th {
+        display: block;
+        padding: 0;
+        border-bottom: 0;
+    }
+
+    .data-table--cards .data-table__filters th:empty {
+        display: none;
+    }
+
+    .data-table--cards tbody tr {
+        display: block;
+        padding: var(--space-3) var(--space-2);
+        border-bottom: 1px solid var(--card-border);
+    }
+
+    /* Outranks the display: block above, or a filtered-out row would stay on screen. */
+    .data-table--cards tbody tr[hidden] {
+        display: none;
+    }
+
+    .data-table--cards td {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: var(--space-3);
+        padding: var(--space-1) 0;
+        border-bottom: 0;
+        overflow-wrap: anywhere;
+        text-align: right;
+    }
+
+    .data-table--cards td:empty {
+        display: none;
+    }
+
+    .data-table--cards td[data-label]::before {
+        content: attr(data-label);
+        flex: none;
+        max-width: 45%;
+        color: var(--muted);
+        font-size: var(--text-sm);
+        text-align: left;
+    }
+
+    /* The first column is the card's title (a name, almost always). */
+    .data-table--cards td:first-child {
+        font-weight: 600;
+        text-align: left;
+    }
+
+    .data-table--cards td:first-child::before {
+        content: none;
+    }
+
+    .data-table--cards td.data-table__actions {
+        width: auto;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        padding-top: var(--space-2);
+        white-space: normal;
+    }
+
+    .data-table--cards td.data-table__actions::before {
+        content: none;
+    }
+
+    /* "Loading" / "No matches" rows: one wide cell, no label. */
+    .data-table--cards td[colspan] {
+        display: block;
+        text-align: left;
+        font-weight: 400;
+    }
+
+    .data-table--cards td[colspan]::before {
+        content: none;
+    }
+}
+
 /* ============ Stacked table (phones) ============
    .data-table--stack: below 640px each row is a card of "label  value" lines instead of a
    row of eleven columns. The Devices table used to force the whole page to scroll sideways
@@ -2042,7 +2208,9 @@ label.checkbox input {
    wanted. Labels come from each cell's data-label (set by the page script from the headers).
    The checkbox and the row menu keep their places at the card's top corners. */
 @media (max-width: 640px) {
-    .data-table--stack thead {
+    /* Without table-tools.js (it failed to load) there is no card layout above to hide the
+       header; with it, the thead must stay so the open filter row can show. */
+    .data-table--stack:not(.data-table--cards) thead {
         display: none;
     }
 

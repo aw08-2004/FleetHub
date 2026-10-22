@@ -177,7 +177,7 @@
         // their approvals "worked".
         const hint = group.decision === 'approved'
             ? el('p', 'stat-card__meta', t('patches.approved_hint')) : null;
-        const table = el('table', 'table');
+        const table = el('table', 'data-table');
         const head = el('tr');
         [t('patches.col.update'), t('patches.col.classification'), t('patches.col.source'),
          t('patches.col.machines')]
@@ -286,7 +286,7 @@
             empty(windowsPane, t('patches.no_windows'));
             return;
         }
-        const table = el('table', 'table');
+        const table = el('table', 'data-table');
         const head = el('tr');
         [t('patches.col.window'), t('patches.col.days'), t('patches.col.time'),
          t('patches.col.scope'), t('patches.col.reboot')]
@@ -447,7 +447,7 @@
                                      el('p', 'stat-card__meta', t('patches.no_runs_hint')));
             return;
         }
-        const table = el('table', 'table');
+        const table = el('table', 'data-table');
         const head = el('tr');
         [t('patches.col.started'), t('patches.col.by'), t('patches.col.progress'),
          t('patches.col.status')]

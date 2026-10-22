@@ -66,7 +66,7 @@
     {# data-table--stack: below 640px each row becomes a card of label/value lines
        (components.css) -- eleven columns were a sideways-scrolling page on a phone. The labels
        come from data-label, which inventory.js copies off these headers. #}
-    <table class="data-table data-table--sortable data-table--stack">
+    <table class="data-table data-table--sortable data-table--stack" data-table-tools="manual">
         <thead>
             <tr id="inventory-head">
                 {# Not sortable, so no data-sort: onHeaderClick is only bound to th[data-sort].
