@@ -71,9 +71,20 @@ internal sealed class ConPtyProcess : IDisposable
     /// it. Dispose sets <c>_disposed</c> first, and asking <see cref="HasExited"/> from there
     /// answered "exited" every time -- TerminateProcess never ran and the root shell was left
     /// to ClosePseudoConsole, which the class remarks say must not be the one to end it.</summary>
-    private static bool ProcessExited(SafeProcessHandle? process) =>
-        process is null || process.IsInvalid || process.IsClosed
-        || (GetExitCodeProcess(process, out var code) && code != STILL_ACTIVE);
+    private static bool ProcessExited(SafeProcessHandle? process)
+    {
+        if (process is null || process.IsInvalid || process.IsClosed) return true;
+        try
+        {
+            return GetExitCodeProcess(process, out var code) && code != STILL_ACTIVE;
+        }
+        catch (ObjectDisposedException)
+        {
+            // Closed by Dispose between the IsClosed check and the call: the marshaller throws
+            // rather than pass a dead handle. A closed handle means torn down, which is exited.
+            return true;
+        }
+    }
 
     /// <summary>Exit code of the hosted process, or null while it is still running.</summary>
     public int? ExitCode
@@ -81,11 +92,21 @@ internal sealed class ConPtyProcess : IDisposable
         get
         {
             // One read of the field: Dispose nulls it from another thread, and the SafeHandle
-            // overloads below keep the handle alive across the call, so a read racing Dispose
-            // fails cleanly instead of asking a closed (and possibly reused) raw handle.
+            // overloads below never hand Windows a closed (and possibly reused) raw handle. A
+            // read racing Dispose can still lose the handle between the IsClosed check and the
+            // call, and the marshaller throws ObjectDisposedException for that; caught here,
+            // because the exit watcher in PtySession reads this unguarded and would fault.
             var process = _process;
             if (process is null || process.IsInvalid || process.IsClosed) return null;
-            if (!GetExitCodeProcess(process, out var code)) return null;
+            uint code;
+            try
+            {
+                if (!GetExitCodeProcess(process, out code)) return null;
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
             return code == STILL_ACTIVE ? null : (int)code;
         }
     }
