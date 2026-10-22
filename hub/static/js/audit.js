@@ -78,6 +78,8 @@ function buildQuery(append) {
 function buildTable() {
     const card = el('div', 'card');
     const table = el('table', 'data-table');
+    // Column filters only: the page's own search box queries the server (table-tools.js).
+    table.dataset.tableTools = 'filters';
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
     for (const label of [t('audit.col.time'), t('audit.col.level'), t('audit.col.actor'),

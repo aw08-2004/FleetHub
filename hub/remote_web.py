@@ -19,12 +19,14 @@ CORS-safelisted, so a cross-origin fetch preflights and fails and an HTML form c
 it. Do not add force=True and do not accept a form-encoded fallback.
 """
 import functools
+import json
 import os
 import time
 
 from flask import Blueprint, Response, jsonify, request, session
 
 import auth_helpers
+import envfile
 import fleet
 import permissions
 import permissions_web
@@ -41,6 +43,15 @@ import sharing_web
 # The .env variable holding the TURN shared secret. Read from the environment (load_dotenv ran
 # at hub startup), never from the settings table -- secrets are structurally barred from there.
 TURN_SECRET_ENV = "REMOTE_TURN_SECRET"
+
+# Relays the hub does not mint for itself (remote.py, "provided relays"). Same .env discipline
+# as the secret above, and for the same reason: each holds a credential. Storing the pasted block
+# as a url_list-style setting was the obvious shape and was turned down -- the settings table is
+# readable without manage_settings, so a Cloudflare credential would be one GET away from anyone
+# who can open the Settings page.
+ICE_SERVERS_JSON_ENV = "REMOTE_ICE_SERVERS_JSON"
+CLOUDFLARE_KEY_ID_ENV = "REMOTE_CLOUDFLARE_TURN_KEY_ID"
+CLOUDFLARE_TOKEN_ENV = "REMOTE_CLOUDFLARE_TURN_API_TOKEN"
 
 # The refusal for relay traffic on a session that has ended or expired.
 SESSION_NOT_ACTIVE = "session is not active"
@@ -71,14 +82,48 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         the hub's network and from nowhere else (remote.select_urls_for_peer). ProxyFix is installed
         in app.py, so request.remote_addr is the real client behind the TLS terminator.
         """
+        turn_ttl = settings.get_int(db_path, "remote.turn_ttl_seconds")
         return remote.ice_servers(
             session_id,
             stun_urls=settings.get_list(db_path, "remote.stun_urls"),
             turn_urls=settings.get_list(db_path, "remote.turn_urls"),
             turn_secret=os.environ.get(TURN_SECRET_ENV, ""),
-            turn_ttl=settings.get_int(db_path, "remote.turn_ttl_seconds"),
+            turn_ttl=turn_ttl,
             peer_ip=peer_ip,
+            static_servers=_static_ice_servers(),
+            cloudflare=_cloudflare_minter(turn_ttl),
         )
+
+    def _static_ice_servers():
+        """The pasted iceServers block, parsed. The save route validated it, but .env is also
+        hand-editable, and a typo there must cost this one entry, not every session start."""
+        try:
+            return remote.parse_ice_servers_json(os.environ.get(ICE_SERVERS_JSON_ENV, ""))
+        except ValueError as e:
+            print(f"[remote] ignoring {ICE_SERVERS_JSON_ENV}: {e}")
+            return []
+
+    def _cloudflare_minter(ttl):
+        key_id = os.environ.get(CLOUDFLARE_KEY_ID_ENV, "").strip()
+        token = os.environ.get(CLOUDFLARE_TOKEN_ENV, "").strip()
+        if not (key_id and token):
+            return None
+        return lambda: remote.fetch_cloudflare_ice_servers(key_id, token, ttl)
+
+    def _write_env(updates):
+        """Write .env and the live environment together (envfile.apply_to_environ says why both).
+        Returns a refusal response, or None on success. Fixed sentences only: the ValueError is a
+        control character in the pasted text, and the OSError names a host path."""
+        try:
+            envfile.set_vars(env_path, updates)
+        except ValueError:
+            return jsonify({"error": "The value cannot contain line breaks or other control "
+                                     "characters."}), 400
+        except OSError as e:
+            print(f"[remote] could not write .env: {e}")
+            return jsonify({"error": "Could not write .env on the hub -- see the hub log."}), 500
+        envfile.apply_to_environ(updates)
+        return None
 
     def _stream_params(data):
         """Validate the viewer's stream choices into agent command params.
@@ -488,14 +533,17 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         """Long-poll the agent's frames. Binary, in remote_relay's framing; the cursor and the
         relay's state ride in headers so the body stays the frames and nothing else."""
         if not _relay_session_live(sess):
-            records, cursor, state = [], 0, "closed"
+            records, cursor, state, lag_ms = [], 0, "closed", 0
         else:
-            records, cursor, state = remote_relay.read_down(
+            records, cursor, state, lag_ms = remote_relay.read_down_with_lag(
                 session_id, request.args.get("after", 0))
         resp = Response(remote_relay.frame_records(records),
                         mimetype="application/octet-stream")
         resp.headers["X-Relay-Next"] = str(cursor)
         resp.headers["X-Relay-State"] = state
+        # How far behind live the first frame is, on the hub's clock -- the browser's cue to
+        # freeze-and-jump and to step quality down (remote-relay.js, remote-quality.js).
+        resp.headers["X-Relay-Lag-Ms"] = str(lag_ms)
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
@@ -850,9 +898,15 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         secret = os.environ.get(TURN_SECRET_ENV, "")
         stun = settings.get_list(db_path, "remote.stun_urls")
         turn = settings.get_list(db_path, "remote.turn_urls")
+        static = _static_ice_servers()
+        # **The preview never calls Cloudflare.** Opening the Settings page must not spend an
+        # API call (or wait on one); a configured key counts as the one entry it will mint, and
+        # the Test button is how an operator finds out whether it actually does.
+        cloudflare_set = _cloudflare_minter(60) is not None
         preview = remote.ice_servers(
             "preview", stun_urls=stun, turn_urls=turn, turn_secret=secret,
             turn_ttl=settings.get_int(db_path, "remote.turn_ttl_seconds"),
+            static_servers=static,
         )
         # How the URLs split by vantage, because "3 TURN URLs configured" hides the failure this
         # page exists to catch: a relay reachable only from inside the hub's network, or only
@@ -868,7 +922,10 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             "turn_lan_count": len(lan),
             "turn_wan_count": len(turn) - len(lan),
             "turn_tcp_count": len([u for u in turn if "transport=tcp" in u.lower()]),
-            "ice_count": len(preview),
+            "static_count": len(static),
+            "static_url_count": sum(len(s["urls"]) for s in static),
+            "cloudflare_configured": cloudflare_set,
+            "ice_count": len(preview) + (1 if cloudflare_set else 0),
         }), 200
 
     @bp.route("/api/remote/turn/secret", methods=["POST"])
@@ -907,5 +964,95 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
                     level=fleet.LEVEL_SECURITY,
                     target="hub", detail={"rotated": not provided})
         return jsonify({"secret_set": True, "secret": value}), 200
+
+    def _env_unwritable():
+        return jsonify({"error": "The hub cannot write .env in this deployment; set it on the "
+                                 "host instead."}), 400
+
+    @bp.route("/api/remote/ice/static", methods=["POST"])
+    @login_required
+    @can_manage_settings
+    def ice_static():
+        """Store (or, with an empty body, clear) a pasted iceServers block -- the shape
+        Cloudflare's generate-ice-servers returns, or any provider's fixed username/credential.
+
+        Stored re-serialised as one compact line, because a .env value is one line and envfile
+        refuses a line break. **The credential is never echoed back**: the response carries only
+        counts, and the audit line only that it changed.
+        """
+        if not env_path:
+            return _env_unwritable()
+        data = request.get_json(silent=True) or {}
+        text = str(data.get("json") or "").strip()
+        if not text:
+            refused = _write_env({ICE_SERVERS_JSON_ENV: None})
+            if refused:
+                return refused
+            fleet.audit(db_path, actor=_current_email(), action="remote_ice_servers_set",
+                        level=fleet.LEVEL_SECURITY, target="hub", detail={"cleared": True})
+            return jsonify({"static_count": 0, "static_url_count": 0}), 200
+        # check_ice_servers_json RETURNS its problem rather than raising it, so what reaches the
+        # browser is a sentence remote.py wrote about the operator's own paste -- it names a URL
+        # or a server number, never a credential -- and never an exception's text.
+        servers, problem = remote.check_ice_servers_json(text)
+        if problem:
+            return jsonify({"error": f"iceServers: {problem}"}), 400
+        if not servers:
+            return jsonify({"error": "iceServers: no servers in the pasted JSON"}), 400
+        refused = _write_env({ICE_SERVERS_JSON_ENV: remote.serialise_ice_servers(servers)})
+        if refused:
+            return refused
+        url_count = sum(len(s["urls"]) for s in servers)
+        fleet.audit(db_path, actor=_current_email(), action="remote_ice_servers_set",
+                    level=fleet.LEVEL_SECURITY, target="hub",
+                    detail={"servers": len(servers), "urls": url_count})
+        return jsonify({"static_count": len(servers), "static_url_count": url_count}), 200
+
+    @bp.route("/api/remote/turn/cloudflare", methods=["POST"])
+    @login_required
+    @can_manage_settings
+    def turn_cloudflare():
+        """Store (or, with both fields empty, clear) a Cloudflare TURN key. The hub then mints a
+        fresh credential per peer, so nothing an operator pasted can expire under them."""
+        if not env_path:
+            return _env_unwritable()
+        data = request.get_json(silent=True) or {}
+        key_id = str(data.get("key_id") or "").strip()
+        token = str(data.get("api_token") or "").strip()
+        if bool(key_id) != bool(token):
+            return jsonify({"error": "Both the TURN key ID and its API token are needed."}), 400
+        if key_id and not remote.CLOUDFLARE_KEY_ID_RE.fullmatch(key_id):
+            # It goes into the URL path of the request that carries the bearer token.
+            return jsonify({"error": "That is not a Cloudflare TURN key ID -- copy the key ID, "
+                                     "not its name."}), 400
+        refused = _write_env({CLOUDFLARE_KEY_ID_ENV: key_id or None,
+                              CLOUDFLARE_TOKEN_ENV: token or None})
+        if refused:
+            return refused
+        fleet.audit(db_path, actor=_current_email(), action="remote_cloudflare_turn_set",
+                    level=fleet.LEVEL_SECURITY, target="hub", detail={"cleared": not key_id})
+        return jsonify({"cloudflare_configured": bool(key_id)}), 200
+
+    @bp.route("/api/remote/turn/cloudflare/test", methods=["POST"])
+    @login_required
+    @can_manage_settings
+    def turn_cloudflare_test():
+        """Mint one credential and throw it away -- the only Cloudflare call made outside a
+        session, so 'configured' on the status card can be turned into 'works'."""
+        minter = _cloudflare_minter(60)
+        if minter is None:
+            return jsonify({"ok": False, "error": "No Cloudflare TURN key is set."}), 400
+        try:
+            servers = minter()
+        except Exception as e:  # noqa: BLE001 -- every failure is the same answer to the operator
+            # The detail (an HTTP status, a connection error naming the URL) goes to the log for
+            # whoever has a shell on the hub; the browser gets one fixed sentence, never the
+            # exception's text.
+            print(f"[remote] Cloudflare TURN test failed: {e}")
+            return jsonify({"ok": False, "error": "Cloudflare did not issue a credential -- "
+                                                  "check the key ID and API token, and see the "
+                                                  "hub log for the reason."}), 502
+        return jsonify({"ok": True,
+                        "url_count": sum(len(s["urls"]) for s in servers)}), 200
 
     return bp

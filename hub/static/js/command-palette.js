@@ -280,6 +280,11 @@
         options.forEach((opt, i) => {
             const on = i === active;
             opt.el.classList.toggle('bg-accent-soft', on);
+        // An inset ring as well as the tint: in the dark theme accent-soft alone is a shade
+        // the eye loses against the card, and the highlighted row is what Enter opens.
+        opt.el.classList.toggle('ring-1', on);
+        opt.el.classList.toggle('ring-inset', on);
+        opt.el.classList.toggle('ring-accent/40', on);
             opt.el.setAttribute('aria-selected', String(on));
             const actions = opt.el.querySelector('[data-actions]');
             if (actions) {

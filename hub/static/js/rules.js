@@ -279,6 +279,89 @@ function renderTargets() {
     });
 }
 
+// The `folder` selector's controls (roadmap #32): a folder picker and "and sub-folders". Its own
+// function so selectorRow stays one branch per kind. refreshTargetCount reports its own
+// failure into the count label, so its promise is deliberately not awaited.
+// Every folder as {id, label}, sorted by its full path -- shared by the folder target selector
+// and the move_to_folder action, so the two pickers can never list folders differently.
+function sortedFolders() {
+    return pcFolders
+        .map((f) => ({ id: f.id, label: pcFolderPath(f.id) }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function appendFolderSelector(row, selector) {
+    if (pcFolders.length) {
+        const select = el('select', 'input');
+        sortedFolders().forEach(({ id, label }) => select.appendChild(opt(String(id), label)));
+        selector.folder_id ??= Number(select.value);
+        select.value = String(selector.folder_id);
+        select.addEventListener('change', () => {
+            selector.folder_id = Number(select.value);
+            void refreshTargetCount();
+        });
+        row.appendChild(select);
+    } else {
+        row.appendChild(el('span', 'stat-card__meta', t('permissions.editor.folder_none_defined')));
+    }
+    const label = el('label', 'stat-card__meta');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = selector.include_children !== false;
+    box.addEventListener('change', () => {
+        selector.include_children = box.checked;
+        void refreshTargetCount();
+    });
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(' ' + t('rules.include_children')));
+    row.appendChild(label);
+}
+
+// The move_to_folder action's editor (hub 1.162.0): a folder, or "(no folder)" to take the PC
+// out of every folder. Writes on `change` only, like paramsEditor -- the folder a NEW action
+// starts with is chosen once, where the action is created (newMoveParams), never here. A
+// default stamped at render would turn "opened a rule and saved it" into a write, and the
+// tempting default here, null, means UNFILE: a silent grant removal nobody chose.
+function folderActionEditor(params) {
+    const wrap = el('div');
+    const select = el('select', 'input');
+    select.appendChild(opt('', t('rules.action_folder_none')));
+    sortedFolders().forEach(({ id, label }) => select.appendChild(opt(String(id), label)));
+    select.value = params.folder_id == null ? '' : String(params.folder_id);
+    select.addEventListener('change', () => {
+        params.folder_id = select.value === '' ? null : Number(select.value);
+    });
+    wrap.appendChild(select);
+    if (!pcFolders.length) {
+        wrap.appendChild(el('p', 'stat-card__meta', t('permissions.editor.folder_none_defined')));
+    }
+    return wrap;
+}
+
+// The params a new move_to_folder action starts with: the first folder by path, chosen
+// explicitly. Null only when there are no folders at all, where it is the one choice there is.
+function newMoveParams() {
+    const first = sortedFolders()[0];
+    return { folder_id: first ? first.id : null };
+}
+
+// Action types whose editor is a function of the params alone -- one lookup branch in
+// actionCard instead of one per type, the same reason SELECTOR_CONTROLS exists.
+const ACTION_EDITORS = {
+    command: commandEditor,
+    script: scriptEditor,
+    move_to_folder: folderActionEditor,
+};
+
+// Kinds whose controls live in their own function rather than inline in selectorRow -- one
+// lookup branch there instead of one per kind, which is what kept selectorRow readable (and
+// under SonarCloud's complexity gate) when `os` arrived beside `folder`.
+const SELECTOR_CONTROLS = {
+    folder: appendFolderSelector,
+    os: (row, selector) => row.appendChild(
+        window.TargetOs.select(selector, () => void refreshTargetCount())),
+};
+
 function selectorRow(side, selector, index) {
     const row = el('div', 'toolbar');
     row.style.marginBottom = 'var(--space-2)';
@@ -328,6 +411,8 @@ function selectorRow(side, selector, index) {
             });
             row.appendChild(select);
         }
+    } else if (Object.hasOwn(SELECTOR_CONTROLS, selector.kind)) {
+        SELECTOR_CONTROLS[selector.kind](row, selector);
     } else if (selector.kind === 'field') {
         const name = el('input', 'input');
         name.type = 'text';
@@ -533,10 +618,8 @@ function actionCard(action, onRemove) {
         card.appendChild(textField(action.params, 'text', t('rules.message_body')));
     } else if (action.type === 'snooze') {
         card.appendChild(numberField(action.params, 'seconds', t('rules.cooldown'), 3600));
-    } else if (action.type === 'command') {
-        card.appendChild(commandEditor(action.params));
-    } else if (action.type === 'script') {
-        card.appendChild(scriptEditor(action.params));
+    } else if (Object.hasOwn(ACTION_EDITORS, action.type)) {
+        card.appendChild(ACTION_EDITORS[action.type](action.params));
     } else if (action.type === 'webhook') {
         card.appendChild(textField(action.params, 'url', 'https://…'));
         card.appendChild(textField(action.params, 'template', t('rules.message_body')));
@@ -867,7 +950,10 @@ function messageEditor(action) {
 
         add.addEventListener('click', () => {
             action.on_response[outcome] = action.on_response[outcome] || [];
-            action.on_response[outcome].push({ type: kind.value, params: {} });
+            action.on_response[outcome].push({
+                type: kind.value,
+                params: kind.value === 'move_to_folder' ? newMoveParams() : {},
+            });
             renderFollowups();
             syncCommandsWarning();
         });
@@ -923,12 +1009,41 @@ async function loadDeviceGroups() {
     }
 }
 
+// PC-tree folders for the `folder` selector -- loaded alongside the device groups, and stale
+// in the same harmless way: a selector stores the folder's id.
+let pcFolders = [];
+async function loadPcFolders() {
+    try {
+        pcFolders = (await api('/api/pc-tree')).folders || [];
+        if (draft) {
+            renderTargets();
+            renderActions();
+        }
+    } catch (e) {
+        pcFolders = [];
+    }
+}
+
+function pcFolderPath(id) {
+    const names = [];
+    const seen = new Set();
+    let current = pcFolders.find((f) => f.id === id);
+    while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        names.unshift(current.name);
+        current = pcFolders.find((f) => f.id === current.parent_id);
+    }
+    return names.length ? names.join(' / ') : `#${id}`;
+}
+
 function fillKindSelects() {
     loadDeviceGroups();
+    // loadPcFolders falls back to no folders on failure, so nothing is left to catch.
+    void loadPcFolders();
     ['rule-target-kind', 'rule-exclude-kind'].forEach((id) => {
         const select = document.getElementById(id);
         select.textContent = '';
-        ['all', 'machines', 'ad_ou', 'field', 'group'].forEach((kind) => {
+        ['all', 'machines', 'ad_ou', 'folder', 'os', 'field', 'group'].forEach((kind) => {
             // "Every PC" as an EXCLUSION would exclude everything, which is never what
             // anybody means; leave it out rather than let a rule be built that targets none.
             if (id === 'rule-exclude-kind' && kind === 'all') return;
@@ -969,7 +1084,9 @@ document.getElementById('rule-add-clause').addEventListener('click', () => {
         if (kind === 'machines') selector.machines = [];
         if (kind === 'ad_ou') { selector.ou = ''; selector.include_children = true; }
         if (kind === 'group') selector.group_id = deviceGroups.length ? deviceGroups[0].id : null;
+        if (kind === 'folder') { selector.folder_id = null; selector.include_children = true; }
         if (kind === 'field') { selector.field = ''; selector.value = ''; }
+        if (kind === 'os') selector.os = window.TargetOs.DEFAULT;
         draft.target[side].push(selector);
         renderTargets();
         refreshTargetCount();
@@ -980,7 +1097,7 @@ const DECLINE_SNOOZE_SECONDS = 86400;
 
 document.getElementById('rule-action-add').addEventListener('click', () => {
     const kind = document.getElementById('rule-action-kind').value;
-    const action = { type: kind, params: {} };
+    const action = { type: kind, params: kind === 'move_to_folder' ? newMoveParams() : {} };
     if (kind === 'show_message') {
         // A new message defers for a day when the person says No.
         //

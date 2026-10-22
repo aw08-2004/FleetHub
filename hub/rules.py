@@ -44,6 +44,7 @@ import alerts
 import capabilities
 import events
 import fleet
+import os_buckets
 import scripts
 
 # ---------------------------------------------------------------------------------------
@@ -134,6 +135,9 @@ DURATION_UNITS = (UNIT_SECONDS, UNIT_DAYS)
 #                  must not conclude "0 processes" from "nobody was looking".
 #   ad     172800  directory.sync_once runs on its own schedule; 2 days survives a weekend
 #                  with the sync disabled.
+#   os       None  The agent reports its OS on hello (machine_info.os_*), and an OS does not
+#                  drift between reports -- an upgrade arrives as a new hello. Same reasoning
+#                  as bios: an old caption is not a wrong one.
 #   event    3600  machine_event_state.reported_at is stamped on every event report, empty
 #                  ones included, and the report rides the same heartbeat as everything else.
 #                  events.STALE_AFTER_SECONDS is what the console already calls a stale event
@@ -146,6 +150,7 @@ AGE_NETWORK = 10800
 AGE_BIOS = None
 AGE_PROC = 300
 AGE_AD = 172800
+AGE_OS = None
 AGE_EVENT = events.STALE_AFTER_SECONDS
 
 GROUP_SYS = "sys"
@@ -156,6 +161,7 @@ GROUP_SESSION = "session"
 GROUP_NET = "net"
 GROUP_BIOS = "bios"
 GROUP_AD = "ad"
+GROUP_OS = "os"
 GROUP_PROC = "proc"
 GROUP_EVENT = "event"
 GROUP_FIELD = "field"
@@ -221,6 +227,23 @@ STATIC_VARIABLES = (
     Var("ad.owner", KIND_TEXT, GROUP_AD, AGE_AD),
     Var("ad.os", KIND_TEXT, GROUP_AD, AGE_AD),
     Var("ad.disabled", KIND_BOOL, GROUP_AD, AGE_AD),
+    # -- os: what the machine is running, agent first and AD as the fallback ------------
+    # Before these the only OS a rule or a device group could see was ad.os -- the
+    # directory's `operatingSystem` attribute. So "every Windows PC" missed every machine
+    # that is not in AD, and lagged every one whose directory record had not caught up with
+    # an upgrade. These read os_buckets.normalize_os, the same function the Dashboard counts
+    # with, so a rule and the "Operating systems" card cannot disagree about a machine.
+    #
+    # os.family and os.release are SLUGS (`windows`, `windows_11`), not display names: a
+    # rule compares them, and `os.release == "windows_11"` must not break the day somebody
+    # rewords the Dashboard's label. os.name is the raw caption for `contains`/`matches`.
+    Var("os.name", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.family", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.release", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.version", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.build", KIND_NUMBER, GROUP_OS, AGE_OS),
+    Var("os.arch", KIND_TEXT, GROUP_OS, AGE_OS),
+    Var("os.source", KIND_TEXT, GROUP_OS, AGE_OS),
     # -- proc: present only while an operator has the Processes card open ---------------
     Var("proc.count", KIND_NUMBER, GROUP_PROC, AGE_PROC),
     Var("proc.cpu_cores", KIND_NUMBER, GROUP_PROC, AGE_PROC),
@@ -1023,6 +1046,9 @@ def resolve_machine_vars(db_path, machine, *, now=None, diagnostics=None, live=N
         _put(out, STATIC_BY_NAME[name], _text(info.get(column)), ad_age)
     _put(out, STATIC_BY_NAME["ad.disabled"], _bool(info.get("ad_disabled")), ad_age)
 
+    # -- OS ------------------------------------------------------------------------------
+    _resolve_os(info, out)
+
     # -- custom fields, probes, then derived --------------------------------------------
     # Order is load-bearing: a derived variable may be a formula over a custom field or a
     # probe value, so both must already be in `out` before the formulas run.
@@ -1031,6 +1057,27 @@ def resolve_machine_vars(db_path, machine, *, now=None, diagnostics=None, live=N
     _resolve_derived(db_path, out, {**field_variables(db_path), **probe_variables(db_path),
                                     **derived_variables(db_path)})
     return out
+
+
+def _resolve_os(info, out):
+    """os.* from machine_info's agent-reported columns, falling back to ad_os.
+
+    The bucket and the label come from one normalize_os call, so os.release can never say
+    Windows 11 while os.name and the Dashboard say 10. version/build/arch are agent-only --
+    the directory has no build number -- and read UNKNOWN on a machine only AD describes,
+    rather than borrowing a value from a source that never said it.
+    """
+    described = os_buckets.normalize_os(info.get("os_caption"), info.get("os_build"),
+                                        info.get("ad_os"))
+    bucket = described["bucket"]
+    _put(out, STATIC_BY_NAME["os.name"], _text(described["label"]))
+    _put(out, STATIC_BY_NAME["os.family"], _text(os_buckets.family_of(bucket)))
+    _put(out, STATIC_BY_NAME["os.release"], bucket if bucket != "unknown" else UNKNOWN)
+    _put(out, STATIC_BY_NAME["os.source"], _text(described["source"]))
+    _put(out, STATIC_BY_NAME["os.version"], _text(info.get("os_version")))
+    build = os_buckets.build_number(info.get("os_build"))
+    _put(out, STATIC_BY_NAME["os.build"], build if build is not None else UNKNOWN)
+    _put(out, STATIC_BY_NAME["os.arch"], _text(info.get("os_arch")))
 
 
 def _resolve_remote(db_path, machine, out, now):
@@ -2889,7 +2936,38 @@ TARGET_FIELD = "field"
 # rule aimed at a group follows the group's edits -- and still goes through the save-time
 # scope check and the evaluation-time scoped_targets exactly like any other selector.
 TARGET_GROUP = "group"
-TARGET_KINDS = (TARGET_ALL, TARGET_MACHINES, TARGET_AD_OU, TARGET_FIELD, TARGET_GROUP)
+# A folder of the hub's own PC tree (pc_tree.py), by id, optionally with every folder beneath
+# it. The twin of TARGET_AD_OU for PCs AD does not file, and of permissions.SCOPE_FOLDER --
+# the same containment, resolved through pc_tree.machines_in_folders, so "the PCs this rule
+# reaches" and "the PCs this group grants" cannot disagree about what a folder holds. Unlike
+# a device group, a folder is not a target spec, so a device group naming one is not nesting
+# and is allowed.
+TARGET_FOLDER = "folder"
+# By operating system (hub 1.160.0): an os_buckets family (`windows`) or one bucket
+# (`windows_11`). The selector that was missing for the commonest group of all -- "every
+# Windows PC" -- which until now could only be approximated by an AD OU, and so missed every
+# machine outside the directory. Matches the agent's own report first and AD second, through
+# the same normalize_os the Dashboard counts with.
+#
+# Rejected: capabilities.platform_of. It is the closed, enforcement-grade vocabulary, but
+# every Windows agent in the field predates it and reports no platform at all, so a
+# `platform == windows` selector would have matched almost nothing on the day it shipped.
+# Rejected too: a free-text "OS contains" selector. It reads naturally and fails quietly --
+# "Windows 10" also matches the early Windows 11 builds WMI still calls Windows 10, which is
+# exactly the misfiling normalize_os exists to undo. A rule that wants the raw caption has
+# os.name in its condition.
+TARGET_OS = "os"
+TARGET_KINDS = (TARGET_ALL, TARGET_MACHINES, TARGET_AD_OU, TARGET_FIELD, TARGET_GROUP,
+                TARGET_FOLDER, TARGET_OS)
+# What an `os` selector may name: the three families, then the Windows buckets. `unknown` is
+# left out on purpose -- "the machines we know nothing about" is a to-do list, not a target,
+# and aiming a script at it is aiming it at whatever enrolled last. linux and android are
+# both a family and a bucket, so they appear once.
+TARGET_OS_VALUES = ((os_buckets.FAMILY_WINDOWS, os_buckets.FAMILY_LINUX,
+                     os_buckets.FAMILY_ANDROID)
+                    + tuple(b for b in os_buckets.OS_BUCKETS
+                            if b not in ("unknown", os_buckets.FAMILY_LINUX,
+                                         os_buckets.FAMILY_ANDROID)))
 TARGET_TEXT_KEY = "rules.target"
 
 MAX_TARGET_SELECTORS = 25
@@ -2963,6 +3041,22 @@ def _validate_selector(selector, extra=None):
         # selector naming a deleted group matches nothing, and deleting a group that a rule
         # aims at is refused upstream (rules_using_group).
         return None, {"kind": TARGET_GROUP, "group_id": group_id}
+    if kind == TARGET_FOLDER:
+        try:
+            folder_id = int(selector.get("folder_id"))
+        except (TypeError, ValueError):
+            return "a folder selector needs a folder", None
+        if folder_id <= 0:
+            return "a folder selector needs a folder", None
+        # Existence unchecked for the reason given for groups above; deleting a folder a rule
+        # names is refused upstream (rules_using_folder).
+        return None, {"kind": TARGET_FOLDER, "folder_id": folder_id,
+                      "include_children": bool(selector.get("include_children", True))}
+    if kind == TARGET_OS:
+        value = str(selector.get("os") or "").strip().lower()
+        if value not in TARGET_OS_VALUES:
+            return f"an OS selector needs one of {', '.join(TARGET_OS_VALUES)}", None
+        return None, {"kind": TARGET_OS, "os": value}
     # TARGET_FIELD
     name = str(selector.get("field") or "").strip()
     var = lookup_variable(f"field.{name}", extra)
@@ -2977,39 +3071,101 @@ def _validate_selector(selector, extra=None):
 
 
 def _all_machines(db_path):
+    # The whole row rather than the columns a selector reads today. An explicit list was
+    # tried for the os selector and is the trap: every selector added later needs its column
+    # added here AND in watchdogs._machine_row, and the one that is missed reads every machine
+    # as `unknown` and quietly matches nothing. The extra columns cost nothing at fleet size.
     with get_conn(db_path) as conn:
-        rows = conn.execute("SELECT machine, ad_ou, ad_dn FROM machine_info").fetchall()
+        rows = conn.execute("SELECT * FROM machine_info").fetchall()
     return [dict(r) for r in rows]
 
 
-def _selector_matches(selector, machine_row, field_values, group_members=None):
-    kind = selector.get("kind")
-    if kind == TARGET_ALL:
-        return True
-    name = machine_row.get("machine")
-    if kind == TARGET_MACHINES:
-        wanted = {m.lower() for m in selector.get("machines", [])}
-        return str(name or "").lower() in wanted
-    if kind == TARGET_AD_OU:
-        want = str(selector.get("ou") or "").strip().lower()
-        # Match against the OU when we have one, and fall back to the DN -- a machine's DN
-        # ENDS WITH its OU, which is also what makes the sub-OU case a suffix test rather
-        # than a second query.
-        have_ou = str(machine_row.get("ad_ou") or "").strip().lower()
-        have_dn = str(machine_row.get("ad_dn") or "").strip().lower()
-        if selector.get("include_children", True):
-            return bool((have_ou and have_ou.endswith(want))
-                        or (have_dn and have_dn.endswith(want)))
-        return have_ou == want
-    if kind == TARGET_GROUP:
-        members = (group_members or {}).get(selector.get("group_id")) or set()
-        return str(name or "").lower() in members
-    if kind == TARGET_FIELD:
-        have = (field_values.get(name) or {}).get(selector.get("field"))
-        if have is None:
-            return False
-        return _loose_equal(have, selector.get("value")) is True
-    return False
+def _name_of(row):
+    return str(row.get("machine") or "").lower()
+
+
+def _match_machines(selector, row, _ctx):
+    return _name_of(row) in {m.lower() for m in selector.get("machines", [])}
+
+
+def _match_ad_ou(selector, row, _ctx):
+    # Imported here for the reason resolve_targets imports device_groups: directory reaches
+    # this module through settings -> ai, so a top-level import is a cycle.
+    import directory
+    want = str(selector.get("ou") or "").strip()
+    have_ou = str(row.get("ad_ou") or "").strip()
+    have_dn = str(row.get("ad_dn") or "").strip()
+    if not want:
+        return False
+    # COMPONENT-WISE containment, the same test permission scoping uses. This was a lowercase
+    # string endswith until hub 1.159.0, which let `OU=Cajas,DC=x` reach `OU=NoCajas,DC=x` --
+    # the bug ROADMAP names for permission scope, here in targeting, and the two had to agree
+    # once a folder-and-OU tree put them side by side. Falls back to the DN when no OU was
+    # stored: a DN is the OU plus one leaf CN, so OU containment of the DN is containment of
+    # the machine.
+    if not selector.get("include_children", True):
+        return bool(have_ou) and directory.normalize_dn(have_ou) == directory.normalize_dn(want)
+    return any(have and directory.ou_contains(want, have) for have in (have_ou, have_dn))
+
+
+def _match_group(selector, row, ctx):
+    return _name_of(row) in (ctx["groups"].get(selector.get("group_id")) or set())
+
+
+def _match_folder(selector, row, ctx):
+    key = (selector.get("folder_id"), bool(selector.get("include_children", True)))
+    return _name_of(row) in (ctx["folders"].get(key) or set())
+
+
+def _match_os(selector, row, _ctx):
+    bucket = os_buckets.normalize_os(row.get("os_caption"), row.get("os_build"),
+                                     row.get("ad_os"))["bucket"]
+    want = selector.get("os")
+    return want == bucket or want == os_buckets.family_of(bucket)
+
+
+def _match_field(selector, row, ctx):
+    have = (ctx["fields"].get(row.get("machine")) or {}).get(selector.get("field"))
+    return have is not None and _loose_equal(have, selector.get("value")) is True
+
+
+_MATCHERS = {
+    TARGET_ALL: lambda _selector, _row, _ctx: True,
+    TARGET_MACHINES: _match_machines,
+    TARGET_AD_OU: _match_ad_ou,
+    TARGET_GROUP: _match_group,
+    TARGET_FOLDER: _match_folder,
+    TARGET_OS: _match_os,
+    TARGET_FIELD: _match_field,
+}
+
+
+def _selector_matches(selector, machine_row, ctx):
+    """Does one selector match one machine row? `ctx` carries what resolve_targets read once
+    for the whole pass: {"fields", "groups", "folders"}. An unknown kind matches nothing."""
+    matcher = _MATCHERS.get(selector.get("kind"))
+    return bool(matcher and matcher(selector, machine_row, ctx))
+
+
+def _resolution_context(db_path, selectors, rows):
+    """Everything a pass over `rows` needs beyond the rows themselves, read only when some
+    selector asks for it."""
+    kinds = {s.get("kind") for s in selectors}
+    ctx = {"fields": {}, "groups": {}, "folders": {}}
+    if TARGET_FIELD in kinds:
+        ctx["fields"] = _all_field_values(db_path)
+    if TARGET_GROUP in kinds:
+        # Imported here rather than at the top: device_groups imports this module for the
+        # target grammar, and a top-level import in both directions is a circular import.
+        import device_groups
+        ctx["groups"] = device_groups.member_sets(
+            db_path, [s.get("group_id") for s in selectors if s.get("kind") == TARGET_GROUP], rows)
+    if TARGET_FOLDER in kinds:
+        import pc_tree     # lazily, for the same cycle reason as device_groups above
+        ctx["folders"] = pc_tree.member_sets(
+            db_path, [(s.get("folder_id"), bool(s.get("include_children", True)))
+                      for s in selectors if s.get("kind") == TARGET_FOLDER])
+    return ctx
 
 
 def resolve_targets(db_path, target, machines=None):
@@ -3022,30 +3178,13 @@ def resolve_targets(db_path, target, machines=None):
     rows = machines if machines is not None else _all_machines(db_path)
     include = (target or {}).get("include") or []
     exclude = (target or {}).get("exclude") or []
+    ctx = _resolution_context(db_path, include + exclude, rows)
 
-    needs_fields = any(s.get("kind") == TARGET_FIELD for s in include + exclude)
-    field_values = _all_field_values(db_path) if needs_fields else {}
+    def wanted(row):
+        return (any(_selector_matches(s, row, ctx) for s in include)
+                and not any(_selector_matches(s, row, ctx) for s in exclude))
 
-    group_ids = [s.get("group_id") for s in include + exclude if s.get("kind") == TARGET_GROUP]
-    if group_ids:
-        # Imported here rather than at the top: device_groups imports this module for the
-        # target grammar, and a top-level import in both directions is a circular import.
-        import device_groups
-        group_members = device_groups.member_sets(db_path, group_ids, rows)
-    else:
-        group_members = {}
-
-    selected = []
-    for row in rows:
-        name = row.get("machine")
-        if not name:
-            continue
-        if not any(_selector_matches(s, row, field_values, group_members) for s in include):
-            continue
-        if any(_selector_matches(s, row, field_values, group_members) for s in exclude):
-            continue
-        selected.append(name)
-    return sorted(selected)
+    return sorted(row["machine"] for row in rows if row.get("machine") and wanted(row))
 
 
 def _all_field_values(db_path):
@@ -3103,8 +3242,25 @@ ACTION_EMAIL = "email"
 # point of a library. Keeping them apart also keeps `run_script`'s params meaning exactly what
 # the agent's executor says they mean.
 ACTION_SCRIPT = "script"
+# File the matching PC into a folder of the hub's PC tree, or (folder_id None) take it out of
+# every folder (hub 1.162.0). The rule-driven half of pc_tree.file_machines: "every Windows 11
+# PC goes in Win11" used to be a hand job repeated every time a PC was upgraded or enrolled.
+#
+# **It is a grant, so it is gated like one.** A folder can be a permission scope
+# (permissions.SCOPE_FOLDER): filing a PC hands it to every group scoped to that folder, and
+# unfiling takes it away. Filing by hand needs MANAGE_PC_TREE and the PC in the filer's own
+# scope (pc_tree_web); a rule gets the same two fences -- `allow_pc_tree` at save time, and
+# scoped_targets, which has already narrowed every fire to the author's scope.
+#
+# Rejected: putting it in MUTATING_ACTIONS behind the command kill switch. It sends nothing to
+# a PC, and the switch exists for things a PC executes; the capability is the right fence.
+# Rejected: a "move to device group" twin. A device group is a filter, not a container --
+# there is nothing to move a PC into. Rejected: writing to AD. The OU half of the tree is AD's
+# own, read-only by design (pc_tree.py), and a hub that rewrote it would be two sources of
+# truth about where a PC is.
+ACTION_MOVE_TO_FOLDER = "move_to_folder"
 ACTION_TYPES = (ACTION_ALERT, ACTION_COMMAND, ACTION_SCRIPT, ACTION_SHOW_MESSAGE,
-                ACTION_SNOOZE, ACTION_WEBHOOK, ACTION_EMAIL)
+                ACTION_SNOOZE, ACTION_WEBHOOK, ACTION_EMAIL, ACTION_MOVE_TO_FOLDER)
 ACTION_TEXT_KEY = "rules.action"
 # Where a COMMAND's words live. Keyed by command type; parameters are keyed by param NAME
 # rather than by (command, name), because the same `timeout_seconds` means the same thing to
@@ -3186,13 +3342,21 @@ def offered_commands():
 
 
 def validate_actions(actions, extra=None, allow_command=True, _nested=False,
-                     script_specs=None):
+                     script_specs=None, allow_pc_tree=False):
     """Check an action list. Returns (error, normalised).
 
     `allow_command` is the author's ISSUE_COMMANDS capability, checked here rather than at
     the endpoint so that the on_response follow-ups of a show_message get the same treatment
     as a top-level action -- a user clicking "Yes" is still a rule issuing a reboot, and a
     check that only guarded the top level would be trivially sidestepped by nesting.
+
+    `allow_pc_tree` is the author's MANAGE_PC_TREE capability, for move_to_folder. Checked
+    ONCE, here at the top level, over iter_actions -- so a "Yes" that files the PC into a
+    folder is caught exactly like a top-level move, without threading a second flag through
+    every validator the way allow_command is. **It defaults to False, unlike allow_command**,
+    so a caller that never heard of it -- the AI drafter, a migration -- refuses a filing action
+    instead of granting one. allow_command defaults the other way only because it predates
+    every caller that now passes it.
     """
     if not isinstance(actions, list):
         return "actions must be a list", None
@@ -3206,6 +3370,10 @@ def validate_actions(actions, extra=None, allow_command=True, _nested=False,
         if err:
             return err, None
         normalised.append(clean)
+    # Nested calls come from _validate_show_message; the top-level call walks their result.
+    if not _nested and not allow_pc_tree and any(
+            a.get("type") == ACTION_MOVE_TO_FOLDER for a in iter_actions(normalised)):
+        return "you do not have permission to create a rule that files PCs into folders", None
     return None, normalised
 
 
@@ -3292,6 +3460,9 @@ def _validate_action(action, extra, allow_command, nested, script_specs=None):
     if kind == ACTION_SHOW_MESSAGE:
         return _validate_show_message(action, extra, allow_command, nested, script_specs)
 
+    if kind == ACTION_MOVE_TO_FOLDER:
+        return _validate_move(params)
+
     if kind == ACTION_WEBHOOK:
         return _validate_webhook(params)
 
@@ -3351,6 +3522,29 @@ OUTCOME_TEXT_KEY = "rules.outcome"
 
 MIN_MESSAGE_TIMEOUT = 30
 MAX_MESSAGE_TIMEOUT = 12 * 3600
+
+
+_NEEDS_FOLDER = "a folder action needs a folder"
+
+
+def _validate_move(params):
+    """move_to_folder's params. The capability is checked by validate_actions, not here."""
+    raw = params.get("folder_id")
+    if raw is None:
+        return None, {"type": ACTION_MOVE_TO_FOLDER, "params": {"folder_id": None}}
+    # bool is an int in Python, and `True` is not folder 1; int(1.5) is 1, and a value that
+    # truncates into some other folder's id is the worst way for this to be wrong.
+    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+        return _NEEDS_FOLDER, None
+    try:
+        folder_id = int(raw)
+    except (TypeError, ValueError):
+        return _NEEDS_FOLDER, None
+    if folder_id <= 0:
+        return _NEEDS_FOLDER, None
+    # Existence unchecked, as for the folder target selector: this validator is pure, and
+    # deleting a folder a rule files into is refused upstream (rules_using_folder).
+    return None, {"type": ACTION_MOVE_TO_FOLDER, "params": {"folder_id": folder_id}}
 
 
 def _validate_show_message(action, extra, allow_command, nested, script_specs=None):
@@ -3575,6 +3769,33 @@ def rules_using_group(db_path, group_id):
     return using
 
 
+def targets_name_folder(target, folder_ids):
+    """Does this target spec include or exclude any of `folder_ids`? Shared by every module
+    that stores a target (rules, device groups, watchdogs), so pc_tree's delete refusal asks
+    each of them the same question."""
+    wanted = {int(f) for f in folder_ids}
+    return any(s.get("kind") == TARGET_FOLDER and s.get("folder_id") in wanted
+               for side in ("include", "exclude") for s in (target or {}).get(side) or [])
+
+
+def rules_using_folder(db_path, folder_ids):
+    """Every rule whose target names any of `folder_ids`, OR whose actions file PCs into one,
+    as [{id, name}]. Used to refuse a folder's deletion, for the reason rules_using_group gives
+    -- and for a move action the reason is sharper: a rule filing into a deleted folder would
+    skip on every fire, a rule that reads as working and never does. Walked with iter_actions
+    so a message's follow-up counts too."""
+    wanted = {int(f) for f in folder_ids}
+    return [{"id": r["id"], "name": r["name"]} for r in list_rules(db_path)
+            if targets_name_folder(r.get("target"), folder_ids)
+            or _actions_name_folder(r.get("actions"), wanted)]
+
+
+def _actions_name_folder(actions, folder_ids):
+    return any(a.get("type") == ACTION_MOVE_TO_FOLDER
+               and (a.get("params") or {}).get("folder_id") in folder_ids
+               for a in iter_actions(actions))
+
+
 def rules_using_script(db_path, script_name):
     """Every rule referencing `script_name`, as [{id, name}]. Used to refuse its deletion.
 
@@ -3656,7 +3877,7 @@ def get_rule(db_path, rule_id):
 
 
 def validate_rule(db_path, payload, *, extra=None, allow_command=True,
-                  max_targets_cap=25, command_cooldown_floor=3600):
+                  max_targets_cap=25, command_cooldown_floor=3600, allow_pc_tree=False):
     """Validate a whole rule payload. Returns (error, normalised).
 
     The two clamps at the end are the fuses that cannot be argued with from the UI:
@@ -3693,7 +3914,8 @@ def validate_rule(db_path, payload, *, extra=None, allow_command=True,
     # pure and unit-testable, and one save does one read of the scripts table however many
     # script actions (and nested follow-ups) the rule turns out to contain.
     err, actions = validate_actions(payload.get("actions"), extra, allow_command,
-                                    script_specs=scripts.specs(db_path))
+                                    script_specs=scripts.specs(db_path),
+                                    allow_pc_tree=allow_pc_tree)
     if err:
         return f"actions: {err}", None
 
@@ -3909,6 +4131,11 @@ def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audi
     `level` is optional and defaults to the security level; it is passed only for entries that
     are operational rather than security-relevant (see handle_message_result).
 
+    The summary's `scope_changed` is True when a move_to_folder action actually moved a PC. A
+    folder can be a permission scope, so app.py then re-points live sockets through the hook
+    the PC tree page and the AD sync already use. Reported rather than called back so this
+    module needs no hook of its own.
+
     The pass is deliberately ordered read -> decide -> dispatch -> write, with no database
     connection held across the dispatch step. fleet.create_command opens its OWN connection,
     and calling it inside a `with get_conn(...)` here would be two connections contending for
@@ -3916,7 +4143,8 @@ def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audi
     """
     now = int(now if now is not None else time.time())
     config = {**DEFAULT_CONFIG, **(config or {})}
-    summary = {"rules": 0, "evaluated": 0, "matched": 0, "fired": 0, "capped": [], "errors": []}
+    summary = {"rules": 0, "evaluated": 0, "matched": 0, "fired": 0, "capped": [], "errors": [],
+               "scope_changed": False}
 
     active = [r for r in list_rules(db_path) if r["enabled"]]
     if not active:
@@ -4025,7 +4253,8 @@ def evaluate_once(db_path, resolve, *, now=None, config=None, deliver=None, audi
     # -- dispatch, with no connection held ------------------------------------------------
     for fire in pending:
         try:
-            _fire(db_path, fire, now=now, config=config, deliver=deliver, audit=audit)
+            if _fire(db_path, fire, now=now, config=config, deliver=deliver, audit=audit):
+                summary["scope_changed"] = True
             summary["fired"] += 1
             state_writes.append((fire["rule"]["id"], fire["machine"],
                                  fire["matched_since"], 1, now))
@@ -4079,7 +4308,8 @@ def _write_state(db_path, writes, now):
 
 
 def _fire(db_path, fire, *, now, config, deliver=None, audit=None):
-    """Run one rule's actions against one machine and record the fire."""
+    """Run one rule's actions against one machine and record the fire. Returns True when a
+    move_to_folder action moved the PC -- see evaluate_once's `scope_changed`."""
     rule = fire["rule"]
     machine = fire["machine"]
     variables = fire["variables"]
@@ -4111,7 +4341,8 @@ def _fire(db_path, fire, *, now, config, deliver=None, audit=None):
               {"rule_id": rule["id"], "rule": rule["name"],
                "actions": [d.get("type") for d in dispatched],
                "command_id": command_id})
-    return fire_id
+    _audit_moves(audit, rule, machine, dispatched)
+    return moved_any(dispatched)
 
 
 def _record_fire(db_path, rule_id, machine, now):
@@ -4186,6 +4417,8 @@ def dispatch_actions(db_path, actions, machine, variables, *, rule, now, config,
             elif kind == ACTION_SCRIPT:
                 record.update(_dispatch_script(db_path, params, machine, variables,
                                                rule=rule, config=config))
+            elif kind == ACTION_MOVE_TO_FOLDER:
+                record.update(_dispatch_move(db_path, params, machine, rule))
             elif kind == ACTION_SHOW_MESSAGE:
                 record.update(_dispatch_message(db_path, action, machine, variables,
                                                 rule=rule, now=now, config=config,
@@ -4221,6 +4454,50 @@ def _unresolved_reason(missing):
     names = ", ".join("{{" + name + "}}" for name in missing)
     return (f"{names} could not be resolved on this machine. A command is not sent with "
             f"unresolved values in it -- see render_template_checked.")
+
+
+def _dispatch_move(db_path, params, machine, rule):
+    """File one machine into the action's folder (or out of every folder). Returns the record
+    fields: folder_id, previous_folder_id, moved.
+
+    No scope check here, and none is missing: every fire has been through scoped_targets, so
+    the machine is one the rule's author could reach, which is exactly what filing by hand
+    requires (pc_tree_web.out_of_scope). A PC already where the rule wants it is `moved: False`
+    and writes nothing, so a rule whose condition stays true does not churn the tree -- or the
+    permissions cache -- on every cooldown.
+    """
+    # Lazily, for the cycle _resolution_context imports pc_tree lazily for.
+    import pc_tree
+    folder_id = params.get("folder_id")
+    try:
+        moved = pc_tree.file_machines(db_path, [machine], folder_id, actor=_issued_by(rule))
+    except ValueError:
+        # The folder was deleted under the rule. Deleting one a rule names is refused
+        # (rules_using_folder), so this is a row written before that, or a race.
+        return {"folder_id": folder_id, "skipped": "that folder no longer exists"}
+    if machine in moved:
+        return {"folder_id": folder_id, "previous_folder_id": moved[machine], "moved": True}
+    return {"folder_id": folder_id, "moved": False}
+
+
+def moved_any(dispatched):
+    """Did any of these dispatch records move a PC between folders? Public because app.py asks
+    it of handle_message_result's `actions`, to re-point live scope after an answered move."""
+    return any(d.get("type") == ACTION_MOVE_TO_FOLDER and d.get("moved") for d in dispatched)
+
+
+def _audit_moves(audit, rule, machine, dispatched):
+    """One `pc_folder.file` audit entry per PC a rule moved -- the same action name filing by
+    hand writes (pc_tree_web), so "who moved this PC" finds rule moves too. A folder can be a
+    permission scope, so this is a grant changing hands, and the rule_fired entry's list of
+    action types does not say where the PC went."""
+    if not audit:
+        return
+    for d in dispatched:
+        if d.get("type") == ACTION_MOVE_TO_FOLDER and d.get("moved"):
+            audit(f"rule:{rule['id']}", "pc_folder.file", machine,
+                  {"rule_id": rule["id"], "rule": rule["name"], "folder_id": d.get("folder_id"),
+                   "previous_folder_id": d.get("previous_folder_id")})
 
 
 def _dispatch_script(db_path, params, machine, variables, *, rule, config):
@@ -4373,6 +4650,7 @@ def handle_message_result(db_path, command_id, *, status=None, result=None, now=
                                   rule=rule, now=now, config=config, deliver=deliver,
                                   allowed=allowed, block_reason=block_reason,
                                   fire_id=row["id"])
+    _audit_moves(audit, rule, machine, dispatched)
     with get_conn(db_path) as conn:
         conn.execute(
             "UPDATE rule_fires SET detail=? WHERE id=?",

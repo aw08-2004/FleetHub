@@ -1081,18 +1081,21 @@ def coerce_and_validate(setting, raw, lang=None):
         # malformed URL is carried all the way into the browser's RTCPeerConnection and the
         # agent's ICE config, where it is skipped without comment, and the only symptom is
         # that sessions stop connecting from some networks.
+        #
+        # The check itself lives in remote.py, shared with the pasted iceServers block, so the
+        # two cannot drift into accepting different URLs. Imported lazily for the same reason
+        # backup_paths is: settings.py is imported by nearly everything.
         if not isinstance(raw, (list, tuple)):
             raise bad("expected_url_list")
+        import remote
         items = []
         for value in raw:
             text = str(value).strip()
             if not text:
                 continue
-            scheme, sep, rest = text.partition(":")
-            if not sep or scheme.lower() not in ("stun", "stuns", "turn", "turns"):
-                raise bad("bad_url_scheme", value=repr(text))
-            if not rest.strip():
-                raise bad("url_without_host", value=repr(text))
+            problem = remote.ice_url_problem(text)
+            if problem:
+                raise bad(problem, value=repr(text))
             items.append(text)
         return items
 

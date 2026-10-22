@@ -105,7 +105,7 @@
             imagesBody.appendChild(el('p', 'stat-card__meta', t('firmware.no_images')));
             return;
         }
-        const table = el('table', 'table');
+        const table = el('table', 'data-table');
         const head = el('tr');
         for (const key of ['image', 'vendor', 'models', 'installs', 'size', 'uploaded']) {
             head.appendChild(el('th', null, t(`firmware.col.${key}`)));
@@ -233,7 +233,7 @@
 
     function renderTargets(container, targets) {
         container.replaceChildren();
-        const table = el('table', 'table');
+        const table = el('table', 'data-table');
         const tbody = el('tbody');
         for (const target of targets) {
             const row = el('tr');

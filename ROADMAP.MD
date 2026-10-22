@@ -63,6 +63,16 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 > reusing `manage_rules` (editing a group changes what other people's rules reach); resolving
 > a deployment's group live (a deployment must not change targets after it was confirmed).
 >
+> **Hub 1.160.0 — target and condition by operating system.** Groups and rules could see an
+> OS only through `ad.os`, so "every Windows PC" missed every machine outside AD. A new `os`
+> selector (any Windows / Linux / Android, or one of the Dashboard's buckets) and `os.*`
+> condition variables (`os.family`, `os.release`, `os.name`, `os.version`, `os.build`,
+> `os.arch`, `os.source`) read the agent's own report first and AD second, through the same
+> `normalize_os` the Dashboard counts with — moved to `os_buckets.py` so `rules.py` can stay
+> app-free. *Rejected:* `capabilities.platform_of` (every Windows agent in the field reports
+> no platform, so it would match almost nothing); a free-text "OS contains" selector (it
+> misfiles the early Windows 11 builds WMI still calls Windows 10); `os=unknown` as a target.
+>
 > **Hub 1.140.0 — console review.** A review against seeded edge-case data fixed numbers the
 > console was getting wrong and the navigation around them:
 > - **Values.** A missing reading is no longer drawn as 0 (fan "Driven at 0%", flat-0 live
@@ -108,7 +118,42 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-19
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-22
+
+**How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
+`beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
+below what an operator has to confirm on a beta hub or a beta PC. Nothing goes to `main` until
+every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main` PR, which
+empties this list. A box that fails stays open with what went wrong written next to it, and
+the fix goes to `beta` like anything else.
+
+`main` is at hub **1.165.0**, the same as `beta`. The `beta` → `main` PR of 2026-10-22 carried
+hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
+hub that day, except the two items still open below.
+
+**Hub 1.159.0 — Group Policy, waiting on agent 3.48.0** (#163)
+- [ ] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
+  item 4c below (apply, Managed elsewhere, unlink removes).
+  The hub half is on `main` and does nothing on its own: a PC is only sent a policy document
+  once its agent reports `gpo_version`, and no released agent does yet.
+
+**Hub 1.165.0 — provided TURN relays, reached `main` unconfirmed** (#172)
+The owner sent it to `main` with the rest on 2026-10-22 without a beta pass, so these checks
+are owed on the production hub instead. Nothing changes until a pasted block or a Cloudflare
+key is saved in Settings.
+- [ ] **Pasted block.** Generate a credential with Cloudflare's `generate-ice-servers` (a long
+  TTL), paste the whole response into **Settings → Remote Control → Provided ICE servers** and
+  save. The card counts the servers and URLs, and the credential appears nowhere on the page.
+- [ ] **It relays.** With the hub's own TURN cleared (or a peer off the LAN), a session
+  connects and `chrome://webrtc-internals` shows the selected pair's local or remote candidate
+  as `relay` from `turn.cloudflare.com`.
+- [ ] **Cloudflare key.** Clear the pasted block, save a TURN key ID + API token, press *Test*
+  (it reports a URL count), and start two sessions: each gets a different minted username.
+- [ ] **Outage.** With a wrong API token, *Test* fails with a message, and a session still
+  starts on whatever else is configured.
+- [ ] **Translations.** The two new blocks read correctly in German and Spanish.
+
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-22
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -190,6 +235,23 @@ this file, on the reset Galaxy A15 once USB debugging is re-authorised. Unchange
   api.github.com and vendor CDNs directly, without a proxy.
 - **#16 events, #18 sweep, #19 BitLocker:** the checks already written in their entries -- all
   three shipped in agent 3.37.0 and none has been confirmed on a real machine.
+
+**4c. Group Policy (#32), hub 1.159.0 (on `main` since 2026-10-22) then agent 3.48.0 on beta -- agent not released.** The agent half
+(`agent/src/TempMonitorAgent/GroupPolicy/`) compiles and its 24 tests pass, but it has only ever
+run against a dictionary standing in for HKLM. Owed, in this order: ~~deploy the beta hub from the
+`beta` branch~~ (done, 1.165.0); cut the agent as a beta with
+`.\release.ps1 -Version 3.48.0 -Channel beta -NotesFile .\release-notes\3.48.0.md` (a MINOR --
+the hub reads `gpo_version` presence, so no hub constant changes; only PCs pinned to beta take
+it); then on one beta PC, elevated:
+- link a policy with `SOFTWARE\Policies\Microsoft\Edge\HideFirstRunExperience = 1` (DWORD) to
+  its OU; within about two minutes `reg query` shows it, the marker
+  `HKLM\SOFTWARE\FleetHub\GroupPolicy` lists it, and the resultant set says Applied;
+- set a value by hand first on a second PC and confirm it stays and reads Managed elsewhere;
+- unlink the policy and confirm the value and the marker are removed;
+- on a domain-joined PC, link a value a real domain GPO also sets and confirm the agent does not
+  fight `gpupdate /force`;
+- uninstall from the hub and confirm the values are gone afterwards.
+Scripts and agent settings need no agent release; check one run-once script on an online PC.
 
 **4b. Disk usage (#27), hub 1.138.0 then agent 3.40.0 -- released 2026-10-05**, tag
 `agent-v3.40.0` on `541c120`, manifest in `5767724`. What remains is the first-contact list
@@ -458,6 +520,21 @@ one PC in a test window with both switches on:
 - Untick *Only FleetHub installs updates*: the values are removed. Uninstall the agent on an
   owned PC: the values are removed, foreign values left alone.
 
+**16. WebRTC never connects, so every remote session rides the hub relay (#2), owed on the hub
+host and its router.** Diagnosed 2026-10-22 from `remote-helper.log` on FCOM1109 (details under
+#2, *Field finding 2026-10-22*). No code change: coturn is not reachable from outside the hub's
+network. On the hub host:
+- `wsl -d FleetHubTurn -- systemctl is-active coturn` says `active`, the `FleetHub - TURN (WSL)`
+  task is **Running**, and `Get-NetFirewallHyperVRule` lets 3478 in (turn/README troubleshooting).
+- The router forwards **3478/udp, 3478/tcp and 49160–49200/udp** to 192.168.1.108, the way it
+  already forwards 443.
+- Add `stun:stun.cloudflare.com:3478` (or any public STUN) beside the relay's own in
+  **Settings → Remote Control → STUN servers**, so a TURN outage no longer takes `srflx` with it.
+- Then open a session from a phone on mobile data. `remote-helper.log` should list a `relay`
+  candidate of its own and one from the browser, the pill should read **Live**, not
+  **Live (via hub)**, and coturn's log should count two allocations. Only then is the shared
+  secret tested at all: 401s mean the hub's `.env` and `/etc/turnserver.conf` differ.
+
 ---
 
 ## ✅ Agent service renamed to `FleetHubAgent`   ·   hub 1.145.0 + agent 3.44.0
@@ -539,6 +616,112 @@ the wire.
   service runs the new one.
 - **Next agent release:** `release.ps1` now publishes `FleetHubAgent.exe`; check the asset name
   on the release and that a PC still on `TempMonitorAgent.exe` self-updates and keeps that name.
+
+---
+
+## 🚧 32. Nested groups, the PC tree, and Group Policy   ·   **hub 1.159.0** + Windows agent (next MINOR after 3.47.0, unreleased)   ·   `permissions.py`, `pc_tree.py` / `pc_tree_web.py`, `gpo.py` / `gpo_web.py`, agent `GroupPolicy/`
+
+Asked for by the owner on 2026-10-20, with a screenshot of ADUC (`ccmf.com.py` →
+FILADELFIA → Usuarios → Cajas → RDP): "make the permission groups nested within other
+groups, for users and PCs ... a Group Policy Manager like Windows has for the computers ...
+browsable and inheriting like Active Directory Users and Computers". Split in two on purpose:
+the trees are hub-only and change nothing on an agent; Group Policy needs an agent MINOR.
+
+### Built · hub 1.159.0 -- the trees
+
+- **Permission groups nest.** `permission_groups.parent_id` (ALTER-if-missing; every existing
+  group stays top level, so nobody's access moved on upgrade). A member of a subgroup holds the
+  subgroup's grants **plus every ancestor's**; resolved once per cache build
+  (`_resolve_inheritance`) and joined into the member's group list by `_with_ancestors`, so
+  `Access`, `effective_permissions` callers, sharing and recordings needed no change. Inherited
+  grants are stored BESIDE the own fields (`inherited_capabilities`, `inherited_machines`,
+  `inherited_all`), never merged into them -- the editor saves own fields only, so a group moved
+  out from under its parent cannot keep the parent's grants. Depth cap 8; cycles, self-parent
+  and over-deep moves refused at write; a hand-made cycle inherits NOTHING (fail closed). A
+  group with subgroups cannot be deleted (409, naming them). `invites._check_creator_ceiling`
+  checks `effective_grant`, inheritance included. `members_of_machine` counts inherited scope.
+- **The PC tree** (`/pc-tree`, `manage_pc_tree`). Two halves: the AD OU tree, derived on read
+  from `machine_info.ad_ou` and narrowed to the caller's scope (an OU with none of your PCs is
+  not disclosed); and hub **folders** (`pc_folders`, `pc_folder_machines`), nested, a PC in at
+  most one. Filing is a grant -- a folder can be a permission scope -- so the filer must hold
+  every PC filed, and every PC under a folder being moved.
+- **`folder` scope mode** for permission groups and a **`folder` target selector** for rules,
+  watchdogs and device groups, both through `pc_tree.machines_in_folders` (subtree included by
+  default). Every tree write invalidates the permissions cache in the model, and the web layer
+  re-points live sockets through the same hook an AD sync uses.
+- **Hub 1.162.0 — a rule can file PCs** (`move_to_folder` action): into a folder, or with
+  `folder_id: null` out of every folder. It is gated like filing by hand, because it is the same
+  grant. The author needs `manage_pc_tree`, checked in `validate_actions` so a message's
+  follow-up is covered, and the gate **fails closed** for callers that never pass it, the AI
+  drafter included. The machine is already inside the author's scope via `scoped_targets`. A
+  PC already in place is not refiled; a fire that did move one is audited as `pc_folder.file` (as
+  filing by hand is) and re-points live sockets; and
+  `rules_using_folder` now counts action references, so a folder a rule files into cannot be
+  deleted.
+  *Rejected:* the command kill switch (nothing is sent to a PC; the capability is the fence),
+  a "move to device group" twin (a group is a filter, not a container), and writing to AD (the
+  OU half is AD's, read-only by design).
+- **Fixed in passing:** the rules `ad_ou` selector was a lowercase string `endswith`, so
+  `OU=Cajas` reached `OU=NoCajas` -- the exact bug noted for permission scope under #4. It now
+  uses `directory.ou_contains`, the same component-wise test permissions use.
+
+**Rejected:**
+- *A child narrowing its parent* (intersection) -- `effective_permissions` already rejects
+  intersection because adding someone to a group would then depend on every other group.
+  A child only adds.
+- *A separate "user OU" container object* -- a group with no grants already is one.
+- *Re-parenting or cascading on delete* -- both are silent grant changes. Refused instead.
+- *Several folders per PC* -- "which folder is this PC in?" would become a list, and a
+  folder-scoped grant would depend on every folder a PC was ever dropped into.
+- *Editing AD OUs from the hub* -- AD is the source of truth for that half; two trees that
+  disagree about where a PC is would be worse than one read-only one.
+- *Nesting DEVICE groups* -- still the 1.114.0 reasoning: folders give the tree, and a device
+  group may now include a folder selector, which is not nesting.
+- *Reusing `manage_device_groups`* for filing -- a folder is a scope, a device group is not.
+
+### Built · hub 1.159.0 + agent (unreleased) -- Group Policy
+
+- **The model is Windows' on purpose** (`gpo.py`): policy objects linked to tree nodes -- every
+  PC, an AD OU (keyed by normalised DN), a hub folder. Processing order is every PC -> AD
+  domain -> OUs top-down -> hub folders top-down, last wins; link order 1 wins within a node;
+  Block inheritance drops non-enforced links from above; enforced links ignore blocks and the
+  HIGHER enforced link wins. Folders come after AD: the hub's own, more specific statement.
+  `rsop()` is the single resolver; the page's resultant-set view asks it rather than
+  re-deriving precedence in JS.
+- **Agent settings** (`agent=True` settings) merge into the heartbeat `config` block per PC,
+  with the overrides folded into `config_version` -- so they work on every agent in the field.
+  Values go through `settings.coerce_and_validate`, so bounds are the settings page's.
+- **Registry values** under `HKLM\\SOFTWARE\\Policies` only (WindowsUpdate and FleetHub's own key
+  refused), checked by the hub AND by the agent (`PolicyAllowList.cs`). Delivered as
+  `gpo_document`/`gpo_version` on the watchdog pattern: presence of `gpo_version` is the
+  capability, recorded in `machine_gpo_agent` so the console can say "agent too old" instead of
+  "pending"; an empty document is always sent. `GroupPolicyRunner` keeps a registry marker
+  (`HKLM\\SOFTWARE\\FleetHub\\GroupPolicy`) plus the last value written: an existing value it did
+  not write is `managed_elsewhere` and untouched; a value it wrote that something else changed
+  is let go; a deleted one is put back; removal deletes only what still holds our value. Marker
+  first on write, value first on removal. A lost state file waits for the hub rather than
+  stripping every value at boot. States ride the heartbeat with ack-after-success
+  (`GroupPolicyReporter`), unlike the watchdog reporter.
+- **Scripts** run once per (PC, script, body hash) via `run_script`, issued as `gpo:<id>`, from a
+  60-second hub scheduler over ONLINE PCs, at most 50 per tick; an expired command retries up
+  to 3 times. Only `{{sys.machine}}` is offered; anything else skips with a reason.
+- **Gates** (`gpo_web.py`): `view` reads, `manage_group_policy` writes, plus `issue_commands`
+  for anything touching scripts. Every write's reach must be in the writer's scope -- a node's
+  PCs, or every PC under every node a policy is linked to (`machines_linked`, a deliberate
+  superset so re-enabling a policy is covered). Links persist `author_scope`, re-stamped on edit.
+- Delete guards: a folder with policy links, and a script a policy runs, cannot be deleted.
+  Agent self-uninstall and `agent-install.ps1 -Uninstall` remove the values the agent wrote.
+
+**Rejected:** an ADMX parser (large; the raw value is what every template resolves to); authoring
+real Windows GPOs (SYSVOL is not ours, the agent is not assumed domain-joined); arbitrary
+registry paths (HKLM is the trust root); HKCU (hives load only at sign-in); a `MIN_GPO_AGENT`
+constant (presence of `gpo_version` is the capability, the watchdog precedent -- and the agent
+half ships unreleased, so there is no minor yet); scripts "last wins" (two policies asking for
+two scripts both mean it); a per-node settings layer separate from policy objects (one
+precedence rule, not two).
+
+**Owed:** the agent half needs the next agent MINOR (release.ps1), deployed after the hub, and a
+first contact on a real Windows PC -- see *Owed locally*.
 
 ---
 
@@ -1792,6 +1975,19 @@ TURN status card — secret set?, URL counts, and the live **ICE-servers-per-ses
 set/rotate of `REMOTE_TURN_SECRET` (`manage_settings`; writes `.env` + applies live; coturn's
 `--static-auth-secret` synced by hand).
 
+**Provided relays (hub 1.165.0).** A relay the hub does not run -- Cloudflare's TURN, or any
+provider with a fixed username/credential -- could not be configured at all: `remote.turn_urls`
+only ever got coturn-style HMAC credentials. Two ways in now, both in `.env` and set from the
+same card. (1) **A pasted `iceServers` block** (`REMOTE_ICE_SERVERS_JSON`), handed to every
+session as-is; it accepts the object, list and single-server shapes and a trailing comma.
+Cloudflare's credentials expire after the TTL they were generated with, which makes this the
+quick path. (2) **A Cloudflare TURN key** (`REMOTE_CLOUDFLARE_TURN_KEY_ID` / `_API_TOKEN`): the hub
+calls `generate-ice-servers` per peer, using the TURN credential TTL setting, drops the port-53
+URLs Cloudflare says browsers block, and **if Cloudflare cannot be reached it skips that entry
+rather than failing the session.** Rejected: storing the block as a settings field, because the
+settings table is readable without `manage_settings` and the block holds a credential. No agent
+change was needed: both peers already took entries with several URLs and a username/credential.
+
 - **Session injection (agent, `Remote/SessionInjector.cs`)** — the service duplicates its own
   SYSTEM token, retargets `TokenSessionId` to the active interactive session (enabling `SeTcb`),
   and `CreateProcessAsUser`s the **same binary** with `--remote-helper` onto `winsta0\default`
@@ -1916,6 +2112,50 @@ agent long-polls. `remote_relay.py` (in memory) + routes in `remote_web.py`;
   because a lost key-up is a key held down. A per-frame backpressure check was tried first and
   threw away every new viewer's first GOP (seen replaying real encoder output), so it is
   judged per batch.
+  **Hub 1.164.0: a lagging viewer jumps to live instead of replaying.** The batch check above
+  never fired on a phone over mobile data: the backlog sat in the network and in the hub's
+  buffer while the decoder kept up, so a viewer behind but still inside the 240-record buffer
+  got every frame since its cursor and showed motion seconds after the operator had stopped.
+  Now the hub starts every read at the newest keyframe past the cursor (control records in
+  between are still delivered), stamps each record on arrival and sends the first frame's age as
+  `X-Relay-Lag-Ms`. The browser adds the body's transfer time, and past 800 ms holds the
+  picture and asks for a keyframe (throttled to one per 2 s) rather than playing old deltas.
+  *Rejected:* dropping deltas to catch up without a keyframe (garbage until the next IDR), and
+  skipping only in the browser (the hub would still push the whole backlog down the slow link).
+- **Auto quality · hub 1.164.0.** The agent encodes at a fixed fps and bitrate with no
+  congestion control, so skipping frames alone turns a too-slow link into a jumpy picture. The
+  new default preset **Auto** (`remote-quality.js`) steps down a five-rung ladder (6 Mbps to
+  0.4 Mbps) when two of the last three lag samples exceed 1 s, waits 15 s of calm before
+  stepping up, cools down 5 s after every change (each one rebuilds the encoder), and doubles
+  the wait after a step up that comes straight back down. The fixed presets got more headroom
+  at the same time (quality 30 fps / 12 Mbps, balanced 20 / 6, speed 12 / 2 at 75 %): the
+  bitrate is the encoder's target, not a cap, so the old ones never used a good link's room.
+  No agent change -- it already honours `{t:'cfg'}` and `{t:'key'}` live.
+  *Rejected:* a bandwidth estimate from bytes per second (the long-poll's batches are too lumpy,
+  and lag is what the operator feels). **Open:** Auto has no signal on WebRTC and holds its
+  starting rung there; feeding it from `getStats()` (jitter buffer delay, frames dropped) is the
+  missing half.
+- **Field finding 2026-10-22: the fallback had become the only path.** The owner reported
+  "WebRTC is not working yet somehow", worst from a phone on mobile data. Every session in
+  FCOM1109's `remote-helper.log` from 2026-10-15 on reached the relay through the 20 s timer,
+  and each shows the same thing. The agent (10.4.1.21, behind 190.112.171.42) gathered one
+  `host` candidate and nothing else. The browser sent only `host` candidates as `<uuid>.local`,
+  with no `srflx` and no `relay`, so neither side reached STUN, let alone TURN. Every URL timed
+  out: `stun`/`turn` at 192.168.1.108:3478 and :3479, because a LAN literal does not route from
+  another site; `temp.arkeanos.net:3478` over UDP; and TCP TURN to 190.112.169.128:3478 was
+  refused. A probe from the same PC on 2026-10-22 agreed: no STUN answer from either coturn
+  address, over UDP or TCP. Google's and Cloudflare's STUN answered at once, so outbound UDP
+  works there, and the NAT mapping is endpoint-independent and port-preserving.
+  `https://temp.arkeanos.net` answered from 190.112.169.128, so 443 is forwarded and 3478 is
+  not, or coturn is down. The one session that did connect over WebRTC (2026-10-19) had the
+  browser on the agent PC itself, host to host. **Nothing in the code is wrong**; the fix is
+  owed item 16. The secret is untested, since no request ever reached coturn to be refused.
+  Two smaller things came out of it. The installer's only STUN URL is the relay's own, so one
+  outage removes `srflx` and `relay` together: hence a public STUN beside it. And the hub
+  re-issued the 192.168.1.108 literals to an agent that reached it from a public address, so it
+  sees a private `remote_addr` and `select_urls_for_peer` never narrows anything. That costs
+  gathering time, not connections. It is probably Docker's port publishing hiding the source,
+  and is unconfirmed.
 - **Security.** The hub sees the picture in the clear (SRTP through coturn it could not), so the
   switch is audited (`remote_session_relay`, once per session), frames live in memory only,
   `remote.relay_fallback` turns it off, and a machine borrowed from another hub is never

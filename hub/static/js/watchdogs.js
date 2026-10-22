@@ -39,7 +39,23 @@
 
     // The selector kinds this page offers. Taken from the server's target vocabulary rather
     // than hardcoded, except for the ORDER, which is a UI decision.
-    var SELECTOR_KINDS = ['all', 'machines', 'group', 'ad_ou', 'field'];
+    var SELECTOR_KINDS = ['all', 'machines', 'group', 'ad_ou', 'folder', 'os', 'field'];
+    // PC-tree folders for the `folder` selector, loaded with the device groups.
+    var pcFolders = [];
+
+    function pcFolderPath(id) {
+        var names = [];
+        var seen = {};
+        var current = pcFolders.find(function (f) { return f.id === id; });
+        while (current && !seen[current.id]) {
+            seen[current.id] = true;
+            names.unshift(current.name);
+            var parent = current.parent_id;
+            current = pcFolders.find(function (f) { return f.id === parent; });
+        }
+        return names.length ? names.join(' / ') : '#' + id;
+    }
+
 
     async function api(path, options) {
         var resp = await fetch(path, options);
@@ -237,6 +253,48 @@
         });
     }
 
+    // The `folder` selector's controls (roadmap #32), out of selectorRow so that stays one
+    // branch per kind. refreshTargetCount reports its own failure into the count label, so its
+    // promise is deliberately not awaited.
+    function appendFolderSelector(row, selector) {
+        if (pcFolders.length) {
+            var folderSelect = el('select', 'input');
+            pcFolders
+                .map(function (f) { return { id: f.id, label: pcFolderPath(f.id) }; })
+                .sort(function (a, b) { return a.label.localeCompare(b.label); })
+                .forEach(function (f) { folderSelect.appendChild(opt(String(f.id), f.label)); });
+            if (selector.folder_id == null) selector.folder_id = Number(folderSelect.value);
+            folderSelect.value = String(selector.folder_id);
+            folderSelect.addEventListener('change', function () {
+                selector.folder_id = Number(folderSelect.value);
+                void refreshTargetCount();
+            });
+            row.appendChild(folderSelect);
+        } else {
+            row.appendChild(el('span', 'stat-card__meta', t('permissions.editor.folder_none_defined')));
+        }
+        var folderLabel = el('label', 'stat-card__meta');
+        var folderBox = document.createElement('input');
+        folderBox.type = 'checkbox';
+        folderBox.checked = selector.include_children !== false;
+        folderBox.addEventListener('change', function () {
+            selector.include_children = folderBox.checked;
+            void refreshTargetCount();
+        });
+        folderLabel.appendChild(folderBox);
+        folderLabel.appendChild(document.createTextNode(' ' + t('rules.include_children')));
+        row.appendChild(folderLabel);
+    }
+
+    // Kinds whose controls live in their own function rather than inline in selectorRow -- one
+    // lookup branch there instead of one per kind, as in rules.js.
+    var SELECTOR_CONTROLS = {
+        folder: appendFolderSelector,
+        os: function (row, selector) {
+            row.appendChild(window.TargetOs.select(selector, function () { void refreshTargetCount(); }));
+        }
+    };
+
     function selectorRow(side, selector, index) {
         var row = el('div', 'toolbar');
         row.style.marginBottom = 'var(--space-2)';
@@ -293,6 +351,8 @@
                 });
                 row.appendChild(select);
             }
+        } else if (Object.hasOwn(SELECTOR_CONTROLS, selector.kind)) {
+            SELECTOR_CONTROLS[selector.kind](row, selector);
         } else if (selector.kind === 'field') {
             var name = el('input', 'input');
             name.type = 'text';
@@ -449,6 +509,11 @@
         } catch (e) {
             deviceGroups = [];
         }
+        try {
+            pcFolders = (await api('/api/pc-tree')).folders || [];
+        } catch (e) {
+            pcFolders = [];
+        }
     }
 
     ['watchdog-target-kind', 'watchdog-exclude-kind'].forEach(function (id) {
@@ -479,7 +544,7 @@
     // The state a machine reports arrives on its heartbeat, which marks `watchdogs` when it
     // carried a watchdog block (fleet_web.py) -- so this is pushed now, over the tab's one
     // shared socket, rather than the 30-second poll it was. Groups are re-read with it.
-    window.FleetLive.watch(['watchdogs', 'device_groups', 'status'], function () {
+    window.FleetLive.watch(['watchdogs', 'device_groups', 'pc_tree', 'status'], function () {
         return loadGroups().then(load);
     });
 }());

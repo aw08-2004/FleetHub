@@ -77,6 +77,8 @@ def _register_sidebar_stubs(app):
                            ("reports", "reports_page"),
                            ("policy", "policy_page"),
                            ("device_groups", "device_groups_page"),
+                           ("pc_tree", "pc_tree_page"),
+                           ("gpo", "group_policy_page"),
                            ("watchdogs", "watchdogs_page"),
                            ("tickets", "tickets_page")):
         bp = Blueprint(name, __name__)

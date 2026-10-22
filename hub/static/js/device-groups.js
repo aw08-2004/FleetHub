@@ -53,15 +53,40 @@
             case 'machines': return t('rules.target.machines');
             case 'ad_ou': return t('rules.target.ad_ou');
             case 'field': return t('rules.target.field');
+            case 'folder': return t('rules.target.folder');
+            case 'os': return t('rules.target.os');
             default: return kind;
         }
     }
+
+    // PC-tree folders, for the `folder` selector: [{id, parent_id, name}]. Loaded with the
+    // list; a stale copy can only be missing a new folder, never point somewhere else, because
+    // a selector stores the folder's id.
+    let pcFolders = [];
+    async function loadFolders() {
+        try { pcFolders = (await api('/api/pc-tree')).folders || []; } catch (e) { pcFolders = []; }
+    }
+
+    function folderPath(id) {
+        const names = [];
+        const seen = new Set();
+        let current = pcFolders.find((f) => f.id === id);
+        while (current && !seen.has(current.id)) {
+            seen.add(current.id);
+            names.unshift(current.name);
+            current = pcFolders.find((f) => f.id === current.parent_id);
+        }
+        return names.length ? names.join(' / ') : `#${id}`;
+    }
+
 
     function describeSelector(selector) {
         switch (selector.kind) {
             case 'machines': return `${kindLabel('machines')}: ${(selector.machines || []).join(', ')}`;
             case 'ad_ou': return `${kindLabel('ad_ou')}: ${selector.ou || ''}`;
+            case 'folder': return `${kindLabel('folder')}: ${folderPath(selector.folder_id)}`;
             case 'field': return `${kindLabel('field')}: ${selector.field} = ${selector.value}`;
+            case 'os': return `${kindLabel('os')}: ${window.TargetOs.label(selector.os)}`;
             default: return kindLabel(selector.kind);
         }
     }
@@ -107,6 +132,7 @@
 
     async function load() {
         try {
+            await loadFolders();
             const data = await api('/api/device-groups');
             renderList(data.groups || []);
         } catch (e) {
@@ -147,7 +173,7 @@
         for (const [id, side] of [['device-group-include-kind', 'include'], ['device-group-exclude-kind', 'exclude']]) {
             const select = document.getElementById(id);
             select.replaceChildren();
-            for (const kind of ['all', 'machines', 'ad_ou', 'field']) {
+            for (const kind of ['all', 'machines', 'ad_ou', 'folder', 'os', 'field']) {
                 // "Every PC" as an exclusion would exclude everything -- same call rules.js makes.
                 if (side === 'exclude' && kind === 'all') continue;
                 const option = el('option', null, kindLabel(kind));
@@ -185,6 +211,33 @@
             box.addEventListener('change', () => { selector.include_children = box.checked; schedulePreview(); });
             label.append(box, document.createTextNode(' ' + t('device_groups.children')));
             row.appendChild(label);
+        } else if (selector.kind === 'folder') {
+            if (!pcFolders.length) {
+                row.appendChild(el('span', 'stat-card__meta', t('permissions.editor.folder_none_defined')));
+            } else {
+                const select = el('select', 'input');
+                pcFolders
+                    .map((f) => ({ id: f.id, label: folderPath(f.id) }))
+                    .sort((a, b) => a.label.localeCompare(b.label))
+                    .forEach(({ id, label }) => {
+                        const option = el('option', null, label);
+                        option.value = String(id);
+                        select.appendChild(option);
+                    });
+                if (selector.folder_id == null) selector.folder_id = Number(select.value);
+                select.value = String(selector.folder_id);
+                select.addEventListener('change', () => { selector.folder_id = Number(select.value); schedulePreview(); });
+                row.appendChild(select);
+            }
+            const label = el('label', 'stat-card__meta');
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = selector.include_children !== false;
+            box.addEventListener('change', () => { selector.include_children = box.checked; schedulePreview(); });
+            label.append(box, document.createTextNode(' ' + t('device_groups.children')));
+            row.appendChild(label);
+        } else if (selector.kind === 'os') {
+            row.appendChild(window.TargetOs.select(selector, schedulePreview));
         } else if (selector.kind === 'field') {
             row.appendChild(input(selector.field || '', 'location', (v) => { selector.field = v.trim(); }));
             row.appendChild(input(selector.value === undefined ? '' : String(selector.value), '', (v) => { selector.value = v; }));
@@ -254,7 +307,9 @@
             const selector = { kind };
             if (kind === 'machines') selector.machines = [];
             if (kind === 'ad_ou') { selector.ou = ''; selector.include_children = true; }
+            if (kind === 'folder') { selector.folder_id = null; selector.include_children = true; }
             if (kind === 'field') { selector.field = ''; selector.value = ''; }
+            if (kind === 'os') selector.os = window.TargetOs.DEFAULT;
             draft.target[side].push(selector);
             renderSelectors();
             schedulePreview();
@@ -287,5 +342,5 @@
     load();
     // Membership is resolved against the machine list, so a machine joining or leaving the
     // fleet moves the counts here too. The editor is a <dialog>, which FleetLive waits on.
-    window.FleetLive.watch(['device_groups', 'machines'], load);
+    window.FleetLive.watch(['device_groups', 'machines', 'pc_tree'], load);
 })();

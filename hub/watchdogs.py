@@ -443,7 +443,9 @@ def document_version(entries):
 
 def _machine_row(db_path, machine):
     with get_conn(db_path) as conn:
-        row = conn.execute("SELECT machine, ad_ou, ad_dn FROM machine_info WHERE machine = ?",
+        # The whole row, as rules._all_machines reads it -- a selector resolved over fewer
+        # columns here than there would answer differently for a watchdog than for a rule.
+        row = conn.execute("SELECT * FROM machine_info WHERE machine = ?",
                            (machine,)).fetchone()
     # A machine the hub has no row for still gets resolved, against the name alone: it is
     # mid-enrolment, and the `all` and `machines` selectors are both answerable without a row.

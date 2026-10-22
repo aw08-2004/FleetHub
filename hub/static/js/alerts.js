@@ -31,6 +31,81 @@
 const alertsList = document.getElementById('alerts-list');
 const alertsEmpty = document.getElementById('alerts-empty');
 
+// "Send to assistant" (roadmap #26): the ticket page's hand-off (ticket.js askAssistant), on
+// every card and on a bundle's header. alerts.html sets the flag from the same test the
+// sidebar link uses, so the button never appears for an operator the assistant would refuse.
+const assistantOn = !!alertsList.dataset.assistant;
+
+// ---------------------------------------------------------------------------- assistant
+
+/** A run of three backticks in fleet text, made harmless -- the same guard ticket.js has,
+ *  for the same reason: a machine name or a rule's text could otherwise close the fence
+ *  and carry on as if it were the operator. */
+function defuse(text) {
+    return String(text).replace(/`{3,}/g, "'''");
+}
+
+/** What a rendered card SAYS, as lines: its title, its sentences and any table rows. Read
+ *  from the DOM at click time rather than rebuilt from the alert, so what the model is told
+ *  is exactly what the operator was looking at -- one renderer per kind, not two that drift.
+ *  Only direct children: the detail and recommendation boxes are opt-in, and a bundle's
+ *  member cards are read as cards of their own. */
+function cardLines(card) {
+    const lines = [];
+    const title = card.firstElementChild;
+    if (title?.tagName === 'DIV') lines.push(title.textContent.trim());
+    for (const p of card.querySelectorAll(':scope > p.stat-card__meta')) {
+        if (p.textContent.trim()) lines.push(p.textContent.trim());
+    }
+    for (const row of card.querySelectorAll(':scope > table tbody tr')) {
+        const cells = [...row.cells].map((c) => c.textContent.trim()).filter(Boolean);
+        if (cells.length) lines.push('- ' + cells.join(' | '));
+    }
+    return lines;
+}
+
+/** The message: the intro and the untrusted notice outside the fence, everything the fleet
+ *  wrote inside ONE fence, the question after it. A new conversation is always Ask mode, so
+ *  the guard against a hostile machine name is still the hub's confirm tiers, not this text. */
+function buildAlertDraft(introKey, machine, blocks) {
+    const fenced = [];
+    if (machine) fenced.push(t('alerts.duplicate.col.machine') + ': ' + defuse(machine));
+    blocks.forEach((lines, index) => {
+        if (index || fenced.length) fenced.push('');
+        for (const line of lines) fenced.push(defuse(line));
+    });
+    // Two literal calls rather than one built key -- tests/test_i18n.py only sees literals.
+    const intro = introKey === 'bundle'
+        ? t('alerts.assistant_draft_bundle_intro', { link: '/alerts' })
+        : t('alerts.assistant_draft_intro', { link: '/alerts' });
+    return [intro, t('alerts.assistant_draft_untrusted'), '```']
+        .concat(fenced, ['```', '', t('alerts.assistant_draft_ask')]).join('\n');
+}
+
+function askAssistant(text) {
+    let shell = null;
+    try { shell = window.parent !== window ? window.parent.FleetShell : null; } catch (e) { /* ok */ }
+    if (shell?.askAssistant) {
+        shell.askAssistant(text);
+        return;
+    }
+    // Opened as a bare page, outside the shell: assistant.js reads the same one-shot key.
+    try { sessionStorage.setItem('tempmonitor:assistant:draft', text); } catch (e) { /* ok */ }
+    location.href = '/assistant';
+}
+
+/** The button, or null when the assistant is off. `draft` is called on click, so the text is
+ *  read from the card as it stands then. */
+function assistantButton(draft) {
+    if (!assistantOn) return null;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn--ghost';
+    btn.textContent = t('alerts.ask_assistant');
+    btn.addEventListener('click', () => askAssistant(draft()));
+    return btn;
+}
+
 function setAlertsEmpty(isEmpty) {
     alertsEmpty.style.display = isEmpty ? 'block' : 'none';
 }
@@ -162,6 +237,9 @@ function alertActions(alert, card) {
         view.href = '/machine/' + encodeURIComponent(alert.machine);
         actions.appendChild(view);
     }
+
+    const ask = assistantButton(() => buildAlertDraft('alert', alert.machine, [cardLines(card)]));
+    if (ask) actions.appendChild(ask);
 
     const dismissBtn = document.createElement('button');
     dismissBtn.type = 'button';
@@ -375,6 +453,9 @@ function renderDuplicateSerial(alert) {
 
     const table = document.createElement('table');
     table.className = 'data-table';
+    // No table tools: a handful of radio rows inside a card, and cardLines() reads this table
+    // as a direct child of the card, which the tools' scroll wrapper would break.
+    table.dataset.tableTools = 'off';
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
     for (const label of [
@@ -447,7 +528,10 @@ function renderDuplicateSerial(alert) {
     dismissBtn.textContent = t('alerts.dismiss');
     dismissBtn.addEventListener('click', () => dismissAlert(alert.id, card, dismissBtn));
 
-    actions.append(mergeBtn, dismissBtn);
+    actions.append(mergeBtn);
+    const ask = assistantButton(() => buildAlertDraft('alert', null, [cardLines(card)]));
+    if (ask) actions.append(ask);
+    actions.append(dismissBtn);
     card.appendChild(actions);
     return card;
 }
@@ -728,6 +812,16 @@ function renderBundleHeader(bundle) {
     }
     header.appendChild(meta);
 
+    // The whole bundle in one message: the header's claim, then every member card. Asking
+    // about one member of a bundle would hand the model a symptom and hide the cause the hub
+    // already found.
+    const ask = assistantButton(() => {
+        const members = header.parentElement?.lastElementChild;
+        const blocks = [cardLines(header)];
+        for (const card of members ? members.children : []) blocks.push(cardLines(card));
+        return buildAlertDraft('bundle', bundle.machine, blocks);
+    });
+
     if (bundle.machine) {
         const detailBox = document.createElement('div');
         const detailBtn = document.createElement('button');
@@ -736,7 +830,13 @@ function renderBundleHeader(bundle) {
         detailBtn.textContent = t('alerts.bundle.detail');
         detailBtn.addEventListener('click', () => loadBundleDetail(bundle, detailBox, detailBtn));
         header.appendChild(detailBtn);
+        if (ask) {
+            ask.style.marginLeft = 'var(--space-3)';
+            header.appendChild(ask);
+        }
         header.appendChild(detailBox);
+    } else if (ask) {
+        header.appendChild(ask);
     }
 
     const box = document.createElement('div');

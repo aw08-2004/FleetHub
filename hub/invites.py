@@ -213,10 +213,14 @@ def _check_creator_ceiling(db_path, group_ids, creator_permissions):
 
     for gid in group_ids:
         group = permissions.get_group(db_path, gid)
-        if group is None:
+        grant = permissions.effective_grant(db_path, gid)
+        if group is None or grant is None:
             raise InviteError("That permission group no longer exists.")
 
-        extra = sorted(set(group["capabilities"]) - held_caps)
+        # Checked against what joining the group actually hands out, INHERITANCE INCLUDED.
+        # Joining a subgroup is joining every group above it, so an empty child of a
+        # fleet-wide parent is a fleet-wide invite however harmless its own row looks.
+        extra = sorted(grant["capabilities"] - held_caps)
         if extra:
             raise InviteError(
                 f"You cannot create an invite granting {group['name']!r}: it includes "
@@ -224,11 +228,11 @@ def _check_creator_ceiling(db_path, group_ids, creator_permissions):
 
         if held_machines is None:
             continue
-        if group["scope_mode"] == permissions.SCOPE_ALL:
+        if grant["machines"] is None:
             raise InviteError(
                 f"You cannot create an invite granting {group['name']!r}: it covers every "
                 f"machine and your own access does not.")
-        beyond = sorted(set(group["machines"]) - set(held_machines))
+        beyond = sorted(grant["machines"] - set(held_machines))
         if beyond:
             raise InviteError(
                 f"You cannot create an invite granting {group['name']!r}: it covers "

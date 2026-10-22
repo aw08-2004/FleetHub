@@ -211,6 +211,14 @@ public sealed class SelfUninstaller(ILogger<SelfUninstaller> log)
             {
                 log.LogError(e, "Could not release Windows Update control before uninstalling");
             }
+            // And the Group Policy registry values (roadmap #32), on the same terms and for the
+            // same reason: only values this agent wrote and that still hold what it wrote.
+            try { TempMonitorAgent.GroupPolicy.GroupPolicyRunner.ReleaseMachine(); }
+            catch (Exception e) when (e is UnauthorizedAccessException or IOException
+                                           or System.Security.SecurityException)
+            {
+                log.LogError(e, "Could not remove Group Policy values before uninstalling");
+            }
             var run = await ProcessRunner.RunAsync("schtasks.exe", $"/run /tn {TaskName}", ct, timeoutSeconds: 30);
             if (run.ExitCode != 0)
             {

@@ -411,6 +411,48 @@ def main():
             ai.requests.post = lambda *a, **k: FakeResponse([b""], status=503)
             error, text = ai.complete(CONFIG, [{"role": "user", "content": "hi"}])
             check("an HTTP error is reported by its status", "503" in str(error))
+
+            # A 400 used to be "refused the tool list" whatever it said, so a model that had
+            # just made a dozen tool calls was blamed for not supporting them, and the real
+            # reason was thrown away unread.
+            def step(body, status=400):
+                ai.requests.post = lambda *a, **k: FakeResponse([body], status=status)
+                return ai.complete_chat(CONFIG, [{"role": "user", "content": "hi"}],
+                                        [{"type": "function", "function": {"name": "x"}}])[0]
+
+            error = step(json.dumps({"error": {"message": "This model's maximum context "
+                                               "length is 8192 tokens."}}).encode())
+            check("a context overflow is not reported as a tool refusal",
+                  "tool list" not in str(error) and "context window" in str(error))
+            error = step(json.dumps({"error": "invalid message: content must not be empty"})
+                         .encode())
+            check("any other 400 carries the provider's own reason",
+                  "tool list" not in str(error) and "content must not be empty" in str(error))
+            error = step(json.dumps({"error": {"message": "tools are not supported by "
+                                               "this model"}}).encode())
+            check("a 400 that IS about tools still says so", "tool list" in str(error))
+            error = step(json.dumps({"detail": "bad key sk-" + "a" * 48}).encode())
+            check("a key echoed in the reason is blanked out", "a" * 40 not in str(error))
+            error = step(json.dumps({"error": {"message": "messages with role 'tool' must "
+                                               "follow tool_calls"}}).encode())
+            check("a message-shape 400 that merely mentions tools is not a refusal",
+                  "tool list" not in str(error) and "must follow" in str(error))
+            error = step(json.dumps({"error": "unknown tool 'x'"}).encode())
+            check("an unknown tool NAME is not a refusal of the tool list",
+                  "tool list" not in str(error) and "unknown tool" in str(error))
+            error = step(json.dumps({"detail": "unknown field: tools"}).encode())
+            check("...but an unknown `tools` FIELD is", "tool list" in str(error))
+            error = step(b"")
+            check("a bare 400 keeps the tool sentence, hedged",
+                  "tool list" in str(error) and "without saying why" in str(error))
+            short_key = "k3y-" + "b" * 20
+            reason = ai._provider_reason(FakeResponse([json.dumps(
+                {"error": "Incorrect API key provided: " + short_key}).encode()]), short_key)
+            check("the key this hub sent is blanked whatever its length",
+                  short_key not in reason and "[...]" in reason)
+            error = step(b"<html>" + b"x" * 20000 + b"</html>", status=502)
+            check("an HTML error page is not pasted into the console",
+                  error == "the AI provider returned HTTP 502")
         finally:
             ai.requests.post = real_post
 

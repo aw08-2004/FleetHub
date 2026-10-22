@@ -1492,11 +1492,31 @@ def test_absolute_links_to_this_hub():
     check("another host's does not", "evil.example" not in text and " x" in text)
 
 
+def test_alerts_page_offers_the_hand_off():
+    # The Send to assistant button is drawn only when alerts.html sets the flag (PR #166).
+    # A flag that stayed on with the assistant switched off would put a button on every card
+    # that opens a page saying the feature is off.
+    print("\n-- the Alerts page offers Send to assistant only while it is on --")
+    viewer = client_for("viewer@x.com")
+    page = viewer.get("/alerts").get_data(as_text=True)
+    check("on: the alerts list carries the flag", 'data-assistant="1"' in page)
+    settings.set_many(DB, {"ai.assistant_enabled": False}, "test")
+    settings.invalidate()
+    try:
+        page = viewer.get("/alerts").get_data(as_text=True)
+        check("off: the flag is empty, so no button is drawn",
+              'id="alerts-list"' in page and 'data-assistant=""' in page)
+    finally:
+        settings.set_many(DB, {"ai.assistant_enabled": True}, "test")
+        settings.invalidate()
+
+
 def main():
     test_assistant_is_off_until_turned_on()
     seed()
     test_every_named_route_exists()
     test_tiers_of_the_routes_that_matter()
+    test_alerts_page_offers_the_hand_off()
     test_path_checks()
     test_page_map_matches_the_app()
     test_links_are_built_by_the_hub_only()

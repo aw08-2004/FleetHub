@@ -7,6 +7,7 @@ import hmac
 import os
 import sys
 import tempfile
+import json
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
@@ -170,6 +171,131 @@ def main():
         s1, s2 = remote.generate_turn_secret(), remote.generate_turn_secret()
         check("generate_turn_secret returns a long hex string", len(s1) >= 32 and all(c in "0123456789abcdef" for c in s1))
         check("generate_turn_secret is not constant", s1 != s2)
+
+        print("\n== parse_ice_servers_json takes every shape an operator is holding ==")
+        # The exact block this feature was asked for, trailing comma and all.
+        sample = """{
+	"iceServers": [
+    {
+      "urls": [
+        "stun:stun.cloudflare.com:3478",
+        "turn:turn.cloudflare.com:3478?transport=udp",
+        "turn:turn.cloudflare.com:3478?transport=tcp",
+        "turns:turn.cloudflare.com:5349?transport=tcp"
+      ],
+      "username": "xxxx",
+      "credential": "yyyy",
+    }
+  ]
+}"""
+        parsed = remote.parse_ice_servers_json(sample)
+        check("the requested sample parses despite its trailing comma",
+              len(parsed) == 1 and len(parsed[0]["urls"]) == 4
+              and parsed[0]["username"] == "xxxx" and parsed[0]["credential"] == "yyyy")
+        old_cf = '{"iceServers": {"urls": ["turn:t.example:3478"], "username": "u", "credential": "c"}}'
+        check("an iceServers OBJECT (Cloudflare's older endpoint) becomes a one-entry list",
+              len(remote.parse_ice_servers_json(old_cf)) == 1)
+        check("a bare list parses",
+              len(remote.parse_ice_servers_json('[{"urls": "stun:s.example:3478"}, '
+                                                '{"urls": "stun:s2.example:3478"}]')) == 2)
+        check("a single server object with a string urls parses into a list",
+              remote.parse_ice_servers_json('{"urls": "stun:s.example:3478"}')
+              == [{"urls": ["stun:s.example:3478"]}])
+        check("an empty paste is no servers, not an error", remote.parse_ice_servers_json("  ") == [])
+        expect_raise("an http: URL is refused", ValueError,
+                     lambda: remote.parse_ice_servers_json('{"urls": "http://x"}'))
+        expect_raise("a turn: URL with no credential is refused (it would 401 silently)", ValueError,
+                     lambda: remote.parse_ice_servers_json('{"urls": ["turn:t.example:3478"]}'))
+        expect_raise("non-JSON is refused", ValueError,
+                     lambda: remote.parse_ice_servers_json("turn:t.example:3478"))
+        # The first version stripped trailing commas with a regex, and rewrote a credential
+        # holding `,}` to `}` before storing it -- a 401 at allocation time that nobody sees.
+        sneaky = ('{"urls": ["turn:t.example:3478"], "username": "u,]v", '
+                  '"credential": "ab,}c\\",] d",}')
+        got = remote.parse_ice_servers_json(sneaky)
+        check("a trailing comma is dropped, but ,} and ,] INSIDE a string are left alone",
+              got[0]["username"] == "u,]v" and got[0]["credential"] == 'ab,}c",] d')
+        check("whitespace between the comma and the bracket is fine too",
+              remote.parse_ice_servers_json('[ {"urls": "stun:s.example:3478" } ,\n ]')
+              == [{"urls": ["stun:s.example:3478"]}])
+        # CodeQL flagged the previous one-regex repair as polynomial on exactly this input: an
+        # unterminated string of escaped quotes, re-scanned from every quote.
+        started = time.time()
+        expect_raise("an unterminated string of 100k escaped quotes is refused", ValueError,
+                     lambda: remote.parse_ice_servers_json('{"urls": "' + '\\"' * 100000))
+        check("...in linear time, not polynomial", time.time() - started < 2)
+        check("serialise_ice_servers writes $ and # as escapes that parse back identically",
+              json.loads(remote.serialise_ice_servers([{"urls": ["stun:s:1"], "u": "a ${X} #b"}]))
+              == [{"urls": ["stun:s:1"], "u": "a ${X} #b"}]
+              and not set("$#") & set(remote.serialise_ice_servers([{"u": "a ${X} #b"}])))
+        check("check_ice_servers_json returns its problem instead of raising",
+              remote.check_ice_servers_json("{oops")[0] is None
+              and remote.check_ice_servers_json("{oops")[1] == "not valid JSON")
+        check("ice_url_problem names the same keys the url_list setting uses",
+              remote.ice_url_problem("http://x") == "bad_url_scheme"
+              and remote.ice_url_problem("turn:") == "url_without_host"
+              and remote.ice_url_problem("turns:t:5349") is None)
+
+        print("\n== ice_servers adds provided relays after the minted one ==")
+        provided = [{"urls": ["turn:turn.example:3478", "turn:10.0.0.9:3478"],
+                     "username": "u", "credential": "c"}]
+        cf_entry = {"urls": ["turn:turn.cloudflare.com:3478"], "username": "cu", "credential": "cc"}
+        combined = remote.ice_servers("s1", stun_urls=["stun:stun.example:3478"],
+                                      turn_urls=["turn:hub.example:3478"], turn_secret=secret,
+                                      static_servers=provided, cloudflare=lambda: [cf_entry])
+        check("order is STUN, minted coturn, pasted, Cloudflare",
+              [s["urls"][0] for s in combined]
+              == ["stun:stun.example:3478", "turn:hub.example:3478",
+                  "turn:turn.example:3478", "turn:turn.cloudflare.com:3478"])
+        check("the pasted credential is handed out unchanged",
+              combined[2]["username"] == "u" and combined[2]["credential"] == "c")
+        outside = remote.ice_servers("s1", static_servers=provided, peer_ip="93.184.216.34")
+        check("a pasted private-literal URL is dropped for an outside peer, like any other",
+              outside[0]["urls"] == ["turn:turn.example:3478"])
+
+        def boom():
+            raise RuntimeError("cloudflare down")
+        survived = remote.ice_servers("s1", stun_urls=["stun:stun.example:3478"],
+                                      static_servers=provided, cloudflare=boom)
+        check("a failing Cloudflare call costs its own entry, not the session's list",
+              len(survived) == 2)
+
+        print("\n== fetch_cloudflare_ice_servers ==")
+        calls = []
+
+        class FakeResp:
+            def __init__(self, status, body):
+                self.status_code, self._body = status, body
+
+            def json(self):
+                return self._body
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            calls.append((url, headers, json, timeout))
+            return FakeResp(201, {"iceServers": [
+                {"urls": ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"]},
+                {"urls": ["turn:turn.cloudflare.com:3478?transport=udp",
+                          "turn:turn.cloudflare.com:53?transport=udp",
+                          "turns:turn.cloudflare.com:443?transport=tcp"],
+                 "username": "minted-u", "credential": "minted-c"}]})
+        got = remote.fetch_cloudflare_ice_servers("KEYID", "TOKEN", 900, post=fake_post)
+        check("it posts to the key's generate-ice-servers endpoint",
+              calls[0][0].endswith("/v1/turn/keys/KEYID/credentials/generate-ice-servers"))
+        check("with the API token as a bearer and the TTL in the body",
+              calls[0][1] == {"Authorization": "Bearer TOKEN"} and calls[0][2] == {"ttl": 900})
+        check("with a timeout, so a slow provider cannot hang a session start",
+              calls[0][3] and calls[0][3] <= 10)
+        check("port-53 URLs are dropped (browsers block them; Cloudflare's docs say so)",
+              all(":53" not in u for s in got for u in s["urls"]) and len(got[1]["urls"]) == 2)
+        check("the minted credential is carried through", got[1]["username"] == "minted-u")
+        before = len(calls)
+        expect_raise("a key ID that would change the URL path is refused before any request",
+                     RuntimeError, lambda: remote.fetch_cloudflare_ice_servers(
+                         "abc/../../x?y#z", "TOKEN", 60, post=fake_post))
+        check("...and no request was made", len(calls) == before)
+        expect_raise("a non-2xx answer raises", RuntimeError,
+                     lambda: remote.fetch_cloudflare_ice_servers(
+                         "K", "T", 60, post=lambda *a, **k: FakeResp(401, {})))
 
         print("\n== set_env_var upserts a dotenv key without a BOM ==")
         env_fd, env_path = tempfile.mkstemp(suffix=".env")

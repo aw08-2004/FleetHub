@@ -43,11 +43,24 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
    configured OIDC provider) against the email allow-list or a Permission Group
 3. **Audit Log:** Every action recorded: who did what, when, on which machine
 4. **SYSTEM Context:** Commands run as SYSTEM; access to this capability is intentionally powerful and scoped to trusted admins
-5. **Machine Scope:** Operators can be limited to specific machines via Permission Groups
-6. **Signed Updates:** Binary replacements verified before execution
-7. **Bounded Invites:** An invite link grants only Permission Groups, never more than
-   its creator holds, and is bounded by a seat count, an expiry and optional pinned
-   addresses (see "Invite links" below)
+5. **Machine Scope:** Operators can be limited to specific machines via Permission Groups.
+   Groups nest: a subgroup member holds every ancestor's grants, and a subgroup can only
+   add to them. Cycles and chains deeper than 8 are refused at write time, and a row edited
+   by hand into either inherits nothing. A PC folder is a scope too, so filing a PC is a
+   grant: it needs `manage_pc_tree` and the PC in the filer's own scope
+6. **Group Policy:** a policy writes registry values only under `HKLM\SOFTWARE\Policies`
+   (never Windows Update policy or FleetHub's own key), checked on the hub AND again by the
+   agent, which never overwrites a value it did not write. Writing policy needs
+   `manage_group_policy`, plus `issue_commands` for a policy that runs a script; every PC a
+   write can reach must be in the writer's scope, and a link keeps its author's scope after
+   more PCs are filed beneath its node. `manage_group_policy` is security-sensitive on its
+   own: `SOFTWARE\Policies` holds Windows Defender and firewall policy, so it can weaken a
+   PC's protection without `issue_commands`. Grant it as carefully as that
+7. **Signed Updates:** Binary replacements verified before execution
+8. **Bounded Invites:** An invite link grants only Permission Groups, never more than
+   its creator holds — counting what a subgroup inherits from its parents — and is
+   bounded by a seat count, an expiry and optional pinned addresses (see "Invite links"
+   below)
 
 ## Personal data inventory
 

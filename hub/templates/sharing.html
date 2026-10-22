@@ -209,6 +209,10 @@
 {# remote-keyboard.js before remote.js: a phone on a borrowed screen can type too (issue
    #138). Without remote-touch.js here the button appears on a coarse pointer alone. #}
 <script src="{{ url_for('static', filename='js/remote-keyboard.js') }}"></script>
+{# remote-quality.js before remote.js: the partial offers Auto here too. A borrowed screen is
+   never relayed, so Auto holds its starting rung -- loaded anyway so Auto means the same
+   settings on both pages. #}
+<script src="{{ url_for('static', filename='js/remote-quality.js') }}"></script>
 <script src="{{ url_for('static', filename='js/remote-clipboard.js') }}"></script>
 <script src="{{ url_for('static', filename='js/remote.js') }}"></script>
 <script src="{{ url_for('static', filename='js/sharing.js') }}"></script>

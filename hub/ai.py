@@ -500,10 +500,15 @@ def _post_chat(resolved, headers, body, timeout, *, refused_status=None):
     caller, so the size cap, the redirect refusal and the fixed error sentences below exist
     exactly once. Two copies of a transport is how one of them ends up following a 302.
 
-    `refused_status`, when given, is the sentence for an HTTP 400/422: the assistant sends a
-    `tools` list, and a model server that does not do tool calls answers that with a 400 --
-    "HTTP 400" tells an operator nothing, "this model does not support tool calls" tells them
-    which setting to change.
+    `refused_status`, when given, is the sentence for an HTTP 400/422 that is ABOUT the tool
+    list: the assistant sends a `tools` list, and a model server that does not do tool calls
+    answers that with a 400 -- "HTTP 400" tells an operator nothing, "this model does not
+    support tool calls" tells them which setting to change.
+
+    **Only when the provider's reason says so** (_rejection). It used to be every 400/422,
+    and a model that had just made a dozen tool calls in the same turn was then reported as
+    not supporting them -- the real 400 (a context overflow, a message shape the server
+    rejects) was thrown away unread, so the operator was sent to change a model that was fine.
     """
     try:
         # stream=True so the body arrives in chunks we can stop taking. Closed either way by
@@ -516,10 +521,10 @@ def _post_chat(resolved, headers, body, timeout, *, refused_status=None):
                 # No redirects, for the reason notify.py gives: a 302 walks straight past
                 # every check check_provider_url just made.
                 allow_redirects=False) as response:
-            if response.status_code in (400, 422) and refused_status:
-                return refused_status, None
             if response.status_code >= 400:
-                return f"the AI provider returned HTTP {response.status_code}", None
+                # The key as sent, so _provider_reason can blank it whatever its length.
+                sent_key = str(headers.get("Authorization") or "").removeprefix("Bearer ")
+                return _rejection(response, refused_status, sent_key), None
             raw = bytearray()
             for chunk in response.iter_content(chunk_size=8192):
                 raw.extend(chunk)
@@ -544,6 +549,116 @@ def _post_chat(resolved, headers, body, timeout, *, refused_status=None):
         return None, json.loads(bytes(raw).decode("utf-8", "replace"))
     except ValueError:
         return "the AI provider returned a response this hub could not read", None
+
+
+# How much of an error body is read. An error reason is a sentence; anything past this is a
+# proxy's HTML page, and the cap is the same promise MAX_RESPONSE_BYTES makes for answers.
+MAX_ERROR_BODY_BYTES = 8192
+MAX_REASON_CHARS = 300
+# Secrets are blanked out of a provider's reason before it is shown: some gateways echo the
+# key they were sent ("Incorrect API key provided: sk-...") and the reason is rendered in an
+# operator's browser, kept in the transcript and written to the log. Two nets: the key this
+# hub actually sent, blanked by value whatever its length, and any long opaque run, for a
+# gateway that echoes some OTHER token. 32 rather than 40 (review, PR #166): some keys are
+# that short. Not lower -- a dated model id like claude-3-5-sonnet-20241022 is 26, and
+# blanking the model name out of "model X does not exist" would hide the actual fix.
+_SECRETISH = re.compile(r"[A-Za-z0-9_\-.~+=]{32,}")
+_CONTEXT_WORDS = ("context length", "context window", "context_length", "maximum context",
+                  "too many tokens", "reduce the length", "prompt is too long",
+                  "exceeds the maximum", "input is too long")
+# A tool REFUSAL needs both lists. Mentioning tools alone is not one: "messages with role
+# 'tool' must follow tool_calls" is a message-shape 400 from a server that does tools fine,
+# and calling it a refusal is the very misdiagnosis this code exists to stop (review, PR #166).
+_TOOL_WORDS = ("tool", "function call", "function_call")
+# "unknown field"/"unknown parameter", never bare "unknown": "unknown tool 'x'" is a call to
+# a tool name the request did not offer, from a server that does tools (review, PR #166).
+_REFUSAL_WORDS = ("support", "not enabled", "not allowed", "tool_choice", "unknown field",
+                  "unknown parameter", "unrecognized", "extra")
+
+CONTEXT_EXCEEDED = ("the conversation no longer fits this model's context window -- start a "
+                    "new conversation, or lower Assistant memory size in Settings -> AI")
+
+
+def _reason_from_json(data):
+    """The message out of a parsed error body, in whichever shape this server uses.
+
+    OpenAI-shaped servers say {"error": {"message": ...}}; Ollama, vLLM and FastAPI-based
+    gateways say {"error": "..."}, {"message": ...} or {"detail": ...}.
+    """
+    error = data.get("error")
+    if isinstance(error, dict):
+        reason = error.get("message") or error.get("msg") or ""
+    else:
+        reason = error if isinstance(error, str) else ""
+    reason = reason or data.get("message") or data.get("detail") or ""
+    if isinstance(reason, str):
+        return reason
+    # FastAPI's 422 is a list of {"loc", "msg"}; the first msg is the useful part.
+    try:
+        return str(reason[0].get("msg") or "")
+    except (TypeError, IndexError, KeyError, AttributeError):
+        return ""
+
+
+def _provider_reason(response, secret=""):
+    """The provider's own error message, bounded and cleaned, or "". NEVER raises.
+
+    A body that is not JSON is used as text only if it is short -- a long one is an HTML
+    page, not a reason.
+    """
+    raw = bytearray()
+    try:
+        for chunk in response.iter_content(chunk_size=4096):
+            raw.extend(chunk)
+            if len(raw) >= MAX_ERROR_BODY_BYTES:
+                break
+    except Exception:                                   # noqa: BLE001
+        return ""
+    text = bytes(raw[:MAX_ERROR_BODY_BYTES]).decode("utf-8", "replace")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        reason = _reason_from_json(data)
+    elif "<" not in text and len(text) <= MAX_REASON_CHARS:
+        reason = text
+    else:
+        reason = ""
+    reason = " ".join(str(reason).split())
+    reason = "".join(ch for ch in reason if ch.isprintable())
+    if secret:
+        reason = reason.replace(secret, "[...]")
+    reason = _SECRETISH.sub("[...]", reason)
+    if len(reason) > MAX_REASON_CHARS:
+        reason = reason[:MAX_REASON_CHARS] + "..."
+    return reason
+
+
+def _rejection(response, refused_status, secret=""):
+    """The sentence for an HTTP error from the provider, built from what it actually said.
+
+    The provider's reason is logged whole-ish (bounded) and shown to the operator, because
+    "HTTP 400" alone sends them guessing and a guess is how a working model got blamed for
+    not supporting tools. The two causes an operator can fix from Settings get OUR words.
+    """
+    status = response.status_code
+    reason = _provider_reason(response, secret)
+    print(f"[ai] provider answered HTTP {status}: {reason or '(no reason given)'}")
+    lowered = reason.lower()
+    if status in (400, 413, 422) and any(w in lowered for w in _CONTEXT_WORDS):
+        return CONTEXT_EXCEEDED
+    if status in (400, 422) and refused_status:
+        if (any(w in lowered for w in _TOOL_WORDS)
+                and any(w in lowered for w in _REFUSAL_WORDS)):
+            return f"{refused_status} (the provider said: {reason})"
+        if not reason:
+            # A server that rejects the request and says nothing at all. The tool list is
+            # still the likeliest cause on a first step, so the old sentence stands -- hedged.
+            return refused_status + " -- or the server rejected the request without saying why"
+    if reason:
+        return f"the AI provider rejected the request (HTTP {status}): {reason}"
+    return f"the AI provider returned HTTP {status}"
 
 
 def _chat_headers(resolved, api_key):
@@ -825,8 +940,9 @@ def target_prompt(db_path):
     listed = ", ".join(sorted(fields)) if fields else "(none defined)"
     return ("Target kinds: " + ", ".join(rules.TARGET_KINDS) + ".\n"
             "There are NO TAGS. A group of machines is an explicit list, an Active Directory\n"
-            "OU, or a custom field selector. Custom fields defined on this hub: " + listed
-            + ".")
+            "OU, a hub PC folder (by folder_id), an operating system, or a custom field\n"
+            "selector. An `os` selector names one of: " + ", ".join(rules.TARGET_OS_VALUES)
+            + ". Custom fields defined on this hub: " + listed + ".")
 
 
 def action_prompt(db_path):
@@ -841,7 +957,11 @@ def action_prompt(db_path):
     """
     names = [s["name"] for s in scripts.list_scripts(db_path)]
     listed = ", ".join(sorted(names)) if names else "(none defined)"
-    return ("Action types: " + ", ".join(rules.ACTION_TYPES) + ".\n"
+    # move_to_folder is left out: the drafter never knows folder ids, and validated_draft
+    # refuses it anyway (allow_pc_tree fails closed), so offering it would only buy a
+    # repair round.
+    offered = [a for a in rules.ACTION_TYPES if a != rules.ACTION_MOVE_TO_FOLDER]
+    return ("Action types: " + ", ".join(offered) + ".\n"
             "Commands a rule may issue: " + ", ".join(rules.offered_commands()) + ".\n"
             "Scripts in the library: " + listed + ".\n"
             "A rule has no schedule and cannot kill a process, and there is no action for\n"
@@ -1486,8 +1606,8 @@ def list_requests(db_path, limit=100):
 REDACTED = "(withheld)"
 
 # The text variables that describe what a machine IS rather than whose it is. Deliberately
-# short: `bios.support` is a vendor support state, `ad.os` an operating system name, and
-# everything absent here -- hostname, serial, service tag, asset tag, signed-in account,
+# short: `bios.support` is a vendor support state, `ad.os` and `os.*` an operating system,
+# and everything absent here -- hostname, serial, service tag, asset tag, signed-in account,
 # domain, IP, MAC, OU, DN, owner, every custom field, every probe -- is withheld while the
 # setting is off.
 SHAREABLE_TEXT = frozenset((
@@ -1495,6 +1615,7 @@ SHAREABLE_TEXT = frozenset((
     "hw.model", "hw.manufacturer",
     "bios.version", "bios.vendor", "bios.support",
     "ad.os",
+    "os.name", "os.family", "os.release", "os.version", "os.arch", "os.source",
 ))
 
 

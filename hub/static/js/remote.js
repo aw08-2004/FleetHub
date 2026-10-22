@@ -57,10 +57,16 @@
 
     // Presets exist because "15fps / 4000kbps / 100%" means nothing to someone who just wants
     // the screen to stop stuttering. Custom reveals the raw numbers for when it does matter.
+    //
+    // The bitrate is the encoder's average TARGET, not a cap, and the fps is a fixed capture
+    // cadence -- so a preset is exactly what the link is asked to carry, never more. Raised in
+    // hub 1.164.0 (quality was 25 fps / 8 Mbps, balanced 15 / 4, speed 10 / 1.5 at 50 %): a good
+    // link had headroom nothing used, and a slow one is now Auto's job rather than the presets'.
+    // 'auto' is not in this table -- its settings come from remote-quality.js, rung by rung.
     const PRESETS = {
-        quality:  { fps: 25, bitrate_kbps: 8000, scale: 100 },
-        balanced: { fps: 15, bitrate_kbps: 4000, scale: 100 },
-        speed:    { fps: 10, bitrate_kbps: 1500, scale: 50 },
+        quality:  { fps: 30, bitrate_kbps: 12000, scale: 100 },
+        balanced: { fps: 20, bitrate_kbps: 6000, scale: 100 },
+        speed:    { fps: 12, bitrate_kbps: 2000, scale: 75 },
     };
 
     /** m:ss, for the recording pill and its countdown. */
@@ -193,6 +199,11 @@
         let relayCapable = false;
         let relayTimer = null;
         let startedCodec = 'h264';
+        // The Auto preset's controller (remote-quality.js), where the page loaded it. Fed only
+        // by the relay's lag samples; a WebRTC session holds its starting rung.
+        const quality = window.RemoteQuality ? window.RemoteQuality.create() : null;
+        // The agent's last geometry line, kept so the Auto rung can be shown beside it.
+        let geomText = '';
         // Fullscreen without the Fullscreen API -- iPhone Safari (see toggleFullscreen).
         let pseudoFull = false;
         // Touch input (remote-touch.js), where the page loaded it. Created in wireInput.
@@ -235,7 +246,32 @@
         }
 
         function hint(text) { els.hint.textContent = text || ''; }
-        function meta(text) { els.meta.textContent = text || ''; }
+        function meta(text) {
+            geomText = text || '';
+            renderMeta();
+        }
+
+        function renderMeta() {
+            let text = geomText;
+            if (geomText && autoActive()) {
+                text += ' · ' + t('machine.remote.auto_rung', {
+                    kbps: quality.settings().bitrate_kbps,
+                });
+            }
+            els.meta.textContent = text;
+        }
+
+        function autoActive() { return !!quality && els.preset.value === 'auto'; }
+
+        // A lag sample from the relay. Only Auto listens; a manual preset is the operator's
+        // choice and stays exactly what they picked.
+        function onRelayLag(lagMs) {
+            if (!autoActive()) return;
+            if (quality.sample(lagMs, performance.now())) {
+                sendConfig();
+                renderMeta();
+            }
+        }
 
         // A borrowed machine (roadmap #15) is shown the same viewer with two controls taken
         // off it. Neither is a security boundary -- the owning hub has no proxy route for
@@ -329,9 +365,9 @@
 
         function liveSettings() {
             const preset = els.preset.value;
-            const base = PRESETS[preset] || {
-                fps: clampInt(els.fps.value, 1, 60, 15),
-                bitrate_kbps: clampInt(els.bitrate.value, 100, 50000, 4000),
+            const base = (preset === 'auto' && quality ? quality.settings() : PRESETS[preset]) || {
+                fps: clampInt(els.fps.value, 1, 60, 20),
+                bitrate_kbps: clampInt(els.bitrate.value, 100, 50000, 6000),
                 scale: clampInt(els.scale.value, 25, 100, 100),
             };
             return Object.assign({ monitor: clampInt(els.monitor.value, 0, 15, 0) }, base);
@@ -343,7 +379,8 @@
             const custom = els.preset.value === 'custom';
             root.querySelectorAll('.remote-field--custom').forEach((el) => { el.hidden = !custom; });
             if (!custom) {
-                const preset = PRESETS[els.preset.value];
+                const preset = els.preset.value === 'auto' && quality
+                    ? quality.settings() : PRESETS[els.preset.value];
                 if (preset) {
                     els.fps.value = preset.fps;
                     els.bitrate.value = preset.bitrate_kbps;
@@ -368,6 +405,9 @@
             iceTypes = { local: new Set(), remote: new Set() };
             relayCapable = false;
             startedCodec = els.codec.value;
+            // Every session starts Auto from its starting rung: the last session's link says
+            // nothing about this one's.
+            if (quality) quality.reset();
             try {
                 const body = Object.assign({
                     session: els.session.value || 'auto',
@@ -555,6 +595,7 @@
                         downUrl: (after) => routes.relayDown(id, after),
                         upUrl: () => routes.relayUp(id),
                         onControl: handleAgentStatus,
+                        onLag: onRelayLag,
                         onFirstFrame: () => setStatus(t('machine.remote.live_relay'), 'ok'),
                         onClosed: () => {
                             if (sessionId !== id) return;
@@ -1188,7 +1229,7 @@
             els.recStop.addEventListener('click', () => recorder.stop('stopped'));
         }
 
-        els.preset.addEventListener('change', () => { syncPresetFields(); sendConfig(); });
+        els.preset.addEventListener('change', () => { syncPresetFields(); sendConfig(); renderMeta(); });
         [els.monitor, els.fps, els.bitrate, els.scale].forEach((el) => {
             el.addEventListener('change', sendConfig);
         });

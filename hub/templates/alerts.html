@@ -8,7 +8,11 @@
 
 {# The fleet summary fold that lived here (roadmap #24) moved into the assistant
    (roadmap #26): ask it for today's alerts. #}
-<div id="alerts-list"></div>
+{# data-assistant: the same switch ticket.html uses for its hand-off. VIEW and not just the
+   setting, because /assistant is behind VIEW and a button that clicks through to a 403 is
+   worse than no button. #}
+<div id="alerts-list"
+     data-assistant="{{ 1 if assistant_enabled and cap.VIEW in user_capabilities else '' }}"></div>
 <div class="empty-state" id="alerts-empty" style="display:none;">{{ t('alerts.empty') }}</div>
 {% endblock %}
 {% block page_scripts %}
