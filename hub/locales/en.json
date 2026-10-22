@@ -1954,7 +1954,15 @@
     "hub_error": "The hub returned an error (HTTP {status}).",
     "request_failed": "{url} returned {status}",
     "intro_more": "More",
-    "intro_less": "Less"
+    "intro_less": "Less",
+    "table_search": "Search this table",
+    "table_filters": "Filters",
+    "table_filter_column": "Filter by {column}",
+    "table_clear": "Clear filters",
+    "table_count": {
+      "one": "{visible} of {count} row",
+      "other": "{visible} of {count} rows"
+    }
   },
   "packages": {
     "preset": {

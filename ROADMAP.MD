@@ -193,7 +193,26 @@ the fix goes to `beta` like anything else.
 - [ ] **Translations.** The action, its description and *(no folder)* read correctly in German
   and Spanish.
 
-**Hub 1.163.0 — a relayed remote screen keeps up with a slow link; Auto quality** (#171)
+**Hub 1.163.0 — table search and column filters, card tables on phones, Ctrl+K placement** (#169)
+- [ ] **Ctrl+K.** Opens centred about an eighth of the way down, 640 px wide, with padding round
+  the box and its rows; full width near the top on a phone. Same in the dark theme.
+- [ ] **Nothing else moved.** base.css's reset is in a cascade layer now, so every Tailwind
+  margin and padding utility in the console started working. Look over Devices (the bulk bar),
+  the PC tree and the alert cards for spacing that changed for the worse.
+- [ ] **Devices.** *Filters* opens a row of boxes under the headers; *Manufacturer* `dell` plus
+  *OS* `windows 10` narrows the list, the count says "N of M", *Select all* ticks only those,
+  *Export* contains only those, and a 30 s refresh keeps the filter.
+- [ ] **Other tables.** Device Groups, Watchdogs, Rules and a machine-page tab: a search box
+  appears above any table with more than five rows, filters combine, *Clear filters* resets.
+  Audit, Tickets, Users, Event logs and Processes show *Filters* but no second search box.
+- [ ] **Phone.** At phone width every one of those tables is a stack of labelled cards, the
+  page never scrolls sideways, and a filtered-out row is really gone.
+- [ ] **Untouched tables.** An alert's duplicate-machine picker, the sensor list, a ticket's
+  facts and a printed device report look as they did.
+- [ ] **Translations.** The search box, *Filters*, *Clear filters* and the count read correctly
+  in German and Spanish.
+
+**Hub 1.164.0 — a relayed remote screen keeps up with a slow link; Auto quality** (#171)
 - [ ] **No replay.** On a phone over mobile data, on a session that reads **Live (via hub)**,
   drag a window around and let go. The picture stops within about 1–2 s instead of carrying on
   moving for several; it may hold still a moment, then jump to the present.
@@ -2154,7 +2173,7 @@ agent long-polls. `remote_relay.py` (in memory) + routes in `remote_web.py`;
   because a lost key-up is a key held down. A per-frame backpressure check was tried first and
   threw away every new viewer's first GOP (seen replaying real encoder output), so it is
   judged per batch.
-  **Hub 1.163.0: a lagging viewer jumps to live instead of replaying.** The batch check above
+  **Hub 1.164.0: a lagging viewer jumps to live instead of replaying.** The batch check above
   never fired on a phone over mobile data: the backlog sat in the network and in the hub's
   buffer while the decoder kept up, so a viewer behind but still inside the 240-record buffer
   got every frame since its cursor and showed motion seconds after the operator had stopped.
@@ -2164,7 +2183,7 @@ agent long-polls. `remote_relay.py` (in memory) + routes in `remote_web.py`;
   picture and asks for a keyframe (throttled to one per 2 s) rather than playing old deltas.
   *Rejected:* dropping deltas to catch up without a keyframe (garbage until the next IDR), and
   skipping only in the browser (the hub would still push the whole backlog down the slow link).
-- **Auto quality · hub 1.163.0.** The agent encodes at a fixed fps and bitrate with no
+- **Auto quality · hub 1.164.0.** The agent encodes at a fixed fps and bitrate with no
   congestion control, so skipping frames alone turns a too-slow link into a jumpy picture. The
   new default preset **Auto** (`remote-quality.js`) steps down a five-rung ladder (6 Mbps to
   0.4 Mbps) when two of the last three lag samples exceed 1 s, waits 15 s of calm before

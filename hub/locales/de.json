@@ -1867,7 +1867,15 @@
     "hub_error": "Der Hub hat einen Fehler gemeldet (HTTP {status}).",
     "request_failed": "{url} lieferte {status}",
     "intro_more": "Mehr",
-    "intro_less": "Weniger"
+    "intro_less": "Weniger",
+    "table_search": "Diese Tabelle durchsuchen",
+    "table_filters": "Filter",
+    "table_filter_column": "Nach {column} filtern",
+    "table_clear": "Filter zurücksetzen",
+    "table_count": {
+      "one": "{visible} von {count} Zeile",
+      "other": "{visible} von {count} Zeilen"
+    }
   },
   "packages": {
     "preset": {

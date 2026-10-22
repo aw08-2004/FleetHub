@@ -6,7 +6,7 @@ buffer was not rewound to a keyframe, a viewer resynchronised past the `geom` re
 map to nothing, or a long-poll that keeps waiting after its session closed. Each of those looks
 healthy from the network tab -- 200s all round -- and only the picture says otherwise.
 
-Its twin since hub 1.163.0 is **a screen that is live-looking but seconds old**: a viewer
+Its twin since hub 1.164.0 is **a screen that is live-looking but seconds old**: a viewer
 behind but still inside the buffer, fed every stale frame in order, so a phone kept showing the
 mouse moving after the operator had let go.
 """

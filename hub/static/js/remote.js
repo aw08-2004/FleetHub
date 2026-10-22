@@ -60,7 +60,7 @@
     //
     // The bitrate is the encoder's average TARGET, not a cap, and the fps is a fixed capture
     // cadence -- so a preset is exactly what the link is asked to carry, never more. Raised in
-    // hub 1.163.0 (quality was 25 fps / 8 Mbps, balanced 15 / 4, speed 10 / 1.5 at 50 %): a good
+    // hub 1.164.0 (quality was 25 fps / 8 Mbps, balanced 15 / 4, speed 10 / 1.5 at 50 %): a good
     // link had headroom nothing used, and a slow one is now Auto's job rather than the presets'.
     // 'auto' is not in this table -- its settings come from remote-quality.js, rung by rung.
     const PRESETS = {

@@ -136,7 +136,7 @@ the operator's scope; every session start/stop is in the audit log.
   never asks). A dead relay is still worth fixing — the fallback is slower — and the diagnosis
   above is unchanged; `remote-helper.log` now also says when and why a session switched.
   A relayed viewer that falls behind (a phone on mobile data, typically) **jumps to the
-  present** instead of replaying old motion (hub 1.163.0): the hub skips to the newest
+  present** instead of replaying old motion (hub 1.164.0): the hub skips to the newest
   keyframe, and the picture holds still for a moment rather than showing movement that has
   already happened.
 

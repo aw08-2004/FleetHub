@@ -1,4 +1,4 @@
-"""Pins how a relayed remote screen keeps up with a slow link (roadmap #2, hub 1.163.0): the
+"""Pins how a relayed remote screen keeps up with a slow link (roadmap #2, hub 1.164.0): the
 Auto preset (remote-quality.js) and the viewer's freeze-and-jump (remote-relay.js).
 
 The silent failures this exists to catch are all "the picture is up, so it must be fine":

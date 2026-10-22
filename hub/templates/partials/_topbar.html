@@ -81,10 +81,16 @@
    every class here is a utility, and app.css must be rebuilt when they change. The margin
    is explicit because base.css's `* { margin: 0 }` removes the UA centring a <dialog> gets.
    The results are built by command-palette.js with textContent -- machine names are
-   whatever a host reported to the unauthenticated /api/report. #}
+   whatever a host reported to the unauthenticated /api/report.
+
+   Pinned to the top-left corner with its padding gone through 1.162.0: the margin and
+   padding utilities here are in app.css's utilities LAYER, and base.css's unlayered
+   `* { margin: 0; padding: 0 }` outranked them. The reset is layered now (base.css), and
+   tests/test_tailwind_build.py pins that. On a phone it sits near the top, full width, with
+   room for the keyboard below and no arrow-key hint nobody there can use. #}
 <dialog id="palette" aria-label="{{ t('palette.label') }}"
-        class="mx-auto mt-[12vh] w-[min(640px,calc(100vw-2rem))] max-w-none overflow-hidden rounded-xl border border-card-border bg-card p-0 text-text shadow-2xl backdrop:bg-black/50">
-    <div class="flex items-center gap-3 border-b border-card-border px-4 py-3">
+        class="mx-auto mt-[12vh] max-sm:mt-4 w-[min(640px,calc(100vw-2rem))] max-w-none overflow-hidden rounded-xl border border-card-border bg-card p-0 text-text shadow-2xl backdrop:bg-black/50 backdrop:backdrop-blur-sm">
+    <div class="flex items-center gap-3 border-b border-card-border px-4 py-3.5">
         <svg class="size-4 shrink-0 text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
         <input id="palette-input" type="text" role="combobox" aria-expanded="true"
                aria-controls="palette-results" aria-autocomplete="list" autocomplete="off" spellcheck="false"
@@ -93,7 +99,7 @@
         <kbd class="shrink-0 rounded-md border border-card-border px-1.5 py-0.5 font-sans text-xs text-muted">Esc</kbd>
     </div>
     <div id="palette-results" role="listbox" aria-label="{{ t('palette.label') }}"
-         class="max-h-[60vh] overflow-y-auto p-2"></div>
-    <div class="border-t border-card-border px-4 py-2 text-xs text-muted">{{ t('palette.hint') }}</div>
+         class="max-h-[60vh] max-sm:max-h-[55vh] overflow-y-auto p-2"></div>
+    <div class="border-t border-card-border px-4 py-2 text-xs text-muted max-sm:hidden">{{ t('palette.hint') }}</div>
 </dialog>
 {% endif %}

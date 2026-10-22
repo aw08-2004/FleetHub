@@ -45,6 +45,25 @@ five-second watcher turns "this machine's last report is now outside the online 
 - **Permission changes apply at once.** The sidebar's links follow a grant or a revocation,
   and the connection re-joins with the new scope.
 
+### Searching and filtering tables
+
+Every table in the console with more than five rows has a **search box** above it (matches
+any cell) and a **Filters** button that opens one filter box per column. Column filters
+combine with each other and with the search: *Manufacturer* `dell` plus *OS* `windows 10`
+shows only the Dells still on Windows 10. The Filters button shows how many column filters
+are on, even with the row folded away, and **Clear filters** resets them all.
+
+- Pages that already have their own search (Devices, Audit log, Tickets, Users, Event logs,
+  the Processes card) get the column filters without a second search box. On those pages the
+  page's own search box keeps working as before.
+- On **Devices** the filters narrow the data itself, so the count, **Select all** and
+  **Export** all follow them. On other pages they hide rows from view.
+- Filters last for the browser tab, not forever: a filter forgotten yesterday would hide PCs
+  today with nothing saying why.
+- On a phone (narrower than 640 px) every table is a stack of cards, one per row, each line
+  labelled with its column. Between 640 and 900 px a wide table scrolls sideways inside its
+  card instead of moving the whole page.
+
 ### The machine page reports at 1 Hz while you are watching it
 
 A machine reports every 5s by default (**Settings -> History Metrics**, see below), and only

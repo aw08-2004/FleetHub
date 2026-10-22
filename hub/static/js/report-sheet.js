@@ -144,6 +144,8 @@
         if (!rows || rows.length === 0) return el('p', 'stat-card__meta', t('report.empty'));
         const wrap = el('div', 'report-table-wrap');
         const tbl = el('table', 'data-table');
+        // A printable sheet: no search box on paper, and no card layout in a PDF.
+        tbl.dataset.tableTools = 'off';
         const head = el('tr');
         columns.forEach((c) => head.appendChild(el('th', null, c.label)));
         tbl.appendChild(el('thead')).appendChild(head);

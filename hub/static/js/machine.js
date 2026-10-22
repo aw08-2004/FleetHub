@@ -1134,6 +1134,8 @@ function renderSensorTree() {
 
             const table = document.createElement('table');
             table.className = 'data-table sensor-table';
+            // Label/value pairs with no header row: nothing to filter, nothing to stack.
+            table.dataset.tableTools = 'off';
             const tbody = document.createElement('tbody');
             for (const sensor of group.sensors) {
                 const tr = document.createElement('tr');

@@ -59,6 +59,8 @@ function renderUsers(users) {
 
     const card = el('div', 'card');
     const table = el('table', 'data-table');
+    // Column filters only: the page's own search box queries the server (table-tools.js).
+    table.dataset.tableTools = 'filters';
     const head = el('thead');
     const headRow = el('tr');
     [t('users.col.name'), t('users.col.username'), t('users.col.email'),

@@ -148,6 +148,9 @@
    provides attachAutocomplete for the pickers that call it directly. Not for the shell,
    which has no page content to upgrade. #}
 <script src="{{ url_for('static', filename='js/autocomplete.js') }}"></script>
+{# Search, column filters and phone-width card labels for every .data-table, found as page
+   scripts insert them (table-tools.js). Before page_scripts: Devices calls it directly. #}
+<script src="{{ url_for('static', filename='js/table-tools.js') }}"></script>
 {% block page_scripts %}{% endblock %}
 {% endif %}
 </body>

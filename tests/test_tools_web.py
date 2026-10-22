@@ -188,7 +188,7 @@ def test_fleet_tasks_holds_only_the_fleet_halves():
     check("the backup fleet half renders", 'id="key-banner"' in full and 'id="hub-pane"' in full)
     check("the firmware image library renders", 'id="images-body"' in full)
     for module in ("fleet-terminal.js", "backup-tab.js", "js/firmware.js", "wake.js",
-                   "files.js", "tools.js"):
+                   "files.js", "js/tools.js"):
         check(f"...and {module} is not loaded", module not in full)
     check("no machine column is left", 'id="tools-machine-list"' not in full)
     check("the tablist keeps the query-parameter mode", 'data-tabs-param="tab"' in full)

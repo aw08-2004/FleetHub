@@ -123,7 +123,9 @@
                                                      : t('events.none_subscribed')));
             return;
         }
-        const table = el('table', 'table');
+        const table = el('table', 'data-table');
+        // Column filters only: the page's own search box queries the server (table-tools.js).
+        table.dataset.tableTools = 'filters';
         const head = el('tr');
         [t('events.col.when'), t('events.col.machine'), t('events.col.level'),
          t('events.col.source'), t('events.col.event'), t('events.col.message')]
@@ -192,7 +194,7 @@
                 canManage ? t('events.sub.none_manage') : t('events.sub.none')));
             return;
         }
-        const table = el('table', 'table');
+        const table = el('table', 'data-table');
         const head = el('tr');
         const columns = [t('events.sub.col_name'), t('events.sub.col_log'),
                          t('events.sub.col_filter'), t('events.sub.col_state')];
