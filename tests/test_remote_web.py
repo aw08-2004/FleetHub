@@ -2,6 +2,7 @@
 Wires the blueprint directly, avoiding app.py's OAuth boot -- same approach as test_fleet_web.
 """
 import functools
+import json
 import os
 import sys
 import tempfile
@@ -394,6 +395,95 @@ def main():
               c.post("/api/remote/turn/secret", json={}).status_code == 403)
         CURRENT_USER = "super@x.com"
         os.environ.pop("REMOTE_TURN_SECRET", None)
+
+        print("\n== Provided relays: a pasted iceServers block ==")
+        # A credential with every character that could trip a .env round-trip: an inline-comment
+        # marker, an equals sign, both quotes and a comma.
+        tricky = "c#r=e'd\"x,y"
+        paste = ('{"iceServers": [{"urls": ["stun:stun.cloudflare.com:3478", '
+                 '"turn:turn.cloudflare.com:3478?transport=udp"], '
+                 '"username": "xxxx", "credential": ' + json.dumps(tricky) + ',}]}')
+        r = c.post("/api/remote/ice/static", json={"json": paste})
+        body = r.get_json()
+        check("a pasted block (trailing comma and all) is saved -> 200 with counts",
+              r.status_code == 200 and body["static_count"] == 1 and body["static_url_count"] == 2)
+        check("...and the response does not echo the credential",
+              tricky not in r.get_data(as_text=True))
+        from dotenv import dotenv_values
+        stored = dotenv_values(env_path).get("REMOTE_ICE_SERVERS_JSON")
+        check("...stored as one .env line that python-dotenv reads back intact",
+              json.loads(stored)[0]["credential"] == tricky)
+        check("...and applied to the live env", os.environ.get("REMOTE_ICE_SERVERS_JSON") == stored)
+        st = c.get("/api/remote/turn/status").get_json()
+        check("status counts the pasted servers and their URLs",
+              st["static_count"] == 1 and st["static_url_count"] == 2 and st["ice_count"] == 1)
+        r = c.post("/api/remote/PC-01/start", json={})
+        ice = r.get_json()["ice_servers"]
+        check("a session start hands the pasted credential out",
+              any(s.get("username") == "xxxx" and s.get("credential") == tricky for s in ice))
+        c.post(f"/api/remote/session/{r.get_json()['session_id']}/stop")
+        r = c.post("/api/remote/ice/static", json={"json": '{"urls": ["turn:t.example:3478"]}'})
+        check("a TURN URL with no credential is refused -> 400", r.status_code == 400)
+        check("...and the stored block is unchanged",
+              os.environ.get("REMOTE_ICE_SERVERS_JSON") == stored)
+        os.environ["REMOTE_ICE_SERVERS_JSON"] = "{not json"
+        check("a hand-broken .env value costs that entry, not the session start",
+              c.post("/api/remote/PC-01/start", json={}).status_code == 201)
+        r = c.post("/api/remote/ice/static", json={"json": ""})
+        check("an empty paste clears it from .env and the live env",
+              r.status_code == 200 and "REMOTE_ICE_SERVERS_JSON" not in os.environ
+              and "REMOTE_ICE_SERVERS_JSON" not in open(env_path, encoding="utf-8").read())
+
+        print("\n== Provided relays: a Cloudflare TURN key ==")
+        import requests
+
+        class FakeResp:
+            status_code = 201
+
+            def json(self):
+                return {"iceServers": [{"urls": ["turn:turn.cloudflare.com:3478?transport=udp",
+                                                 "turn:turn.cloudflare.com:53?transport=udp"],
+                                        "username": "minted", "credential": "fresh"}]}
+        cf_calls = []
+        real_post = requests.post
+        requests.post = lambda *a, **k: (cf_calls.append(a), FakeResp())[1]
+        try:
+            check("half a key is refused -> 400",
+                  c.post("/api/remote/turn/cloudflare", json={"key_id": "K"}).status_code == 400)
+            r = c.post("/api/remote/turn/cloudflare", json={"key_id": "KID", "api_token": "TOK"})
+            check("a full key is saved -> 200", r.status_code == 200
+                  and os.environ.get("REMOTE_CLOUDFLARE_TURN_API_TOKEN") == "TOK")
+            st = c.get("/api/remote/turn/status").get_json()
+            check("status shows it configured WITHOUT calling Cloudflare",
+                  st["cloudflare_configured"] is True and st["ice_count"] == 1 and not cf_calls)
+            r = c.post("/api/remote/turn/cloudflare/test", json={})
+            check("Test mints once and reports the usable URL count (port 53 dropped)",
+                  r.status_code == 200 and r.get_json() == {"ok": True, "url_count": 1})
+            r = c.post("/api/remote/PC-01/start", json={})
+            check("a session start carries the minted credential",
+                  any(s.get("username") == "minted" for s in r.get_json()["ice_servers"]))
+            c.post(f"/api/remote/session/{r.get_json()['session_id']}/stop")
+
+            def down(*a, **k):
+                raise requests.ConnectionError("https://rtc.live.cloudflare.com/... KID")
+            requests.post = down
+            r = c.post("/api/remote/turn/cloudflare/test", json={})
+            check("Test against an unreachable Cloudflare -> 502 without the exception text",
+                  r.status_code == 502 and "KID" not in r.get_data(as_text=True))
+            check("...and a session still starts", c.post("/api/remote/PC-01/start",
+                                                          json={}).status_code == 201)
+        finally:
+            requests.post = real_post
+        r = c.post("/api/remote/turn/cloudflare", json={"key_id": "", "api_token": ""})
+        check("clearing removes both keys", r.status_code == 200
+              and "REMOTE_CLOUDFLARE_TURN_KEY_ID" not in os.environ
+              and "REMOTE_CLOUDFLARE_TURN_API_TOKEN" not in os.environ)
+        CURRENT_USER = "tech@x.com"
+        check("the provided-relay routes are manage_settings only -> 403",
+              c.post("/api/remote/ice/static", json={"json": ""}).status_code == 403
+              and c.post("/api/remote/turn/cloudflare", json={}).status_code == 403
+              and c.post("/api/remote/turn/cloudflare/test", json={}).status_code == 403)
+        CURRENT_USER = "super@x.com"
 
         print("\n== Stream parameters are validated, not silently clamped ==")
         r = c.post("/api/remote/PC-01/start",

@@ -94,6 +94,24 @@ the operator's scope; every session start/stop is in the audit log.
   `systemctl restart coturn`; `turn/.env` for a Docker relay). Leaving the secret unset simply
   omits TURN (STUN/direct paths only — fine on a LAN). See [turn/README.md](../turn/README.md) for
   ports, the public-IP requirement, and the host-OS notes.
+- **Using a TURN relay the hub does not run (Cloudflare, or any provider).** The same card has
+  two more blocks, both write-only (`manage_settings`; they write `.env` and apply live, and the
+  credential is never shown back):
+  - **Provided ICE servers** — paste an `iceServers` JSON block, e.g.
+    `{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","turn:turn.cloudflare.com:3478?transport=udp","turns:turn.cloudflare.com:5349?transport=tcp"],"username":"…","credential":"…"}]}`.
+    A bare list, a single server object, `urls` as a string and a trailing comma are all
+    accepted. Every session gets it unchanged, next to the hub's own STUN/TURN. Stored as
+    `REMOTE_ICE_SERVERS_JSON`. **Cloudflare-generated credentials expire** after the TTL you
+    generated them with — re-paste, or use the key below.
+  - **Cloudflare TURN key** — the TURN key ID and API token from the Cloudflare dashboard
+    (Realtime → TURN), stored as `REMOTE_CLOUDFLARE_TURN_KEY_ID` /
+    `REMOTE_CLOUDFLARE_TURN_API_TOKEN`. The hub calls Cloudflare's `generate-ice-servers` for
+    each peer with the *TURN credential TTL* setting, drops the port-53 URLs browsers block, and
+    if Cloudflare cannot be reached it leaves that entry out rather than failing the session.
+    *Test* mints one credential to prove the key works; opening the page never calls Cloudflare.
+
+  The hub needs outbound HTTPS to `rtc.live.cloudflare.com` for the key; the peers need to reach
+  `turn.cloudflare.com` (UDP/TCP 3478, TLS 5349/443). No agent update is needed for either.
 - **Why the Windows installer builds a WSL distro rather than running a container.** A coturn
   *container* on Windows relays from the Docker bridge. `--external-ip` makes it advertise the
   public address and inbound DNAT works — so both peers allocate and the logs look healthy — but

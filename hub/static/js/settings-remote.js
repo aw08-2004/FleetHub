@@ -116,6 +116,118 @@
         return wrap;
     }
 
+    // ---- Provided relays (a pasted iceServers block, a Cloudflare TURN key) ------------------
+    // What a relay the hub does not run needs: a fixed username/credential it hands out as-is,
+    // or a Cloudflare key it mints from per session. Both live in .env (remote_web.py says why),
+    // so like the secret above they are write-only from here -- the card shows counts, never
+    // the credential.
+    //
+    // Drafts survive re-renders: FleetLive refreshes this card every few seconds while anything
+    // remote happens, and a re-render that dropped a half-pasted block would read as the Save
+    // button eating it.
+    const drafts = { json: '', keyId: '', token: '' };
+    let providedMsg = { ice: null, cf: null };   // {text, err} shown under each block
+
+    async function postJson(url, payload) {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(body.error || ('HTTP ' + resp.status));
+        return body;
+    }
+
+    function draftInput(props, key) {
+        const node = el(props.tag || 'input', Object.assign({ class: 'input', autocomplete: 'off',
+                                                              spellcheck: 'false' }, props.attrs));
+        node.value = drafts[key];
+        node.addEventListener('input', () => { drafts[key] = node.value; });
+        return node;
+    }
+
+    function msgNode(slot) {
+        const m = providedMsg[slot];
+        return el('div', { class: 'turn-secret__msg' + (m && m.err ? ' turn-secret__msg--err' : ''),
+                           text: m ? m.text : '' });
+    }
+
+    function providedControls() {
+        const wrap = el('div', { class: 'turn-secret' });
+        if (!cachedStatus.can_write_secret) return wrap;   // cannot_write_env is already shown
+
+        const buttons = [];
+        async function run(slot, fn) {
+            buttons.forEach((b) => { b.disabled = true; });
+            try {
+                providedMsg[slot] = { text: await fn(), err: false };
+            } catch (e) {
+                providedMsg[slot] = { text: e.message, err: true };
+            }
+            await refresh();
+        }
+        function button(text, kind, slot, fn) {
+            const b = el('button', { type: 'button', class: 'btn btn--' + kind, text });
+            b.addEventListener('click', () => run(slot, fn));
+            buttons.push(b);
+            return b;
+        }
+
+        // Static block.
+        const json = draftInput({ tag: 'textarea', attrs: { class: 'input turn-secret__json',
+            rows: '7', placeholder: '{ "iceServers": [ { "urls": [...], "username": "...", "credential": "..." } ] }' } },
+            'json');
+        wrap.appendChild(el('label', { class: 'setting__label', text: t('settings.remote.ice_json_label') }));
+        wrap.appendChild(el('p', { class: 'setting__help', text: t('settings.remote.ice_json_help') }));
+        wrap.appendChild(json);
+        wrap.appendChild(el('div', { class: 'card-actions' }, [
+            button(t('settings.remote.ice_json_save'), 'primary', 'ice', async () => {
+                const body = await postJson('/api/remote/ice/static', { json: drafts.json });
+                drafts.json = '';
+                return t('settings.remote.ice_json_saved', { servers: body.static_count,
+                                                             urls: body.static_url_count });
+            }),
+            button(t('settings.remote.clear'), 'ghost', 'ice', async () => {
+                await postJson('/api/remote/ice/static', { json: '' });
+                drafts.json = '';
+                return t('settings.remote.cleared');
+            }),
+        ]));
+        wrap.appendChild(msgNode('ice'));
+
+        // Cloudflare key.
+        const keyId = draftInput({ attrs: { type: 'text',
+            placeholder: t('settings.remote.cf_key_id_placeholder') } }, 'keyId');
+        const token = draftInput({ attrs: { type: 'password',
+            placeholder: t('settings.remote.cf_token_placeholder') } }, 'token');
+        wrap.appendChild(el('label', { class: 'setting__label', text: t('settings.remote.cf_label') }));
+        wrap.appendChild(el('p', { class: 'setting__help', text: t('settings.remote.cf_help') }));
+        wrap.appendChild(keyId);
+        wrap.appendChild(token);
+        wrap.appendChild(el('div', { class: 'card-actions' }, [
+            button(t('settings.remote.cf_save'), 'primary', 'cf', async () => {
+                await postJson('/api/remote/turn/cloudflare',
+                               { key_id: drafts.keyId.trim(), api_token: drafts.token.trim() });
+                drafts.keyId = drafts.token = '';
+                return t('settings.remote.cf_saved');
+            }),
+            cachedStatus.cloudflare_configured
+                ? button(t('settings.remote.cf_test'), 'ghost', 'cf', async () => {
+                    const body = await postJson('/api/remote/turn/cloudflare/test', {});
+                    return t('settings.remote.cf_test_ok', { urls: body.url_count });
+                })
+                : null,
+            button(t('settings.remote.clear'), 'ghost', 'cf', async () => {
+                await postJson('/api/remote/turn/cloudflare', { key_id: '', api_token: '' });
+                drafts.keyId = drafts.token = '';
+                return t('settings.remote.cleared');
+            }),
+        ]));
+        wrap.appendChild(msgNode('cf'));
+        return wrap;
+    }
+
     function buildCard() {
         const card = el('div', { class: 'card', id: CARD_ID });
         card.appendChild(el('h3', { class: 'card__title', text: t('settings.remote.title') }));
@@ -141,6 +253,12 @@
                     el('span', { text: t('settings.remote.turn_breakdown', {
                         total: s.turn_count, wan: s.turn_wan_count, lan: s.turn_lan_count,
                         tcp: s.turn_tcp_count }) })),
+            statRow(t('settings.remote.static_servers'),
+                    el('span', { text: t('settings.remote.static_breakdown', {
+                        servers: s.static_count || 0, urls: s.static_url_count || 0 }) })),
+            statRow(t('settings.remote.cf_status'),
+                    s.cloudflare_configured ? pill(t('settings.remote.secret_set'), 'ok')
+                                            : pill(t('settings.remote.secret_unset'), 'muted')),
             statRow(t('settings.remote.ice_per_session'), pill(String(s.ice_count), iceKind)),
         ]);
         card.appendChild(stats);
@@ -165,6 +283,7 @@
         }
 
         card.appendChild(secretControls());
+        card.appendChild(providedControls());
         card.appendChild(el('p', { class: 'setting__help',
             text: t('settings.remote.urls_help') }));
         return card;
