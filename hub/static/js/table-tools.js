@@ -50,11 +50,28 @@
     // so `focused` still being true when the replacement arrives means "was typing here".
     let focusMemo = { key: '', field: '', focused: false };
 
+    /** The header labels, joined: what a table IS, independent of where it sits. */
+    function signature(table) {
+        const row = headerRow(table);
+        return row ? Array.from(row.cells, (th) => th.textContent.trim()).join('|') : '';
+    }
+
+    /** Which saved filter belongs to this table. Its id when it has one; otherwise its header
+     *  labels, plus its rank among tables on the page with the SAME labels (Sharing has three
+     *  alike). Rejected: its index among all tables on the page -- a page that inserts its
+     *  tables in a different order on the next load (they arrive as their fetches finish)
+     *  would hand one table's saved filter to another, hiding rows for no visible reason. */
     function storageKey(table) {
         let key = tableSeq.get(table);
         if (!key) {
-            const all = Array.from(document.querySelectorAll('table.data-table'));
-            key = table.id || `${all.indexOf(table)}`;
+            if (table.id) {
+                key = table.id;
+            } else {
+                const sig = signature(table);
+                const alike = Array.from(document.querySelectorAll('table.data-table'))
+                    .filter((other) => !other.id && signature(other) === sig);
+                key = `${sig}#${Math.max(alike.indexOf(table), 0)}`;
+            }
             tableSeq.set(table, key);
         }
         return STORAGE_PREFIX + location.pathname + location.search + '#' + key;
