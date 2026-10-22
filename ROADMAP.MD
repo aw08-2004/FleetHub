@@ -193,7 +193,7 @@ the fix goes to `beta` like anything else.
 - [ ] **Translations.** The action, its description and *(no folder)* read correctly in German
   and Spanish.
 
-**Hub 1.163.0 — a relayed remote screen keeps up with a slow link; Auto quality** (#2, hub only)
+**Hub 1.163.0 — a relayed remote screen keeps up with a slow link; Auto quality** (#171)
 - [ ] **No replay.** On a phone over mobile data, on a session that reads **Live (via hub)**,
   drag a window around and let go. The picture stops within about 1–2 s instead of carrying on
   moving for several; it may hold still a moment, then jump to the present.
