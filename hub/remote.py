@@ -19,7 +19,10 @@ Trust model (enforced in remote_web.py, same two planes as fleet_web.py):
     signals from the agent whose machine owns it.
   * TURN credentials are ephemeral (HMAC of a secret in .env, short TTL) and per-session, so an
     agent never holds a long-lived relay credential -- the same "secrets live in .env, the hub
-    mints scoped access on demand" discipline the backup pre-signed URLs use.
+    mints scoped access on demand" discipline the backup pre-signed URLs use. **The one
+    exception is a pasted iceServers block** (see "provided relays" below): its credential is
+    whatever the provider issued, handed to every peer until it expires. The Cloudflare key path
+    exists so a deployment that cares can keep per-session credentials there too.
 
 Kept free of Flask so it can be unit-tested in isolation; remote_web.py wires thin HTTP
 endpoints on top.
@@ -599,13 +602,250 @@ def select_urls_for_peer(urls_in, peer_ip=None):
     return wan or urls
 
 
+# --------------------------------------------------------------------------- provided relays
+# A relay the hub does not run and cannot mint for with REMOTE_TURN_SECRET -- Cloudflare's TURN,
+# or anything else that hands out a fixed username/credential. Two ways in, both through .env
+# because both carry a credential and the settings table is readable without manage_settings:
+#
+#   * a pasted `iceServers` block (REMOTE_ICE_SERVERS_JSON), handed to every session verbatim.
+#     Cloudflare-generated credentials EXPIRE after the TTL they were generated with, so this is
+#     the quick path, not the durable one;
+#   * a Cloudflare TURN key (REMOTE_CLOUDFLARE_TURN_KEY_ID + _API_TOKEN), from which the hub
+#     asks Cloudflare for a fresh credential per peer, the same "secret in .env, scoped
+#     credential on demand" shape the coturn HMAC path already has.
+#
+# Neither the browser nor the agent needed a change for this: both already take an entry with
+# several URLs and a username/credential (remote.js hands the list to RTCPeerConnection as-is,
+# RemotePeer.BuildIceServers splits the URLs). That is why no agent minor gates it.
+
+ICE_SCHEMES = ("stun", "stuns", "turn", "turns")
+
+# The endpoint Cloudflare documents for minting (realtime/turn/generate-credentials). Answers
+# 201 with {"iceServers": [...]} in exactly the shape parse_ice_servers_json accepts.
+CLOUDFLARE_TURN_URL = ("https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}"
+                       "/credentials/generate-ice-servers")
+
+# Short on purpose: this runs inside a session start, and an operator watching a spinner for
+# the default requests timeout (none) because a provider is slow is a worse failure than a
+# session that falls back to coturn or the hub relay.
+CLOUDFLARE_TIMEOUT_SECONDS = 5
+
+
+def ice_url_problem(text):
+    """None if `text` is a usable STUN/TURN URL, else the i18n error key saying why
+    ('bad_url_scheme' / 'url_without_host'). Shared by the url_list setting and the pasted
+    iceServers JSON, so the two cannot drift into accepting different things -- a malformed URL
+    is skipped without comment by both peers, and the only symptom is sessions that stop
+    connecting from some networks."""
+    scheme, sep, rest = str(text).partition(":")
+    if not sep or scheme.lower() not in ICE_SCHEMES:
+        return "bad_url_scheme"
+    if not rest.strip():
+        return "url_without_host"
+    return None
+
+
+# A comma right before a closing bracket is what a hand-edited block picks up -- the sample this
+# feature was written against had one after its last field -- and strict JSON refuses it.
+#
+# **Commas inside a string are never touched.** The first version stripped `,\s*([}\]])` blind,
+# and was wrong in exactly the place that matters: a credential containing `,}` was quietly
+# rewritten, re-serialised and stored, and the result was a 401 at allocation time that nobody
+# sees -- the failure the Save check exists to prevent. So every string is skipped whole, by
+# json's own scanstring (the C scanner json.loads itself uses), before a comma can be looked at.
+#
+# The second version was a single regex matching "a string OR a trailing comma". It was correct,
+# but CodeQL rightly flagged it as polynomial: an unterminated `"\"\"\"...` is re-scanned from
+# every quote. This loop is linear -- each character is visited once. Only tried after a strict
+# parse fails, so valid JSON is never touched.
+_NON_SPACE_RE = re.compile(r"\S")
+
+
+def _string_end(text, quote_at):
+    """Index just past the JSON string opening at `quote_at`. An unterminated or malformed string
+    runs to the end of the text: leaving it alone is all the repair should do with it."""
+    try:
+        return json.decoder.scanstring(text, quote_at + 1)[1]
+    except ValueError:
+        return len(text)
+
+
+def _strip_trailing_commas(text):
+    out, i = [], 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '"':
+            end = _string_end(text, i)
+            out.append(text[i:end])
+            i = end
+            continue
+        nxt = _NON_SPACE_RE.search(text, i + 1) if ch == "," else None
+        if not (nxt and nxt.group() in "}]"):
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _load_ice_json(raw):
+    """(data, problem). The problem is our own sentence, never the decoder's exception text --
+    that is what reaches the browser, and an exception's message is not ours to show."""
+    for candidate in (raw, _strip_trailing_commas(raw)):
+        try:
+            return json.loads(candidate), None
+        except ValueError:
+            continue
+    return None, "not valid JSON"
+
+
+def _ice_server_list(data):
+    if isinstance(data, dict) and ("iceServers" in data or "ice_servers" in data):
+        data = data.get("iceServers", data.get("ice_servers"))
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return None, "expected an iceServers list or a server object"
+    return data, None
+
+
+def _ice_server_entry(i, entry):
+    """One server, normalised. (server, problem)."""
+    if not isinstance(entry, dict):
+        return None, f"server {i} is not an object"
+    urls = entry.get("urls", entry.get("url"))
+    urls = [urls] if isinstance(urls, str) else urls
+    if not isinstance(urls, list):
+        return None, f"server {i} has no urls"
+    urls = [str(u).strip() for u in urls if str(u).strip()]
+    if not urls:
+        return None, f"server {i} has no urls"
+    bad = next((u for u in urls if ice_url_problem(u)), None)
+    if bad:
+        return None, f"{bad!r} is not a stun:, stuns:, turn: or turns: URL"
+    server = {"urls": urls}
+    username, credential = entry.get("username"), entry.get("credential")
+    if username or credential:
+        server["username"] = str(username or "")
+        server["credential"] = str(credential or "")
+    needs_cred = any(u.lower().startswith(("turn:", "turns:")) for u in urls)
+    if needs_cred and not (server.get("username") and server.get("credential")):
+        return None, f"server {i} has TURN URLs but no username and credential"
+    return server, None
+
+
+def check_ice_servers_json(text):
+    """Normalise a pasted iceServers block into ([{urls: [...], username?, credential?}], None),
+    or (None, problem) with a sentence an operator can act on.
+
+    Accepts every shape an operator is likely to be holding: {"iceServers": [...]} (Cloudflare's
+    generate-ice-servers, and what RTCPeerConnection takes), {"iceServers": {...}} (Cloudflare's
+    older /credentials/generate answers one object, not a list), a bare list, or one server
+    object; `urls` as a string or a list (RTCIceServer allows both).
+
+    **Refuses a turn:/turns: URL in an entry with no username and credential.** It would be
+    carried all the way into both peers and fail at allocation time with a 401 nobody sees,
+    which is the silent failure this check exists to move to the Save button.
+
+    Returns rather than raises so the save route can show the problem without handing an
+    exception's text to the browser.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return [], None
+    data, problem = _load_ice_json(raw)
+    if problem:
+        return None, problem
+    entries, problem = _ice_server_list(data)
+    if problem:
+        return None, problem
+    servers = []
+    for i, entry in enumerate(entries, 1):
+        server, problem = _ice_server_entry(i, entry)
+        if problem:
+            return None, problem
+        servers.append(server)
+    return servers, None
+
+
+def serialise_ice_servers(servers):
+    """The one-line form REMOTE_ICE_SERVERS_JSON is stored in.
+
+    **`$` and `#` are written as JSON \\u escapes.** envfile writes `KEY=value` unquoted, and
+    load_dotenv expands `${...}` in an unquoted value and treats ` #` as the start of a comment.
+    So a provider credential holding either worked for the running process -- apply_to_environ
+    mirrors the raw string -- and was silently mangled at the next restart, when the block failed
+    to parse and the relay vanished from every session. In compact JSON both characters can only
+    occur inside a string, where `\\u0024` and `\\u0023` mean exactly the same thing, so the stored
+    line has neither and the credential parses back byte-for-byte. Rejected: refusing them at
+    Save (it turns down a valid credential), and quoting the value (envfile's other keys are
+    unquoted, and a hand-quoted value is the operator's to own).
+    """
+    text = json.dumps(servers, separators=(",", ":"))
+    return text.replace("$", "\\u0024").replace("#", "\\u0023")
+
+
+def parse_ice_servers_json(text):
+    """check_ice_servers_json for callers that want an exception: raises ValueError."""
+    servers, problem = check_ice_servers_json(text)
+    if problem:
+        raise ValueError(problem)
+    return servers
+
+
+# What Cloudflare issues as a TURN key ID is hex. Checked at Save and again before the request,
+# because the ID goes into the URL path: `abc/../x`, `?` or `#` would change which Cloudflare
+# endpoint receives the bearer token, and a typo would surface only as a puzzling 404 on Test.
+CLOUDFLARE_KEY_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def fetch_cloudflare_ice_servers(key_id, api_token, ttl_seconds=600, post=None):
+    """Mint one Cloudflare TURN credential and return it as ICE entries.
+
+    URLs on port 53 are dropped: Cloudflare's own docs say browsers block it and the URL times
+    out, and the agent would spend gathering time on the same dead allocation.
+
+    `post` is injectable so the tests never touch the network. Raises on any failure; the caller
+    decides that a provider outage is a missing entry, not a failed session.
+    """
+    if not CLOUDFLARE_KEY_ID_RE.fullmatch(str(key_id or "")):
+        raise RuntimeError("the Cloudflare TURN key ID is not a valid key ID")
+    if post is None:
+        import requests
+        post = requests.post
+    resp = post(CLOUDFLARE_TURN_URL.format(key_id=key_id),
+                headers={"Authorization": f"Bearer {api_token}"},
+                json={"ttl": int(ttl_seconds)}, timeout=CLOUDFLARE_TIMEOUT_SECONDS)
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Cloudflare TURN answered HTTP {resp.status_code}")
+    servers = []
+    for entry in parse_ice_servers_json(json.dumps(resp.json())):
+        urls = [u for u in entry["urls"] if not _is_port_53(u)]
+        if urls:
+            servers.append({**entry, "urls": urls})
+    if not servers:
+        raise RuntimeError("Cloudflare TURN returned no usable ICE servers")
+    return servers
+
+
+def _is_port_53(url):
+    rest = str(url).partition(":")[2].split("?", 1)[0]
+    if rest.startswith("["):
+        rest = rest.partition("]")[2]
+    return rest.rpartition(":")[2] == "53"
+
+
 def ice_servers(session_id, stun_urls=None, turn_urls=None, turn_secret=None, turn_ttl=600,
-                peer_ip=None):
+                peer_ip=None, static_servers=None, cloudflare=None):
     """Build the ICE server list handed to one peer. STUN servers need no credential; TURN
     servers get a freshly minted ephemeral credential. Pure and config-driven -- remote_web.py
     supplies the URLs from settings and the secret from .env -- so an empty/unconfigured TURN
     simply yields whatever STUN is set (or nothing, which still works on a LAN via host
     candidates).
+
+    `static_servers` is the parsed REMOTE_ICE_SERVERS_JSON; `cloudflare` is a zero-argument
+    callable returning minted entries (a callable so this module never reads .env or the
+    network itself). **A failing provider is logged and skipped, never raised**: coturn, the
+    pasted block or the hub relay may still carry the session, and a provider outage should
+    cost one relay, not every session.
 
     `peer_ip` is the source address of the peer this list is for; see select_urls_for_peer.
     """
@@ -625,4 +865,14 @@ def ice_servers(session_id, stun_urls=None, turn_urls=None, turn_secret=None, tu
                 "username": cred["username"],
                 "credential": cred["password"],
             })
+    provided = list(static_servers or [])
+    if cloudflare is not None:
+        try:
+            provided.extend(cloudflare())
+        except Exception as e:  # noqa: BLE001 -- any provider failure is the same skipped entry
+            print(f"[remote] Cloudflare TURN credential request failed: {e}")
+    for entry in provided:
+        urls = select_urls_for_peer(entry.get("urls"), peer_ip)
+        if urls:
+            servers.append({**entry, "urls": urls})
     return servers

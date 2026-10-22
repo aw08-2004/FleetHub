@@ -678,6 +678,11 @@ ACTION_LEVELS = {
     "recording_view": LEVEL_SECURITY,
     "recording_delete": LEVEL_SECURITY,
     "remote_turn_secret_set": LEVEL_SECURITY,
+    # The provided-relay credentials (remote_web.py): a pasted iceServers block and a Cloudflare
+    # TURN key. Same level as the secret beside them -- each is a credential every remote
+    # session is handed or minted from.
+    "remote_ice_servers_set": LEVEL_SECURITY,
+    "remote_cloudflare_turn_set": LEVEL_SECURITY,
     # Installing the virtual display puts a third-party driver into the DriverStore and its
     # publisher into this machine's certificate store. That is an expansion of what the
     # machine trusts, so it is recorded at the same level as running code as SYSTEM.

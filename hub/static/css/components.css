@@ -1711,6 +1711,11 @@ label.checkbox input {
     padding-top: var(--space-3);
     border-top: 1px solid var(--card-border);
 }
+.turn-secret__json {
+    min-height: 8rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--text-sm);
+}
 .turn-secret__msg { font-size: var(--text-sm); color: var(--muted); }
 .turn-secret__msg--err { color: var(--danger); }
 .turn-secret__reveal {

@@ -227,6 +227,19 @@ the fix goes to `beta` like anything else.
   still shows its badge, and clicks still land where they should after the jump.
 - [ ] **Translations.** *Auto* and the `Auto … kbps` line read correctly in German and Spanish.
 
+**Hub 1.165.0 — provided TURN relays: a pasted iceServers block, or a Cloudflare TURN key** (#172)
+- [ ] **Pasted block.** Generate a credential with Cloudflare's `generate-ice-servers` (a long
+  TTL), paste the whole response into **Settings → Remote Control → Provided ICE servers** and
+  save. The card counts the servers and URLs, and the credential appears nowhere on the page.
+- [ ] **It relays.** With the hub's own TURN cleared (or a peer off the LAN), a session
+  connects and `chrome://webrtc-internals` shows the selected pair's local or remote candidate
+  as `relay` from `turn.cloudflare.com`.
+- [ ] **Cloudflare key.** Clear the pasted block, save a TURN key ID + API token, press *Test*
+  (it reports a URL count), and start two sessions: each gets a different minted username.
+- [ ] **Outage.** With a wrong API token, *Test* fails with a message, and a session still
+  starts on whatever else is configured.
+- [ ] **Translations.** The two new blocks read correctly in German and Spanish.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-22
 
 **Read this first when working on the machine that holds the signing key.** Everything below
@@ -2048,6 +2061,19 @@ URLs into Settings, and prints generated secrets once) and **fully manageable in
 TURN status card — secret set?, URL counts, and the live **ICE-servers-per-session** count — plus
 set/rotate of `REMOTE_TURN_SECRET` (`manage_settings`; writes `.env` + applies live; coturn's
 `--static-auth-secret` synced by hand).
+
+**Provided relays (hub 1.165.0).** A relay the hub does not run -- Cloudflare's TURN, or any
+provider with a fixed username/credential -- could not be configured at all: `remote.turn_urls`
+only ever got coturn-style HMAC credentials. Two ways in now, both in `.env` and set from the
+same card. (1) **A pasted `iceServers` block** (`REMOTE_ICE_SERVERS_JSON`), handed to every
+session as-is; it accepts the object, list and single-server shapes and a trailing comma.
+Cloudflare's credentials expire after the TTL they were generated with, which makes this the
+quick path. (2) **A Cloudflare TURN key** (`REMOTE_CLOUDFLARE_TURN_KEY_ID` / `_API_TOKEN`): the hub
+calls `generate-ice-servers` per peer, using the TURN credential TTL setting, drops the port-53
+URLs Cloudflare says browsers block, and **if Cloudflare cannot be reached it skips that entry
+rather than failing the session.** Rejected: storing the block as a settings field, because the
+settings table is readable without `manage_settings` and the block holds a credential. No agent
+change was needed: both peers already took entries with several URLs and a username/credential.
 
 - **Session injection (agent, `Remote/SessionInjector.cs`)** — the service duplicates its own
   SYSTEM token, retargets `TokenSessionId` to the active interactive session (enabling `SeTcb`),
