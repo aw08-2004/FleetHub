@@ -150,14 +150,24 @@ function frame(kind, key, text) {
 const V = (text, key) => frame(1, key, text);
 const C = (text) => frame(2, false, text);
 
-// Each batch is [lagHeader, records...].
-const batches = [
-    [50,   V('K1', true), V('d1')],
-    [1500, V('d2'), V('d3')],
-    [1600, V('d4')],
-    [100,  C('{"t":"geom","w":1,"h":1}'), V('K2', true), V('d5')],
-    [1200, V('K3', true), V('d6')],
-];
+// Each batch is [lagHeader, records...]. SCENARIO picks the run.
+const SCENARIOS = {
+    mixed: [
+        [50,   V('K1', true), V('d1')],
+        [1500, V('d2'), V('d3')],
+        [1600, V('d4')],
+        [100,  C('{"t":"geom","w":1,"h":1}'), V('K2', true), V('d5')],
+        [1200, V('K3', true), V('d6')],
+    ],
+    // A link too slow for the bitrate: every batch is late, and every one leads with the
+    // newest keyframe the hub had.
+    keyled: [
+        [1500, V('K1', true), V('d1')],
+        [1700, V('K2', true), V('d2')],
+        [1600, V('K3', true), V('d3')],
+    ],
+};
+const batches = SCENARIOS[process.env.SCENARIO || 'mixed'];
 let served = 0;
 const decoded = [];
 const sentUp = [];
@@ -218,9 +228,10 @@ setTimeout(() => {
 """
 
 
-def _node(node, driver, script):
+def _node(node, driver, script, scenario=None):
+    env = dict(os.environ, SCENARIO=scenario) if scenario else None
     result = subprocess.run([node, "-e", driver, script],
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, timeout=30, env=env)
     if result.returncode != 0:
         print(result.stderr)
         return None
@@ -272,6 +283,19 @@ def test_relay_behaviour(node):
           decoded[-2:] == ["K3", "d6"])
     check("every batch with video reports its lag",
           len(out["lags"]) == 5 and out["lags"][1] >= 1500 and out["lags"][3] >= 100)
+
+    # Review of #171: late batches that LEAD with a keyframe must not ask for another. Each
+    # request rebuilds the agent's encoder for a bigger IDR that arrives just as late, and the
+    # stream never settles; that link is Auto's to fix, through the lag it is still told.
+    out = _node(node, RELAY_DRIVER, os.path.join(JS, "remote-relay.js"), scenario="keyled")
+    check("the keyframe-led run ran under node", out is not None)
+    if out is None:
+        return
+    check("late keyframe-led batches are shown, not frozen",
+          out["decoded"] == ["K1", "d1", "K2", "d2", "K3", "d3"])
+    check("and request no keyframe at all -- no encoder-rebuild loop", out["keyRequests"] == 0)
+    check("while Auto still hears that they were late",
+          len(out["lags"]) == 3 and min(out["lags"]) >= 1500)
 
 
 def main():

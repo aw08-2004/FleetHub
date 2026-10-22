@@ -320,6 +320,19 @@ def _wait_for(relay, queue, after, wait_seconds):
         relay.cond.wait(remaining)
 
 
+def _lead_in(relay, buffered, after, index, resync):
+    """The control records a read hands out BEFORE the frame at `index`: the newest geometry on
+    a resync (so the viewer knows the picture's size before its first frame -- see
+    Relay.last_geom), or, on an in-buffer jump, every control record jumped over."""
+    if resync:
+        return [] if relay.last_geom is None else [(KIND_CONTROL, 0, relay.last_geom)]
+    if not after or not buffered:
+        return []
+    skipped = buffered[max(0, after - buffered[0][0] + 1):index]
+    return [(kind, flags, payload) for _, kind, flags, payload, _ in skipped
+            if kind == KIND_CONTROL]
+
+
 def _collect_down(relay, after, max_bytes):
     """The records a viewer at cursor `after` gets next, its new cursor, and how far behind live
     that is in milliseconds. Caller holds relay.cond. See _start_index for where a new or
@@ -333,18 +346,9 @@ def _collect_down(relay, after, max_bytes):
     clock, so nothing depends on the agent's or the phone's time being right. Zero when no
     video goes out."""
     index, resync = _start_index(relay, after)
-    out, size = [], 0
-    if resync and relay.last_geom is not None:
-        # Put the geometry first so the viewer knows the picture's size before its first
-        # frame -- see Relay.last_geom.
-        out.append((KIND_CONTROL, 0, relay.last_geom))
-        size += len(relay.last_geom)
     buffered = list(relay.down)
-    if not resync and after and buffered:
-        for _, kind, flags, payload, _ in buffered[max(0, after - buffered[0][0] + 1):index]:
-            if kind == KIND_CONTROL:
-                out.append((kind, flags, payload))
-                size += len(payload)
+    out = _lead_in(relay, buffered, after, index, resync)
+    size = sum(len(payload) for _, _, payload in out)
     cursor = after
     lag_ms = None
     for seq, kind, flags, payload, arrived in buffered[index:]:

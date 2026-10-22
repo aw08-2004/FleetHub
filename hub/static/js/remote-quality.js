@@ -57,7 +57,7 @@
         let calmSince = null;
         let upAfter = UP_AFTER_MS;
 
-        function settings() { return Object.assign({}, LADDER[rung]); }
+        function settings() { return { ...LADDER[rung] }; }
 
         function move(next, now) {
             const direction = next > rung ? 1 : -1;

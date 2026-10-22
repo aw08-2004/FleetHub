@@ -212,7 +212,7 @@
                     buffer,
                     next: Number.parseInt(response.headers.get('X-Relay-Next') || '', 10),
                     state: response.headers.get('X-Relay-State'),
-                    lag: Number.isFinite(hubLag) ? hubLag + Math.round(bodyMs) : NaN,
+                    lag: Number.isFinite(hubLag) ? hubLag + Math.round(bodyMs) : Number.NaN,
                 };
             } catch (e) {
                 return RETRY;
@@ -234,11 +234,15 @@
                 requestKey();
             }
             const firstVideo = records.find((r) => r.kind === KIND_VIDEO);
-            if (firstVideo && lagMs > MAX_LAG_MS) {
-                // The hub already started this batch at the newest keyframe it had. If that is
-                // a keyframe, it is the freshest picture there is: show it. If it is a delta,
-                // there was no keyframe to jump to -- hold the picture still until one comes.
-                if ((firstVideo.flags & FLAG_KEYFRAME) === 0) waitingForKey = true;
+            if (firstVideo && lagMs > MAX_LAG_MS && (firstVideo.flags & FLAG_KEYFRAME) === 0) {
+                // The hub already started this batch at the newest keyframe it had, so a batch
+                // led by a delta means there was none to jump to: hold the picture still and
+                // ask for one. A batch led by a keyframe is the freshest picture there is --
+                // show it, and do NOT ask for another. On a link too slow for the bitrate the
+                // keyframe batch itself arrives late, and asking again rebuilds the encoder for
+                // an even bigger IDR that arrives just as late: a loop that never settles
+                // (review of #171). That case is remote-quality.js's to fix, via onLag.
+                waitingForKey = true;
                 requestKey();
             }
             for (const record of records) {
