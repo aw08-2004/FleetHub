@@ -212,7 +212,7 @@ the fix goes to `beta` like anything else.
 - [ ] **Translations.** The search box, *Filters*, *Clear filters* and the count read correctly
   in German and Spanish.
 
-**Hub 1.164.0 — provided TURN relays: a pasted iceServers block, or a Cloudflare TURN key** (#PR)
+**Hub 1.164.0 — provided TURN relays: a pasted iceServers block, or a Cloudflare TURN key** (#172)
 - [ ] **Pasted block.** Generate a credential with Cloudflare's `generate-ice-servers` (a long
   TTL), paste the whole response into **Settings → Remote Control → Provided ICE servers** and
   save. The card counts the servers and URLs, and the credential appears nowhere on the page.
