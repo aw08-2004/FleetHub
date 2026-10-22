@@ -158,14 +158,13 @@ def test_lagging_viewer_jumps_to_newest_keyframe():
 def test_lag_is_reported():
     print("the lag of the first frame handed out is reported")
     rr.open_relay("s10", "PC-01")
-    clock = [1000.0]
     # mock.patch.object rather than pytest's monkeypatch: the house runner executes this file
     # as a plain script, where fixtures do not exist, and the patch still undoes itself.
-    with mock.patch.object(rr.time, "monotonic", lambda: clock[0]):
+    with mock.patch.object(rr.time, "monotonic", return_value=1000.0) as clock:
         rr.push_down("s10", [control(b'{"t":"geom","w":1}'), video(b"K", key=True)])
-        clock[0] += 1.5
+        clock.return_value += 1.5
         rr.push_down("s10", [video(b"d1")])
-        clock[0] += 0.25
+        clock.return_value += 0.25
         records, cursor, state, lag = rr.read_down_with_lag("s10", 0, wait_seconds=0)
         check("the age is the first VIDEO record's, on the hub's clock", lag == 1750)
         _, _, _, lag2 = rr.read_down_with_lag("s10", cursor, wait_seconds=0)
