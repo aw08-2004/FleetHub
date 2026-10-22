@@ -141,7 +141,7 @@ hub that day, except the two items still open below.
   changes on a PC until a policy with registry values is linked above it, so the on-PC checks
   in item 4c are now owed on one test OU of production PCs before linking anything wider.
 
-**Agent, unreleased — terminal teardown ends the shell itself** (SonarCloud S3869)
+**Agent 3.48.1 — terminal teardown ends the shell itself** (#175, SonarCloud S3869)
 - [ ] **Closing a terminal ends its shell.** On a beta PC, open a terminal from the console,
   run `ping -t localhost`, close the tab, and check in Task Manager that neither the shell
   nor `ping` survives. `ConPtyProcess.Dispose` asked `HasExited` after setting `_disposed`, so
