@@ -143,7 +143,6 @@
             .filter((f) => f.value);
         let rows = 0;
         let shown = 0;
-        state.applying = true;
         for (const tr of dataRows(state)) {
             if (isNoticeRow(tr)) { tr.hidden = false; continue; }
             rows++;
@@ -155,7 +154,6 @@
             if (ok) shown++;
         }
         showNoMatch(state, rows > 0 && shown === 0 && active(state));
-        state.applying = false;
         updateCount(state, rows, shown);
         updateVisibility(state, rows);
     }
@@ -355,7 +353,6 @@
             ...saved,
             onChange: opts.onChange || null,
             withSearch: opts.search !== false && mode !== 'filters',
-            applying: false,
             mutating: false,
         };
         states.set(table, state);
@@ -391,9 +388,12 @@
 
         // The whole table, subtree: a page may add its tbody after inserting the table, and a
         // live reading rewriting one cell's text must re-run the filter on that row too.
-        // Only childList -- apply() writes the hidden attribute, which must not wake this.
+        // Only childList, so the hidden attribute apply() writes on every row never wakes it.
+        // The one child apply() adds or removes is the no-match row, and only when that state
+        // flips -- so the run it wakes changes nothing and the loop ends there. Rejected: an
+        // "applying" flag around apply(). Observer callbacks are microtasks, so the flag was
+        // always false again by the time one ran, and it guarded nothing.
         const observer = new MutationObserver(() => {
-            if (state.applying) return;
             labelCells(state);
             apply(state);
         });
