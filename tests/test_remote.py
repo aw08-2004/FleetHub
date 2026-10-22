@@ -207,6 +207,19 @@ def main():
                      lambda: remote.parse_ice_servers_json('{"urls": ["turn:t.example:3478"]}'))
         expect_raise("non-JSON is refused", ValueError,
                      lambda: remote.parse_ice_servers_json("turn:t.example:3478"))
+        # The first version stripped trailing commas with a regex, and rewrote a credential
+        # holding `,}` to `}` before storing it -- a 401 at allocation time that nobody sees.
+        sneaky = ('{"urls": ["turn:t.example:3478"], "username": "u,]v", '
+                  '"credential": "ab,}c\\",] d",}')
+        got = remote.parse_ice_servers_json(sneaky)
+        check("a trailing comma is dropped, but ,} and ,] INSIDE a string are left alone",
+              got[0]["username"] == "u,]v" and got[0]["credential"] == 'ab,}c",] d')
+        check("whitespace between the comma and the bracket is fine too",
+              remote.parse_ice_servers_json('[ {"urls": "stun:s.example:3478" } ,\n ]')
+              == [{"urls": ["stun:s.example:3478"]}])
+        check("check_ice_servers_json returns its problem instead of raising",
+              remote.check_ice_servers_json("{oops")[0] is None
+              and remote.check_ice_servers_json("{oops")[1] == "not valid JSON")
         check("ice_url_problem names the same keys the url_list setting uses",
               remote.ice_url_problem("http://x") == "bad_url_scheme"
               and remote.ice_url_problem("turn:") == "url_without_host"
@@ -264,6 +277,11 @@ def main():
         check("port-53 URLs are dropped (browsers block them; Cloudflare's docs say so)",
               all(":53" not in u for s in got for u in s["urls"]) and len(got[1]["urls"]) == 2)
         check("the minted credential is carried through", got[1]["username"] == "minted-u")
+        before = len(calls)
+        expect_raise("a key ID that would change the URL path is refused before any request",
+                     RuntimeError, lambda: remote.fetch_cloudflare_ice_servers(
+                         "abc/../../x?y#z", "TOKEN", 60, post=fake_post))
+        check("...and no request was made", len(calls) == before)
         expect_raise("a non-2xx answer raises", RuntimeError,
                      lambda: remote.fetch_cloudflare_ice_servers(
                          "K", "T", 60, post=lambda *a, **k: FakeResp(401, {})))

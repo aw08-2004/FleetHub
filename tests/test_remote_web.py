@@ -453,6 +453,10 @@ def main():
         try:
             check("half a key is refused -> 400",
                   c.post("/api/remote/turn/cloudflare", json={"key_id": "K"}).status_code == 400)
+            check("a key ID that is not one (it goes into the URL path) is refused -> 400",
+                  c.post("/api/remote/turn/cloudflare",
+                         json={"key_id": "abc/../x", "api_token": "TOK"}).status_code == 400
+                  and "REMOTE_CLOUDFLARE_TURN_KEY_ID" not in os.environ)
             r = c.post("/api/remote/turn/cloudflare", json={"key_id": "KID", "api_token": "TOK"})
             check("a full key is saved -> 200", r.status_code == 200
                   and os.environ.get("REMOTE_CLOUDFLARE_TURN_API_TOKEN") == "TOK")

@@ -140,8 +140,8 @@
     }
 
     function draftInput(props, key) {
-        const node = el(props.tag || 'input', Object.assign({ class: 'input', autocomplete: 'off',
-                                                              spellcheck: 'false' }, props.attrs));
+        const node = el(props.tag || 'input', { class: 'input', autocomplete: 'off',
+                                                spellcheck: 'false', ...props.attrs });
         node.value = drafts[key];
         node.addEventListener('input', () => { drafts[key] = node.value; });
         return node;
@@ -149,8 +149,8 @@
 
     function msgNode(slot) {
         const m = providedMsg[slot];
-        return el('div', { class: 'turn-secret__msg' + (m && m.err ? ' turn-secret__msg--err' : ''),
-                           text: m ? m.text : '' });
+        return el('div', { class: 'turn-secret__msg' + (m?.err ? ' turn-secret__msg--err' : ''),
+                           text: m?.text || '' });
     }
 
     function providedControls() {

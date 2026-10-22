@@ -991,12 +991,12 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
             fleet.audit(db_path, actor=_current_email(), action="remote_ice_servers_set",
                         level=fleet.LEVEL_SECURITY, target="hub", detail={"cleared": True})
             return jsonify({"static_count": 0, "static_url_count": 0}), 200
-        try:
-            servers = remote.parse_ice_servers_json(text)
-        except ValueError as e:
-            # Our own sentence about the operator's own paste -- it names a URL or a position,
-            # never a credential (parse errors are raised before any field is read).
-            return jsonify({"error": f"iceServers: {e}"}), 400
+        # check_ice_servers_json RETURNS its problem rather than raising it, so what reaches the
+        # browser is a sentence remote.py wrote about the operator's own paste -- it names a URL
+        # or a server number, never a credential -- and never an exception's text.
+        servers, problem = remote.check_ice_servers_json(text)
+        if problem:
+            return jsonify({"error": f"iceServers: {problem}"}), 400
         if not servers:
             return jsonify({"error": "iceServers: no servers in the pasted JSON"}), 400
         refused = _write_env({ICE_SERVERS_JSON_ENV: json.dumps(servers, separators=(",", ":"))})
@@ -1021,6 +1021,10 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         token = str(data.get("api_token") or "").strip()
         if bool(key_id) != bool(token):
             return jsonify({"error": "Both the TURN key ID and its API token are needed."}), 400
+        if key_id and not remote.CLOUDFLARE_KEY_ID_RE.fullmatch(key_id):
+            # It goes into the URL path of the request that carries the bearer token.
+            return jsonify({"error": "That is not a Cloudflare TURN key ID -- copy the key ID, "
+                                     "not its name."}), 400
         refused = _write_env({CLOUDFLARE_KEY_ID_ENV: key_id or None,
                               CLOUDFLARE_TOKEN_ENV: token or None})
         if refused:
@@ -1041,12 +1045,13 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         try:
             servers = minter()
         except Exception as e:  # noqa: BLE001 -- every failure is the same answer to the operator
+            # The detail (an HTTP status, a connection error naming the URL) goes to the log for
+            # whoever has a shell on the hub; the browser gets one fixed sentence, never the
+            # exception's text.
             print(f"[remote] Cloudflare TURN test failed: {e}")
-            # The status code is safe to show; a requests exception text can carry the URL with
-            # the key id, which is not a secret but is not the operator's business here either.
-            text = str(e) if isinstance(e, RuntimeError) else ("Could not get a credential from "
-                                                                  "Cloudflare -- see the hub log.")
-            return jsonify({"ok": False, "error": text}), 502
+            return jsonify({"ok": False, "error": "Cloudflare did not issue a credential -- "
+                                                  "check the key ID and API token, and see the "
+                                                  "hub log for the reason."}), 502
         return jsonify({"ok": True,
                         "url_count": sum(len(s["urls"]) for s in servers)}), 200
 

@@ -645,14 +645,73 @@ def ice_url_problem(text):
     return None
 
 
-# A comma right before a closing bracket. Strict JSON refuses it, and it is exactly what a
-# hand-edited block picks up -- the sample this feature was written against had one after its
-# last field. Only tried after a strict parse fails, so valid JSON is never touched.
-_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+# A comma right before a closing bracket is what a hand-edited block picks up -- the sample this
+# feature was written against had one after its last field -- and strict JSON refuses it.
+#
+# **Commas inside a string are never touched.** The first version stripped `,\s*([}\]])` blind,
+# and was wrong in exactly the place that matters: a credential containing `,}` was quietly
+# rewritten, re-serialised and stored, and the result was a 401 at allocation time that nobody
+# sees -- the failure the Save check exists to prevent. This pattern matches a whole JSON string
+# OR a trailing comma, leftmost first, so a string is consumed (and handed back unchanged)
+# before any comma inside it can be seen. Only tried after a strict parse fails, so valid JSON
+# is never touched.
+_STRING_OR_TRAILING_COMMA_RE = re.compile(r'"(?:\\.|[^"\\])*"|,(\s*[}\]])')
 
 
-def parse_ice_servers_json(text):
-    """Normalise a pasted iceServers block into [{urls: [...], username?, credential?}].
+def _strip_trailing_commas(text):
+    return _STRING_OR_TRAILING_COMMA_RE.sub(
+        lambda m: m.group(0) if m.group(1) is None else m.group(1), text)
+
+
+def _load_ice_json(raw):
+    """(data, problem). The problem is our own sentence, never the decoder's exception text --
+    that is what reaches the browser, and an exception's message is not ours to show."""
+    for candidate in (raw, _strip_trailing_commas(raw)):
+        try:
+            return json.loads(candidate), None
+        except ValueError:
+            continue
+    return None, "not valid JSON"
+
+
+def _ice_server_list(data):
+    if isinstance(data, dict) and ("iceServers" in data or "ice_servers" in data):
+        data = data.get("iceServers", data.get("ice_servers"))
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return None, "expected an iceServers list or a server object"
+    return data, None
+
+
+def _ice_server_entry(i, entry):
+    """One server, normalised. (server, problem)."""
+    if not isinstance(entry, dict):
+        return None, f"server {i} is not an object"
+    urls = entry.get("urls", entry.get("url"))
+    urls = [urls] if isinstance(urls, str) else urls
+    if not isinstance(urls, list):
+        return None, f"server {i} has no urls"
+    urls = [str(u).strip() for u in urls if str(u).strip()]
+    if not urls:
+        return None, f"server {i} has no urls"
+    bad = next((u for u in urls if ice_url_problem(u)), None)
+    if bad:
+        return None, f"{bad!r} is not a stun:, stuns:, turn: or turns: URL"
+    server = {"urls": urls}
+    username, credential = entry.get("username"), entry.get("credential")
+    if username or credential:
+        server["username"] = str(username or "")
+        server["credential"] = str(credential or "")
+    needs_cred = any(u.lower().startswith(("turn:", "turns:")) for u in urls)
+    if needs_cred and not (server.get("username") and server.get("credential")):
+        return None, f"server {i} has TURN URLs but no username and credential"
+    return server, None
+
+
+def check_ice_servers_json(text):
+    """Normalise a pasted iceServers block into ([{urls: [...], username?, credential?}], None),
+    or (None, problem) with a sentence an operator can act on.
 
     Accepts every shape an operator is likely to be holding: {"iceServers": [...]} (Cloudflare's
     generate-ice-servers, and what RTCPeerConnection takes), {"iceServers": {...}} (Cloudflare's
@@ -663,51 +722,39 @@ def parse_ice_servers_json(text):
     carried all the way into both peers and fail at allocation time with a 401 nobody sees,
     which is the silent failure this check exists to move to the Save button.
 
-    Raises ValueError with a message an operator can act on.
+    Returns rather than raises so the save route can show the problem without handing an
+    exception's text to the browser.
     """
     raw = str(text or "").strip()
     if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        try:
-            data = json.loads(_TRAILING_COMMA_RE.sub(r"\1", raw))
-        except ValueError as e:
-            raise ValueError(f"not valid JSON ({e.msg}, line {e.lineno} column {e.colno})")
-
-    if isinstance(data, dict) and ("iceServers" in data or "ice_servers" in data):
-        data = data.get("iceServers", data.get("ice_servers"))
-    if isinstance(data, dict):
-        data = [data]
-    if not isinstance(data, list):
-        raise ValueError("expected an iceServers list or a server object")
-
+        return [], None
+    data, problem = _load_ice_json(raw)
+    if problem:
+        return None, problem
+    entries, problem = _ice_server_list(data)
+    if problem:
+        return None, problem
     servers = []
-    for i, entry in enumerate(data, 1):
-        if not isinstance(entry, dict):
-            raise ValueError(f"server {i} is not an object")
-        urls = entry.get("urls", entry.get("url"))
-        if isinstance(urls, str):
-            urls = [urls]
-        if not isinstance(urls, list):
-            raise ValueError(f"server {i} has no urls")
-        urls = [str(u).strip() for u in urls if str(u).strip()]
-        if not urls:
-            raise ValueError(f"server {i} has no urls")
-        for url in urls:
-            if ice_url_problem(url):
-                raise ValueError(f"{url!r} is not a stun:, stuns:, turn: or turns: URL")
-        server = {"urls": urls}
-        username, credential = entry.get("username"), entry.get("credential")
-        if username or credential:
-            server["username"] = str(username or "")
-            server["credential"] = str(credential or "")
-        needs_cred = any(u.lower().startswith(("turn:", "turns:")) for u in urls)
-        if needs_cred and not (server.get("username") and server.get("credential")):
-            raise ValueError(f"server {i} has TURN URLs but no username and credential")
+    for i, entry in enumerate(entries, 1):
+        server, problem = _ice_server_entry(i, entry)
+        if problem:
+            return None, problem
         servers.append(server)
+    return servers, None
+
+
+def parse_ice_servers_json(text):
+    """check_ice_servers_json for callers that want an exception: raises ValueError."""
+    servers, problem = check_ice_servers_json(text)
+    if problem:
+        raise ValueError(problem)
     return servers
+
+
+# What Cloudflare issues as a TURN key ID is hex. Checked at Save and again before the request,
+# because the ID goes into the URL path: `abc/../x`, `?` or `#` would change which Cloudflare
+# endpoint receives the bearer token, and a typo would surface only as a puzzling 404 on Test.
+CLOUDFLARE_KEY_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 def fetch_cloudflare_ice_servers(key_id, api_token, ttl_seconds=600, post=None):
@@ -719,6 +766,8 @@ def fetch_cloudflare_ice_servers(key_id, api_token, ttl_seconds=600, post=None):
     `post` is injectable so the tests never touch the network. Raises on any failure; the caller
     decides that a provider outage is a missing entry, not a failed session.
     """
+    if not CLOUDFLARE_KEY_ID_RE.fullmatch(str(key_id or "")):
+        raise RuntimeError("the Cloudflare TURN key ID is not a valid key ID")
     if post is None:
         import requests
         post = requests.post
