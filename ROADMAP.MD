@@ -147,6 +147,15 @@ hub that day, except the two items still open below.
   nor `ping` survives. `ConPtyProcess.Dispose` asked `HasExited` after setting `_disposed`, so
   `TerminateProcess` never ran and the root shell was left to `ClosePseudoConsole`.
 
+**Android agent (next beta) — the provisioning QR actually enrolls the device**
+- [ ] **QR enrolls hands-off.** Factory-reset a phone, scan a QR minted by the hub, and let
+  the wizard finish. The app opens on its status, not on the setup screen, and the device
+  appears in the console enrolled, with no URL or secret typed. `adb logcat -s FleetHubAgent`
+  shows *Adopted hub URL from the QR* and *Adopted the enrollment secret from the QR*, and
+  never *No provisioning extras*. The bundle is a `PersistableBundle`, which
+  `Intent.getBundleExtra` silently returns as null, so every QR-provisioned device until now
+  had been throwing the hub URL and secret away.
+
 **Hub 1.165.0 — provided TURN relays, reached `main` unconfirmed** (#172)
 The owner sent it to `main` with the rest on 2026-10-22 without a beta pass, so these checks
 are owed on the production hub instead. Nothing changes until a pasted block or a Cloudflare

@@ -1,6 +1,8 @@
 using Android.App;
 using Android.Content;
 using Android.OS;
+using FleetHubAgent.Android.Platform;
+using FleetHubAgent.State;
 
 namespace FleetHubAgent.Android.Policy;
 
@@ -81,8 +83,22 @@ public sealed class GetProvisioningModeActivity : Activity
             return;
         }
 
+        // The earliest moment the QR's configuration reaches this app, so it is adopted here as
+        // well as in PolicyComplianceActivity. Adopt is idempotent and never throws; the second
+        // call simply writes the same two values again. Doing it only later would leave
+        // everything resting on the wizard forwarding the bundle, which the next comment is
+        // about.
+        ProvisioningExtras.Adopt(this, Intent, new AgentState(new AndroidStateStore(this)));
+
         var result = new Intent();
         result.PutExtra(ExtraProvisioningMode, ModeFullyManagedDevice);
+        // Handed back on purpose. The platform forwards to ADMIN_POLICY_COMPLIANCE whatever admin
+        // extras this result carries, along with the ones from the QR. Echoing the bundle means
+        // the compliance step sees it on every wizard, not just the ones that pass the QR's copy
+        // through themselves.
+        var extras = ProvisioningExtras.ReadPersistable(Intent);
+        if (extras is not null)
+            result.PutExtra(ProvisioningExtras.ExtraAdminExtrasBundle, extras);
         SetResult(Result.Ok, result);
         Finish();
     }
