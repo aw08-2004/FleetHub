@@ -156,6 +156,22 @@ hub that day, except the two items still open below.
   `Intent.getBundleExtra` silently returns as null, so every QR-provisioned device until now
   had been throwing the hub URL and secret away.
 
+**Android agent (next beta) — wipe actually erases, and a managed device's hub URL is locked**
+- [ ] **Wipe erases on Android 14+.** On a scratch fully managed phone on Android 14 or later,
+  wipe it from the console. It reboots into the factory reset within about ten seconds of the
+  command reading *done*, and stops reporting. Until now `wipeData` threw
+  `IllegalStateException` on every Android 14+ device (target SDK 36, system user), after the
+  console had already been told the wipe had started; the agent now calls `wipeDevice` there.
+  Seen on SM-A155M-42608627 (Android 16), which kept reporting after a "successful" wipe.
+- [ ] **Hub URL is locked on a device owner.** On a QR-provisioned phone, open the app →
+  *Advanced*: the hub field is greyed out, labelled as set by provisioning, and shows the real
+  hub. *Save* with only a secret typed still works.
+- [ ] **Still editable where it should be.** On a phone with the agent sideloaded (no device
+  owner), the hub field can be changed and saved as before.
+- Still open, not in this release: a wipe the platform refuses is reported to nobody. The
+  command has to answer before the wipe fires, so a refusal can only reach the hub as a
+  later heartbeat field, which needs hub work.
+
 **Hub 1.165.0 — provided TURN relays, reached `main` unconfirmed** (#172)
 The owner sent it to `main` with the rest on 2026-10-22 without a beta pass, so these checks
 are owed on the production hub instead. Nothing changes until a pasted block or a Cloudflare

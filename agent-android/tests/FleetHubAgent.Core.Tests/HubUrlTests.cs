@@ -48,6 +48,30 @@ public class HubUrlTests : IDisposable
     }
 
     [Fact]
+    public void A_device_owner_with_a_hub_cannot_be_repointed()
+    {
+        // The hole this closes: a provisioned phone whose holder typed another hub on the setup
+        // screen and silently left management.
+        AgentConfig.Configure("https://hub.example.com");
+        Assert.True(AgentConfig.IsHubUrlLocked(deviceOwner: true));
+    }
+
+    [Fact]
+    public void A_device_owner_with_no_hub_can_still_be_given_one()
+    {
+        // A provisioned phone whose QR extras were lost. Locking it here would strand it until
+        // the next factory reset.
+        Assert.False(AgentConfig.IsHubUrlLocked(deviceOwner: true));
+    }
+
+    [Fact]
+    public void An_ordinary_install_is_never_locked()
+    {
+        AgentConfig.Configure("https://hub.example.com");
+        Assert.False(AgentConfig.IsHubUrlLocked(deviceOwner: false));
+    }
+
+    [Fact]
     public void The_hubs_own_url_is_recognised()
     {
         Assert.True(AgentConfig.IsHubUrl(AgentConfig.HubBase + "/api/agent/commands"));
