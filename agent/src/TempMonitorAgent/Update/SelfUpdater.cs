@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.State;
+using FleetHub.Shared;
 
 namespace TempMonitorAgent.Update;
 
@@ -61,16 +62,20 @@ public sealed class SelfUpdater
     {
         var rs = _state.LoadRestartState();
         if (rs is null) return;
-        if (VersionUtil.Compare(AgentConfig.Version, rs.Target) >= 0)
+        // EQUAL to the target, not "at least": since pins (roadmap #21) a target can be
+        // OLDER than the build that went looking for it, and "at least" read a downgrade
+        // whose swap did not take -- the SCM starting the newer exe again -- as a success,
+        // which retired the guard that stops it retrying forever.
+        if (VersionUtil.Compare(AgentConfig.Version, rs.Target) == 0)
         {
             Volatile.Write(ref _awaitingConfirmation, 1);
             _log.LogInformation(
                 "Update to {Target} booted (now {Version}); holding the previous binary until this build reaches the hub",
                 rs.Target, AgentConfig.Version);
         }
-        // Older than the target means the swap did not take and the SCM started the old
-        // binary. Leave the state alone: its Count is what stops CheckAndApplyAsync
-        // retrying the same broken target forever.
+        // Anything else means the swap did not take and the SCM started the old binary.
+        // Leave the state alone: its Count is what stops CheckAndApplyAsync retrying the
+        // same broken target forever.
     }
 
     /// <summary>Called once the updated build has completed a round trip the hub accepted,
@@ -125,8 +130,18 @@ public sealed class SelfUpdater
                 return false;
             }
 
-            // 4. Newer?
-            if (VersionUtil.Compare(manifest.Version, AgentConfig.Version) <= 0)
+            // 4. Install it? Newer on automatic; exactly the pin, forward or back, when the hub
+            // has pinned this platform (UpdatePins.Decide). The env override is a test server
+            // and is read the automatic way.
+            var pin = AgentConfig.UpdateManifestOverridden
+                ? null
+                : UpdatePins.NormalizePin(RuntimeConfigStore.Current.PinnedVersion);
+            var decision = UpdatePins.Decide(AgentConfig.Version, manifest.Version, pin,
+                                             canDowngrade: true, VersionUtil.Compare);
+            if (decision == UpdateDecision.PinMismatch)
+                _log.LogWarning("[update] manifest for pinned {Pin} names {Version} -- refusing",
+                                pin, manifest.Version);
+            if (decision != UpdateDecision.Install)
                 return false;
 
             // 5. Restart-loop guard.

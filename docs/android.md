@@ -11,6 +11,12 @@ button that fixes it. Nothing on the first screen prompts for a credential or op
 device**, type the six characters. The code admits that device once. The fleet's shared secret
 still works under *Advanced*, but it enrols any device and stays on the one it was typed into.
 
+**The hub URL is locked on a fully managed device.** Once a device provisioned by QR has a hub,
+the *Hub URL* field under *Advanced* is greyed out and cannot be saved, so the person holding the
+phone cannot point it away from the console. Moving such a device to a different hub takes a
+factory reset and a new QR. A device with the agent installed as an ordinary app keeps the field
+editable, and so does a managed device that has no hub yet.
+
 ## Fully managed features
 
 These features need the Android agent on a fully managed device (see

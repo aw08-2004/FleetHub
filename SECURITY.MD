@@ -56,7 +56,14 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
    more PCs are filed beneath its node. `manage_group_policy` is security-sensitive on its
    own: `SOFTWARE\Policies` holds Windows Defender and firewall policy, so it can weaken a
    PC's protection without `issue_commands`. Grant it as carefully as that
-7. **Signed Updates:** Binary replacements verified before execution
+7. **Signed Updates:** Binary replacements verified before execution. **Version pins widen
+   what a compromised hub can choose** (roadmap #21): the hub sends a version string, the agent
+   builds the manifest url from a compiled-in base on `main` and installs only what the offline
+   key signed. A hub can therefore pick any version that has a signed per-version manifest
+   (`<agent>/manifests/<version>.json`), **including an older one**, where before it could
+   only pick between the stable and beta trains. It still cannot introduce a binary the key did
+   not sign. Revocation is deleting that version's manifest on `main`: no agent can reach it
+   after that. Delete the manifest of any version a security fix supersedes.
 8. **Bounded Invites:** An invite link grants only Permission Groups, never more than
    its creator holds — counting what a subgroup inherits from its parents — and is
    bounded by a seat count, an expiry and optional pinned addresses (see "Invite links"

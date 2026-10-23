@@ -185,6 +185,44 @@ The hub nudges this along: `/api/report` echoes back the newest agent version it
 read from the manifest, so an agent goes and checks as soon as it sees a number ahead
 of its own instead of waiting for its own weekly poll.
 
+### Beta machines and a newer stable
+
+A machine on the **beta** channel normally reads only the beta manifest. If a stable release
+passes the newest beta (for example a 3.38.2 hotfix cut on `main` while beta still says 3.38.1),
+the hub tells beta machines **stable** until a newer beta is published, and then tells them beta
+again. The machine page says *Following stable X until a newer beta is published* while that
+is happening. Nothing has to be configured, and it works with every agent already installed,
+because the hub only ever sends the channel's name.
+
+### Pinning agent versions (review before updating)
+
+**Settings → Fleet** has an update policy for each platform: *Windows / Linux / Android agent
+updates*, either **Automatic** or **Pinned to a version**, with the version beside it
+(`MAJOR.MINOR.PATCH`). While a platform is pinned, every agent of that platform installs
+**exactly** that version, forward or back, and nothing newer. The workflow for reviewing a
+release first:
+
+1. Pin each platform at the version the fleet already runs. Automatic updates are now off.
+2. When a release comes out, the sidebar says it is waiting for review instead of installing.
+   Try it on one PC (pin that PC to the beta channel, or install it by hand), read the notes.
+3. Raise the pin to the new version. The fleet installs it within about 15 minutes.
+4. To roll back, lower the pin. Windows and Linux agents go back to that build. Android
+   cannot install an older build, so a lower pin keeps an Android device where it is.
+
+Things to know:
+
+- **A pin only binds agents that understand it**: Windows 3.49.0, Linux 0.4.0 and Android 0.4.0
+  or later. Older agents keep updating automatically, and the machine page says so. Let the
+  fleet reach those versions on Automatic before relying on a pin.
+- **Only versions with a signed per-version manifest can be pinned.** Every release cut by the
+  release scripts now publishes `agent/manifests/<version>.json` (and the Linux and Android
+  equivalents) beside the channel manifest. Older versions have none unless one is added, and a
+  pin that names one makes the machine page say *no signed manifest exists for that version*.
+- **Deleting a version's manifest on `main` revokes it.** No agent can then be pinned to it;
+  do this for any version with a security fix behind it (see SECURITY.MD).
+- The beta/stable channel still applies while a platform is on Automatic. A pin wins over the
+  channel.
+
 ### Hub self-updates (opt-in)
 
 The hub can keep itself current too, but it's **off by default** — set
@@ -217,8 +255,9 @@ of the way entirely while `hub.auto_update` is on. Its **Release notes** link op
 
 Under it, a second notice announces each new **agent** release on the fleet's default
 channel, with a link to that version's GitHub release. It is only a notice: agents install
-the release themselves within about 15 minutes, whether or not anyone reads it. It is
-dismissed the same way and comes back for the next agent release.
+the release themselves within about 15 minutes, whether or not anyone reads it. While Windows
+agent updates are **pinned**, it says instead that the release is waiting until the pin is
+raised. It is dismissed the same way and comes back for the next agent release.
 
 How it updates depends on the layout, decided by whether a `.git` directory is present:
 

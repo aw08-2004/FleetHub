@@ -45,6 +45,14 @@ it shipped. This has bitten twice already: an agent released as `1.19.1` (a majo
 typo, on a train where `1.x` means the long-dead Python companion) and a release commit
 that moved the agent from `3.32.0` back to `3.31.0`.
 
+**The one exception is an operator's exact-version pin** (roadmap #21, Settings → Fleet).
+A pinned agent installs exactly the pinned version, forward or back, from that version's own
+signed manifest under `<agent>/manifests/<version>.json`, which each release script writes
+beside the channel manifest. That is a deliberate rollback path, not a release: the release
+rule above still holds, and every channel manifest still installs only what is strictly newer.
+Android cannot go backwards at all (its package installer refuses a lower versionCode).
+`machine.js` carries a third copy of `versionLess` for the Android note.
+
 **The two-file pairs must match.** `AgentConfig.Version` ↔ csproj `<Version>`,
 `clientVersion` ↔ `pubspec.yaml`. Move them with the scripts, not by hand:
 

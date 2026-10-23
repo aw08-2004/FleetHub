@@ -78,6 +78,7 @@
       "the sentence says so and the link opens the GitHub release. manage_settings only."
     ],
     "available": "Agent v{version} was released. Machines install it within about 15 minutes.",
+    "available_pinned": "Agent v{version} was released. Windows agents stay on v{pinned} until you raise the pin in Settings → Fleet.",
     "release_notes": "Release notes",
     "dismiss": "Dismiss"
   },
@@ -1505,6 +1506,30 @@
         "label": "Default agent channel",
         "help": "Which agent build machines update to unless they have been pinned individually. Pin a few machines to beta to try a release before it reaches the fleet — an agent release otherwise arrives everywhere within about fifteen minutes."
       },
+      "fleet.agent_updates.windows": {
+        "label": "Windows agent updates",
+        "help": "Automatic installs each new Windows agent release within about fifteen minutes. Pinned keeps every Windows agent on exactly the version below — forward or back — so a release can be reviewed first; raise the pin to approve it."
+      },
+      "fleet.agent_pin.windows": {
+        "label": "Pinned Windows agent version",
+        "help": "The exact Windows agent version to install while updates are pinned, as MAJOR.MINOR.PATCH (for example 3.48.0). Only versions released with a signed per-version manifest can be installed."
+      },
+      "fleet.agent_updates.linux": {
+        "label": "Linux agent updates",
+        "help": "Automatic installs each new Linux agent release. Pinned keeps every Linux agent on exactly the version below, forward or back."
+      },
+      "fleet.agent_pin.linux": {
+        "label": "Pinned Linux agent version",
+        "help": "The exact Linux agent version to install while updates are pinned, as MAJOR.MINOR.PATCH."
+      },
+      "fleet.agent_updates.android": {
+        "label": "Android agent updates",
+        "help": "Automatic installs each new Android agent release. Pinned keeps every Android agent on the version below — Android cannot install an older build, so a pin below the running version holds the device where it is."
+      },
+      "fleet.agent_pin.android": {
+        "label": "Pinned Android agent version",
+        "help": "The exact Android agent version to install while updates are pinned, as MAJOR.MINOR.PATCH."
+      },
       "sharing.enabled": {
         "label": "Share machines with other hubs",
         "help": "Lets this hub answer requests from hubs you have paired with, and make requests to hubs that have shared a machine with you. Off means neither direction works, whatever is already paired -- what is paired stays visible so you can revoke it."
@@ -1763,6 +1788,18 @@
         "stable": "Stable",
         "beta": "Beta"
       },
+      "fleet.agent_updates.windows": {
+        "auto": "Automatic",
+        "pinned": "Pinned to a version"
+      },
+      "fleet.agent_updates.linux": {
+        "auto": "Automatic",
+        "pinned": "Pinned to a version"
+      },
+      "fleet.agent_updates.android": {
+        "auto": "Automatic",
+        "pinned": "Pinned to a version"
+      },
       "tickets.submitters": {
         "any": "Anyone signed in to the PC",
         "domain": "Domain accounts only"
@@ -1787,7 +1824,8 @@
       "bad_url_scheme": "{value} must start with stun:, stuns:, turn: or turns:",
       "url_without_host": "{value} has no host",
       "expected_path_list": "expected a list of paths",
-      "unsupported_type": "unsupported setting type {type}"
+      "unsupported_type": "unsupported setting type {type}",
+      "expected_version": "expected a version like 3.48.0, got {value}"
     },
     "add_entry": "Add an entry",
     "add_sensor": "Add a sensor…",
@@ -3119,6 +3157,11 @@
     "channel_pin": "Release channel",
     "channel_follow_fleet": "Follow the fleet default",
     "channel_ahead": "Running {running}, ahead of stable ({stable}). It will not update again until stable passes it — moving off beta does not undo an installed update.",
+    "channel_following_stable": "Following stable {stable} until a newer beta is published.",
+    "channel_pinned_version": "Updates for this platform are pinned to {version}.",
+    "channel_pin_unsupported": "Running {running}, which ignores the update pin and keeps updating automatically. Pins apply from {min} on.",
+    "channel_pin_missing": "Pinned to {version}, but no signed manifest exists for that version, so nothing will install until the pin names a released build.",
+    "channel_pin_android_downgrade": "Pinned to {version}, below the running {running}. Android cannot install an older build, so this device stays on {running} until the pin passes it.",
     "location": {
       "title": "Location",
       "disclosure": "Asking is recorded in the audit trail, and the device shows a notification naming the operator who asked."

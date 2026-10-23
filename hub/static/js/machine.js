@@ -965,6 +965,46 @@ const channelPicker = document.getElementById('channel-picker');
 const channelSelect = document.getElementById('channel-select');
 let savedChannel = '';
 
+// The same three-component comparison as processes.js and fleet-terminal.js (VERSIONING.md
+// lists all of them). Only ever fed a validated pin and a reported version.
+function versionLess(a, b) {
+    const pa = String(a).split('.').map(Number);
+    const pb = String(b).split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+        const x = pa[i] || 0, y = pb[i] || 0;
+        if (x !== y) return x < y;
+    }
+    return false;
+}
+
+// Literal t() keys on purpose -- tests/test_i18n.py only sees literal calls.
+function channelNoteText(body) {
+    const policy = body.update_policy || {};
+    const pin = policy.mode === 'pinned' ? policy.version : '';
+    const running = body.running_version || '';
+    if (pin && running && !body.honours_pin) {
+        return t('machine.channel_pin_unsupported', {
+            running, min: body.pin_aware_version || '',
+        });
+    }
+    if (pin && body.pin_manifest_exists === false) {
+        return t('machine.channel_pin_missing', { version: pin });
+    }
+    if (pin && body.platform === 'android' && running && versionLess(pin, running)) {
+        return t('machine.channel_pin_android_downgrade', { version: pin, running });
+    }
+    if (pin) return t('machine.channel_pinned_version', { version: pin });
+    if (body.following_stable) {
+        return t('machine.channel_following_stable', { stable: body.latest_stable_version || '' });
+    }
+    if (body.ahead_of_stable) {
+        return t('machine.channel_ahead', {
+            running, stable: body.latest_stable_version,
+        });
+    }
+    return '';
+}
+
 async function loadChannel() {
     const resp = await fetch(`/api/machines/${encodeURIComponent(MACHINE)}/channel`);
     if (!resp.ok) return;
@@ -980,12 +1020,13 @@ async function loadChannel() {
     // beta does not roll it back -- every updater installs only what is strictly newer -- so
     // it sits on the build it has until stable passes it. Saying that here is the difference
     // between an explained state and a support call.
-    channelNote.hidden = !body.ahead_of_stable;
-    if (body.ahead_of_stable) {
-        channelNote.textContent = t('machine.channel_ahead', {
-            running: body.running_version, stable: body.latest_stable_version,
-        });
-    }
+    //
+    // One note at most, the most consequential first: a pin this agent cannot honour, a pin
+    // with nothing behind it, a downgrade Android will refuse, then the pin itself, then the
+    // beta-following-stable and ahead-of-stable explanations.
+    const note = channelNoteText(body);
+    channelNote.hidden = !note;
+    channelNote.textContent = note || '';
 
     channelPicker.hidden = !body.can_manage;
     if (!body.can_manage) return;

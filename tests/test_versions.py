@@ -1042,6 +1042,99 @@ def test_channel_wiring():
     check("...and archives main", app.hub_archive_url().endswith("/refs/heads/main"))
 
 
+def test_delivered_channel_and_pins():
+    """The app.py half of "beta follows a newer stable" and of per-platform version pins.
+
+    channels.py's rules are covered in tests/test_channels.py; what can go wrong silently here
+    is the WIRING: a beta machine still advertised the older beta after a stable hotfix, a
+    pinned fleet still advertised the newest release (so agents go and look past the pin),
+    a pin that Settings accepts but no agent can read, and a fleet held for review lighting
+    up the dashboard as outdated.
+    """
+    import settings as _settings
+    print("\n-- delivered channel: beta follows a newer stable --")
+    set_agent_version("3.38.2", beta="3.38.1")
+    app.set_machine_channel_override("deliv-beta-box", app.channels.BETA)
+    check("a beta machine is delivered stable while stable is newer",
+          app.delivered_agent_channel("deliv-beta-box") == app.channels.STABLE)
+    check("...and is advertised the stable build",
+          app.get_advertised_version("3.38.0", "deliv-beta-box") == "3.38.2")
+    set_agent_version("3.38.2", beta="3.39.0")
+    check("a newer beta flips it back",
+          app.delivered_agent_channel("deliv-beta-box") == app.channels.BETA
+          and app.get_advertised_version("3.38.0", "deliv-beta-box") == "3.39.0")
+    set_agent_version("3.38.2", beta=None)
+    check("no beta published -> it stays on beta (nothing is guessed)",
+          app.delivered_agent_channel("deliv-beta-box") == app.channels.BETA)
+
+    client = app.app.test_client()
+    console_session.sign_in(client, "tester@example.com")
+    set_agent_version("3.38.2", beta="3.38.1")
+    app.save_machine_info("deliv-beta-box", None, None, None, companion_version="3.38.1")
+    doc = client.get("/api/machines/deliv-beta-box/channel").get_json()
+    check("the channel endpoint says it is following stable",
+          doc["following_stable"] is True and doc["delivered_channel"] == app.channels.STABLE
+          and doc["effective_channel"] == app.channels.BETA)
+    app.set_machine_channel_override("deliv-beta-box", None)
+
+    print("\n-- pins: Settings validates, the hub advertises the pin --")
+    for bad in ("3.49", "3.49.0-rc1", "../3.49.0"):
+        try:
+            _settings.set_many(app.DB_PATH, {"fleet.agent_pin.windows": bad})
+            refused = False
+        except ValueError:
+            refused = True
+        check(f"a pin of {bad!r} is refused by Settings", refused)
+    try:
+        _settings.set_many(app.DB_PATH, {"fleet.agent_updates.windows": "pinned",
+                                         "fleet.agent_pin.windows": "3.38.0"})
+        check("auto policy by default for linux",
+              app.agent_update_policy_for("linux") == {"mode": "auto"})
+        check("the windows policy is a pin",
+              app.agent_update_policy_for("windows") == {"mode": "pinned", "version": "3.38.0"})
+        check("a machine with no reported platform gets the Windows policy",
+              app.agent_update_policy("pin-win-box")["version"] == "3.38.0")
+        check("a pinned platform is advertised the pin, not the newest release",
+              app.get_advertised_version("3.38.2", "pin-win-box") == "3.38.0")
+
+        app.save_machine_info("pin-win-box", None, None, None, companion_version="3.38.0")
+        doc = client.get("/api/machines/pin-win-box/channel").get_json()
+        check("the channel endpoint reports the policy",
+              doc["update_policy"] == {"mode": "pinned", "version": "3.38.0"})
+        check("...and that 3.38.0 is too old to honour it",
+              doc["honours_pin"] is False
+              and doc["pin_aware_version"] == app.channels.PIN_AWARE_AGENT["windows"])
+        app.save_machine_info("pin-new-box", None, None, None, companion_version="3.49.0")
+        check("a pin-aware build honours it",
+              client.get("/api/machines/pin-new-box/channel").get_json()["honours_pin"] is True)
+
+        app.pinned_manifest_state[("windows", "3.38.0")] = False
+        check("a pin with no signed manifest is reported",
+              client.get("/api/machines/pin-win-box/channel")
+              .get_json()["pin_manifest_exists"] is False)
+
+        print("\n-- pins: the dashboard measures a pinned platform against its pin --")
+        app._fleet_summary_cache.clear()
+        held = client.get("/api/fleet/summary").get_json()["counts"]["agents_outdated"]
+        _settings.set_many(app.DB_PATH, {"fleet.agent_updates.windows": "auto"})
+        app._fleet_summary_cache.clear()
+        auto = client.get("/api/fleet/summary").get_json()["counts"]["agents_outdated"]
+        check("a machine AT the pin is not outdated, but is once the pin is released",
+              auto >= held + 1)
+
+        print("\n-- pins: the sidebar notice says the release is waiting --")
+        _settings.set_many(app.DB_PATH, {"fleet.agent_updates.windows": "pinned"})
+        agent = client.get("/api/hub/version").get_json()["agent"]
+        check("the notice carries the pin", agent["pinned"] == "3.38.0"
+              and agent["latest"] == "3.38.2")
+        _settings.set_many(app.DB_PATH, {"fleet.agent_pin.windows": "3.38.2"})
+        agent = client.get("/api/hub/version").get_json()["agent"]
+        check("...and hides once the pin names the release", agent["latest"] is None)
+    finally:
+        _settings.reset(app.DB_PATH, ["fleet.agent_updates.windows", "fleet.agent_pin.windows"])
+        app.pinned_manifest_state.clear()
+
+
 if __name__ == "__main__":
     test_version_compare()
     test_pre_agent_clients_get_nothing()
@@ -1050,6 +1143,7 @@ if __name__ == "__main__":
     test_unknown_train()
     test_report_endpoint()
     test_channel_wiring()
+    test_delivered_channel_and_pins()
     test_config_version_follows_reported_build()
     test_hub_self_update()
     test_hub_update_archive_swap()

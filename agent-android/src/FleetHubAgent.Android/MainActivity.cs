@@ -194,6 +194,7 @@ public sealed class MainActivity : Activity
         var name = snapshot?.MachineName ?? _state.LoadMachineNameOverride() ?? "(derived from this device)";
 
         RenderCard(snapshot, enrolled);
+        ApplyHubLock();
         _statusFacts.Text = string.Join("\n", new[]
         {
             $"Name in the console:  {name}",
@@ -441,9 +442,38 @@ public sealed class MainActivity : Activity
 
     // ------------------------------------------------------------------ advanced
 
+    /// <summary>Grey out the hub URL on a device owner that already has one -- see
+    /// AgentConfig.IsHubUrlLocked for why it is not a setting there.
+    ///
+    /// Re-evaluated on every refresh rather than once in Bind, for the reason DeviceOwner.
+    /// IsManaged is live: `adb shell dpm set-device-owner` can grant ownership while this screen
+    /// is open. The field shows the hub actually in use, so a locked device says where it
+    /// reports rather than showing an empty box that looks editable in spirit.</summary>
+    private void ApplyHubLock()
+    {
+        var locked = AgentConfig.IsHubUrlLocked(DeviceOwner.IsManaged(this));
+        if (_hubField.Enabled == !locked) return;
+        _hubField.Enabled = !locked;
+        if (locked) _hubField.Text = AgentConfig.HubBase;
+        FindViewById<TextView>(Resource.Id.hub_label)!.Text = locked
+            ? "Hub URL (set by provisioning, cannot be changed on this device)"
+            : "Hub URL";
+    }
+
     private void Save()
     {
         var hub = _hubField.Text?.Trim() ?? "";
+        // Checked here as well as by the disabled field. The field is what a person sees; this
+        // is what stops the value being written, whatever reached Save.
+        if (hub.Length > 0 && AgentConfig.IsHubUrlLocked(DeviceOwner.IsManaged(this))
+            && hub.TrimEnd('/') != AgentConfig.HubBase)
+        {
+            Toast.MakeText(this, "This device is managed: its hub URL was set when it was " +
+                                 "provisioned and cannot be changed here.",
+                ToastLength.Long)?.Show();
+            _hubField.Text = AgentConfig.HubBase;
+            return;
+        }
         if (hub.Length > 0)
         {
             // Validated the same way the agent validates it, so a typo is refused here rather

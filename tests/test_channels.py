@@ -212,6 +212,58 @@ def main():
         check("every channel has a place in the vocabulary",
               set(channels.CHANNELS) == {channels.STABLE, channels.BETA}
               and channels.DEFAULT in channels.CHANNELS)
+
+        # ------------------------------------------------- beta follows a newer stable
+        # The silent failure: a stable-only release that reaches every machine EXCEPT the
+        # pilot ring, which keeps the older beta until somebody happens to cut another one.
+        print("\n== Delivered channel ==")
+        newer = lambda a, b: tuple(map(int, a.split("."))) > tuple(map(int, b.split(".")))
+        check("beta with a strictly newer stable is told stable",
+              channels.delivered("beta", "3.38.2", "3.38.1", newer) == channels.STABLE)
+        check("...including a minor that skipped beta",
+              channels.delivered("beta", "3.39.0", "3.38.1", newer) == channels.STABLE)
+        check("a promoted beta (equal versions) stays on beta",
+              channels.delivered("beta", "3.48.1", "3.48.1", newer) == channels.BETA)
+        check("a newer beta flips it back",
+              channels.delivered("beta", "3.48.0", "3.48.1", newer) == channels.BETA)
+        check("stable is never moved onto beta, whatever the versions",
+              channels.delivered("stable", "3.48.0", "3.49.0", newer) == channels.STABLE)
+        # Not read yet / never published: switching on a guess installs a build nobody chose.
+        check("an unknown stable version keeps beta",
+              channels.delivered("beta", None, "3.48.1", newer) == channels.BETA)
+        check("an unknown beta version keeps beta",
+              channels.delivered("beta", "3.48.1", None, newer) == channels.BETA)
+        check("an unrecognised chosen channel still reads as stable",
+              channels.delivered("nightly", "3.48.0", "3.49.0", newer) == channels.STABLE)
+
+        # ------------------------------------------------------------ version pins
+        # The silent failures: a pin the agent cannot turn into a url (updates stop forever),
+        # a "pinned" policy with no version shipped as a pin, and a pin url built off a string
+        # that is not a version.
+        print("\n== Update policy ==")
+        check("automatic is the default shape",
+              channels.update_policy("auto", "3.48.0") == {"mode": "auto"})
+        check("a pinned mode with a version is a pin",
+              channels.update_policy("pinned", " 3.48.0 ")
+              == {"mode": "pinned", "version": "3.48.0"})
+        for bad in ("", None, "3.48", "3.48.0.1", "3.48.0-rc1", "../3.48.0", "1234567.0.0"):
+            check(f"a pinned mode with {bad!r} degrades to automatic",
+                  channels.update_policy("pinned", bad) == {"mode": "auto"})
+            check(f"{bad!r} is not a valid pin", not channels.is_valid_pin(bad))
+        check("an unknown mode is automatic",
+              channels.update_policy("frozen", "3.48.0") == {"mode": "auto"})
+        check("each platform's pin reads its own manifests directory",
+              channels.pinned_manifest_url("windows", "3.48.0")
+              == f"https://raw.githubusercontent.com/{channels.REPO}/main/agent/manifests/3.48.0.json"
+              and "/main/agent-linux/manifests/0.4.0.json"
+              in channels.pinned_manifest_url("linux", "0.4.0")
+              and "/main/agent-android/manifests/0.4.0.json"
+              in channels.pinned_manifest_url("android", "0.4.0"))
+        check("no url for a pin that is not a version",
+              channels.pinned_manifest_url("windows", "3.48") is None)
+        check("every platform with a train has a pin-aware floor",
+              set(channels.PIN_AWARE_AGENT) == set(channels.AGENT_PLATFORMS)
+              and all(channels.is_valid_pin(v) for v in channels.PIN_AWARE_AGENT.values()))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

@@ -1,3 +1,5 @@
+using FleetHub.Shared;
+
 namespace FleetHubAgent;
 
 /// <summary>
@@ -47,7 +49,7 @@ public static class AgentConfig
     /// Rejected alternative, and it is worth keeping: matching the Windows agent's number so
     /// the fleet "looks consistent". That reads to the hub as a fully-featured agent on
     /// somebody else's train, and every one of those gates would pass on a lie.</summary>
-    public const string Version = "0.3.1";
+    public const string Version = "0.3.2";
 
     // --- Hub endpoints -----------------------------------------------------
 
@@ -78,6 +80,29 @@ public static class AgentConfig
     /// </summary>
     public static bool IsHubConfigured =>
         !string.Equals(_hubBase, DefaultHubBase, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether the person holding the device is refused a change to the hub URL.
+    ///
+    /// **On a device owner, the hub URL is the whole of management, so it is not a setting.**
+    /// Before 0.3.2 the setup screen's Advanced panel let anybody holding a QR-provisioned phone
+    /// type a different hub and press Save: the agent then reported to that address, every
+    /// policy, lock and wipe from the real console went unanswered, and the console saw a device
+    /// that had simply gone offline. Blocking force-stop and clear-data (DeviceOwner.
+    /// ApplyBaseline) was pointless while the same result was one text field away.
+    ///
+    /// **Locked only once a hub is actually configured.** A device owner still on the
+    /// placeholder is the one the PersistableBundle bug of 0.3.0 produced -- provisioned, with
+    /// the QR's hub URL silently dropped -- and locking it would leave a managed phone that
+    /// reports nowhere and can only be recovered by another factory reset. Such a device is not
+    /// managed by anybody yet, so letting it be pointed at a hub once takes nothing away.
+    ///
+    /// An ordinary install (no device owner) is never locked: it is somebody's own phone running
+    /// an app, the person can uninstall it anyway, and a lock there would protect nothing.
+    ///
+    /// Rejected: locking it on the hub's side by refusing reports from an unexpected address.
+    /// The hub never sees a device that has been pointed somewhere else -- that is the problem.
+    /// </summary>
+    public static bool IsHubUrlLocked(bool deviceOwner) => deviceOwner && IsHubConfigured;
 
     /// <summary>
     /// Point the agent at a hub. Called ONCE by the platform layer before any loop starts.
@@ -243,6 +268,18 @@ public static class AgentConfig
     /// to set one from, and adding an override that only a debugger could reach would be a
     /// setting nobody can audit. A lab build changes the constant.</summary>
     public static string UpdateManifestUrl => StableManifestUrl;
+
+    /// <summary>One signed manifest per released version (roadmap #21), written by
+    /// release.ps1 beside the channel manifest. A pin can reach exactly the versions that have
+    /// a file here on main; deleting one revokes it -- see SECURITY.MD.</summary>
+    public const string PinnedManifestBase =
+        "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-android/manifests/";
+
+    /// <summary>The compiled-in manifest url for one pinned version, or null when there is no
+    /// usable pin. Re-validated here, because this is the line that turns a string off the
+    /// wire into a url.</summary>
+    public static string? ManifestUrlForPin(string? version) =>
+        UpdatePins.NormalizePin(version) is { } pin ? $"{PinnedManifestBase}{pin}.json" : null;
 
     public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
 
