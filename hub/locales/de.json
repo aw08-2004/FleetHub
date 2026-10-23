@@ -58,6 +58,7 @@
   },
   "agent_update": {
     "available": "Agent v{version} wurde veröffentlicht. Die Rechner installieren ihn innerhalb von etwa 15 Minuten.",
+    "available_pinned": "Agent v{version} wurde veröffentlicht. Windows-Agenten bleiben auf v{pinned}, bis Sie die Fixierung unter Einstellungen → Flotte erhöhen.",
     "release_notes": "Versionshinweise",
     "dismiss": "Ausblenden"
   },
@@ -1428,6 +1429,30 @@
         "label": "Standard-Agent-Kanal",
         "help": "Auf welchen Agent-Build Rechner aktualisieren, sofern sie nicht einzeln festgelegt wurden. Legen Sie einige Rechner auf Beta fest, um eine Version vor der Flotte zu testen – sonst erreicht ein Agent-Release innerhalb von etwa fünfzehn Minuten alle Rechner."
       },
+      "fleet.agent_updates.windows": {
+        "label": "Updates des Windows-Agenten",
+        "help": "Automatisch installiert jede neue Windows-Agent-Version innerhalb von etwa fünfzehn Minuten. Fixiert hält jeden Windows-Agenten genau auf der Version unten – vorwärts oder zurück –, damit eine Version zuerst geprüft werden kann; erhöhen Sie die Fixierung, um sie freizugeben."
+      },
+      "fleet.agent_pin.windows": {
+        "label": "Fixierte Windows-Agent-Version",
+        "help": "Die genaue Windows-Agent-Version, die bei fixierten Updates installiert wird, als MAJOR.MINOR.PATCH (zum Beispiel 3.48.0). Installierbar sind nur Versionen, die mit einem signierten Manifest pro Version veröffentlicht wurden."
+      },
+      "fleet.agent_updates.linux": {
+        "label": "Updates des Linux-Agenten",
+        "help": "Automatisch installiert jede neue Linux-Agent-Version. Fixiert hält jeden Linux-Agenten genau auf der Version unten, vorwärts oder zurück."
+      },
+      "fleet.agent_pin.linux": {
+        "label": "Fixierte Linux-Agent-Version",
+        "help": "Die genaue Linux-Agent-Version, die bei fixierten Updates installiert wird, als MAJOR.MINOR.PATCH."
+      },
+      "fleet.agent_updates.android": {
+        "label": "Updates des Android-Agenten",
+        "help": "Automatisch installiert jede neue Android-Agent-Version. Fixiert hält jeden Android-Agenten auf der Version unten – Android kann keine ältere Version installieren, daher hält eine Fixierung unter der laufenden Version das Gerät, wo es ist."
+      },
+      "fleet.agent_pin.android": {
+        "label": "Fixierte Android-Agent-Version",
+        "help": "Die genaue Android-Agent-Version, die bei fixierten Updates installiert wird, als MAJOR.MINOR.PATCH."
+      },
       "sharing.enabled": {
         "label": "Rechner mit anderen Hubs teilen",
         "help": "Erlaubt diesem Hub, Anfragen gekoppelter Hubs zu beantworten und selbst Anfragen an Hubs zu stellen, die einen Rechner freigegeben haben. Aus bedeutet: keine Richtung funktioniert, unabhängig von bestehenden Kopplungen -- Gekoppeltes bleibt sichtbar, damit Sie es widerrufen können."
@@ -1681,6 +1706,18 @@
         "stable": "Stabil",
         "beta": "Beta"
       },
+      "fleet.agent_updates.windows": {
+        "auto": "Automatisch",
+        "pinned": "Auf eine Version fixiert"
+      },
+      "fleet.agent_updates.linux": {
+        "auto": "Automatisch",
+        "pinned": "Auf eine Version fixiert"
+      },
+      "fleet.agent_updates.android": {
+        "auto": "Automatisch",
+        "pinned": "Auf eine Version fixiert"
+      },
       "tickets.submitters": {
         "any": "Jeder am PC angemeldete Benutzer",
         "domain": "Nur Domänenkonten"
@@ -1700,7 +1737,8 @@
       "bad_url_scheme": "{value} muss mit stun:, stuns:, turn: oder turns: beginnen",
       "url_without_host": "{value} hat keinen Host",
       "expected_path_list": "eine Liste von Pfaden erwartet",
-      "unsupported_type": "nicht unterstützter Einstellungstyp {type}"
+      "unsupported_type": "nicht unterstützter Einstellungstyp {type}",
+      "expected_version": "Version wie 3.48.0 erwartet, erhalten: {value}"
     },
     "add_entry": "Eintrag hinzufügen",
     "add_sensor": "Sensor hinzufügen …",
@@ -3001,6 +3039,11 @@
     "channel_pin": "Release-Kanal",
     "channel_follow_fleet": "Flotten-Standard folgen",
     "channel_ahead": "Läuft mit {running} und ist damit der stabilen Version ({stable}) voraus. Es wird erst wieder aktualisiert, wenn Stabil daran vorbeizieht — der Wechsel weg von Beta macht ein installiertes Update nicht rückgängig.",
+    "channel_following_stable": "Folgt Stable {stable}, bis eine neuere Beta veröffentlicht wird.",
+    "channel_pinned_version": "Updates für diese Plattform sind auf {version} fixiert.",
+    "channel_pin_unsupported": "Läuft mit {running}; diese Version ignoriert die Fixierung und aktualisiert weiter automatisch. Fixierungen gelten ab {min}.",
+    "channel_pin_missing": "Auf {version} fixiert, aber für diese Version gibt es kein signiertes Manifest – nichts wird installiert, bis die Fixierung eine veröffentlichte Version nennt.",
+    "channel_pin_android_downgrade": "Auf {version} fixiert, unter der laufenden {running}. Android kann keine ältere Version installieren, daher bleibt dieses Gerät auf {running}, bis die Fixierung sie überholt.",
     "location": {
       "title": "Standort",
       "disclosure": "Jede Anfrage wird im Prüfprotokoll festgehalten, und das Gerät zeigt eine Benachrichtigung mit dem Namen der anfragenden Bedienperson."

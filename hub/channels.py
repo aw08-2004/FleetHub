@@ -28,9 +28,14 @@ Four things carry the design, and the first two are constraints rather than choi
         `agent.manifest.json`. Every pilot machine is already at that version and does
         nothing; every stable machine updates to it. Nothing is renumbered.
       - Leaving beta does NOT roll a machine back. It keeps its build and stops updating
-        until stable catches up, which for a promoted beta is immediately. This is deliberate
-        -- a downgrade path would mean defeating the strictly-newer guard that is currently
-        the thing stopping a replayed or rolled-back manifest from being installed.
+        until stable catches up, which for a promoted beta is immediately. The channel
+        manifests keep the strictly-newer guard; the one way an agent moves backwards is an
+        operator's exact-version PIN (see `update_policy`), which is a different, signed,
+        per-version manifest and never a channel.
+      - **A beta machine follows a newer stable** (`delivered`). A stable-only release -- a
+        3.38.2 hotfix cut on main while beta still says 3.38.1 -- used to reach every machine
+        except the pilot ring, which is exactly backwards. While stable's manifest is strictly
+        newer, a beta machine is TOLD stable; the next beta that passes it flips it back.
 
   * **The hub's own channel selects a git REF, not a manifest.** The agent and the client
     each read a signed manifest; the hub has none -- `hub_update_available()` reads
@@ -49,6 +54,7 @@ below read the `machine_info.update_channel` column the same way firmware.py, wa
 directory.py read that table. Keeping them here rather than in app.py is what lets
 fleet_web.py answer a heartbeat with a machine's channel without importing app.
 """
+import re
 import sqlite3
 
 # For the platform slugs, imported rather than restated. The two must agree -- a
@@ -198,6 +204,103 @@ def agent_release_notes_url(version, channel=DEFAULT):
         return None
     suffix = "-beta" if normalize(channel) == BETA else ""
     return f"https://github.com/{REPO}/releases/tag/agent-v{version}{suffix}"
+
+
+def delivered(chosen, stable_latest, beta_latest, newer):
+    """The channel name the heartbeat actually SENDS, given the one the operator chose.
+
+    Equal to `chosen`, except that a beta machine is told stable while stable's manifest is
+    **strictly** newer than beta's. Without this a stable-only release (a hotfix on main, or a
+    stable cut that skipped beta) reached the whole fleet except the pilot ring, which kept
+    the older beta until somebody happened to cut another one.
+
+    **Both versions must be known.** None means "not read yet" (a hub that just restarted) or
+    "never published" (most platforms have no beta), and switching on a guess is the wrong way
+    round: a beta machine wrongly told beta costs nothing, because its updater installs only
+    what is strictly newer, while one wrongly told stable takes a build nobody chose for it.
+    Equal versions stay on beta -- that is a promoted beta, and nothing needs to move.
+
+    `newer(a, b)` is passed in so app.py's `cmp_versions` stays the hub's ONE comparator;
+    a second copy here would be the fifth comparator VERSIONING.md already warns about.
+    Rejected: rewriting agent.manifest.beta.json from the stable release script (it only
+    covers releases cut through the script, and would put a stable tag in the beta file), and
+    an agent that reads both manifests (correct, but it reaches no machine until a new agent
+    does, and the owner wanted the hub to own the decision).
+    """
+    chosen = normalize(chosen)
+    if chosen != BETA or not stable_latest or not beta_latest:
+        return chosen
+    return STABLE if newer(stable_latest, beta_latest) else BETA
+
+
+# ================================
+# AGENT UPDATE POLICY -- exact-version pins per platform
+# ================================
+#: The two modes. `auto` is today's behaviour: install the newest build on the channel.
+#: `pinned` installs exactly one version, forward or back, and nothing else -- which is also
+#: what "automatic updates off" is: a pin at the version the fleet is running, raised once
+#: the operator has reviewed the next release.
+UPDATE_AUTO = "auto"
+UPDATE_PINNED = "pinned"
+UPDATE_MODES = (UPDATE_AUTO, UPDATE_PINNED)
+
+#: Strict MAJOR.MINOR.PATCH, at most six digits a component. Stricter than `version_tuple` on
+#: purpose: the agent builds a path out of this string, so anything but digits and dots is
+#: refused on both ends rather than being "tolerantly" truncated into a different version than
+#: the operator typed. The agent's Channels.NormalizePin uses the same bounds, so a pin the hub
+#: accepts is one every agent can read.
+_PIN_RE = re.compile(r"^\d{1,6}\.\d{1,6}\.\d{1,6}$")
+
+
+#: The first build of each platform's agent that reads `update_policy` at all. **A
+#: compatibility API, like the MIN_*_AGENT constants in static/js**: an older agent ignores
+#: the field and keeps updating automatically, so the console has to say which machines a pin
+#: does not bind yet -- and getting them past this number is itself an automatic update.
+#: Each is the MINOR after the last release before pins existed; if a release cuts a
+#: different number, this table is what has to follow it.
+PIN_AWARE_AGENT = {
+    capabilities.PLATFORM_WINDOWS: "3.49.0",
+    capabilities.PLATFORM_LINUX: "0.4.0",
+    capabilities.PLATFORM_ANDROID: "0.4.0",
+}
+
+
+def is_valid_pin(value):
+    return bool(_PIN_RE.match(str(value or "").strip()))
+
+
+def update_policy(mode, pin):
+    """The heartbeat's `update_policy` block for one platform.
+
+    **A pinned mode with no usable version degrades to auto**, never to "pinned to nothing".
+    The agent would read an empty pin as auto anyway, and the console should say the same
+    thing the machine is doing; the Settings validation is what stops this being typed.
+    """
+    pin = str(pin or "").strip()
+    if str(mode or "").strip().lower() == UPDATE_PINNED and is_valid_pin(pin):
+        return {"mode": UPDATE_PINNED, "version": pin}
+    return {"mode": UPDATE_AUTO}
+
+
+def pinned_manifest_path(platform, version):
+    """Repo path of the signed manifest for ONE version of one platform's agent.
+
+    Written by each agent's release.ps1 beside the channel manifest at every release, so the
+    set of installable versions is exactly the set of files under `<dir>/manifests/` on main.
+    **Deleting a file there revokes that version** -- the agent only ever fetches from main,
+    so a version whose manifest is gone cannot be pinned by anyone, including a compromised
+    hub. That is the revocation story SECURITY.MD points at.
+    """
+    directory = _AGENT_MANIFEST[normalize_platform(platform)][STABLE][0]
+    return f"{directory}/manifests/{version}.json"
+
+
+def pinned_manifest_url(platform, version):
+    """Where the HUB checks that a pinned version actually has a signed manifest. The agent
+    holds its own base compiled in and never receives this url."""
+    if not is_valid_pin(version):
+        return None
+    return f"https://raw.githubusercontent.com/{REPO}/main/{pinned_manifest_path(platform, version)}"
 
 
 # ================================

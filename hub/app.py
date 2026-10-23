@@ -170,7 +170,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.165.0"
+HUB_VERSION = "1.166.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1251,6 +1251,32 @@ def agent_channel_for(machine=None):
         return channels.normalize(default)
     return channels.for_machine(DB_PATH, machine, default)
 
+def delivered_agent_channel(machine=None):
+    """The channel name the heartbeat SENDS this machine -- its chosen channel, except that a
+    beta machine is told stable while stable's manifest is strictly newer (channels.delivered).
+
+    Read per heartbeat from the watcher's cache, so the flip back to beta happens on the
+    first heartbeat after a newer beta's manifest is read -- nothing is stored, and there is
+    no state to get stuck in."""
+    chosen = agent_channel_for(machine)
+    platform = capabilities.platform_of(DB_PATH, machine) if machine else ""
+    return channels.delivered(chosen,
+                              get_latest_agent_version(channels.STABLE, platform),
+                              get_latest_agent_version(channels.BETA, platform),
+                              lambda a, b: cmp_versions(a, b) > 0)
+
+def agent_update_policy_for(platform=None):
+    """The fleet's update policy for one platform's agents: automatic, or pinned to one
+    exact version (channels.update_policy). Per platform, never per machine -- the owner's
+    call, and the per-machine control that exists is the channel pin."""
+    platform = channels.normalize_platform(platform)
+    return channels.update_policy(settings.get(DB_PATH, f"fleet.agent_updates.{platform}"),
+                                  settings.get(DB_PATH, f"{settings.AGENT_PIN_PREFIX}{platform}"))
+
+def agent_update_policy(machine=None):
+    """The heartbeat's `update_policy` block for this machine, chosen by its platform."""
+    return agent_update_policy_for(capabilities.platform_of(DB_PATH, machine) if machine else "")
+
 def machine_channel_override(machine):
     """A machine's pinned channel, or None when it follows the fleet."""
     return channels.override_for(DB_PATH, machine)
@@ -1326,11 +1352,20 @@ def get_advertised_version(reported_version, machine=None):
     latest_version entirely and the client falls back to its own poll."""
     platform = capabilities.platform_of(DB_PATH, machine) if machine else ""
     if platform and platform != capabilities.PLATFORM_WINDOWS:
-        return get_latest_agent_version(agent_channel_for(machine), platform)
+        return _advertised_for(machine, platform)
     if reported_version and cmp_versions(reported_version, AGENT_TRAIN_MIN_VERSION) >= 0:
-        return get_latest_agent_version(agent_channel_for(machine),
-                                        capabilities.PLATFORM_WINDOWS)
+        return _advertised_for(machine, capabilities.PLATFORM_WINDOWS)
     return None
+
+def _advertised_for(machine, platform):
+    """The pin when the platform is pinned, else the newest build on the DELIVERED channel --
+    the same two answers the agent's own updater reaches, so the hint never names a version
+    the agent then declines. An agent too old to read the pin installs the channel's newest
+    on its own poll whatever this says; the hint is only ever a reason to go and check."""
+    policy = agent_update_policy_for(platform)
+    if policy["mode"] == channels.UPDATE_PINNED:
+        return policy["version"]
+    return get_latest_agent_version(delivered_agent_channel(machine), platform)
 
 def refresh_latest_agent_version():
     """Read each channel's version straight out of its signed release manifest, so the
@@ -1362,9 +1397,37 @@ def refresh_latest_agent_version():
         except Exception as e:
             print(f"[agent-version] Could not refresh the {platform} {channel} version: {e}")
 
+#: (platform, version) -> True / False for whether a pinned version has a signed manifest on
+#: main. Absent means not checked yet. Read by the console so a pin naming a version that was
+#: never released -- or whose manifest was deleted to revoke it -- says so, instead of looking
+#: like a fleet that has quietly stopped updating.
+pinned_manifest_state = {}
+
+def refresh_pinned_manifests():
+    if HUB_SKIP_REMOTE_CHECKS:
+        return
+    for platform in channels.AGENT_PLATFORMS:
+        policy = agent_update_policy_for(platform)
+        if policy["mode"] != channels.UPDATE_PINNED:
+            continue
+        url = channels.pinned_manifest_url(platform, policy["version"])
+        try:
+            resp = requests.head(url, timeout=10, allow_redirects=True)
+            if resp.status_code in (200, 404):
+                with latest_version_lock:
+                    pinned_manifest_state[(platform, policy["version"])] = resp.status_code == 200
+        except Exception as e:
+            print(f"[agent-version] Could not check the {platform} pin {policy['version']}: {e}")
+
+def pinned_manifest_exists(platform, version):
+    """True, False, or None for "not checked yet"."""
+    with latest_version_lock:
+        return pinned_manifest_state.get((channels.normalize_platform(platform), version))
+
 def agent_version_watcher():
     while True:
         refresh_latest_agent_version()
+        refresh_pinned_manifests()
         time.sleep(AGENT_VERSION_CHECK_INTERVAL)
 
 agent_version_watcher_thread = None
@@ -2408,6 +2471,10 @@ app.register_blueprint(create_fleet_blueprint(
     DB_PATH, AGENT_ENROLLMENT_SECRET, login_required, access,
     on_command_result=_on_command_result,
     on_change=lambda topic, machine: mark_changed(topic, machine),
+    # Both resolved here because the inputs -- the watcher's manifest cache and the settings
+    # -- live in app.py; fleet_web.py keeps its own fallback for either one failing.
+    agent_channel_for=delivered_agent_channel,
+    agent_update_policy=agent_update_policy,
 ))
 # Settings endpoints (console-facing only). Same reason for being registered here.
 app.register_blueprint(create_settings_blueprint(DB_PATH, login_required, access))
@@ -5841,6 +5908,15 @@ def _build_fleet_summary(top):
     fleet_channel = agent_channel_for()
     latest_by_platform = {p: get_latest_agent_version(fleet_channel, p)
                           for p in channels.AGENT_PLATFORMS}
+    # A pinned platform is measured against its PIN, not against the newest release: a fleet
+    # held at 3.48.0 while 3.49.0 waits for review is the operator's choice, and counting every
+    # machine as outdated would turn the dashboard's one actionable number into noise exactly
+    # when somebody is being careful. Below the pin still counts -- that machine has an install
+    # it has not taken yet.
+    for p in channels.AGENT_PLATFORMS:
+        pinned = agent_update_policy_for(p).get("version")
+        if pinned:
+            latest_by_platform[p] = pinned
     machine_platforms = capabilities.platforms_for(DB_PATH, scoped_names)
     hot_threshold = settings.get_int(DB_PATH, "hub.hot_temp_threshold_c")
     low_disk_pct = settings.get_int(DB_PATH, "hub.low_disk_free_pct")
@@ -6399,6 +6475,10 @@ def get_machine_channel(machine):
     # yes forever.
     platform = channels.normalize_platform(capabilities.platform_of(DB_PATH, machine_name))
     stable_latest = get_latest_agent_version(channels.STABLE, platform)
+    delivered = delivered_agent_channel(machine_name)
+    policy = agent_update_policy_for(platform)
+    pinned_version = policy.get("version")
+    min_pin_aware = channels.PIN_AWARE_AGENT.get(platform)
     with get_db_conn() as conn:
         row = conn.execute("SELECT companion_version FROM machine_info WHERE machine = ?",
                            (machine_name,)).fetchone()
@@ -6416,11 +6496,23 @@ def get_machine_channel(machine):
             for name in channels.CHANNELS
         ],
         "can_manage": access.can(permissions.MANAGE_SETTINGS),
-        "latest_version": get_latest_agent_version(effective, platform),
+        "latest_version": get_latest_agent_version(delivered, platform),
         "latest_stable_version": stable_latest,
         "running_version": running,
-        "ahead_of_stable": bool(running and stable_latest
+        "ahead_of_stable": bool(running and stable_latest and not pinned_version
                                 and cmp_versions(running, stable_latest) > 0),
+        # What the heartbeat actually sends (channels.delivered): beta machines are told
+        # stable while stable is strictly newer, and the page says so rather than showing a
+        # beta PC that has inexplicably installed a stable build.
+        "delivered_channel": delivered,
+        "following_stable": effective != delivered,
+        # The platform's update policy, and whether THIS agent can honour it. An agent older
+        # than channels.PIN_AWARE_AGENT ignores the field and keeps updating on its own.
+        "update_policy": policy,
+        "honours_pin": bool(running and cmp_versions(running, min_pin_aware) >= 0),
+        "pin_aware_version": min_pin_aware,
+        "pin_manifest_exists": (pinned_manifest_exists(platform, pinned_version)
+                                if pinned_version else None),
     })
 
 
@@ -7176,10 +7268,18 @@ def _fleet_agent_release():
     try:
         channel = agent_channel_for(None)
         latest = get_latest_agent_version(channel, capabilities.PLATFORM_WINDOWS)
-        return {"latest": latest, "channel": channel,
+        # A pinned Windows fleet turns the notice from "this is arriving" into "this is
+        # waiting for you": the release is there to review and nothing installs it until
+        # the pin is raised. Hidden when the pin already names it.
+        policy = agent_update_policy_for(capabilities.PLATFORM_WINDOWS)
+        pinned = policy.get("version")
+        if pinned and latest and pinned == latest:
+            latest = None
+        return {"latest": latest, "channel": channel, "pinned": pinned,
                 "release_notes_url": channels.agent_release_notes_url(latest, channel)}
     except Exception:
-        return {"latest": None, "channel": channels.DEFAULT, "release_notes_url": None}
+        return {"latest": None, "channel": channels.DEFAULT, "pinned": None,
+                "release_notes_url": None}
 
 
 def _hub_release_notes_url():

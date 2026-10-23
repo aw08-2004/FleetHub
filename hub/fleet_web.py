@@ -72,7 +72,8 @@ _bearer_agent = auth_helpers.bearer_agent
 
 
 def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
-                           on_command_result=None, on_change=None):
+                           on_command_result=None, on_change=None,
+                           agent_channel_for=None, agent_update_policy=None):
     """Build the fleet Blueprint. `login_required` (app.py's session gate) and `access`
     (the permission-group layer) are both passed in, to avoid a circular import and to
     keep one source of truth for each.
@@ -84,7 +85,13 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
 
     `on_change(topic, machine)` is the live console's change notice (changes.py). The
     heartbeat is excluded from the generic after-request mark because most heartbeats change
-    nothing, so it calls this itself, once per change-only block it actually carried."""
+    nothing, so it calls this itself, once per change-only block it actually carried.
+
+    `agent_channel_for(machine)` and `agent_update_policy(machine)` answer the heartbeat's
+    `update_channel` and `update_policy` (roadmap #21). Both need the agent-manifest cache that
+    lives in app.py, so they are passed in like the two hooks above; absent, the heartbeat
+    falls back to the plain chosen channel and sends no policy at all, which an agent reads
+    as "leave the pin as it is"."""
     bp = Blueprint("fleet", __name__)
     can_view = access.require(permissions.VIEW)
 
@@ -445,11 +452,32 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         # allow-list is what makes a hub unable to redirect where an agent gets its code.
         # Sending a URL here would trade away the one control that still holds if this hub is
         # compromised. Its own try/except, so a failure here cannot cost the watch flags.
+        #
+        # The name sent is the DELIVERED channel, which can differ from the pin: a beta
+        # machine is told stable while stable's manifest is strictly newer
+        # (channels.delivered). On any failure resolving that, the chosen channel is sent --
+        # what every hub before it sent.
         try:
-            payload["update_channel"] = channels.for_machine(
-                db_path, machine, settings.get(db_path, "fleet.default_agent_channel"))
+            payload["update_channel"] = (agent_channel_for(machine) if agent_channel_for
+                                         else None)
         except Exception as e:
-            print(f"[channels] Could not resolve the channel for {machine}: {e}")
+            print(f"[channels] Could not resolve the delivered channel for {machine}: {e}")
+        if not payload.get("update_channel"):
+            try:
+                payload["update_channel"] = channels.for_machine(
+                    db_path, machine, settings.get(db_path, "fleet.default_agent_channel"))
+            except Exception as e:
+                print(f"[channels] Could not resolve the channel for {machine}: {e}")
+        # The platform's update policy: automatic, or pinned to one exact version. A version
+        # STRING and a mode, never a url -- the agent builds the manifest url from its own
+        # compiled-in base and installs only what the offline key signed. Its own try/except;
+        # on failure the field is simply absent, which an agent reads as "no change" -- so one
+        # bad heartbeat cannot release a pin. Only an explicit {"mode": "auto"} does that.
+        try:
+            if agent_update_policy:
+                payload["update_policy"] = agent_update_policy(machine)
+        except Exception as e:
+            print(f"[channels] Could not resolve the update policy for {machine}: {e}")
         # The device's app policy (roadmap #23 phase D), resolved to a flat list of packages
         # to suspend. Sent only when the version the agent holds differs from the current
         # one -- the same shape `config` above uses, and for the same reason: this is a

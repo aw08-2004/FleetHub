@@ -62,6 +62,11 @@ public static class StateKeys
     /// month ago would go on enforcing forever, one process kill at a time.</summary>
     public const string DevicePolicy = "device_policy";
 
+    /// <summary>The agent version the hub pinned Android to (roadmap #21), or absent for
+    /// automatic. Persisted so an update check on a fresh start, before the first heartbeat,
+    /// cannot install a release an operator is holding back.</summary>
+    public const string UpdatePin = "update_pin";
+
     /// <summary>What a self-update is aiming at, and how many attempts it has had
     /// (roadmap #22). Persisted because the process that would remember it is the one
     /// the platform kills to install the new package -- and because a build that

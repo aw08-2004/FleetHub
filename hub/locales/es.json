@@ -58,6 +58,7 @@
   },
   "agent_update": {
     "available": "Se ha publicado el agente v{version}. Los equipos lo instalarán en unos 15 minutos.",
+    "available_pinned": "Se publicó el agente v{version}. Los agentes de Windows siguen en v{pinned} hasta que subas la versión fijada en Configuración → Flota.",
     "release_notes": "Notas de la versión",
     "dismiss": "Descartar"
   },
@@ -1428,6 +1429,30 @@
         "label": "Canal predeterminado del agente",
         "help": "A qué versión del agente se actualizan los equipos salvo que se hayan fijado individualmente. Fije unos pocos equipos en beta para probar una versión antes de que llegue a la flota: de lo contrario, una versión del agente llega a todas partes en unos quince minutos."
       },
+      "fleet.agent_updates.windows": {
+        "label": "Actualizaciones del agente de Windows",
+        "help": "Automático instala cada nueva versión del agente de Windows en unos quince minutos. Fijado mantiene cada agente de Windows exactamente en la versión de abajo —hacia delante o hacia atrás— para poder revisar una versión primero; sube la versión fijada para aprobarla."
+      },
+      "fleet.agent_pin.windows": {
+        "label": "Versión fijada del agente de Windows",
+        "help": "La versión exacta del agente de Windows que se instala mientras las actualizaciones están fijadas, como MAJOR.MINOR.PATCH (por ejemplo 3.48.0). Solo se pueden instalar versiones publicadas con un manifiesto firmado por versión."
+      },
+      "fleet.agent_updates.linux": {
+        "label": "Actualizaciones del agente de Linux",
+        "help": "Automático instala cada nueva versión del agente de Linux. Fijado mantiene cada agente de Linux exactamente en la versión de abajo, hacia delante o hacia atrás."
+      },
+      "fleet.agent_pin.linux": {
+        "label": "Versión fijada del agente de Linux",
+        "help": "La versión exacta del agente de Linux que se instala mientras las actualizaciones están fijadas, como MAJOR.MINOR.PATCH."
+      },
+      "fleet.agent_updates.android": {
+        "label": "Actualizaciones del agente de Android",
+        "help": "Automático instala cada nueva versión del agente de Android. Fijado mantiene cada agente de Android en la versión de abajo; Android no puede instalar una versión anterior, así que fijar una versión inferior a la actual deja el dispositivo donde está."
+      },
+      "fleet.agent_pin.android": {
+        "label": "Versión fijada del agente de Android",
+        "help": "La versión exacta del agente de Android que se instala mientras las actualizaciones están fijadas, como MAJOR.MINOR.PATCH."
+      },
       "sharing.enabled": {
         "label": "Compartir equipos con otros concentradores",
         "help": "Permite que este concentrador responda a las peticiones de los concentradores emparejados y que haga peticiones a los que le han compartido un equipo. Desactivado significa que ninguna dirección funciona, aunque ya haya emparejamientos -- lo emparejado sigue visible para que pueda revocarlo."
@@ -1681,6 +1706,18 @@
         "stable": "Estable",
         "beta": "Beta"
       },
+      "fleet.agent_updates.windows": {
+        "auto": "Automático",
+        "pinned": "Fijado a una versión"
+      },
+      "fleet.agent_updates.linux": {
+        "auto": "Automático",
+        "pinned": "Fijado a una versión"
+      },
+      "fleet.agent_updates.android": {
+        "auto": "Automático",
+        "pinned": "Fijado a una versión"
+      },
       "tickets.submitters": {
         "any": "Cualquier persona con sesión en el PC",
         "domain": "Solo cuentas de dominio"
@@ -1700,7 +1737,8 @@
       "bad_url_scheme": "{value} debe empezar por stun:, stuns:, turn: o turns:",
       "url_without_host": "{value} no tiene host",
       "expected_path_list": "se esperaba una lista de rutas",
-      "unsupported_type": "tipo de opción no admitido {type}"
+      "unsupported_type": "tipo de opción no admitido {type}",
+      "expected_version": "se esperaba una versión como 3.48.0, se recibió {value}"
     },
     "add_entry": "Añadir una entrada",
     "add_sensor": "Añadir un sensor…",
@@ -3001,6 +3039,11 @@
     "channel_pin": "Canal de versiones",
     "channel_follow_fleet": "Seguir el valor de la flota",
     "channel_ahead": "Ejecuta {running}, por delante de estable ({stable}). No volverá a actualizarse hasta que estable lo supere: salir de beta no deshace una actualización ya instalada.",
+    "channel_following_stable": "Sigue a estable {stable} hasta que se publique una beta más nueva.",
+    "channel_pinned_version": "Las actualizaciones de esta plataforma están fijadas en {version}.",
+    "channel_pin_unsupported": "Ejecuta {running}, que ignora la versión fijada y sigue actualizándose automáticamente. Las versiones fijadas se aplican a partir de {min}.",
+    "channel_pin_missing": "Fijado en {version}, pero no existe un manifiesto firmado para esa versión, así que no se instalará nada hasta que se fije una versión publicada.",
+    "channel_pin_android_downgrade": "Fijado en {version}, por debajo de la actual {running}. Android no puede instalar una versión anterior, así que este dispositivo se queda en {running} hasta que la versión fijada la supere.",
     "location": {
       "title": "Ubicación",
       "disclosure": "Cada petición queda registrada en la auditoría, y el dispositivo muestra una notificación con el nombre del operador que la hizo."

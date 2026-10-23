@@ -58,6 +58,13 @@ $IsBeta       = ($Channel -eq "beta")
 # of this filename exist by necessity -- a PowerShell script, a Python module and a C#
 # constant cannot share one -- and tests/test_channels.py pins the other two.
 $ManifestPath = Join-Path $AgentDir $(if ($IsBeta) { "agent.manifest.beta.json" } else { "agent.manifest.json" })
+
+# The per-version copy (roadmap #21): manifests/<version>.json + .sig, byte-for-byte the files
+# just signed. It is what an operator's exact-version PIN reads -- the agent builds that path
+# from a compiled-in base -- so the set of pinnable versions is exactly the set of files under
+# manifests/ on main, and deleting one revokes it. A COPY rather than a second signing run:
+# Ed25519 would produce the same bytes anyway, and a copy cannot drift from the channel file.
+$PinnedManifestPath = Join-Path (Join-Path $AgentDir "manifests") "$Version.json"
 $SignScript = Join-Path $RepoRoot "sign_release.py"
 # The tag differs so the two channels' releases and their assets never collide.
 $Tag        = $(if ($IsBeta) { "agent-v$Version-beta" } else { "agent-v$Version" })
@@ -327,6 +334,7 @@ if ($DryRun) {
 Step "Signing manifest"
 if ($DryRun) {
     Say "[dry-run] $py `"$SignScript`" --sign-agent --file `"$ExePath`" --agent-version $Version --agent-url $AssetUrl --key `"$keyPath`" --manifest `"$ManifestPath`""
+    Say "[dry-run] copy $ManifestPath (+ .sig) -> $PinnedManifestPath (+ .sig)"
 } else {
     # --manifest picks the channel's output path. sign_release.py needed no change for
     # roadmap #21 -- it already took the path, so beta is the same signer, the same key and
@@ -334,6 +342,11 @@ if ($DryRun) {
     & $py $SignScript --sign-agent --file $ExePath --agent-version $Version --agent-url $AssetUrl --key $keyPath --manifest $ManifestPath
     if ($LASTEXITCODE -ne 0) { Die "sign_release.py --sign-agent failed." }
     Ok "Signed -> $ManifestPath (+ .sig)"
+    # Per-version copy for exact-version pins -- see $PinnedManifestPath above.
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PinnedManifestPath) | Out-Null
+    Copy-Item -LiteralPath $ManifestPath -Destination $PinnedManifestPath -Force
+    Copy-Item -LiteralPath "$ManifestPath.sig" -Destination "$PinnedManifestPath.sig" -Force
+    Ok "pinnable as $Version -> $PinnedManifestPath (+ .sig)"
 }
 
 # ----------------------------------------------------------------------
@@ -355,10 +368,10 @@ Step "Committing manifest"
 Push-Location $RepoRoot
 try {
     if ($DryRun) {
-        Say "[dry-run] git add agent/agent.manifest.json agent/agent.manifest.json.sig agent/src/.../AgentConfig.cs agent/src/.../TempMonitorAgent.csproj"
+        Say "[dry-run] git add agent/agent.manifest.json agent/agent.manifest.json.sig agent/manifests/$Version.json agent/manifests/$Version.json.sig agent/src/.../AgentConfig.cs agent/src/.../TempMonitorAgent.csproj"
         Say "[dry-run] git commit -m `"Release agent v$Version`""
     } else {
-        git add $ManifestPath "$ManifestPath.sig" $ConfigCs $Csproj
+        git add $ManifestPath "$ManifestPath.sig" $PinnedManifestPath "$PinnedManifestPath.sig" $ConfigCs $Csproj
         if ($LASTEXITCODE -ne 0) { Die "git add failed -- nothing was committed." }
         $staged = git diff --cached --name-only
         if (-not $staged) {

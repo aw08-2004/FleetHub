@@ -83,6 +83,13 @@ public sealed class AgentState(IStateStore store)
     /// <summary>The stored app policy document, or null. See StateKeys.DevicePolicy.</summary>
     public string? LoadDevicePolicy() => _store.Get(StateKeys.DevicePolicy);
 
+    /// <summary>The pinned agent version, or null for automatic. Read through the same strict
+    /// parse as the heartbeat, so a damaged value reads as automatic.</summary>
+    public string? LoadUpdatePin() => Update.VersionUtil.NormalizePin(_store.Get(StateKeys.UpdatePin));
+
+    /// <summary>Store the pin; null stores an empty value, which reads back as automatic.</summary>
+    public bool SaveUpdatePin(string? version) => _store.Set(StateKeys.UpdatePin, version ?? "");
+
     /// <summary>Store the app policy document. A failed write is not fatal -- the policy is
     /// applied from memory either way; what is lost is the staleness clock surviving a
     /// restart.</summary>

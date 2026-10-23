@@ -65,7 +65,10 @@ public sealed class SelfUpdater
     {
         var rs = _state.LoadRestartState();
         if (rs is null) return;
-        if (VersionUtil.Compare(AgentConfig.Version, rs.Target) >= 0)
+        // EQUAL to the target, not "at least": a pinned target can be older than the build
+        // that went looking for it, and "at least" read a downgrade whose swap did not take as
+        // a success, retiring the guard that stops it retrying forever.
+        if (VersionUtil.Compare(AgentConfig.Version, rs.Target) == 0)
         {
             Volatile.Write(ref _awaitingConfirmation, 1);
             _log.LogInformation(
@@ -103,8 +106,12 @@ public sealed class SelfUpdater
         try
         {
             // 1. Manifest + detached signature.
-            var manifestBytes = await _http.GetByteArrayAsync(AgentConfig.UpdateManifestUrl, ct);
-            var sigHex = (await _http.GetStringAsync(AgentConfig.UpdateManifestSigUrl, ct)).Trim();
+            // A pin reads that version's own manifest; the env override (a test server) wins
+            // over both and is read the automatic way.
+            var pin = AgentConfig.UpdateManifestOverridden ? null : _state.LoadUpdatePin();
+            var manifestUrl = AgentConfig.ManifestUrlForPin(pin) ?? AgentConfig.UpdateManifestUrl;
+            var manifestBytes = await _http.GetByteArrayAsync(manifestUrl, ct);
+            var sigHex = (await _http.GetStringAsync(manifestUrl + ".sig", ct)).Trim();
 
             // 2. Verify the signature over the EXACT manifest bytes, fail-closed. Everything
             // after this point trusts the contents; nothing before it does.
@@ -123,9 +130,14 @@ public sealed class SelfUpdater
                 return false;
             }
 
-            // 4. Newer? Strictly, which is what makes a replayed or rolled-back manifest a
-            // no-op rather than a downgrade.
-            if (VersionUtil.Compare(manifest.Version, AgentConfig.Version) <= 0) return false;
+            // 4. Install it? Strictly newer on automatic, which is what makes a replayed or
+            // rolled-back manifest a no-op; exactly the pin, forward or back, when pinned.
+            var decision = VersionUtil.Decide(AgentConfig.Version, manifest.Version, pin,
+                                              canDowngrade: true);
+            if (decision == UpdateDecision.PinMismatch)
+                _log.LogWarning("[update] manifest for pinned {Pin} names {Version} -- refusing",
+                                pin, manifest.Version);
+            if (decision != UpdateDecision.Install) return false;
 
             // 5. Restart-loop guard.
             var rs = _state.LoadRestartState();

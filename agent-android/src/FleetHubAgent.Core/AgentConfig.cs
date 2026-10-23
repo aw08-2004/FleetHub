@@ -244,6 +244,18 @@ public static class AgentConfig
     /// setting nobody can audit. A lab build changes the constant.</summary>
     public static string UpdateManifestUrl => StableManifestUrl;
 
+    /// <summary>One signed manifest per released version (roadmap #21), written by
+    /// release.ps1 beside the channel manifest. A pin can reach exactly the versions that have
+    /// a file here on main; deleting one revokes it -- see SECURITY.MD.</summary>
+    public const string PinnedManifestBase =
+        "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-android/manifests/";
+
+    /// <summary>The compiled-in manifest url for one pinned version, or null when there is no
+    /// usable pin. Re-validated here, because this is the line that turns a string off the
+    /// wire into a url.</summary>
+    public static string? ManifestUrlForPin(string? version) =>
+        Update.VersionUtil.NormalizePin(version) is { } pin ? $"{PinnedManifestBase}{pin}.json" : null;
+
     public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
 
     /// <summary>Whether self-update is off. False here and settable only by rebuilding, for

@@ -64,6 +64,41 @@ public sealed class AgentState
         AtomicWrite(AgentConfig.RestartStatePath, JsonSerializer.Serialize(state, JsonOpts));
     }
 
+    /// <summary>The version the hub pinned this platform to, or null for automatic. A corrupt
+    /// or hand-edited file reads as automatic only after NormalizePin refuses it -- the same
+    /// strict parse the heartbeat goes through.</summary>
+    public string? LoadUpdatePin()
+    {
+        try
+        {
+            if (File.Exists(AgentConfig.UpdatePinPath))
+            {
+                var pin = JsonSerializer.Deserialize<UpdatePin>(File.ReadAllText(AgentConfig.UpdatePinPath));
+                return Update.VersionUtil.NormalizePin(pin?.Version);
+            }
+        }
+        catch { /* unreadable reads as automatic, the state before pins existed */ }
+        return null;
+    }
+
+    /// <summary>Store the pin, or delete the file for automatic.</summary>
+    public void SaveUpdatePin(string? version)
+    {
+        if (version is null)
+        {
+            try { File.Delete(AgentConfig.UpdatePinPath); } catch { /* retried next change */ }
+            return;
+        }
+        EnsureStateDir();
+        AtomicWrite(AgentConfig.UpdatePinPath,
+                    JsonSerializer.Serialize(new UpdatePin { Version = version }, JsonOpts));
+    }
+
+    private sealed class UpdatePin
+    {
+        public string? Version { get; set; }
+    }
+
     /// <summary>Forget the update in flight. Called once the new build has done real work, not
     /// merely started -- see SelfUpdater.ConfirmRunningBuild.</summary>
     public void ClearRestartState()

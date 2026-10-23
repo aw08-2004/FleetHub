@@ -362,6 +362,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             ApplyEscrowRequestFromHeartbeat(text);
             ApplyLiveWatchFromHeartbeat(text);
             ApplyChannelFromHeartbeat(text);
+            ApplyUpdatePolicyFromHeartbeat(text);
             ApplyEventSubscriptionsFromHeartbeat(text);
             ApplyWatchdogsFromHeartbeat(text);
             ApplyGroupPolicyFromHeartbeat(text);
@@ -540,6 +541,43 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         catch (Exception e)
         {
             _log.LogWarning("Ignoring malformed channel from the hub: {Msg}", e.Message);
+        }
+    }
+
+    /// <summary>
+    /// Apply the hub's update policy (roadmap #21): automatic, or pinned to one exact version.
+    ///
+    /// <para><b>An ABSENT block changes nothing</b>, unlike the channel above, where absent
+    /// means stable. The asymmetry is deliberate: a pin exists to stop an install, and a hub
+    /// that failed to resolve the policy for one heartbeat (its own try/except leaves the field
+    /// out) must not release the hold for long enough to install the release under review.
+    /// Releasing a pin takes an explicit <c>{"mode": "auto"}</c>, which every hub that knows
+    /// about pins sends.</para>
+    ///
+    /// <para>A version that is not exactly MAJOR.MINOR.PATCH reads as automatic -- see
+    /// Channels.NormalizePin -- because a pin the agent cannot turn into a url would otherwise
+    /// stop updates silently and forever.</para>
+    /// </summary>
+    private void ApplyUpdatePolicyFromHeartbeat(string body)
+    {
+        try
+        {
+            var block = JsonNode.Parse(body)?["update_policy"];
+            if (block is null) return;
+            var applied = RuntimeConfigStore.Current.WithUpdatePolicy(
+                block["mode"]?.GetValue<string>(), block["version"]?.GetValue<string>());
+            if (applied.PinnedVersion == RuntimeConfigStore.Current.PinnedVersion) return;
+
+            RuntimeConfigStore.Set(applied);
+            _state.SaveRuntimeConfig(applied);
+            if (applied.PinnedVersion is null)
+                _log.LogInformation("Agent updates are automatic again");
+            else
+                _log.LogInformation("Agent updates are pinned to {Version}", applied.PinnedVersion);
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning("Ignoring malformed update policy from the hub: {Msg}", e.Message);
         }
     }
 

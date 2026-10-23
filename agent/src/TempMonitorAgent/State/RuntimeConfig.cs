@@ -112,6 +112,21 @@ public sealed record RuntimeConfig
     public string Channel { get; init; } = Channels.Stable;
 
     /// <summary>
+    /// The exact agent version the hub has pinned this platform to, or null for automatic
+    /// (roadmap #21). A VERSION STRING, never a url, for the same reason as
+    /// <see cref="Channel"/>: <see cref="AgentConfig.ManifestUrlForPin"/> turns it into a path
+    /// under a compiled-in base on main, and what is installed is still only what the offline
+    /// release key signed. What a hub can do with it is choose among versions that have a
+    /// signed manifest -- including an older one, which is the point of a pin and the trade-off
+    /// SECURITY.MD records.
+    ///
+    /// <para>Persisted for the reason a pin exists at all: an update check that ran on a fresh
+    /// boot before the first heartbeat landed must not install the very release an operator
+    /// is holding back for review.</para>
+    /// </summary>
+    public string? PinnedVersion { get; init; }
+
+    /// <summary>
     /// Keep the ticket tray running in every signed-in session (roadmap #31 phase A), mirroring
     /// the hub's <c>tickets.tray_enabled</c>. **Off until the hub says otherwise**, and off
     /// again the moment a payload says "false": the tray is the first process this agent keeps
@@ -130,6 +145,16 @@ public sealed record RuntimeConfig
     public string TicketSubmitters { get; init; } = "any";
 
     public static RuntimeConfig Default { get; } = new();
+
+    /// <summary>This config with the hub's update policy applied: <c>mode == "pinned"</c> with
+    /// a usable version pins it, anything else is automatic. Pure, so the parse that decides
+    /// whether a release under review can install is testable without a heartbeat.</summary>
+    public RuntimeConfig WithUpdatePolicy(string? mode, string? version) => this with
+    {
+        PinnedVersion = mode?.Trim().ToLowerInvariant() == "pinned"
+            ? Channels.NormalizePin(version)
+            : null,
+    };
 
     /// <summary>
     /// Build a new config from a hub payload, keyed by the hub's registry keys.

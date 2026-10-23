@@ -302,7 +302,25 @@ public static class AgentConfig
     /// answered for one channel would be a worse tool rather than a safer one.</summary>
     public static string UpdateManifestUrl =>
         Env("UPDATE_MANIFEST_URL", "UPDATE_MANIFEST_URL")
+        ?? ManifestUrlForPin(State.RuntimeConfigStore.Current.PinnedVersion)
         ?? ManifestUrlFor(State.RuntimeConfigStore.Current.Channel);
+
+    /// <summary>Whether the env override points the updater at a test server, in which case
+    /// a persisted pin is ignored and the manifest is read the automatic way.</summary>
+    public static bool UpdateManifestOverridden =>
+        Env("UPDATE_MANIFEST_URL", "UPDATE_MANIFEST_URL") is not null;
+
+    // One signed manifest per released version, written by release.ps1 beside the channel
+    // manifest. The set of versions a pin can reach is exactly the set of files here on main,
+    // so deleting one revokes that version for every agent -- see SECURITY.MD.
+    public const string PinnedManifestBase =
+        "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent/manifests/";
+
+    /// <summary>The compiled-in manifest url for one pinned version, or null when there is no
+    /// usable pin. The version is re-validated here rather than trusted from the caller,
+    /// because this is the line that turns a string off the wire into a url.</summary>
+    public static string? ManifestUrlForPin(string? version) =>
+        State.Channels.NormalizePin(version) is { } pin ? $"{PinnedManifestBase}{pin}.json" : null;
 
     /// <summary>Channel name to compiled-in url. Public so a test can pin the mapping
     /// without standing up a config store -- this is the one function in the agent where a

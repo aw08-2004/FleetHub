@@ -133,6 +133,28 @@ public sealed class FleetClient : IDisposable
         }
     }
 
+    /// <summary>The hub's update policy (roadmap #21), the one part of the reply besides the
+    /// device policy this agent reads -- because it decides what the updater installs.
+    /// **An absent block changes nothing**, the other agents' rule: a pin exists to stop an
+    /// install, and a heartbeat whose hub failed to resolve it must not release it.</summary>
+    private void ApplyUpdatePolicy(JsonNode? block)
+    {
+        if (block is null) return;
+        try
+        {
+            var pin = Update.VersionUtil.PinFromPolicy(
+                block["mode"]?.GetValue<string>(), block["version"]?.GetValue<string>());
+            if (pin == _state.LoadUpdatePin()) return;
+            _state.SaveUpdatePin(pin);
+            if (pin is null) _log.LogInformation("Agent updates are automatic again");
+            else _log.LogInformation("Agent updates are pinned to {Version}", pin);
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning("Ignoring malformed update policy from the hub: {Msg}", e.Message);
+        }
+    }
+
     /// <summary>Take the `{agent_id, token}` the hub minted, persist it, and adopt it. Shared
     /// by both enrollment paths, because the rule in it is the one that matters most.</summary>
     private CodeRedeemOutcome AdoptIdentity(string responseText)
@@ -330,6 +352,7 @@ public sealed class FleetClient : IDisposable
             {
                 var text = await resp.Content.ReadAsStringAsync(ct);
                 var json = JsonNode.Parse(text) as JsonObject;
+                ApplyUpdatePolicy(json?["update_policy"]);
                 return new HeartbeatReply(
                     json?["device_policy"],
                     json?["device_policy_version"]?.GetValue<string>());
