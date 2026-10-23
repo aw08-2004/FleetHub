@@ -1625,6 +1625,10 @@
         "default_timeout_seconds": {
           "label": "Time a device spends looking",
           "help": "How long a device tries for a fresh position before answering with its last known one instead. A satellite fix from cold takes tens of seconds outdoors and never arrives indoors, so this is the point at which the device stops rather than leaving somebody watching a spinner."
+        },
+        "live_interval_seconds": {
+          "label": "Live map refresh",
+          "help": "While the device map is open with Live on, how often each online device is asked for its position again. Spaced per device, so several people viewing the map do not ask any more often. Each ask uses the device's location for up to the time above and shows a notice on it."
         }
       },
       "data": {
@@ -4798,14 +4802,17 @@
     },
     "map": {
       "heading": "Device map",
-      "intro": "Where each device was the last time somebody asked. Nothing here is live, and no device is tracked -- a point exists because an operator requested it.",
+      "intro": "Where each device was the last time it answered. With Live on, every online device you can locate is asked again while this page is open, and each one shows a notice naming who asked. Nothing is asked while the page is closed, hidden or paused.",
       "filter": "Filter devices",
       "count": "{count} shown",
       "none": "No device you can see has ever been located.",
       "no_match": "No device matches that filter.",
       "unreachable": "The hub did not answer.",
       "count_with_unlocated": "{count} shown, {unlocated} not located yet",
-      "none_yet": "No device has a position yet. {count} can be located -- they are listed beside the map with what each one last said."
+      "none_yet": "No device has a position yet. {count} can be located -- they are listed beside the map with what each one last said.",
+      "live": "Live",
+      "live_on": "Asking online devices again every {seconds} s.",
+      "live_paused": "Live updates are paused."
     }
   },
   "apps": {

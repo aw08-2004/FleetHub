@@ -102,6 +102,18 @@ public sealed class AndroidLocationReader(Context context, ILogger log) : ILocat
         }
 
         var providers = EnabledProviders(manager);
+        if (providers.Count == 0 && DeviceOwner.EnableLocation(context, log))
+        {
+            // The providers come up asynchronously after the switch flips, typically within a
+            // second. Polled briefly rather than assumed, because listening on a provider that
+            // is still disabled registers fine and then never fires -- a whole budget spent
+            // waiting on nothing, ending in a stale answer.
+            for (var i = 0; i < 10 && providers.Count == 0; i++)
+            {
+                await Task.Delay(300, ct);
+                providers = EnabledProviders(manager);
+            }
+        }
         if (providers.Count == 0)
         {
             // Location switched off entirely. The last known position may still be there and

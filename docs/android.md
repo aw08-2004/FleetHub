@@ -190,9 +190,16 @@ hub a device has an app it does not have.
 
 Asking a managed Android device where it is, on demand.
 
-**On demand only, and that is the design rather than a first step.** Nothing polls. A position
-exists in the hub because an operator pressed a button and the device answered; there is no
-background collection and no travel history, only a history of *when somebody asked*.
+**On demand, and only while somebody is looking.** The hub has no timer of its own. A position
+exists because an operator asked and the device answered, either with a Locate button or by
+having the map open with **Live** on (see *Seeing it*). Nothing is collected while nobody
+is watching, and the history is a history of *when somebody asked*.
+
+**A managed phone's location switch is turned back on when a locate needs it.** If the person
+holding a fully managed phone has switched Location off, the next locate switches it on again
+before taking a fix. Nothing stops them switching it off afterwards; the locate after that
+switches it on again. A phone with the agent installed as an ordinary app answers *location is
+switched off on this device* instead.
 
 **Asking has its own capability — `locate_device` — and it is deliberately not
 `issue_commands`.** Wake, the Processes card and the file explorer all reuse that one on the
@@ -229,7 +236,15 @@ control rather than a disk-space one — see the personal-data inventory in `SEC
 Two views over the same data. A **Location fold** on the machine page carries the last known
 fix, a Locate button, and the history of who asked and what came back. The **Map** page
 (`/map`, in the sidebar under Inventory) plots every device in scope that has a known position,
-with a filter and a list beside it.
+with a filter and a list beside it. Every device in the list has a **Locate** button if you hold
+`locate_device`.
+
+**Live.** For an operator who holds `locate_device`, the map asks every online device in their
+scope again every `location.live_interval_seconds` (60 by default) while the page is open, and
+the points move as answers arrive. The **Live** switch beside the count pauses it, and nothing is
+asked while the tab is hidden. The spacing is per device on the hub, so two people watching the
+map do not double the asks. Offline devices are skipped. Each ask is audited and notified exactly
+like a single locate.
 
 **The map never claims more precision than the fix had.** The accuracy radius is drawn as a
 real circle in metres, so a fix that might be a kilometre wide looks a kilometre wide; a radius

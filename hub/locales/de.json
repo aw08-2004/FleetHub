@@ -1548,6 +1548,10 @@
         "default_timeout_seconds": {
           "label": "Suchdauer auf dem Gerät",
           "help": "Wie lange ein Gerät nach einer frischen Position sucht, bevor es stattdessen die zuletzt bekannte meldet. Eine Satellitenortung aus dem Kaltstart dauert im Freien Dutzende Sekunden und gelingt in Gebäuden gar nicht, deshalb hört das Gerät hier auf, statt jemanden vor einem sich drehenden Rad warten zu lassen."
+        },
+        "live_interval_seconds": {
+          "label": "Aktualisierung der Live-Karte",
+          "help": "Wie oft jedes Online-Gerät erneut nach seiner Position gefragt wird, solange die Gerätekarte mit „Live“ geöffnet ist. Der Abstand gilt pro Gerät, sodass mehrere Betrachter der Karte nicht häufiger fragen. Jede Abfrage nutzt den Standort des Geräts bis zur oben eingestellten Zeit und zeigt dort einen Hinweis."
         }
       },
       "data": {
@@ -4675,14 +4679,17 @@
     },
     "map": {
       "heading": "Gerätekarte",
-      "intro": "Wo sich jedes Gerät befand, als zuletzt jemand gefragt hat. Nichts davon ist live, und kein Gerät wird verfolgt -- ein Punkt existiert, weil eine Bedienperson ihn angefordert hat.",
+      "intro": "Wo jedes Gerät bei seiner letzten Antwort war. Mit „Live“ wird jedes Online-Gerät, das Sie orten dürfen, erneut gefragt, solange diese Seite offen ist, und jedes zeigt einen Hinweis, wer gefragt hat. Bei geschlossener, verborgener oder pausierter Seite wird nichts abgefragt.",
       "filter": "Geräte filtern",
       "count": "{count} angezeigt",
       "none": "Kein für Sie sichtbares Gerät wurde je geortet.",
       "no_match": "Kein Gerät passt zu diesem Filter.",
       "unreachable": "Der Hub hat nicht geantwortet.",
       "count_with_unlocated": "{count} angezeigt, {unlocated} noch nicht geortet",
-      "none_yet": "Noch kein Gerät hat eine Position. {count} können geortet werden -- sie stehen neben der Karte, mit ihrer jeweils letzten Antwort."
+      "none_yet": "Noch kein Gerät hat eine Position. {count} können geortet werden -- sie stehen neben der Karte, mit ihrer jeweils letzten Antwort.",
+      "live": "Live",
+      "live_on": "Online-Geräte werden alle {seconds} s erneut gefragt.",
+      "live_paused": "Live-Aktualisierung ist pausiert."
     }
   },
   "apps": {
