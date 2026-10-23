@@ -302,15 +302,19 @@ public static class AgentConfig
     /// The env override still wins, and still overrides BOTH channels: it exists so the
     /// self-update path can be exercised against a local server, and a test server that only
     /// answered for one channel would be a worse tool rather than a safer one.</summary>
+    /// <summary>The env override's name, which has no legacy spelling: it was added after the
+    /// rename, so the FLEETHUB_ and TEMP_MONITOR_ prefixes both read the same suffix.</summary>
+    private const string UpdateManifestUrlEnv = "UPDATE_MANIFEST_URL";
+
     public static string UpdateManifestUrl =>
-        Env("UPDATE_MANIFEST_URL", "UPDATE_MANIFEST_URL")
+        Env(UpdateManifestUrlEnv, UpdateManifestUrlEnv)
         ?? ManifestUrlForPin(State.RuntimeConfigStore.Current.PinnedVersion)
         ?? ManifestUrlFor(State.RuntimeConfigStore.Current.Channel);
 
     /// <summary>Whether the env override points the updater at a test server, in which case
     /// a persisted pin is ignored and the manifest is read the automatic way.</summary>
     public static bool UpdateManifestOverridden =>
-        Env("UPDATE_MANIFEST_URL", "UPDATE_MANIFEST_URL") is not null;
+        Env(UpdateManifestUrlEnv, UpdateManifestUrlEnv) is not null;
 
     // One signed manifest per released version, written by release.ps1 beside the channel
     // manifest. The set of versions a pin can reach is exactly the set of files here on main,

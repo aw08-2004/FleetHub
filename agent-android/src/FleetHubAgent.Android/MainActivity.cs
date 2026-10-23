@@ -75,6 +75,7 @@ public sealed class MainActivity : Activity
     private LinearLayout _checklist = null!;
     private TextView _advancedToggle = null!;
     private View _advancedPanel = null!;
+    private TextView _hubLabel = null!;
     private EditText _hubField = null!;
     private EditText _secretField = null!;
 
@@ -148,7 +149,8 @@ public sealed class MainActivity : Activity
         _advancedToggle.Click += (_, _) => ToggleAdvanced();
         SetAdvancedOpen(false);
 
-        FindViewById<TextView>(Resource.Id.hub_label)!.Text = "Hub URL";
+        _hubLabel = FindViewById<TextView>(Resource.Id.hub_label)!;
+        _hubLabel.Text = "Hub URL";
         _hubField = FindViewById<EditText>(Resource.Id.hub_field)!;
         _hubField.Hint = AgentConfig.DefaultHubBase;
         _hubField.Text = _state.LoadHubBaseOverride() ?? "";
@@ -455,7 +457,7 @@ public sealed class MainActivity : Activity
         if (_hubField.Enabled == !locked) return;
         _hubField.Enabled = !locked;
         if (locked) _hubField.Text = AgentConfig.HubBase;
-        FindViewById<TextView>(Resource.Id.hub_label)!.Text = locked
+        _hubLabel.Text = locked
             ? "Hub URL (set by provisioning, cannot be changed on this device)"
             : "Hub URL";
     }

@@ -68,7 +68,7 @@ public sealed class AgentState
     /// <summary>The version the hub pinned this platform to, or null for automatic. A corrupt
     /// or hand-edited file reads as automatic only after NormalizePin refuses it -- the same
     /// strict parse the heartbeat goes through.</summary>
-    public string? LoadUpdatePin()
+    public static string? LoadUpdatePin()
     {
         try
         {

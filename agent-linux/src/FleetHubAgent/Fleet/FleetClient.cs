@@ -250,14 +250,14 @@ public sealed class FleetClient : IDisposable, IOutputSink
             if (block is null) return;
             var pin = UpdatePins.PinFromPolicy(
                 block["mode"]?.GetValue<string>(), block["version"]?.GetValue<string>());
-            if (pin == _state.LoadUpdatePin()) return;
+            if (pin == AgentState.LoadUpdatePin()) return;
             _state.SaveUpdatePin(pin);
             if (pin is null) _log.LogInformation("Agent updates are automatic again");
             else _log.LogInformation("Agent updates are pinned to {Version}", pin);
         }
         catch (Exception e)
         {
-            _log.LogWarning("Ignoring malformed update policy from the hub: {Msg}", e.Message);
+            _log.LogWarning(e, "Ignoring malformed update policy from the hub: {Msg}", e.Message);
         }
     }
 

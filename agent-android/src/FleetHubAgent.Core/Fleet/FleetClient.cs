@@ -152,7 +152,7 @@ public sealed class FleetClient : IDisposable
         }
         catch (Exception e)
         {
-            _log.LogWarning("Ignoring malformed update policy from the hub: {Msg}", e.Message);
+            _log.LogWarning(e, "Ignoring malformed update policy from the hub: {Msg}", e.Message);
         }
     }
 
