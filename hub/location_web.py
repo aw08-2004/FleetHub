@@ -212,51 +212,87 @@ def create_location_blueprint(db_path, login_required, access):
         before anything is queued, so the set this can reach is exactly the set the single-
         device route could reach one at a time.
 
-        Skipped, and reported back so the page can say why a point did not move:
-          * **offline** devices -- a locate queued at a switched-off phone expires into a
-            "did not answer" row every TTL, which would bury its real history in noise;
-          * devices with a locate **in flight**, for the reason the single route gives;
-          * devices asked **within the live interval**, by anybody -- see
-            location.recently_requested. The interval belongs to the device, not the viewer.
+        Skipped, and reported back so the page can say why a point did not move -- see
+        _live_candidates for the three reasons.
         """
         if not request.is_json:
             return jsonify({"error": "expected application/json"}), 415
         actor = permissions_web.current_actor()
-        now = int(time.time())
         interval = _live_interval()
-
-        capable = access.filter_rows(
-            [{"machine": m} for m in
-             capabilities.machines_with_feature(db_path, capabilities.FEATURE_LOCATE)])
-        names = [c["machine"] for c in capable]
-        online = {row["machine"] for row in fleet.list_agent_status(
-            db_path, offline_after=settings.get_int(db_path, "fleet.offline_after_seconds"))
-            if row["status"] == "online"}
-        in_flight = set(location.open_requests(db_path, names))
-        # A little under the interval, so a page whose timer fires a second early is not
-        # turned away on every other tick and left updating at half the rate.
-        recent = location.recently_requested(db_path, names, now - interval + 5)
-
-        asked, skipped = [], {}
-        for name in names:
-            if name not in online:
-                skipped[name] = "offline"
-            elif name in in_flight:
-                skipped[name] = "pending"
-            elif name in recent:
-                skipped[name] = "recent"
-            else:
-                try:
-                    _ask(name, actor, live=True)
-                    asked.append(name)
-                except ValueError:
-                    # A device that has since stopped reporting the feature. One refusal must
-                    # not cost every other device its update.
-                    skipped[name] = "unsupported"
+        targets, skipped, since = _live_candidates(db_path, access, int(time.time()), interval)
+        asked, refused = _ask_each(db_path, targets, since,
+                                   lambda name: _ask(name, actor, live=True))
+        skipped.update(refused)
         return jsonify({"asked": asked, "skipped": skipped,
                         "live": {"interval_seconds": interval}}), 202
 
     return bp
+
+
+def _live_candidates(db_path, access, now, interval):
+    """Split the operator's locatable devices into the ones the live map should ask now and the
+    ones it should leave alone. Returns `(targets, skipped, since)`, `skipped` being
+    `{machine: reason}` and `since` the cut-off _ask_each re-checks against.
+
+    Left alone:
+      * **offline** devices -- a locate queued at a switched-off phone expires into a "did not
+        answer" row every TTL, which would bury its real history in noise;
+      * devices with a locate **in flight**, for the reason the single-device route gives;
+      * devices asked **within the live interval**, by anybody -- see
+        location.recently_requested, which is what spaces asks per device rather than per
+        viewer.
+
+    Module level, like _unlocated, so the blueprint factory stays a list of routes.
+    """
+    names = [c["machine"] for c in access.filter_rows(
+        [{"machine": m} for m in
+         capabilities.machines_with_feature(db_path, capabilities.FEATURE_LOCATE)])]
+    online = {row["machine"] for row in fleet.list_agent_status(
+        db_path, offline_after=settings.get_int(db_path, "fleet.offline_after_seconds"))
+        if row["status"] == "online"}
+    in_flight = set(location.open_requests(db_path, names))
+    # A little under the interval, so a page whose timer fires a second early is not turned
+    # away on every other tick and left updating at half the rate.
+    since = now - interval + 5
+    recent = location.recently_requested(db_path, names, since)
+
+    targets, skipped = [], {}
+    for name in names:
+        if name not in online:
+            skipped[name] = "offline"
+        elif name in in_flight:
+            skipped[name] = "pending"
+        elif name in recent:
+            skipped[name] = "recent"
+        else:
+            targets.append(name)
+    return targets, skipped, since
+
+
+def _ask_each(db_path, targets, since, ask):
+    """Ask each target, re-checking it just before. Returns `(asked, {machine: reason})`.
+
+    **The re-check narrows a race; it does not close one.** Two viewers whose ticks land in
+    the same instant both read the candidate list before either has queued anything, and
+    without this both would ask every phone. Checking each device immediately before its own
+    ask leaves a window of one statement rather than one whole fleet, and what slips through
+    it is one extra GPS fix -- not worth a lock on the command table. Rejected: an atomic
+    claim (INSERT ... WHERE NOT EXISTS) in fleet.create_command, which every other command
+    type would pay for to save a phone an occasional duplicate locate.
+    """
+    asked, skipped = [], {}
+    for name in targets:
+        if location.recently_requested(db_path, [name], since):
+            skipped[name] = "recent"
+            continue
+        try:
+            ask(name)
+            asked.append(name)
+        except ValueError:
+            # A device that has since stopped reporting the feature. One refusal must not
+            # cost every other device its update.
+            skipped[name] = "unsupported"
+    return asked, skipped
 
 
 def _unlocated(db_path, access, fixes):

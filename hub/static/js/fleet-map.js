@@ -188,7 +188,7 @@
         fixes = data.fixes || [];
         unlocated = data.unlocated || [];
         canLocate = !!data.can_locate;
-        if (data.live && data.live.interval_seconds) liveSeconds = data.live.interval_seconds;
+        if (data.live?.interval_seconds) liveSeconds = data.live.interval_seconds;
         // Built after the first payload, because the tile URL is in it -- a map created before
         // the fetch would need its layer swapped afterwards for no gain.
         if (!view) {
@@ -211,7 +211,7 @@
     // slow hub cannot stack ticks. The hub spaces asks per DEVICE (location.recently_requested),
     // so this timer only has to be roughly right, and two open maps cost a phone nothing extra.
     function liveOn() {
-        return canLocate && liveToggle && liveToggle.checked && !document.hidden;
+        return !!(canLocate && liveToggle?.checked && !document.hidden);
     }
 
     function describeLive() {
@@ -231,7 +231,7 @@
                     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
                 if (response.ok) {
                     const data = await response.json().catch(() => ({}));
-                    if (data.live && data.live.interval_seconds) liveSeconds = data.live.interval_seconds;
+                    if (data.live?.interval_seconds) liveSeconds = data.live.interval_seconds;
                 }
             } catch {
                 // Offline for a moment. The next tick tries again; the answers that do arrive
@@ -245,26 +245,33 @@
 
     function scheduleLive() {
         if (liveTimer) clearTimeout(liveTimer);
-        liveTimer = liveOn() ? setTimeout(liveTick, liveSeconds * 1000) : null;
+        liveTimer = liveOn() ? setTimeout(startLive, liveSeconds * 1000) : null;
+    }
+
+    // liveTick never rejects -- its fetch is caught and load() reports its own failures on
+    // the page -- so the promise is dropped on purpose rather than awaited by an event
+    // handler that has nothing to do with the answer.
+    function startLive() {
+        void liveTick();
     }
 
     if (liveToggle) {
         liveToggle.addEventListener('change', () => {
             describeLive();
-            if (liveOn()) liveTick(); else scheduleLive();
+            if (liveOn()) startLive(); else scheduleLive();
         });
     }
     // Hidden tab: stop asking. Back in view: ask at once rather than waiting out the interval,
     // since whoever came back to the tab came back to see where things are now.
     document.addEventListener('visibilitychange', () => {
         describeLive();
-        if (liveOn()) liveTick(); else scheduleLive();
+        if (liveOn()) startLive(); else scheduleLive();
     });
 
     filterEl.addEventListener('input', draw);
-    load().then(() => {
+    void load().then(() => {
         describeLive();
-        if (liveOn()) liveTick();
+        if (liveOn()) startLive();
     });
     // New fixes, and machines going on- or offline (the marker style follows status).
     window.FleetLive.watch(['location', 'status', 'machines'], load, { minInterval: 5000 });

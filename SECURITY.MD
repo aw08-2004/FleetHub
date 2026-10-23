@@ -92,6 +92,11 @@ Four properties of that row are deliberate and worth stating plainly:
   open therefore does build a short travel history**, capped at 100 positions per device and
   pruned by `data.location_retention_days`. Pausing *Live*, or closing or hiding the tab, stops
   it.
+- **A managed device's location switch is not the holder's to keep off.** On a fully managed
+  Android device, a locate that finds Location switched off switches it back on before taking
+  the fix (Android agents released after 0.3.2). Only a locate does this, it is not held on afterwards, and the
+  notice still names who asked. A device with the agent installed as an ordinary app is never
+  switched on. It just answers that location is off.
 - **Asking has its own capability.** `locate_device` is not part of `issue_commands`, which
   every other command-issuing feature reuses. Being able to reboot a PC does not imply being
   able to find out where an employee is. The hub refuses a hand-rolled `locate_device` through

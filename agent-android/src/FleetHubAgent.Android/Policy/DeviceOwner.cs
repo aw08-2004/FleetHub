@@ -324,7 +324,7 @@ public static class DeviceOwner
         }
         catch (Exception e)
         {
-            log.LogWarning("Device Owner: could not switch location on: {Msg}", e.Message);
+            log.LogWarning(e, "Device Owner: could not switch location on: {Msg}", e.Message);
             return false;
         }
     }
