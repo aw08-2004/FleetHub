@@ -115,6 +115,42 @@ if (-not (Test-Path (Join-Path $AgentDir "signing.props"))) {
          "and publishing one would produce a release every device refuses. See signing.props.example.")
 }
 
+# **The Android SDK and the JDK are found through the standard environment variables, with the
+# Visual Studio install location as the fallback.** This used to pass only
+# %LOCALAPPDATA%\Android\Sdk and %LOCALAPPDATA%\Android\jdk, which is where Visual Studio puts
+# them and nowhere else. On a machine that has the SDK somewhere else, the publish failed with
+# XA5300 "The Android SDK directory could not be found" -- after the version triple had
+# already been bumped, so a failed release left three modified files behind it. The lookup
+# runs here, before anything is touched, for that reason.
+#
+# ANDROID_HOME is the variable Google documents. ANDROID_SDK_ROOT is its deprecated
+# predecessor and is still set on older machines. JAVA_HOME is what every JDK installer and
+# every Java tool reads. A directory is accepted only when it contains what the build actually
+# uses, so a variable left pointing at an old install fails here, with its name, and not
+# halfway through a publish.
+function FirstDir([string]$what, [string]$mustContain, [object[]]$candidates) {
+    foreach ($c in $candidates) {
+        if ($c.Path -and (Test-Path (Join-Path $c.Path $mustContain))) {
+            Ok "$what : $($c.Path) (from $($c.From))"
+            return $c.Path
+        }
+        if ($c.Path) { Warn "$what : $($c.From) is $($c.Path), which has no $mustContain; skipped" }
+    }
+    # Only the variables are named: the fallback is not something anyone can "set".
+    $names = ($candidates | Where-Object { $_.From -cmatch '^[A-Z_]+$' } |
+              ForEach-Object { $_.From }) -join " or "
+    Die "No $what found. Set $names to its install directory, then open a new terminal."
+}
+
+Step "Locating the build tools"
+$AndroidSdk = FirstDir "Android SDK" "platform-tools" @(
+    @{ From = "ANDROID_HOME";     Path = $env:ANDROID_HOME },
+    @{ From = "ANDROID_SDK_ROOT"; Path = $env:ANDROID_SDK_ROOT },
+    @{ From = "the Visual Studio default"; Path = (Join-Path $env:LOCALAPPDATA "Android\Sdk") })
+$JavaSdk = FirstDir "JDK" "bin\java.exe" @(
+    @{ From = "JAVA_HOME"; Path = $env:JAVA_HOME },
+    @{ From = "the Visual Studio default"; Path = (Join-Path $env:LOCALAPPDATA "Android\jdk") })
+
 # **gh is handed a PATH to the notes, never the prose itself.** This script used to read the
 # file and pass the text as an argument, which threw away the entire reason -NotesFile exists.
 # Release notes are prose, prose contains quotation marks, and PowerShell's native-argument
@@ -195,8 +231,8 @@ foreach ($proj in @($CoreCsproj, $AppCsproj)) {
 Step "Publishing"
 if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
 & dotnet publish $AppCsproj -c Release -o $DistDir `
-    -p:AndroidSdkDirectory="$env:LOCALAPPDATA\Android\Sdk" `
-    -p:JavaSdkDirectory="$env:LOCALAPPDATA\Android\jdk" | Out-Host
+    -p:AndroidSdkDirectory="$AndroidSdk" `
+    -p:JavaSdkDirectory="$JavaSdk" | Out-Host
 if ($LASTEXITCODE -ne 0) { Die "dotnet publish failed" }
 
 $apk = Get-ChildItem -Path $DistDir -Filter "*-Signed.apk" -Recurse | Select-Object -First 1
@@ -207,7 +243,7 @@ Ok ("published {0:N1} MB" -f ($apk.Length / 1MB))
 # The signing certificate the provisioning QR's checksum covers. Printed rather than checked,
 # because this script does not know what the previous release was signed with -- but a
 # technician about to re-provision a device can compare it against the console.
-$apksigner = Join-Path $env:LOCALAPPDATA "Android\Sdk\build-tools\36.0.0\apksigner.bat"
+$apksigner = Join-Path $AndroidSdk "build-tools\36.0.0\apksigner.bat"
 if (Test-Path $apksigner) {
     Say "signing certificate:"
     Native { & $apksigner verify --print-certs $ApkPath } |

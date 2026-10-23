@@ -155,7 +155,7 @@ internal static class ProvisioningExtras
     // rather than referenced for the same reason as the action strings in ProvisioningActivities:
     // the constant carries ApiSince = 23 but the bundle is only ever populated by the flows this
     // app supports, and the value is a frozen platform string.
-    private const string ExtraAdminExtrasBundle = "android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE";
+    internal const string ExtraAdminExtrasBundle = "android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE";
 
     private const string Tag = "FleetHubAgent";
 
@@ -166,7 +166,7 @@ internal static class ProvisioningExtras
     {
         try
         {
-            var extras = intent?.GetBundleExtra(ExtraAdminExtrasBundle);
+            var extras = ReadExtras(intent);
             if (extras is null)
             {
                 // Info, not Warn. A device provisioned by an MDM rather than by a FleetHub QR
@@ -206,6 +206,39 @@ internal static class ProvisioningExtras
             global::Android.Util.Log.Error(Tag, $"Could not read the provisioning extras: {e.Message}");
         }
     }
+
+    /// <summary>The admin extras bundle out of a provisioning intent, or null.
+    ///
+    /// **It is a PersistableBundle, not a Bundle, and reading it as a Bundle returns null
+    /// without a word.** The platform declares the extra as "a Parcelable extra of type
+    /// PersistableBundle"; the two are siblings under BaseBundle, not parent and child, and
+    /// <c>Intent.getBundleExtra</c> swallows the ClassCastException and hands back null. That is
+    /// what the first version of <see cref="Adopt"/> did, so every QR-provisioned device logged
+    /// "No provisioning extras", stored nothing, and opened on the setup screen asking for the
+    /// hub URL the QR had just carried. **Observed on a factory-reset device after the fix above
+    /// had shipped.**
+    ///
+    /// The Bundle read is kept as a second try rather than dropped: an OEM setup wizard that
+    /// builds the intent by hand could send a plain Bundle, and costing nothing on the devices
+    /// that behave is better than finding that one out with another wipe.</summary>
+    internal static BaseBundle? ReadExtras(Intent? intent)
+    {
+        if (intent is null) return null;
+        // The untyped GetParcelableExtra is obsolete from API 33, and its typed replacement does
+        // not exist below it; this app targets API 26, so the untyped one is the call that runs
+        // everywhere.
+#pragma warning disable CA1422, CS0618
+        if (intent.GetParcelableExtra(ExtraAdminExtrasBundle) is PersistableBundle persistable)
+            return persistable;
+#pragma warning restore CA1422, CS0618
+        return intent.GetBundleExtra(ExtraAdminExtrasBundle);
+    }
+
+    /// <summary>The same bundle, as the PersistableBundle a GET_PROVISIONING_MODE result must
+    /// carry to have it forwarded to ADMIN_POLICY_COMPLIANCE. Null when there is none, or when it
+    /// arrived as a plain Bundle, which cannot be put on that result.</summary>
+    internal static PersistableBundle? ReadPersistable(Intent? intent) =>
+        ReadExtras(intent) as PersistableBundle;
 
     /// <summary>Trimmed, or null when there is nothing usable. The hub trims before it mints, so
     /// this is about a bundle assembled by hand or by another tool.</summary>
