@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.166.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.167.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -204,6 +204,27 @@ key is saved in Settings.
   no manifest makes the machine page say *no signed manifest exists*. An agent older than the
   pin-aware version says it ignores the pin.
 - [ ] **Translations.** The new Settings rows and notes read correctly in German and Spanish.
+
+**Hub 1.167.0 + Android agent (next beta): live map, repeat locates, location switched back on**
+(roadmap #23). The owner's call on 2026-10-23: the map may ask again while it is open. The
+rejected alternative, a hub-side timer locating with no map open, is recorded in
+`hub/location.py`.
+- [ ] **Repeat locate.** On the map, a device that already has a point shows **Locate** in the
+  list. Pressing it moves the point once the device answers.
+- [ ] **Live.** With the map open, an online phone's point updates about every minute. Unticking
+  *Live*, or switching to another tab, stops the asks: the machine's command list shows no new
+  `locate_device` until the tab is back.
+- [ ] **Per device, not per viewer.** With the map open in two browsers, a phone still gets
+  about one locate a minute.
+- [ ] **Offline skipped.** A switched-off phone gets no `locate_device` from the live map, and
+  its history gains no *did not answer* rows.
+- [ ] **Location switched on** (needs the next Android agent). On a fully managed phone, turn
+  Location off in quick settings and locate it: the switch comes back on and a fresh fix
+  arrives, instead of *location is switched off on this device*.
+- [ ] **One chime.** On that agent, with the map open, the "This device was located" notice sounds
+  once and then updates silently until it is dismissed.
+- [ ] **Translations.** The *Live* switch, its status line and the new setting read correctly in
+  German and Spanish.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 

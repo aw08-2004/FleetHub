@@ -19,11 +19,22 @@
 <div class="toolbar" style="justify-content: space-between; margin-bottom: var(--space-3);">
     <div>
         <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-2);">{{ t('location.map.heading') }}</h1>
-        {# Says plainly that this is not live. A map that looked live would be read as live,
-           and every point here is where a device was the last time somebody ASKED. #}
+        {# Says plainly what a point is and when it moves: where a device was the last time it
+           answered, refreshed only while somebody has this page open with Live on. #}
         <p class="stat-card__meta">{{ t('location.map.intro') }}</p>
     </div>
-    <span class="stat-card__meta" id="fleet-map-count"></span>
+    <div style="text-align: right;">
+        <span class="stat-card__meta" id="fleet-map-count"></span>
+        {# Revealed by fleet-map.js only for an operator who may locate. Unchecking it is the
+           pause: nothing is asked while it is off or while this tab is hidden. #}
+        <div id="fleet-map-live" hidden>
+            <label class="stat-card__meta">
+                <input type="checkbox" id="fleet-map-live-toggle" checked>
+                {{ t('location.map.live') }}
+            </label>
+            <span class="stat-card__meta" id="fleet-map-live-status"></span>
+        </div>
+    </div>
 </div>
 
 <div class="fleet-map">

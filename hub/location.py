@@ -1,9 +1,16 @@
 """Where a device is, when somebody asked -- roadmap #23 phase B.
 
-**On-demand only. Nothing here polls, and that is the design rather than a first step.** A fix
-exists in this table because an operator pressed a button and the device answered; there is no
-background collection, no periodic sample, and no trail of where a device has been except the
-trail of times somebody asked. The Android agent's manifest used to argue that a fleet agent
+**On-demand only. Nothing on the hub polls, and that is the design rather than a first step.**
+A fix exists in this table because an operator asked and the device answered; there is no
+background collection and no periodic sample taken while nobody is looking. **The one
+repetition is the live fleet map (2026-10-23, the owner's call):** while an operator with
+`locate_device` has the map open, the page asks every online device in their scope again on
+`location.live_interval_seconds`. That is still an operator asking -- the page stops when it
+is closed or hidden, every ask is audited and notified like a single one -- but it does mean
+the history of a device on an open map is a trail rather than a handful of points, which is
+what MAX_FIXES_PER_MACHINE and the retention prune below are for. Rejected: a hub-side timer
+that kept locating with no map open. That is tracking, and nobody would be looking at it.
+The Android agent's manifest used to argue that a fleet agent
 asking for location is an agent nobody installs, and that comment is rewritten rather than
 deleted (see the manifest): what changed is that there is now a console that can show a fix, a
 capability that gates asking, an audit row for every ask, and a notification on the device
@@ -427,6 +434,27 @@ def open_requests(db_path, machines):
     # Ascending, so the newest request per machine is the one left standing -- the same
     # answer open_request gives for one machine.
     return {row["machine"]: row["status"] for row in rows}
+
+
+def recently_requested(db_path, machines, since):
+    """The subset of `machines` that were sent a locate at or after `since` (epoch seconds),
+    whatever became of it.
+
+    **What keeps two open maps from doubling the load on a phone.** Every console showing the
+    live map asks on its own timer, and `open_requests` alone only stops a second ask while the
+    first is still in flight -- once a device has answered, the next viewer's tick would ask
+    again at once. Spacing by when the last ask was CREATED makes the interval a property of
+    the device rather than of how many people are looking at it.
+    """
+    names = [str(m).strip() for m in machines or () if str(m or "").strip()]
+    if not names:
+        return set()
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT machine FROM commands WHERE type = ? AND created_at >= ? "
+            f"AND machine IN ({','.join('?' for _ in names)})",
+            [COMMAND_TYPE, int(since), *names]).fetchall()
+    return {row["machine"] for row in rows}
 
 
 def open_request(db_path, machine):

@@ -59,6 +59,12 @@ public sealed class LocationNotifier(Context context, ILogger log) : ILocationDi
                     $"Its position was sent to your organisation's console."))
                 .SetSmallIcon(global::Android.Resource.Drawable.IcMenuMyLocation)
                 .SetAutoCancel(true)
+                // The live fleet map asks about once a minute. The notice is still replaced
+                // each time, so its timestamp stays current, but it sounds only while the
+                // person has not yet seen it -- once they dismiss it the next ask alerts again.
+                // A chime every minute would be a reason to switch notifications off, which
+                // would silence the disclosure altogether.
+                .SetOnlyAlertOnce(true)
                 .SetWhen(Java.Lang.JavaSystem.CurrentTimeMillis())
                 .SetShowWhen(true)
                 .Build();

@@ -667,6 +667,13 @@ REGISTRY = (
     # settable: the device is the only thing that knows what it actually has.
     _s("location.default_timeout_seconds", "location", "int", 45, minimum=5, maximum=300,
        unit="seconds"),
+    # How often the open fleet map asks every online device again (location_web.
+    # locate_fleet). Spaced per DEVICE on the hub, not per viewer, so two operators with the
+    # map open do not double it. The floor is a battery one: each ask holds a wake lock and
+    # the GPS for up to the timeout above, and below a quarter-minute a phone on an open map
+    # would be locating more or less continuously.
+    _s("location.live_interval_seconds", "location", "int", 60, minimum=15, maximum=3600,
+       unit="seconds"),
 
     # ---------------- Map: where the console gets its tiles (roadmap #23) ----------------
     # **The one thing in the console that is fetched from a third party at page load**, and

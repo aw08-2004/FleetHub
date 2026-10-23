@@ -1548,6 +1548,10 @@
         "default_timeout_seconds": {
           "label": "Tiempo que el dispositivo dedica a buscar",
           "help": "Cuánto intenta un dispositivo obtener una posición nueva antes de responder con la última conocida. Una fijación por satélite en frío tarda decenas de segundos al aire libre y no llega nunca en interiores, así que este es el punto en el que el dispositivo se detiene en lugar de dejar a alguien mirando un indicador de carga."
+        },
+        "live_interval_seconds": {
+          "label": "Actualización del mapa en vivo",
+          "help": "Con el mapa de dispositivos abierto y «En vivo» activado, cada cuánto se vuelve a pedir su posición a cada dispositivo en línea. El intervalo es por dispositivo, así que varias personas mirando el mapa no consultan más a menudo. Cada consulta usa la ubicación del dispositivo hasta el tiempo indicado arriba y muestra un aviso en él."
         }
       },
       "data": {
@@ -4675,14 +4679,17 @@
     },
     "map": {
       "heading": "Mapa de dispositivos",
-      "intro": "Dónde estaba cada dispositivo la última vez que alguien lo pidió. Nada de esto es en vivo, y ningún dispositivo es rastreado: un punto existe porque un operador lo solicitó.",
+      "intro": "Dónde estaba cada dispositivo la última vez que respondió. Con «En vivo» activado, cada dispositivo en línea que usted puede localizar se consulta de nuevo mientras esta página está abierta, y cada uno muestra un aviso con quién lo pidió. No se consulta nada con la página cerrada, oculta o en pausa.",
       "filter": "Filtrar dispositivos",
       "count": "{count} mostrados",
       "none": "Ningún dispositivo que pueda ver se ha localizado nunca.",
       "no_match": "Ningún dispositivo coincide con ese filtro.",
       "unreachable": "El hub no respondió.",
       "count_with_unlocated": "{count} mostrados, {unlocated} aún sin ubicar",
-      "none_yet": "Ningún dispositivo tiene posición todavía. {count} se pueden ubicar -- aparecen junto al mapa con lo último que respondió cada uno."
+      "none_yet": "Ningún dispositivo tiene posición todavía. {count} se pueden ubicar -- aparecen junto al mapa con lo último que respondió cada uno.",
+      "live": "En vivo",
+      "live_on": "Consultando de nuevo los dispositivos en línea cada {seconds} s.",
+      "live_paused": "Las actualizaciones en vivo están en pausa."
     }
   },
   "apps": {

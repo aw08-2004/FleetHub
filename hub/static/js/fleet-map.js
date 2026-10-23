@@ -1,9 +1,16 @@
 // The fleet map (roadmap #23 phase C): every device in scope that has a known position.
 //
-// **A last-known-position map, and the page has to say so.** Nothing here is live. Each point
-// is where a device was the last time an operator asked, which for most devices is never and
-// for the rest is whenever somebody last needed to know. A map that looked live would be read
-// as live, so the age of every fix is on screen and stale ones are drawn differently.
+// **Last-known positions, refreshed only while somebody watches.** Each point is where a device
+// was the last time it answered a locate. With Live on (the default for an operator who may
+// locate), the page asks every online device in scope again on location.live_interval_seconds
+// for as long as it is open and visible, and the points move as the answers arrive. Closed,
+// hidden or paused, nothing is asked -- the hub has no timer of its own (see location.py). The
+// age of every fix stays on screen and stale ones are drawn differently, because a point that
+// stopped moving still has to say how old it is.
+//
+// **Live replaced a map that could locate a device once.** The Locate button used to exist
+// only on the "not located yet" list, so a phone's first answer moved it to the located list,
+// which had no button, and its point never moved again. Every located row now has one too.
 //
 // **The list beside the map is not decoration.** It is what works when the tile server is
 // unreachable, what an operator reads on a narrow screen, and what carries the coordinates
@@ -29,6 +36,11 @@
     let fixes = [];
     let unlocated = [];
     let canLocate = false;
+    let liveSeconds = 60;
+    let liveTimer = null;
+    const liveEl = document.getElementById('fleet-map-live');
+    const liveToggle = document.getElementById('fleet-map-live-toggle');
+    const liveStatus = document.getElementById('fleet-map-live-status');
 
     function el(tag, className, text) {
         const node = document.createElement(tag);
@@ -124,6 +136,14 @@
                 if (view) view.show([fix]);
             });
             listEl.appendChild(row);
+            // Beside the row rather than inside it: a button nested in the row's button is
+            // invalid HTML, and a click on it would also frame the map.
+            if (canLocate) {
+                const button = el('button', 'btn fleet-map__locate', t('location.list.locate'));
+                button.type = 'button';
+                button.addEventListener('click', () => locate(fix.machine, button));
+                listEl.appendChild(button);
+            }
         });
         renderUnlocated(waiting);
     }
@@ -168,6 +188,7 @@
         fixes = data.fixes || [];
         unlocated = data.unlocated || [];
         canLocate = !!data.can_locate;
+        if (data.live && data.live.interval_seconds) liveSeconds = data.live.interval_seconds;
         // Built after the first payload, because the tile URL is in it -- a map created before
         // the fetch would need its layer swapped afterwards for no gain.
         if (!view) {
@@ -185,8 +206,66 @@
         draw();
     }
 
+    // ---------------------------------------------------------------- live
+    // One timer for the whole page, re-armed after each tick rather than setInterval, so a
+    // slow hub cannot stack ticks. The hub spaces asks per DEVICE (location.recently_requested),
+    // so this timer only has to be roughly right, and two open maps cost a phone nothing extra.
+    function liveOn() {
+        return canLocate && liveToggle && liveToggle.checked && !document.hidden;
+    }
+
+    function describeLive() {
+        if (!liveEl) return;
+        liveEl.hidden = !canLocate;
+        if (!liveStatus) return;
+        liveStatus.textContent = liveOn()
+            ? t('location.map.live_on', { seconds: liveSeconds })
+            : t('location.map.live_paused');
+    }
+
+    async function liveTick() {
+        liveTimer = null;
+        if (liveOn()) {
+            try {
+                const response = await fetch('/api/location/fleet/locate',
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                if (response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    if (data.live && data.live.interval_seconds) liveSeconds = data.live.interval_seconds;
+                }
+            } catch {
+                // Offline for a moment. The next tick tries again; the answers that do arrive
+                // come in as 'location' events either way.
+            }
+            await load();
+        }
+        describeLive();
+        scheduleLive();
+    }
+
+    function scheduleLive() {
+        if (liveTimer) clearTimeout(liveTimer);
+        liveTimer = liveOn() ? setTimeout(liveTick, liveSeconds * 1000) : null;
+    }
+
+    if (liveToggle) {
+        liveToggle.addEventListener('change', () => {
+            describeLive();
+            if (liveOn()) liveTick(); else scheduleLive();
+        });
+    }
+    // Hidden tab: stop asking. Back in view: ask at once rather than waiting out the interval,
+    // since whoever came back to the tab came back to see where things are now.
+    document.addEventListener('visibilitychange', () => {
+        describeLive();
+        if (liveOn()) liveTick(); else scheduleLive();
+    });
+
     filterEl.addEventListener('input', draw);
-    load();
+    load().then(() => {
+        describeLive();
+        if (liveOn()) liveTick();
+    });
     // New fixes, and machines going on- or offline (the marker style follows status).
     window.FleetLive.watch(['location', 'status', 'machines'], load, { minInterval: 5000 });
 })();
