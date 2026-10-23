@@ -149,7 +149,11 @@ public sealed class MainActivity : Activity
         _advancedToggle.Click += (_, _) => ToggleAdvanced();
         SetAdvancedOpen(false);
 
-        _hubLabel = FindViewById<TextView>(Resource.Id.hub_label)!;
+        // `?? throw` rather than `!`: SonarCloud (S8969) calls the `!` redundant while the
+        // compiler, which reads FindViewById as nullable, warns CS8602 without it. A missing
+        // view is a broken layout either way, and this says so at the line that found it.
+        _hubLabel = FindViewById<TextView>(Resource.Id.hub_label)
+                    ?? throw new InvalidOperationException("activity_main has no hub_label");
         _hubLabel.Text = "Hub URL";
         _hubField = FindViewById<EditText>(Resource.Id.hub_field)!;
         _hubField.Hint = AgentConfig.DefaultHubBase;
