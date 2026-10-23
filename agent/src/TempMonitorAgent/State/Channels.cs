@@ -13,7 +13,7 @@ namespace TempMonitorAgent.State;
 /// compiled-in urls. Keeping the mapping there rather than here means the trust decision
 /// lives beside the trust root it protects.</para>
 /// </summary>
-public static partial class Channels
+public static class Channels
 {
     public const string Stable = "stable";
     public const string Beta = "beta";
@@ -30,22 +30,4 @@ public static partial class Channels
         var text = value?.Trim().ToLowerInvariant();
         return text == Beta ? Beta : Stable;
     }
-
-    /// <summary>A pinned agent version from the hub's <c>update_policy</c>, or null for
-    /// "automatic".
-    ///
-    /// <para><b>Strict on purpose, unlike VersionUtil.</b> The pin becomes a path component
-    /// of a compiled-in url (<see cref="AgentConfig.ManifestUrlForPin"/>), so anything but
-    /// exactly three short numeric components is refused rather than "tolerantly" read as a
-    /// different version than the operator typed. Six digits a component also keeps
-    /// VersionUtil's int.Parse from ever overflowing on a value that came off the wire. Mirrors
-    /// <c>channels.is_valid_pin</c> on the hub.</para></summary>
-    public static string? NormalizePin(string? value)
-    {
-        var text = value?.Trim();
-        return text is not null && PinPattern().IsMatch(text) ? text : null;
-    }
-
-    [System.Text.RegularExpressions.GeneratedRegex(@"^\d{1,6}\.\d{1,6}\.\d{1,6}$")]
-    private static partial System.Text.RegularExpressions.Regex PinPattern();
 }

@@ -1,5 +1,6 @@
 using FleetHubAgent;
 using FleetHubAgent.Update;
+using FleetHub.Shared;
 
 namespace FleetHubAgent.Core.Tests;
 
@@ -20,7 +21,7 @@ public class UpdatePinTests
     [InlineData("../0.4.0")]
     public void Anything_but_three_short_numbers_reads_as_automatic(string? raw)
     {
-        Assert.Null(VersionUtil.NormalizePin(raw));
+        Assert.Null(UpdatePins.NormalizePin(raw));
         Assert.Null(AgentConfig.ManifestUrlForPin(raw));
     }
 
@@ -35,10 +36,14 @@ public class UpdatePinTests
     public void A_lower_pin_is_refused_rather_than_attempted()
     {
         Assert.Equal(UpdateDecision.DowngradeRefused,
-                     VersionUtil.Decide("0.4.0", "0.3.0", "0.3.0", canDowngrade: false));
+                     Decide("0.4.0", "0.3.0", "0.3.0", canDowngrade: false));
         Assert.Equal(UpdateDecision.Install,
-                     VersionUtil.Decide("0.3.0", "0.4.0", "0.4.0", canDowngrade: false));
+                     Decide("0.3.0", "0.4.0", "0.4.0", canDowngrade: false));
         Assert.Equal(UpdateDecision.PinMismatch,
-                     VersionUtil.Decide("0.3.0", "0.5.0", "0.4.0", canDowngrade: false));
+                     Decide("0.3.0", "0.5.0", "0.4.0", canDowngrade: false));
     }
+
+    private static UpdateDecision Decide(string running, string manifest, string? pin,
+                                         bool canDowngrade = true) =>
+        UpdatePins.Decide(running, manifest, pin, canDowngrade, VersionUtil.Compare);
 }

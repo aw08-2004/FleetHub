@@ -3987,6 +3987,10 @@ script now writes as a byte copy of the signed channel manifest.
   success.
 - **Android cannot downgrade** (PackageInstaller refuses a lower versionCode), so a lower pin is
   refused on the device and explained on the machine page rather than retried.
+- **One rule, one file.** The pin parse and the install decision live in
+  `agent-shared/UpdatePins.cs`, which each agent's csproj links in. Everything else in the three
+  agents stays a per-platform port. Three copies were what SonarCloud's duplication gate refused
+  on #177, and a pin that reads differently on one platform would fail silently.
 - **Old agents ignore the field** and keep updating automatically. `channels.PIN_AWARE_AGENT`
   is the compatibility table that says which machines a pin binds.
 - **The dashboard measures a pinned platform against its pin**, so a fleet held for review does

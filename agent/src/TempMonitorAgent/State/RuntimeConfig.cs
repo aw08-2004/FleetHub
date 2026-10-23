@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using FleetHub.Shared;
 
 namespace TempMonitorAgent.State;
 
@@ -152,7 +153,7 @@ public sealed record RuntimeConfig
     public RuntimeConfig WithUpdatePolicy(string? mode, string? version) => this with
     {
         PinnedVersion = mode?.Trim().ToLowerInvariant() == "pinned"
-            ? Channels.NormalizePin(version)
+            ? UpdatePins.NormalizePin(version)
             : null,
     };
 

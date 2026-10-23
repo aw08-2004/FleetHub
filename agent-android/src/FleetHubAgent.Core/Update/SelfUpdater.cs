@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.State;
+using FleetHub.Shared;
 
 namespace FleetHubAgent.Update;
 
@@ -136,8 +137,8 @@ public sealed class SelfUpdater
             // rolled-back manifest a no-op. Pinned: exactly the pin -- but only forward,
             // because PackageInstaller refuses a lower versionCode, and trying anyway would be
             // a failed install every fifteen minutes. The hub's machine page says so instead.
-            var decision = VersionUtil.Decide(AgentConfig.Version, manifest.Version, pin,
-                                              canDowngrade: false);
+            var decision = UpdatePins.Decide(AgentConfig.Version, manifest.Version, pin,
+                                              canDowngrade: false, VersionUtil.Compare);
             if (decision == UpdateDecision.PinMismatch)
                 _log.LogWarning("[update] manifest for pinned {Pin} names {Version} -- refusing",
                                 pin, manifest.Version);

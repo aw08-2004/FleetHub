@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.State;
+using FleetHub.Shared;
 
 namespace FleetHubAgent.Update;
 
@@ -75,8 +76,7 @@ public sealed class SelfUpdater
                 "Update to {Target} booted (now {Version}); holding the previous binary until "
                 + "this build reaches the hub", rs.Target, AgentConfig.Version);
         }
-        // Older than the target means the swap did not take and systemd started the old
-        // binary. Leave the state alone: its Count is what stops CheckAndApplyAsync retrying
+        // Anything else means the swap did not take and systemd started the old binary. Leave the state alone: its Count is what stops CheckAndApplyAsync retrying
         // the same broken target forever.
     }
 
@@ -132,8 +132,8 @@ public sealed class SelfUpdater
 
             // 4. Install it? Strictly newer on automatic, which is what makes a replayed or
             // rolled-back manifest a no-op; exactly the pin, forward or back, when pinned.
-            var decision = VersionUtil.Decide(AgentConfig.Version, manifest.Version, pin,
-                                              canDowngrade: true);
+            var decision = UpdatePins.Decide(AgentConfig.Version, manifest.Version, pin,
+                                              canDowngrade: true, VersionUtil.Compare);
             if (decision == UpdateDecision.PinMismatch)
                 _log.LogWarning("[update] manifest for pinned {Pin} names {Version} -- refusing",
                                 pin, manifest.Version);

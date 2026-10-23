@@ -1,3 +1,5 @@
+using FleetHub.Shared;
+
 namespace TempMonitorAgent;
 
 /// <summary>
@@ -320,7 +322,7 @@ public static class AgentConfig
     /// usable pin. The version is re-validated here rather than trusted from the caller,
     /// because this is the line that turns a string off the wire into a url.</summary>
     public static string? ManifestUrlForPin(string? version) =>
-        State.Channels.NormalizePin(version) is { } pin ? $"{PinnedManifestBase}{pin}.json" : null;
+        UpdatePins.NormalizePin(version) is { } pin ? $"{PinnedManifestBase}{pin}.json" : null;
 
     /// <summary>Channel name to compiled-in url. Public so a test can pin the mapping
     /// without standing up a config store -- this is the one function in the agent where a

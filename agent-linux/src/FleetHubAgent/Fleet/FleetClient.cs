@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.State;
+using FleetHub.Shared;
 
 namespace FleetHubAgent.Fleet;
 
@@ -247,7 +248,7 @@ public sealed class FleetClient : IDisposable, IOutputSink
         {
             var block = JsonNode.Parse(reply)?["update_policy"];
             if (block is null) return;
-            var pin = Update.VersionUtil.PinFromPolicy(
+            var pin = UpdatePins.PinFromPolicy(
                 block["mode"]?.GetValue<string>(), block["version"]?.GetValue<string>());
             if (pin == _state.LoadUpdatePin()) return;
             _state.SaveUpdatePin(pin);

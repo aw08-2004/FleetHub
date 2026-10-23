@@ -1,3 +1,5 @@
+using FleetHub.Shared;
+
 namespace FleetHubAgent;
 
 /// <summary>
@@ -254,7 +256,7 @@ public static class AgentConfig
     /// usable pin. Re-validated here, because this is the line that turns a string off the
     /// wire into a url.</summary>
     public static string? ManifestUrlForPin(string? version) =>
-        Update.VersionUtil.NormalizePin(version) is { } pin ? $"{PinnedManifestBase}{pin}.json" : null;
+        UpdatePins.NormalizePin(version) is { } pin ? $"{PinnedManifestBase}{pin}.json" : null;
 
     public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
 

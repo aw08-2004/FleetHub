@@ -1,5 +1,6 @@
 using TempMonitorAgent.State;
 using TempMonitorAgent.Update;
+using FleetHub.Shared;
 using Xunit;
 
 namespace TempMonitorAgent.Tests;
@@ -21,7 +22,7 @@ public class UpdatePinTests
     [InlineData("0.4.0", "0.4.0")]
     public void A_well_formed_pin_is_kept(string raw, string expected)
     {
-        Assert.Equal(expected, Channels.NormalizePin(raw));
+        Assert.Equal(expected, UpdatePins.NormalizePin(raw));
     }
 
     [Theory]
@@ -35,7 +36,7 @@ public class UpdatePinTests
     [InlineData("1234567.0.0")]
     public void Anything_else_reads_as_automatic(string? raw)
     {
-        Assert.Null(Channels.NormalizePin(raw));
+        Assert.Null(UpdatePins.NormalizePin(raw));
         Assert.Null(AgentConfig.ManifestUrlForPin(raw));
     }
 
@@ -73,31 +74,35 @@ public class UpdatePinTests
     [Fact]
     public void Automatic_installs_only_what_is_strictly_newer()
     {
-        Assert.Equal(UpdateDecision.Install, VersionUtil.Decide("3.48.0", "3.48.1", null));
-        Assert.Equal(UpdateDecision.UpToDate, VersionUtil.Decide("3.48.1", "3.48.1", null));
-        Assert.Equal(UpdateDecision.UpToDate, VersionUtil.Decide("3.48.1", "3.47.0", null));
+        Assert.Equal(UpdateDecision.Install, Decide("3.48.0", "3.48.1", null));
+        Assert.Equal(UpdateDecision.UpToDate, Decide("3.48.1", "3.48.1", null));
+        Assert.Equal(UpdateDecision.UpToDate, Decide("3.48.1", "3.47.0", null));
     }
 
     [Fact]
     public void A_pin_installs_exactly_that_version_forward_or_back()
     {
-        Assert.Equal(UpdateDecision.Install, VersionUtil.Decide("3.47.0", "3.48.0", "3.48.0"));
-        Assert.Equal(UpdateDecision.Install, VersionUtil.Decide("3.48.1", "3.47.0", "3.47.0"));
-        Assert.Equal(UpdateDecision.UpToDate, VersionUtil.Decide("3.48.0", "3.48.0", "3.48.0"));
+        Assert.Equal(UpdateDecision.Install, Decide("3.47.0", "3.48.0", "3.48.0"));
+        Assert.Equal(UpdateDecision.Install, Decide("3.48.1", "3.47.0", "3.47.0"));
+        Assert.Equal(UpdateDecision.UpToDate, Decide("3.48.0", "3.48.0", "3.48.0"));
     }
 
     [Fact]
     public void A_signed_manifest_for_another_version_is_refused_at_the_pinned_path()
     {
-        Assert.Equal(UpdateDecision.PinMismatch, VersionUtil.Decide("3.47.0", "3.49.0", "3.48.0"));
+        Assert.Equal(UpdateDecision.PinMismatch, Decide("3.47.0", "3.49.0", "3.48.0"));
     }
 
     [Fact]
     public void A_platform_that_cannot_downgrade_refuses_a_lower_pin()
     {
         Assert.Equal(UpdateDecision.DowngradeRefused,
-                     VersionUtil.Decide("0.4.0", "0.3.0", "0.3.0", canDowngrade: false));
+                     Decide("0.4.0", "0.3.0", "0.3.0", canDowngrade: false));
         Assert.Equal(UpdateDecision.Install,
-                     VersionUtil.Decide("0.3.0", "0.4.0", "0.4.0", canDowngrade: false));
+                     Decide("0.3.0", "0.4.0", "0.4.0", canDowngrade: false));
     }
+
+    private static UpdateDecision Decide(string running, string manifest, string? pin,
+                                         bool canDowngrade = true) =>
+        UpdatePins.Decide(running, manifest, pin, canDowngrade, VersionUtil.Compare);
 }

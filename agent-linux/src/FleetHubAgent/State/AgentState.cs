@@ -1,4 +1,5 @@
 using System.Text.Json;
+using FleetHub.Shared;
 
 namespace FleetHubAgent.State;
 
@@ -74,7 +75,7 @@ public sealed class AgentState
             if (File.Exists(AgentConfig.UpdatePinPath))
             {
                 var pin = JsonSerializer.Deserialize<UpdatePin>(File.ReadAllText(AgentConfig.UpdatePinPath));
-                return Update.VersionUtil.NormalizePin(pin?.Version);
+                return UpdatePins.NormalizePin(pin?.Version);
             }
         }
         catch { /* unreadable reads as automatic, the state before pins existed */ }

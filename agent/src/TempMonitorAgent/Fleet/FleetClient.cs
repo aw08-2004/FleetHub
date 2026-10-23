@@ -555,7 +555,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// about pins sends.</para>
     ///
     /// <para>A version that is not exactly MAJOR.MINOR.PATCH reads as automatic -- see
-    /// Channels.NormalizePin -- because a pin the agent cannot turn into a url would otherwise
+    /// UpdatePins.NormalizePin -- because a pin the agent cannot turn into a url would otherwise
     /// stop updates silently and forever.</para>
     /// </summary>
     private void ApplyUpdatePolicyFromHeartbeat(string body)

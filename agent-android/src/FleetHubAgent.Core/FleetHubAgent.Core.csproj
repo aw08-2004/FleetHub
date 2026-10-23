@@ -41,4 +41,9 @@
     <InternalsVisibleTo Include="FleetHubAgent.Core.Tests" />
   </ItemGroup>
 
+  <!-- The update-pin rule (roadmap #21), one file linked into all three agents so a pin
+       cannot mean something different on one platform. See agent-shared/UpdatePins.cs. -->
+  <ItemGroup>
+    <Compile Include="..\..\..\agent-shared\UpdatePins.cs" Link="Update\UpdatePins.cs" />
+  </ItemGroup>
 </Project>

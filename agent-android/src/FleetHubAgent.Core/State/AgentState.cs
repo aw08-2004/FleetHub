@@ -1,4 +1,5 @@
 using System.Text.Json;
+using FleetHub.Shared;
 
 namespace FleetHubAgent.State;
 
@@ -85,7 +86,7 @@ public sealed class AgentState(IStateStore store)
 
     /// <summary>The pinned agent version, or null for automatic. Read through the same strict
     /// parse as the heartbeat, so a damaged value reads as automatic.</summary>
-    public string? LoadUpdatePin() => Update.VersionUtil.NormalizePin(_store.Get(StateKeys.UpdatePin));
+    public string? LoadUpdatePin() => UpdatePins.NormalizePin(_store.Get(StateKeys.UpdatePin));
 
     /// <summary>Store the pin; null stores an empty value, which reads back as automatic.</summary>
     public bool SaveUpdatePin(string? version) => _store.Set(StateKeys.UpdatePin, version ?? "");
