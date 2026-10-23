@@ -603,7 +603,11 @@ function initHubUpdate() {
         if (!agent || !info) return;
         const latest = info.latest || '';
         agent.notice.dataset.agentLatest = latest;
-        agent.text.textContent = t('agent_update.available', { version: latest });
+        // A pinned Windows fleet installs nothing until the pin is raised, so the sentence
+        // changes from "arriving" to "waiting for your review".
+        agent.text.textContent = info.pinned
+            ? t('agent_update.available_pinned', { version: latest, pinned: info.pinned })
+            : t('agent_update.available', { version: latest });
         setNotesLink(agent.notes, info.release_notes_url);
         agent.notice.hidden = !latest || storedDismissal(AGENT_UPDATE_DISMISS_KEY) === latest;
     }

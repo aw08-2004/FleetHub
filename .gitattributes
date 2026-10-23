@@ -9,6 +9,14 @@ agent/agent.manifest.json.sig -text
 # fleet would refuse the update with no obvious cause.
 agent/agent.manifest.beta.json -text
 agent/agent.manifest.beta.json.sig -text
+# Per-version copies for exact-version pins (roadmap #21) -- the same signed bytes, so the same
+# rule. One pattern per agent rather than a list, because a file appears here at every release.
+agent/manifests/*.json -text
+agent/manifests/*.json.sig -text
+agent-linux/manifests/*.json -text
+agent-linux/manifests/*.json.sig -text
+agent-android/manifests/*.json -text
+agent-android/manifests/*.json.sig -text
 # The Linux and Android agents' own manifests (roadmap #22). Each agent has its own release
 # train now, because the hub picks a manifest by the platform a machine reports rather than
 # reading every version as though it belonged to the Windows agent. Pinned here BEFORE the

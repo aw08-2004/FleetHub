@@ -1,3 +1,5 @@
+using FleetHub.Shared;
+
 namespace FleetHubAgent;
 
 /// <summary>
@@ -251,6 +253,26 @@ public static class AgentConfig
     public static string UpdateManifestUrl => Env("UPDATE_MANIFEST_URL") ?? StableManifestUrl;
 
     public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
+
+    /// <summary>Whether the env override points the updater at a test server, in which case
+    /// a persisted pin is ignored and the manifest is read the automatic way.</summary>
+    public static bool UpdateManifestOverridden => Env("UPDATE_MANIFEST_URL") is not null;
+
+    /// <summary>One signed manifest per released version (roadmap #21), written by
+    /// release.ps1 beside the channel manifest. A pin can reach exactly the versions that have
+    /// a file here on main; deleting one revokes it -- see SECURITY.MD.</summary>
+    public const string PinnedManifestBase =
+        "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/manifests/";
+
+    /// <summary>The compiled-in manifest url for one pinned version, or null when there is no
+    /// usable pin. Re-validated here, because this is the line that turns a string off the
+    /// wire into a url.</summary>
+    public static string? ManifestUrlForPin(string? version) =>
+        UpdatePins.NormalizePin(version) is { } pin ? $"{PinnedManifestBase}{pin}.json" : null;
+
+    /// <summary>The hub's update pin, persisted so a check on a fresh boot before the first
+    /// heartbeat cannot install a release an operator is holding back.</summary>
+    public static string UpdatePinPath => Path.Combine(StateDir, "update-pin.json");
 
     /// <summary>Set FLEETHUB_NO_UPDATE=1 to pin a machine to its current build. Honoured for
     /// the same reason the Windows agent honours it: a box being used to reproduce a bug must

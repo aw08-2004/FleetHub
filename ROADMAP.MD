@@ -118,7 +118,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-22
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-23
 
 **How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
 `beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**, the same as `beta`. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.166.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -172,7 +172,24 @@ key is saved in Settings.
   starts on whatever else is configured.
 - [ ] **Translations.** The two new blocks read correctly in German and Spanish.
 
-## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-22
+**Hub 1.166.0: agent version pins, and beta follows a newer stable** (#21; agent halves in
+*Owed locally* item 17)
+- [ ] **Nothing changes by default.** After the beta hub updates, every platform shows
+  *Automatic* in **Settings → Fleet**, and a beta PC's page shows no new note (beta 3.48.1 is
+  ahead of stable 3.48.0, so it stays on beta).
+- [ ] **Beta follows a newer stable.** Once a stable release passes the newest beta, a beta PC
+  reads *Following stable X…* and installs it. The next beta flips it back.
+- [ ] **A pin holds.** With the pin-aware agent on a beta PC, pin Windows at the running
+  version, then publish a newer beta: nothing installs, and the sidebar says the release is
+  waiting for the pin.
+- [ ] **Raising and lowering.** Raise the pin and the PC installs it. Lower it and a Windows
+  PC goes back (and confirms on the hub), while an Android device says it cannot.
+- [ ] **Bad pins.** `3.49` or `3.49.0-rc1` is refused in Settings. A well-formed version with
+  no manifest makes the machine page say *no signed manifest exists*. An agent older than the
+  pin-aware version says it ignores the pin.
+- [ ] **Translations.** The new Settings rows and notes read correctly in German and Spanish.
+
+## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
 **Read this first when working on the machine that holds the signing key.** Everything below
 was built, tested and pushed from a Linux container with no Windows, no Android device and no
@@ -553,6 +570,15 @@ network. On the hub host:
   candidate of its own and one from the browser, the pill should read **Live**, not
   **Live (via hub)**, and coturn's log should count two allocations. Only then is the shared
   secret tested at all: 401s mean the hub's `.env` and `/etc/turnserver.conf` differ.
+
+**17. Agent version pins (#21) need three agent betas, owed on the machine with the signing
+key.** Hub 1.166.0 first, then cut **Windows 3.49.0**, **Linux 0.4.0** and **Android 0.4.0**
+with `-Channel beta`. Those numbers are `channels.PIN_AWARE_AGENT`: if a release cuts a
+different one, change the table to match it, or the console misreports which machines honour
+a pin. Each release also writes `<agent>/manifests/<version>.json` (+ `.sig`), and that file is
+the only thing a pin can install. Optional: backfill manifests for recent releases so the fleet
+can be pinned back to them. Download the release asset and run `sign_release.py --sign-agent`
+with that version, the asset url and `--manifest <agent>/manifests/<version>.json`.
 
 ---
 
@@ -3887,7 +3913,7 @@ the owner hub rather than failing generically.
 
 ---
 
-## ✅ 21. Release channels — stable / beta   ·   hub 1.93.0 + agent 3.35.0
+## 🚧 21. Release channels — stable / beta, and version pins   ·   hub 1.93.0 + agent 3.35.0 · pins hub 1.166.0 + agents (next releases)
 
 Not from the PRD. Everything in this product updates from `main` and reaches everything at
 once: a signed agent manifest landing on main starts upgrading the whole fleet within about
@@ -3938,6 +3964,49 @@ prerelease — for humans reading the releases list, since the filename is what 
 who installs it. Both new manifest pairs are pinned `-text` in `.gitattributes` **before** the
 first beta is published, because a line-ending rewrite between signing and serving is
 indistinguishable from tampering.
+
+**Beta follows a newer stable (hub 1.166.0).** A stable-only release (a hotfix cut on
+`main` while beta still says 3.38.1) used to reach every machine *except* the pilot ring. The
+hub now separates the **chosen** channel (pin, else fleet default) from the **delivered** one.
+While stable's manifest is strictly newer than beta's, a beta machine is told stable, and the
+next beta that passes it flips it back (`channels.delivered`). It switches only when both
+versions are known, because a wrongly delivered "beta" costs nothing (strictly-newer guard),
+while a wrongly delivered "stable" installs a build nobody chose. This is a hub-only change and
+works with every agent in the field. Rejected: having the stable release script also rewrite
+`agent.manifest.beta.json` (it only covers releases cut through the script, and it puts a stable
+tag into the beta file), and an agent that reads both manifests (correct, but it reaches no
+machine until a new agent does, and the owner wanted the hub to own it).
+
+**Exact-version pins per platform (hub 1.166.0 + Windows 3.49.0 / Linux 0.4.0 / Android
+0.4.0).** Operators wanted to stop automatic updates and review a release before the fleet
+takes it. **Settings → Fleet** has, per platform, *Automatic* or *Pinned to a version*. A
+pinned platform installs exactly that version, forward or back. A pin at the running version
+*is* "auto-update off", and raising it is the approval. The heartbeat carries
+`update_policy: {mode, version}`. As with the channel, it is a name and never a url: the agent
+builds `<agent>/manifests/<version>.json` from a compiled-in base on `main`, which each release
+script now writes as a byte copy of the signed channel manifest.
+- **Absent means unchanged, explicit `auto` releases.** This is the opposite of the channel's
+  rule, deliberately: one heartbeat whose hub failed to resolve the policy must not release a
+  hold for long enough to install the release under review. The pin is persisted for the same
+  reason (a check on boot before the first heartbeat).
+- **A downgrade is now possible, and that is the security cost.** A compromised hub can pick any
+  signed version on `main`, including an old one, where before it could only pick a train.
+  Revocation is deleting that version's manifest (SECURITY.MD). `ReconcileAfterBoot` now
+  requires *equality* with the target. "At least" read a downgrade whose swap failed as a
+  success.
+- **Android cannot downgrade** (PackageInstaller refuses a lower versionCode), so a lower pin is
+  refused on the device and explained on the machine page rather than retried.
+- **One rule, one file.** The pin parse and the install decision live in
+  `agent-shared/UpdatePins.cs`, which each agent's csproj links in. Everything else in the three
+  agents stays a per-platform port. Three copies were what SonarCloud's duplication gate refused
+  on #177, and a pin that reads differently on one platform would fail silently.
+- **Old agents ignore the field** and keep updating automatically. `channels.PIN_AWARE_AGENT`
+  is the compatibility table that says which machines a pin binds.
+- **The dashboard measures a pinned platform against its pin**, so a fleet held for review does
+  not read as outdated.
+- Rejected: **"approve up to X" caps** (simpler, works with the one-version manifests, but
+  cannot roll back, which the owner asked for); **per-machine pins** (the per-machine control is
+  the channel); **the hub sending a manifest url** (it would make the hub the trust root).
 
 **Open parameters.** Whether an abandoned beta should expire — a machine left on one is the
 failure this design cannot see by itself. Whether the ring should become a rule rather than a

@@ -56,6 +56,13 @@ $ApkName    = "net.arkeanos.fleethub.agent-Signed.apk"
 $IsBeta     = ($Channel -eq "beta")
 # Must match hub/channels.py's _AGENT_MANIFEST and AgentConfig.StableManifestUrl.
 $ManifestPath = Join-Path $AgentDir $(if ($IsBeta) { "agent-android.manifest.beta.json" } else { "agent-android.manifest.json" })
+
+# The per-version copy (roadmap #21): manifests/<version>.json + .sig, byte-for-byte the files
+# just signed. It is what an operator's exact-version PIN reads -- the agent builds that path
+# from a compiled-in base -- so the set of pinnable versions is exactly the set of files under
+# manifests/ on main, and deleting one revokes it. A COPY rather than a second signing run:
+# Ed25519 would produce the same bytes anyway, and a copy cannot drift from the channel file.
+$PinnedManifestPath = Join-Path (Join-Path $AgentDir "manifests") "$Version.json"
 $SignScript = Join-Path $RepoRoot "sign_release.py"
 $Tag        = $(if ($IsBeta) { "android-agent-v$Version-beta" } else { "android-agent-v$Version" })
 $AssetUrl   = "https://github.com/$Repo/releases/download/$Tag/$ApkName"
@@ -285,6 +292,12 @@ if ($LASTEXITCODE -ne 0) { Die "sign_release.py failed" }
 if (-not (Test-Path "$ManifestPath.sig")) { Die "No signature beside $ManifestPath" }
 Ok "manifest + .sig written"
 
+# Per-version copy for exact-version pins -- see $PinnedManifestPath above.
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PinnedManifestPath) | Out-Null
+Copy-Item -LiteralPath $ManifestPath -Destination $PinnedManifestPath -Force
+Copy-Item -LiteralPath "$ManifestPath.sig" -Destination "$PinnedManifestPath.sig" -Force
+Ok "pinnable as $Version -> $PinnedManifestPath (+ .sig)"
+
 # ---------------------------------------------------------------- 5. upload
 
 Step "Uploading the asset"
@@ -297,7 +310,7 @@ Ok "uploaded $ApkName"
 # ---------------------------------------------------------------- 6. commit
 
 Step "Committing"
-& git -C $RepoRoot add $ConfigCs $CoreCsproj $AppCsproj $ManifestPath "$ManifestPath.sig" | Out-Host
+& git -C $RepoRoot add $ConfigCs $CoreCsproj $AppCsproj $ManifestPath "$ManifestPath.sig" $PinnedManifestPath "$PinnedManifestPath.sig" | Out-Host
 & git -C $RepoRoot commit -m "Release Android agent v$Version ($Channel)" | Out-Host
 if ($LASTEXITCODE -ne 0) { Warn "nothing to commit, or the commit failed" }
 

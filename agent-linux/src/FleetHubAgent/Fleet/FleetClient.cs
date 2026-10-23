@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.State;
+using FleetHub.Shared;
 
 namespace FleetHubAgent.Fleet;
 
@@ -221,7 +222,9 @@ public sealed class FleetClient : IDisposable, IOutputSink
             // The reply's `processes_wanted` is how this agent learns to STOP sampling once
             // the card is closed. The only thing read back from a heartbeat; see
             // ApplyProcessesWanted for why a bad reply changes nothing.
-            ApplyProcessesWanted(await resp.Content.ReadAsStringAsync(ct));
+            var reply = await resp.Content.ReadAsStringAsync(ct);
+            ApplyProcessesWanted(reply);
+            ApplyUpdatePolicy(reply);
             return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -234,6 +237,29 @@ public sealed class FleetClient : IDisposable, IOutputSink
     /// <summary>What the last heartbeat reply said about the Processes card, or null before
     /// one has answered. Read by the process loop.</summary>
     public bool? ProcessesWanted { get; private set; }
+
+    /// <summary>The hub's update policy (roadmap #21): automatic, or pinned to one exact
+    /// version. **An absent block changes nothing** -- the Windows agent's rule, for the
+    /// Windows agent's reason: a pin exists to stop an install, and one heartbeat whose hub
+    /// failed to resolve the policy must not release it. Persisted only when it changed.</summary>
+    private void ApplyUpdatePolicy(string reply)
+    {
+        try
+        {
+            var block = JsonNode.Parse(reply)?["update_policy"];
+            if (block is null) return;
+            var pin = UpdatePins.PinFromPolicy(
+                block["mode"]?.GetValue<string>(), block["version"]?.GetValue<string>());
+            if (pin == _state.LoadUpdatePin()) return;
+            _state.SaveUpdatePin(pin);
+            if (pin is null) _log.LogInformation("Agent updates are automatic again");
+            else _log.LogInformation("Agent updates are pinned to {Version}", pin);
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning("Ignoring malformed update policy from the hub: {Msg}", e.Message);
+        }
+    }
 
     private void ApplyProcessesWanted(string reply)
     {

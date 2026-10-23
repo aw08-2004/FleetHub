@@ -358,7 +358,7 @@
                 aria-label="{{ t('agent_update.dismiss') }}" title="{{ t('agent_update.dismiss') }}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
-        <p class="sidebar__update-text" id="agent-update-text">{{ t('agent_update.available', version=agent_rel.latest or '') }}</p>
+        <p class="sidebar__update-text" id="agent-update-text">{% if agent_rel.pinned %}{{ t('agent_update.available_pinned', version=agent_rel.latest or '', pinned=agent_rel.pinned) }}{% else %}{{ t('agent_update.available', version=agent_rel.latest or '') }}{% endif %}</p>
         <a class="sidebar__update-link" id="agent-update-notes" target="_blank" rel="noopener noreferrer"
            href="{{ agent_rel.release_notes_url or '' }}" {% if not agent_rel.release_notes_url %}hidden{% endif %}>
             {{ t('agent_update.release_notes') }}

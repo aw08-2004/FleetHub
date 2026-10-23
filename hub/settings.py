@@ -95,6 +95,8 @@ UNIT_TEXT_KEY = "settings.unit"
 SECTION_TEXT_KEY = "settings.section"
 CHOICE_TEXT_KEY = "settings.choice"
 ERROR_TEXT_KEY = "settings.error"
+#: The per-platform agent pins -- see the fleet.agent_pin.* registry entries.
+AGENT_PIN_PREFIX = "fleet.agent_pin."
 
 
 def field_label(setting, lang=None):
@@ -398,6 +400,26 @@ REGISTRY = (
     # heartbeat reply instead, beside processes_wanted.
     _s("fleet.default_agent_channel", "fleet", "enum", channels.DEFAULT,
        choices=list(channels.CHANNELS)),
+
+    # Agent update policy per platform (roadmap #21): automatic, or PINNED to one exact version
+    # that every machine of that platform installs -- forward or back -- and nothing past it.
+    # A pin at the version the fleet already runs is how automatic updates are switched off so
+    # a release can be reviewed first; raising it is the approval. Per platform because a
+    # version number means nothing across the three trains (VERSIONING.md).
+    #
+    # Two keys rather than one "auto or a version" string, so the mode is an enum the page can
+    # render as a picker and a pin survives being switched back to auto and on again. Like the
+    # channel, NOT agent=True: it rides the heartbeat as `update_policy`, a name and a version,
+    # never a url -- the agent builds the url from its own compiled-in base.
+    _s("fleet.agent_updates.windows", "fleet", "enum", channels.UPDATE_AUTO,
+       choices=list(channels.UPDATE_MODES)),
+    _s("fleet.agent_pin.windows", "fleet", "str", ""),
+    _s("fleet.agent_updates.linux", "fleet", "enum", channels.UPDATE_AUTO,
+       choices=list(channels.UPDATE_MODES)),
+    _s("fleet.agent_pin.linux", "fleet", "str", ""),
+    _s("fleet.agent_updates.android", "fleet", "enum", channels.UPDATE_AUTO,
+       choices=list(channels.UPDATE_MODES)),
+    _s("fleet.agent_pin.android", "fleet", "str", ""),
 
     # Command PUSH: how long the hub may hold an agent's command request open so a command
     # issued in the meantime goes down it immediately, and how many it will hold at once.
@@ -1051,7 +1073,13 @@ def coerce_and_validate(setting, raw, lang=None):
         # unrepresentable rather than merely unlikely.
         if raw is None:
             return ""
-        return str(raw).strip()
+        value = str(raw).strip()
+        # A pin is a path component on the agent's side, so the format is enforced here AND
+        # there. Blank stays allowed: it is "no pin chosen yet", which channels.update_policy
+        # reads as automatic.
+        if setting.key.startswith(AGENT_PIN_PREFIX) and value and not channels.is_valid_pin(value):
+            raise bad("expected_version", value=repr(value))
+        return value
 
     if setting.type == "enum":
         text = str(raw).strip()

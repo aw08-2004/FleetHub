@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.State;
+using FleetHub.Shared;
 
 namespace FleetHubAgent.Update;
 
@@ -108,8 +109,10 @@ public sealed class SelfUpdater
         try
         {
             // 1. Manifest + detached signature.
-            var manifestBytes = await _http.GetByteArrayAsync(AgentConfig.UpdateManifestUrl, ct);
-            var sigHex = (await _http.GetStringAsync(AgentConfig.UpdateManifestSigUrl, ct)).Trim();
+            var pin = _state.LoadUpdatePin();
+            var manifestUrl = AgentConfig.ManifestUrlForPin(pin) ?? AgentConfig.UpdateManifestUrl;
+            var manifestBytes = await _http.GetByteArrayAsync(manifestUrl, ct);
+            var sigHex = (await _http.GetStringAsync(manifestUrl + ".sig", ct)).Trim();
 
             // 2. Verify the signature over the EXACT manifest bytes, fail-closed. Everything
             // after this point trusts the contents; nothing before it does.
@@ -130,9 +133,19 @@ public sealed class SelfUpdater
                 return false;
             }
 
-            // 3. Newer? Strictly, which is what makes a replayed or rolled-back manifest a
-            // no-op rather than a downgrade -- and Android would refuse a downgrade anyway.
-            if (VersionUtil.Compare(manifest.Version, AgentConfig.Version) <= 0) return false;
+            // 3. Install it? Strictly newer on automatic, which is what makes a replayed or
+            // rolled-back manifest a no-op. Pinned: exactly the pin -- but only forward,
+            // because PackageInstaller refuses a lower versionCode, and trying anyway would be
+            // a failed install every fifteen minutes. The hub's machine page says so instead.
+            var decision = UpdatePins.Decide(AgentConfig.Version, manifest.Version, pin,
+                                              canDowngrade: false, VersionUtil.Compare);
+            if (decision == UpdateDecision.PinMismatch)
+                _log.LogWarning("[update] manifest for pinned {Pin} names {Version} -- refusing",
+                                pin, manifest.Version);
+            else if (decision == UpdateDecision.DowngradeRefused)
+                _log.LogInformation("[update] pinned to {Pin}, below the running {Version}; "
+                                    + "Android cannot install an older build", pin, AgentConfig.Version);
+            if (decision != UpdateDecision.Install) return false;
 
             // 4. Restart-loop guard.
             var restart = _state.LoadRestartState();
