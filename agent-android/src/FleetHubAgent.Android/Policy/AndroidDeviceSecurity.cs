@@ -64,9 +64,30 @@ public sealed class AndroidDeviceSecurity(Context context, ILogger log)
 
         try
         {
-            // Does not return. Anything after this line runs only if the platform refused.
-            dpm.WipeData(flags);
-            log.LogError("wipeData returned; this device has NOT been erased");
+            // **wipeDevice from API 34, wipeData only below it.** wipeData throws
+            // IllegalStateException when called on the system user by an app targeting 34 or
+            // above -- and a device owner always runs on the system user, while .NET 10 builds
+            // this app for target SDK 36. So up to 0.3.1 every wipe on every Android 14+
+            // device answered "the wipe has started", then threw here ten seconds later into a
+            // log nobody reads, and the phone carried on reporting. **Observed on an Android 16
+            // Galaxy A15**, which kept heartbeating two minutes after the console said it was
+            // being erased. wipeDevice is the replacement the platform added for exactly this
+            // caller; it always requests a full factory reset and honours the same flags.
+            //
+            // Rejected: pinning targetSdkVersion to 33 to keep wipeData working. Play and the
+            // platform both penalise a low target, and it would trade one wipe call for every
+            // newer behaviour the rest of this app is written against.
+            // Does not return. Anything after these lines runs only if the platform refused.
+            if (OperatingSystem.IsAndroidVersionAtLeast(34))
+            {
+                dpm.WipeDevice(flags);
+                log.LogError("wipeDevice returned; this device has NOT been erased");
+            }
+            else
+            {
+                dpm.WipeData(flags);
+                log.LogError("wipeData returned; this device has NOT been erased");
+            }
         }
         catch (Exception e)
         {

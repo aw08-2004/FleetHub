@@ -81,6 +81,29 @@ public static class AgentConfig
     public static bool IsHubConfigured =>
         !string.Equals(_hubBase, DefaultHubBase, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Whether the person holding the device is refused a change to the hub URL.
+    ///
+    /// **On a device owner, the hub URL is the whole of management, so it is not a setting.**
+    /// Before 0.3.2 the setup screen's Advanced panel let anybody holding a QR-provisioned phone
+    /// type a different hub and press Save: the agent then reported to that address, every
+    /// policy, lock and wipe from the real console went unanswered, and the console saw a device
+    /// that had simply gone offline. Blocking force-stop and clear-data (DeviceOwner.
+    /// ApplyBaseline) was pointless while the same result was one text field away.
+    ///
+    /// **Locked only once a hub is actually configured.** A device owner still on the
+    /// placeholder is the one the PersistableBundle bug of 0.3.0 produced -- provisioned, with
+    /// the QR's hub URL silently dropped -- and locking it would leave a managed phone that
+    /// reports nowhere and can only be recovered by another factory reset. Such a device is not
+    /// managed by anybody yet, so letting it be pointed at a hub once takes nothing away.
+    ///
+    /// An ordinary install (no device owner) is never locked: it is somebody's own phone running
+    /// an app, the person can uninstall it anyway, and a lock there would protect nothing.
+    ///
+    /// Rejected: locking it on the hub's side by refusing reports from an unexpected address.
+    /// The hub never sees a device that has been pointed somewhere else -- that is the problem.
+    /// </summary>
+    public static bool IsHubUrlLocked(bool deviceOwner) => deviceOwner && IsHubConfigured;
+
     /// <summary>
     /// Point the agent at a hub. Called ONCE by the platform layer before any loop starts.
     ///
