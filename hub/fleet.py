@@ -1747,8 +1747,16 @@ def require_enrolled(db_path, machine):
     scheduler warns that a raise there "would raise out of this loop and cost every remaining
     target its pass". A target with no agent is ordinary for them (an AD-synced machine, a
     revoked one) and already ends through the command's TTL, which is the right outcome
-    there. Every other door is a button on a machine page, and that page is now a 404 for a
-    name the hub does not know.
+    there.
+
+    **Not every door is guarded, and that is a known gap, not a claim.** The other operator
+    routes that queue a command -- processes, remote, wipe, location, BIOS, discovery, disk
+    usage, a manual backup run -- are buttons on a machine page, and that page is now a 404
+    for a name the hub does not know, which closes them to anyone navigating. It does not close
+    them to a direct API call: a caller with the capability can still queue one of those for a
+    name nobody enrolled under, and it sits pending until its TTL, as everything did before
+    this check existed (review on PR #182). Adding this call to each of those routes is the fix
+    when one of them is seen doing it.
 
     **Exact, not case-folded**, because claim_commands is: a command for `openclaw` is never
     claimed by the agent enrolled as `OPENCLAW`, so queueing it would be the same silent
