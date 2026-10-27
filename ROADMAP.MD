@@ -172,6 +172,19 @@ hub that day, except the two items still open below.
   command has to answer before the wipe fires, so a refusal can only reach the hub as a
   later heartbeat field, which needs hub work.
 
+**Hub image renamed to `ghcr.io/aw08-2004/fleethub`** (#28; workflow on `main` and `beta`)
+The workflow now publishes `fleethub` first and mirrors every tag to `temp_monitor-hub`, the
+pre-rename name every existing Docker host pulls. `fleethub` does not exist until the first
+push to `beta` that touches `hub/` after this merges.
+- [ ] **First publish.** That run's *Push* step shows both `fleethub:beta-X.Y.Z` and
+  `temp_monitor-hub:beta-X.Y.Z`, and both share one digest.
+- [ ] **Make `fleethub` public**, by hand and before the `beta` → `main` PR: GitHub creates it
+  private, and `compose.yaml` on `main` will point at it. Package settings → Danger Zone →
+  Change visibility → Public (one-way). Then `docker pull ghcr.io/aw08-2004/fleethub:beta`
+  works with no `docker login`.
+- [ ] **Retire the mirror** once every Docker hub host's `compose.yaml` says `fleethub`: drop
+  `temp_monitor-hub` from `repos` in `.github/workflows/hub-image.yml` (to `main` and `beta`).
+
 **Hub 1.165.0 — provided TURN relays, reached `main` unconfirmed** (#172)
 The owner sent it to `main` with the rest on 2026-10-22 without a beta pass, so these checks
 are owed on the production hub instead. Nothing changes until a pasted block or a Cloudflare

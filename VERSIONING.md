@@ -138,8 +138,9 @@ merges, after everything in ROADMAP.MD → *On beta, waiting for confirmation* i
 skipping the numbers it never ran is fine; the rule above is only that none repeats.
 
 The same number is the hub's **container image tag**. `.github/workflows/hub-image.yml`
-publishes `ghcr.io/<owner>/temp_monitor-hub:X.Y.Z` from `main`, and `beta-X.Y.Z` from
-`beta`. It **fails** if `HUB_VERSION` is not three numeric components, or if that tag already
+publishes `ghcr.io/<owner>/fleethub:X.Y.Z` from `main`, and `beta-X.Y.Z` from
+`beta`, and mirrors every tag to the pre-rename `temp_monitor-hub` for hosts still on the
+old compose file. It **fails** if `HUB_VERSION` is not three numeric components, or if that tag already
 exists. A reused number never overwrites an image: the push fails, and a container hub
 cannot install a release that has no new tag.
 
