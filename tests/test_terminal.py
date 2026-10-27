@@ -299,6 +299,30 @@ def main():
               r.get_json()["status"] == "closed"
               and "never picked it up" in (r.get_json()["close_reason"] or ""))
 
+        print("\n== A shell_open an old agent ANSWERED without attaching ends, saying why ==")
+        # Reachable since hub 1.169.0 gives a machine with no reported version the real
+        # console: an agent from before 3.15 claims shell_open and fails it as unknown. The
+        # session never attaches, and without this the console sat at Connecting forever.
+        r = c.post("/api/fleet/pty", json={"machine": "PC-01"})
+        old_sid = r.get_json()["session_id"]
+        old_cmd = r.get_json()["command_id"]
+        fleet.claim_commands(db_path, agent_id, "PC-01")
+        fleet.complete_command(db_path, old_cmd, agent_id, False,
+                               output="unknown command type: shell_open\nmore detail")
+        body = c.get(f"/api/fleet/pty/{old_sid}/output").get_json()
+        check("the session is closed",
+              body["status"] == "closed"
+              and terminal.get_session(db_path, old_sid)["status"] == terminal.STATUS_CLOSED)
+        check("...with the agent's own first line as the reason",
+              body["close_reason"] == "the agent did not open a terminal: unknown command type: shell_open")
+        # A live session whose command is still running is left alone.
+        r = c.post("/api/fleet/pty", json={"machine": "PC-01"})
+        live_sid = r.get_json()["session_id"]
+        fleet.claim_commands(db_path, agent_id, "PC-01")
+        c.post(f"/api/agent/pty/{live_sid}/output", json={"seq": 0, "chunk": "PS> "}, headers=auth)
+        check("a terminal that attached is not touched while its command runs",
+              c.get(f"/api/fleet/pty/{live_sid}/output").get_json()["status"] == terminal.STATUS_LIVE)
+
         print("\n== Limits ==")
         check("an over-long keystroke payload is refused -> 400",
               c.post("/api/fleet/pty/%s/input" % c.post(
