@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Shell;
+using FleetHub.Shared.Pty;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
 using TempMonitorAgent.Update;

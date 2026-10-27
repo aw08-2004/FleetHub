@@ -56,10 +56,11 @@
             {# Which installer (hub 1.169.0). The page guesses from the browser, but a Linux
                server usually has none, so the code is often typed on another computer -- the
                switch is how that person says which machine they are setting up. #}
-            <div class="onboarding-os" role="radiogroup" aria-label="{{ t('onboarding.wizard.os_label') }}">
-                <button type="button" class="onboarding-os__choice" role="radio" aria-checked="true" data-os="windows" id="os-windows">{{ t('onboarding.wizard.os_windows') }}</button>
-                <button type="button" class="onboarding-os__choice" role="radio" aria-checked="false" data-os="linux" id="os-linux">{{ t('onboarding.wizard.os_linux') }}</button>
-            </div>
+            <fieldset class="onboarding-os">
+                <legend class="onboarding-os__legend">{{ t('onboarding.wizard.os_label') }}</legend>
+                <label class="onboarding-os__choice"><input type="radio" name="os" value="windows" id="os-windows" checked> {{ t('onboarding.wizard.os_windows') }}</label>
+                <label class="onboarding-os__choice"><input type="radio" name="os" value="linux" id="os-linux"> {{ t('onboarding.wizard.os_linux') }}</label>
+            </fieldset>
             <div id="install-windows">
                 <p class="invite-meta">{{ t('onboarding.wizard.install_intro') }}</p>
                 <a class="google-btn onboarding-btn" id="download-cmd" href="#">{{ t('onboarding.wizard.download') }}</a>

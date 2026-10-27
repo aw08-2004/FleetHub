@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using TempMonitorAgent.Backup;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Watchdog;
+using FleetHub.Shared.Pty;
 
 namespace TempMonitorAgent.Fleet;
 
@@ -20,26 +21,6 @@ public readonly record struct OutputPostResult(bool Ok, bool Truncated);
 public interface IOutputSink
 {
     Task<OutputPostResult> PostOutputAsync(string commandId, int seq, string text, CancellationToken ct);
-}
-
-/// <summary>One item the console queued for an open terminal: either raw bytes the operator
-/// typed (<c>Kind == "data"</c>) or a terminal resize (<c>Kind == "resize"</c>).</summary>
-public readonly record struct PtyInputItem(int Seq, string Kind, string Data, short Cols, short Rows);
-
-/// <summary>Result of one keystroke poll. <c>Ok</c> is false when the hub couldn't be
-/// reached at all — distinct from "reached it, nothing typed", because only the former
-/// should make the session give up. <c>Closing</c> is the console asking us to shut the
-/// terminal down.</summary>
-public readonly record struct PtyInputBatch(
-    bool Ok, IReadOnlyList<PtyInputItem> Items, int NextSeq, bool Closing, bool Gone);
-
-/// <summary>The terminal half of the hub API, split out for the same reason as IOutputSink:
-/// PtySessionRunner's polling/coalescing/backoff is worth testing without a live hub.</summary>
-public interface IPtyChannel
-{
-    Task<PtyInputBatch> PullPtyInputAsync(string sessionId, int afterSeq, CancellationToken ct);
-    Task<bool> PostPtyOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct);
-    Task ReportPtyClosedAsync(string sessionId, string reason, CancellationToken ct);
 }
 
 /// <summary>Fetching a package payload, for DeployPackageExecutor. An interface for the
@@ -1015,104 +996,26 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     }
 
     // ---------------------------------------------------------------- interactive terminal
-    // These three are the whole hub-facing surface of a ConPTY session. They are separate
-    // from the command endpoints above because a terminal is a stream, not a command: it
-    // has no result, no exit code worth recording, and a lifetime measured in an operator's
-    // attention span. See hub/terminal.py for the other end.
+    // The three terminal requests are agent-shared/Pty/PtyProtocol.cs (PtyHttp), the same code
+    // the Linux agent runs: the URLs, the 404-means-gone rule and the input parse are the hub
+    // protocol (hub/terminal.py). This client supplies its HttpClient, its bearer token and the
+    // enrolled check. Separate from the command endpoints above because a terminal is a stream,
+    // not a command: no result, and a lifetime measured in an operator's attention span.
 
-    /// <summary>Fetch keystrokes and resizes the console queued for this session. Called on
-    /// a tight loop while a terminal is open, so it must be cheap and must never throw.</summary>
-    public async Task<PtyInputBatch> PullPtyInputAsync(string sessionId, int afterSeq, CancellationToken ct)
-    {
-        var empty = Array.Empty<PtyInputItem>();
-        if (!_identity.IsEnrolled) return new PtyInputBatch(false, empty, afterSeq, false, false);
+    public Task<PtyInputBatch> PullPtyInputAsync(string sessionId, int afterSeq, CancellationToken ct) =>
+        _identity.IsEnrolled
+            ? PtyHttp.PullInputAsync(_http, Authorized, AgentConfig.HubBase, sessionId, afterSeq, _log, ct)
+            : Task.FromResult(new PtyInputBatch(false, Array.Empty<PtyInputItem>(), afterSeq, false, false));
 
-        try
-        {
-            using var req = Authorized(HttpMethod.Get, AgentConfig.PtyInputUrl(sessionId, afterSeq));
-            using var resp = await _http.SendAsync(req, ct);
+    public Task<bool> PostPtyOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct) =>
+        _identity.IsEnrolled
+            ? PtyHttp.PostOutputAsync(_http, Authorized, AgentConfig.HubBase, sessionId, seq, chunk, _log, ct)
+            : Task.FromResult(false);
 
-            // The hub forgot this session (reaped, or the DB was reset). Nothing will ever
-            // arrive for it, so the session should end rather than poll a 404 forever.
-            if (resp.StatusCode == HttpStatusCode.NotFound)
-                return new PtyInputBatch(true, empty, afterSeq, Closing: true, Gone: true);
-            if (!resp.IsSuccessStatusCode)
-                return new PtyInputBatch(false, empty, afterSeq, false, false);
-
-            var json = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct));
-            var items = new List<PtyInputItem>();
-            if (json?["items"] is JsonArray array)
-            {
-                foreach (var node in array)
-                {
-                    if (node is null) continue;
-                    var seq = node["seq"]?.GetValue<int>() ?? -1;
-                    var kind = node["kind"]?.GetValue<string>() ?? "data";
-                    if (kind == "resize")
-                    {
-                        var size = node["size"];
-                        items.Add(new PtyInputItem(seq, "resize", "",
-                            (short)(size?["cols"]?.GetValue<int>() ?? 120),
-                            (short)(size?["rows"]?.GetValue<int>() ?? 30)));
-                    }
-                    else
-                    {
-                        items.Add(new PtyInputItem(seq, "data", node["data"]?.GetValue<string>() ?? "", 0, 0));
-                    }
-                }
-            }
-            return new PtyInputBatch(
-                true, items,
-                json?["next_seq"]?.GetValue<int>() ?? afterSeq,
-                json?["closing"]?.GetValue<bool>() ?? false,
-                Gone: false);
-        }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
-        {
-            _log.LogDebug("pty input poll for {Id} failed: {Msg}", sessionId, e.Message);
-            return new PtyInputBatch(false, empty, afterSeq, false, false);
-        }
-    }
-
-    /// <summary>Post one VT chunk. Like PostOutputAsync, a retry MUST reuse the same seq —
-    /// the hub keys on it, and a fresh number would duplicate bytes into the middle of an
-    /// escape sequence and corrupt the operator's screen.</summary>
-    public async Task<bool> PostPtyOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct)
-    {
-        if (!_identity.IsEnrolled) return false;
-        var body = new JsonObject { ["seq"] = seq, ["chunk"] = chunk };
-        try
-        {
-            using var req = Authorized(HttpMethod.Post, AgentConfig.PtyOutputUrl(sessionId));
-            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp = await _http.SendAsync(req, ct);
-            return resp.IsSuccessStatusCode;
-        }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
-        {
-            _log.LogDebug("pty output post for {Id} seq {Seq} failed: {Msg}", sessionId, seq, e.Message);
-            return false;
-        }
-    }
-
-    /// <summary>Tell the hub the session is over, so the console can stop polling and say
-    /// why. Best-effort: if it doesn't land, the hub's idle reaper closes it anyway.</summary>
-    public async Task ReportPtyClosedAsync(string sessionId, string reason, CancellationToken ct)
-    {
-        if (!_identity.IsEnrolled) return;
-        var body = new JsonObject { ["reason"] = reason };
-        try
-        {
-            using var req = Authorized(HttpMethod.Post, AgentConfig.PtyClosedUrl(sessionId));
-            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp = await _http.SendAsync(req, ct);
-            _ = resp.IsSuccessStatusCode;
-        }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
-        {
-            _log.LogDebug("pty close report for {Id} failed: {Msg}", sessionId, e.Message);
-        }
-    }
+    public Task ReportPtyClosedAsync(string sessionId, string reason, CancellationToken ct) =>
+        _identity.IsEnrolled
+            ? PtyHttp.ReportClosedAsync(_http, Authorized, AgentConfig.HubBase, sessionId, reason, _log, ct)
+            : Task.CompletedTask;
 
     /// <summary>Report a command's result. Must run under the same agent_id that claimed it.</summary>
     public async Task<bool> ReportResultAsync(string commandId, CommandResult result, CancellationToken ct)

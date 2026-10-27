@@ -437,7 +437,7 @@ def main():
         # version, because the Linux train is 0.x and every MIN_*_AGENT gate reads it as old.
         term_js = read_static("js", "fleet-terminal.js")
         check("fleet-terminal.js hands a Linux box to the pty on its shell_open claim",
-              "commands.indexOf('shell_open')" in term_js)
+              "commands.includes('shell_open')" in term_js)
         check("...and tells fleet-pty.js which platform it is",
               "FleetPty.activate({ platform })" in term_js)
         # A machine that enrolled but never sent /api/report has no version. It used to get

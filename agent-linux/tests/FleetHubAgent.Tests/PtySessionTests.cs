@@ -1,8 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using FleetHubAgent.Fleet;
+using FleetHub.Shared.Pty;
 using FleetHubAgent.Fleet.Executors;
 using FleetHubAgent.Fleet.Shell;
 
@@ -314,7 +313,7 @@ public class UnixPtyTests
     private static async Task<(PtySessionRunnerTests.FakeHub Hub, PtySessionRunner Runner, Task<string> Run)> Open()
     {
         var hub = new PtySessionRunnerTests.FakeHub();
-        var runner = new PtySessionRunner(Guid.NewGuid().ToString("N"), hub, NullLogger.Instance);
+        var runner = new PtySessionRunner(Guid.NewGuid().ToString("N"), hub, NullLogger.Instance, PtySession.Start);
         var run = runner.RunAsync("bash", 100, 30, CancellationToken.None);
         // A marker of our own rather than waiting for a prompt: root's PS1 differs per distro.
         hub.Type("echo READY-$((40+2))\r");

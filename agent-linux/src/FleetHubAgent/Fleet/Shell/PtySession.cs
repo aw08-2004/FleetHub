@@ -1,23 +1,8 @@
 using System.Text;
 using Microsoft.Extensions.Logging;
+using FleetHub.Shared.Pty;
 
 namespace FleetHubAgent.Fleet.Shell;
-
-/// <summary>What <see cref="PtySessionRunner"/> needs from a live terminal. An interface only
-/// so the runner's bookkeeping -- cursors, seqs, the ways a session ends -- can be tested
-/// against a fake on any machine, including the Windows box the agent is usually built on,
-/// where no pseudoterminal can be opened.</summary>
-public interface IPtySession : IDisposable
-{
-    bool Exited { get; }
-    DateTime LastActivityUtc { get; }
-    void Write(string data);
-    void Resize(short cols, short rows);
-}
-
-/// <summary>Starts a session. The real one is <see cref="PtySession.Start"/>.</summary>
-public delegate IPtySession PtySessionFactory(
-    string sessionId, string shell, short cols, short rows, Action<string> onOutput, ILogger log);
 
 /// <summary>
 /// One live interactive terminal on this machine: a login shell on a pseudoterminal (see
@@ -144,7 +129,7 @@ public sealed class PtySession : IPtySession
         }
         catch (Exception e)
         {
-            _log.LogDebug("pty {Id}: write failed: {Msg}", SessionId, e.Message);
+            _log.LogDebug(e, "pty {Id}: write failed", SessionId);
         }
     }
 
@@ -168,7 +153,7 @@ public sealed class PtySession : IPtySession
             try { read = _pty.Read(buffer, ReadPollMillis); }
             catch (Exception e)
             {
-                _log.LogDebug("pty {Id}: read ended: {Msg}", SessionId, e.Message);
+                _log.LogDebug(e, "pty {Id}: read ended", SessionId);
                 break;
             }
             if (read < 0) break;   // EIO: the last process holding the terminal is gone
@@ -178,7 +163,7 @@ public sealed class PtySession : IPtySession
             if (n == 0) continue;
             LastActivityUtc = DateTime.UtcNow;
             try { onOutput(new string(chars, 0, n)); }
-            catch (Exception e) { _log.LogDebug("pty {Id}: output sink threw: {Msg}", SessionId, e.Message); }
+            catch (Exception e) { _log.LogDebug(e, "pty {Id}: output sink threw", SessionId); }
         }
 
         _streamEnded = true;

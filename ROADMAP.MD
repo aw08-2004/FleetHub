@@ -4882,9 +4882,12 @@ directory group instead of an email, for the tenant that would rather not mainta
 > 0.4.0 (*Owed locally* item 19). `Fleet/Shell/UnixPty.cs` opens a Unix pty and starts a login
 > shell with `posix_spawn` (`POSIX_SPAWN_SETSID`, then the slave opened by path onto fd 0, so it
 > becomes the controlling terminal). It is not `forkpty`, which item 5 below assumed: forking a
-> multithreaded .NET runtime from managed code is unsafe. The runner, manager and
-> `ShellOpenExecutor` are ports of the Windows agent's, line for line where the hub protocol
-> dictates. The console switches on `shell_open` in the capability report, not on
+> multithreaded .NET runtime from managed code is unsafe. The runner, registry, hub calls,
+> timings and the shell_open body are `agent-shared/Pty/`, compiled into the Windows agent as
+> well (the Windows agent moved onto it in the same change, with no behaviour change; its 747
+> tests pass). A port was the first version, and SonarCloud's duplication gate refused it:
+> two copies of the hub protocol would let a cursor bug fixed on one platform survive on the
+> other. Only the pty is per agent. The console switches on `shell_open` in the capability report, not on
 > `MIN_PTY_AGENT`. Still 🚧 for patch install and process end/restart.
 
 > **Status update (2026-09-30) — supersedes the opening below and *The manifest is not in the

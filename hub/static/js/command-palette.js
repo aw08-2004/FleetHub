@@ -158,16 +158,16 @@
 
     /** The jump targets this row offers, in ArrowRight order. */
     function actionsFor(row) {
-        const remote = remoteBase() && NO_REMOTE_PLATFORMS.indexOf(row.platform || '') === -1;
+        const remote = remoteBase() && !NO_REMOTE_PLATFORMS.includes(row.platform || '');
         return ACTIONS.filter((a) => !a.remote || remote);
     }
 
     function hrefFor(row, action) {
-        if (action && action.remote) {
+        if (action?.remote) {
             return `${remoteBase()}?machine=${encodeURIComponent(row.machine)}`;
         }
         const path = `/machine/${encodeURIComponent(row.machine)}`;
-        const slug = action && action.slug;
+        const slug = action?.slug;
         return slug ? `${path}?tab=${slug}` : path;
     }
 

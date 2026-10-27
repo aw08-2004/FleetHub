@@ -116,4 +116,12 @@
   <ItemGroup>
     <Compile Include="..\..\..\agent-shared\UpdatePins.cs" Link="Update\UpdatePins.cs" />
   </ItemGroup>
+
+  <!-- The interactive terminal's hub side (runner, registry, hub calls, timings), shared with
+       the Linux agent because it is the hub protocol rather than anything about Windows.
+       Only the pseudoconsole is this agent's own: Fleet/Shell/ConPty.cs and PtySession.cs.
+       See agent-shared/Pty/PtySessionRunner.cs. -->
+  <ItemGroup>
+    <Compile Include="..\..\..\agent-shared\Pty\*.cs" LinkBase="Fleet\Shell\Shared" />
+  </ItemGroup>
 </Project>

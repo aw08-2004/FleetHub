@@ -82,15 +82,6 @@ public static class AgentConfig
     public static string CommandOutputUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/output";
 
-    /// <summary>The terminal endpoints (hub/fleet_web.py, agent_pty_*). The hub scopes them to
-    /// this agent's own machine, so a session id cannot reach another machine's terminal.</summary>
-    public static string PtyInputUrl(string sessionId, int afterSeq) =>
-        HubBase + "/api/agent/pty/" + Uri.EscapeDataString(sessionId) +
-        "/input?after_seq=" + afterSeq.ToString(System.Globalization.CultureInfo.InvariantCulture);
-    public static string PtyOutputUrl(string sessionId) =>
-        HubBase + "/api/agent/pty/" + Uri.EscapeDataString(sessionId) + "/output";
-    public static string PtyClosedUrl(string sessionId) =>
-        HubBase + "/api/agent/pty/" + Uri.EscapeDataString(sessionId) + "/closed";
 
     /// <summary>
     /// Does <paramref name="url"/> actually address OUR hub?
@@ -162,38 +153,6 @@ public static class AgentConfig
     /// <summary>Default per-command timeout when the console does not send one.</summary>
     public const int DefaultCommandTimeoutSeconds = 600;
 
-    // --- Interactive terminals (shell_open) ----------------------------------
-    // The Windows agent's numbers, unchanged and for its reasons: they are sized against what
-    // an operator perceives as echo (~250-400ms end to end) and against the hub's request
-    // budget (waitress runs a fixed thread pool), neither of which depends on the OS. Once a
-    // shell_open is claimed, keystrokes and output flow over /api/agent/pty/* on this cadence
-    // instead of the command queue's.
-
-    /// <summary>Keystroke poll while the operator is typing.</summary>
-    public const int PtyInputPollMillis = 150;
-
-    /// <summary>...backing off to this after <see cref="PtyIdleAfterMillis"/> of no typing. A
-    /// terminal left open on a second monitor should cost about a heartbeat.</summary>
-    public const int PtyInputPollIdleMillis = 1000;
-    public const int PtyIdleAfterMillis = 15_000;
-
-    /// <summary>Coalesce output for a beat before posting: `ls -R` is hundreds of small writes,
-    /// and one POST each would be pure overhead.</summary>
-    public const int PtyOutputFlushMillis = 40;
-
-    /// <summary>Matches terminal.PTY_MAX_CHUNK_CHARS on the hub; split before it would refuse.</summary>
-    public const int PtyMaxChunkChars = 16_000;
-
-    /// <summary>The agent's BACKSTOP reap. The hub decides abandonment (one hour, on a clock
-    /// only the console's polls refresh) and says so with `closing`; this covers a hub that
-    /// forgot the session while still answering. It must sit well above the hub's horizon or
-    /// it would reap the very absence a terminal is meant to survive -- but it must exist,
-    /// because what would leak is a root shell.</summary>
-    public const int PtyIdleTimeoutSeconds = 2 * 60 * 60;
-
-    /// <summary>Most terminals open at once on one machine. The hub caps each operator at
-    /// four; this bounds the machine whatever the hub does.</summary>
-    public const int MaxPtySessions = 8;
 
     // --- Live output streaming ---------------------------------------------
     // The Windows agent's three constants, unchanged and for the same reasons. They are sized

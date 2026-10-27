@@ -113,7 +113,8 @@ src/FleetHubAgent/        the agent
   AgentConfig.cs          version, endpoints, cadence, state paths
   Worker.cs               the five loops
   Fleet/                  hub client, dispatcher, executors, capability report, output streaming
-  Fleet/Shell/            the interactive terminal: Unix pty, session, runner, registry
+  Fleet/Shell/            the interactive terminal's pty: UnixPty and PtySession (the runner,
+                          registry and hub calls are ../agent-shared/Pty, shared with Windows)
   Patch/                  what apt/dnf says is available, and the heartbeat payload for it
   Update/                 the signed self-update: manifest verification and the swap
   Telemetry/              /proc and /sys readers, the report builder

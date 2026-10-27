@@ -221,12 +221,12 @@ def main():
               sh.status_code == 200 and sh.mimetype == "text/plain"
               and sh.headers.get("Cache-Control") == "no-store")
         check("...naming this hub and this code, shell-quoted",
-              f"local HUB_URL='{HUB}'" in shell and f"local CODE='{code}'" in shell)
+              f"local hub_url='{HUB}'" in shell and f"local code='{code}'" in shell)
         # bash reads a CR as part of the word: `local CODE='ABC234'\r` is another code.
         check("...with no carriage return anywhere", "\r" not in shell)
         check("...running the signed Linux installer with no secret",
               f"'{onboarding_web.AGENT_LINUX_INSTALLER_URL}'" in shell
-              and "--secret" not in shell and 'bash "$work/install.sh" --hub "$HUB_URL"' in shell)
+              and "--secret" not in shell and 'bash "$work/install.sh" --hub "$hub_url"' in shell)
         # A failed install must not burn the code: the redeem comes after the installer, and
         # the installer's failure ends the script.
         check("...installing BEFORE spending the code",
@@ -234,7 +234,7 @@ def main():
         check("...never printing the token",
               "echo \"$token\"" not in shell and "printf '%s\\n' \"$token\"" not in shell)
         check("...writing agent.json 0600 in one step, never widened then narrowed",
-              "install -m 0600 -o root -g root /dev/stdin \"$IDENTITY\"" in shell
+              "install -m 0600 -o root -g root /dev/stdin \"$identity\"" in shell
               and not any("chmod" in line for line in shell.splitlines()
                           if not line.lstrip().startswith("#")))
         # A pipe is not a file: a dropped connection must define half a function and run
@@ -263,7 +263,7 @@ def main():
                                  "agent-linux", "install", "install.sh")
         with open(installer, encoding="utf-8") as fh:
             check("install.sh knows an onboarding install needs no secret",
-                  '"${FLEETHUB_ONBOARDING:-}" = "1"' in fh.read())
+                  '"${FLEETHUB_ONBOARDING:-}" == "1"' in fh.read())
 
         print("\n== Status, then redeem (what the script does) ==")
         reset_limits()

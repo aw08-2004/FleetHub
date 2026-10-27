@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using FleetHub.Shared.Pty;
 using TempMonitorAgent.Fleet.Shell;
 
 namespace TempMonitorAgent.Fleet.Executors;
@@ -18,6 +19,10 @@ namespace TempMonitorAgent.Fleet.Executors;
 /// result text is a one-line summary, because the VT stream goes over the pty endpoints on
 /// its own cadence -- see PtySessionRunner for why the command channel's tick is unusable
 /// for a terminal.
+///
+/// **The session is agent-shared/Pty** (PtyShellOpen, PtySessionRunner), the same code the Linux
+/// agent runs, because its rules are the hub protocol. What is this agent's own is
+/// <see cref="PtySession.Start"/>: ConPTY hosting powershell.exe or cmd.exe.
 ///
 /// Note for the Worker: this must be EXEMPT from MaxConcurrentCommands. It occupies its
 /// slot for as long as an operator keeps a tab open, so counting it would let four idle
@@ -46,33 +51,13 @@ public sealed class ShellOpenExecutor : ICommandExecutor
             return CommandResult.Fail("shell_open requires params.session_id");
 
         var shell = (cmd.Params.GetString("shell") ?? "powershell").ToLowerInvariant();
-        var cols = (short)Math.Clamp(cmd.Params.GetInt("cols", 120), 20, 500);
-        var rows = (short)Math.Clamp(cmd.Params.GetInt("rows", 30), 5, 200);
-
-        var runner = new PtySessionRunner(sessionId, _channel, _log);
-        if (!_sessions.TryAdd(runner))
-        {
-            // Tell the hub as well as the command: the console is polling the session, not
-            // this command's result, so a failure reported only here would look like a
-            // terminal that opened and then said nothing.
-            const string reason = "too many terminals are already open on this machine";
-            await _channel.ReportPtyClosedAsync(sessionId, reason, CancellationToken.None);
-            return CommandResult.Fail(reason);
-        }
+        var (cols, rows) = PtyShellOpen.ClampSize(cmd.Params.GetInt("cols", 120), cmd.Params.GetInt("rows", 30));
 
         _log.LogInformation("Opening terminal {Id} ({Shell} {Cols}x{Rows}) for {Op}",
             sessionId, shell, cols, rows, OperatorTag.For(cmd.IssuedBy));
 
-        try
-        {
-            var reason = await runner.RunAsync(shell, cols, rows, ct);
-            // Ending is the normal case, not a failure: `exit` is how you close a terminal.
-            return CommandResult.Ok($"terminal session ended: {reason}");
-        }
-        finally
-        {
-            _sessions.Remove(sessionId);
-            runner.Dispose();
-        }
+        var (ok, text) = await PtyShellOpen.RunAsync(
+            _sessions, _channel, _log, PtySession.Start, sessionId, shell, cols, rows, ct);
+        return ok ? CommandResult.Ok(text) : CommandResult.Fail(text);
     }
 }

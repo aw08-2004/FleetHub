@@ -29,7 +29,7 @@ const psCommand = document.getElementById('ps-command');
 const copyStatus = document.getElementById('copy-status');
 const linuxCommand = document.getElementById('linux-command');
 const copyLinuxStatus = document.getElementById('copy-linux-status');
-const osChoices = Array.from(document.querySelectorAll('.onboarding-os__choice'));
+const osChoices = Array.from(document.querySelectorAll('input[name="os"]'));
 const installPanels = {
     windows: document.getElementById('install-windows'),
     linux: document.getElementById('install-linux'),
@@ -59,9 +59,7 @@ function guessOs() {
 }
 
 function chooseOs(os) {
-    osChoices.forEach((button) => {
-        button.setAttribute('aria-checked', String(button.dataset.os === os));
-    });
+    osChoices.forEach((radio) => { radio.checked = radio.value === os; });
     installPanels.windows.hidden = os !== 'windows';
     installPanels.linux.hidden = os !== 'linux';
 }
@@ -185,8 +183,8 @@ document.getElementById('copy-command').addEventListener('click', () => {
 document.getElementById('copy-linux').addEventListener('click', () => {
     void copyFrom(linuxCommand, copyLinuxStatus);
 });
-osChoices.forEach((button) => {
-    button.addEventListener('click', () => chooseOs(button.dataset.os));
+osChoices.forEach((radio) => {
+    radio.addEventListener('change', () => { if (radio.checked) chooseOs(radio.value); });
 });
 
 const preset = new URLSearchParams(location.search).get('code');

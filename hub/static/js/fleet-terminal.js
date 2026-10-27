@@ -459,7 +459,7 @@
                 // required -- silence permits commands in capabilities.py, but it cannot tell
                 // us a pty is on the other end, and guessing wrong opens a terminal that never
                 // attaches.
-                if (Array.isArray(commands) && commands.indexOf('shell_open') !== -1 && window.FleetPty) {
+                if (Array.isArray(commands) && commands.includes('shell_open') && window.FleetPty) {
                     // bash/sh in the picker that decides what "+" opens -- not PowerShell.
                     setShells('unix');
                     owner = 'pty';

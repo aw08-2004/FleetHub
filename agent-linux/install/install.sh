@@ -419,7 +419,7 @@ main() {
 visible in \`ps\` while this ran. Use --secret-file or FLEETHUB_ENROLLMENT_SECRET next time."
     elif [ -f "$CONF_DIR/agent.secret" ]; then
         say "secret  -> keeping the existing $CONF_DIR/agent.secret"
-    elif [ "${FLEETHUB_ONBOARDING:-}" = "1" ]; then
+    elif [[ "${FLEETHUB_ONBOARDING:-}" == "1" ]]; then
         # Run by the hub's onboarding script (hub/templates/onboarding/onboard.sh), which spends
         # an onboarding code and writes this machine's own credential to agent.json right after
         # this returns. No secret is the design there, so the TELEMETRY ONLY banner below would

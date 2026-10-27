@@ -772,38 +772,44 @@
     // pseudoconsole, the clones would still be in place and BOTH sets of handlers gone.
     let wired = false;
 
+    /** Swap the shared toolbar over to this terminal's words: hide the line terminal's
+     *  controls, and set the hint and the titles. Safe to repeat on every activate(). */
+    function showPtyChrome(platform) {
+        if (paneEl) paneEl.hidden = false;
+        if (legacyEl) legacyEl.hidden = true;
+        for (const id of ['terminal-timeout', 'terminal-timeout-label',
+                          'terminal-stop', 'terminal-reset']) {
+            const el = document.getElementById(id);
+            if (el) el.hidden = true;
+        }
+
+        if (hintEl) {
+            hintEl.className = 'terminal__hint';
+            // "running as SYSTEM" is wrong on a Linux box, which runs the shell as root,
+            // so it gets its own sentence rather than a substituted word.
+            hintEl.textContent = platform === 'linux'
+                ? t('machine.pty.hint_linux', { max: MAX_CONSOLES })
+                : t('machine.pty.hint', { max: MAX_CONSOLES });
+        }
+
+        const clearBtn = document.getElementById('terminal-clear');
+        if (clearBtn) clearBtn.title = t('machine.pty.clear_title');
+        const saveFavBtn = document.getElementById('terminal-save-fav');
+        if (saveFavBtn) saveFavBtn.title = t('machine.pty.save_fav_title');
+        // The shell dropdown picks what "+" opens next, and follows whichever console is
+        // in front. It deliberately does NOT restart anything: a running powershell
+        // cannot become cmd, and ending the session an operator is working in because
+        // they touched a dropdown was never a good trade.
+        if (shellEl) shellEl.title = t('machine.pty.shell_title');
+    }
+
     window.FleetPty = {
         /** `platform` is what fleet-terminal.js read off the machine: 'linux' for a Linux
          *  agent that answers shell_open, anything else for a PC. It only changes the words
          *  under the strip -- the shell picker has already been filled for the platform
          *  over there, and everything else about a console is the same on both. */
         activate({ platform } = {}) {
-            if (paneEl) paneEl.hidden = false;
-            if (legacyEl) legacyEl.hidden = true;
-            for (const id of ['terminal-timeout', 'terminal-timeout-label',
-                              'terminal-stop', 'terminal-reset']) {
-                const el = document.getElementById(id);
-                if (el) el.hidden = true;
-            }
-
-            if (hintEl) {
-                hintEl.className = 'terminal__hint';
-                // "running as SYSTEM" is wrong on a Linux box, which runs the shell as root,
-                // so it gets its own sentence rather than a substituted word.
-                hintEl.textContent = platform === 'linux'
-                    ? t('machine.pty.hint_linux', { max: MAX_CONSOLES })
-                    : t('machine.pty.hint', { max: MAX_CONSOLES });
-            }
-
-            const clearBtn = document.getElementById('terminal-clear');
-            if (clearBtn) clearBtn.title = t('machine.pty.clear_title');
-            const saveFavBtn = document.getElementById('terminal-save-fav');
-            if (saveFavBtn) saveFavBtn.title = t('machine.pty.save_fav_title');
-            // The shell dropdown picks what "+" opens next, and follows whichever console is
-            // in front. It deliberately does NOT restart anything: a running powershell
-            // cannot become cmd, and ending the session an operator is working in because
-            // they touched a dropdown was never a good trade.
-            if (shellEl) shellEl.title = t('machine.pty.shell_title');
+            showPtyChrome(platform);
 
             // Everything below binds a listener, so it happens once per document however
             // many times a machine is picked.

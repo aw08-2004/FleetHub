@@ -80,8 +80,8 @@ try
     // in the capability report, and that report is what switches the console's Terminal tab
     // from the one-shot box to a real xterm for this machine. The manager is a singleton so
     // the host disposes it at stop and hangs up every open shell.
-    builder.Services.AddSingleton<FleetHubAgent.Fleet.Shell.PtySessionManager>();
-    builder.Services.AddSingleton<IPtyChannel>(sp => sp.GetRequiredService<FleetClient>());
+    builder.Services.AddSingleton<FleetHub.Shared.Pty.PtySessionManager>();
+    builder.Services.AddSingleton<FleetHub.Shared.Pty.IPtyChannel>(sp => sp.GetRequiredService<FleetClient>());
     builder.Services.AddSingleton<ICommandExecutor, ShellOpenExecutor>();
 
     // What the machine's package manager says is available (roadmap #14's Linux half). Its
