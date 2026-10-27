@@ -178,6 +178,11 @@ pre-rename name every existing Docker host pulls. `fleethub` does not exist unti
 push to `beta` that touches `hub/` after this merges.
 - [ ] **First publish.** That run's *Push* step shows both `fleethub:beta-X.Y.Z` and
   `temp_monitor-hub:beta-X.Y.Z`, and both share one digest.
+- [ ] **Re-run it once, on purpose.** *Re-run all jobs* on that same run. It should skip the
+  build, warn that the tag is already there, pull both copies, pass the revision check, and
+  re-push `:beta` under both names with nothing else changed. That is the only way to see the
+  half-failed-push recovery run (its `git fetch` and branch-head `HUB_VERSION` read) before a
+  real failure needs it.
 - [ ] **Make `fleethub` public**, by hand and before the `beta` → `main` PR: GitHub creates it
   private, and `compose.yaml` on `main` will point at it. Package settings → Danger Zone →
   Change visibility → Public (one-way). Then `docker pull ghcr.io/aw08-2004/fleethub:beta`
