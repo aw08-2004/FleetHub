@@ -967,6 +967,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             return jsonify({"error": "Files are browsed and moved from the Files tool, "
                                      "not the command channel."}), 400
         try:
+            # A name typed here reaches no agent unless one enrolled under it -- see
+            # fleet.require_enrolled, and why that is not in create_command itself.
+            fleet.require_enrolled(db_path, data.get("machine"))
             command_id = fleet.create_command(
                 db_path,
                 machine=data.get("machine"),

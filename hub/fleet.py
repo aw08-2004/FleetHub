@@ -1724,6 +1724,39 @@ class UnsupportedCommand(ValueError):
     """
 
 
+class UnknownMachine(ValueError):
+    """A command an operator typed for a name no live agent enrollment answers to.
+
+    A ValueError for the same reason as UnsupportedCommand: every web caller already turns one
+    into a refusal with its sentence.
+    """
+
+
+def require_enrolled(db_path, machine):
+    """Raise UnknownMachine unless `machine` has a live enrollment.
+
+    Only an enrolled agent claims commands, so a command for anything else sits "pending"
+    until it expires, looking exactly like a slow PC. Found on a Windows Sandbox: the operator
+    queued a file listing for the 36-character GUID a ticket showed, the agent had enrolled
+    under the 15 characters Windows truncates that to, and nothing said the two differ. A
+    machine that is merely offline is still enrolled and still queues.
+
+    **Called at the doors an operator types a name into -- the command channel and the Files
+    tool -- and deliberately not from create_command.** The funnel was tried first and broke
+    the schedulers: the package dispatcher claims a target before queueing, and the patch
+    scheduler warns that a raise there "would raise out of this loop and cost every remaining
+    target its pass". A target with no agent is ordinary for them (an AD-synced machine, a
+    revoked one) and already ends through the command's TTL, which is the right outcome
+    there. Every other door is a button on a machine page, and that page is now a 404 for a
+    name the hub does not know.
+    """
+    if not is_enrolled(db_path, machine):
+        raise UnknownMachine(
+            f"No enrolled agent answers to '{str(machine or '').strip()}', so nothing would "
+            f"ever run this command. Check the name against Inventory -- Windows shortens "
+            f"computer names longer than 15 characters.")
+
+
 def create_command(db_path, machine, command_type, params, issued_by,
                    ttl_seconds=DEFAULT_COMMAND_TTL_SECONDS):
     """Queue a command for a machine. Returns its id.
@@ -1748,6 +1781,9 @@ def create_command(db_path, machine, command_type, params, issued_by,
     It costs one indexed lookup per command and cannot refuse anything for a machine that has
     not reported -- which is every Windows agent in the field. See capabilities.py's
     absent-report rule; the asymmetry is the whole reason this is safe to put in the funnel.
+
+    It does NOT refuse a machine with no enrollment -- see require_enrolled for why that check
+    lives at the operator's doors instead.
     """
     machine = str(machine or "").strip()
     if not machine:

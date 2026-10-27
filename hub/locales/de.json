@@ -313,6 +313,11 @@
     "note": "Berechtigungen ergeben sich aus den Gruppen, denen Sie angehören. Bitten Sie eine Administratorin oder einen Administrator, Sie einer passenden Gruppe hinzuzufügen.",
     "back": "Zurück zur Übersicht"
   },
+  "machine_not_found": {
+    "title": "Gerät nicht gefunden",
+    "message": "Der Hub kennt kein Gerät namens {name}.",
+    "note": "Ein Gerät erscheint hier, sobald sich sein Agent registriert oder Daten meldet. Prüfen Sie die Schreibweise im Inventar -- Windows kürzt lange Computernamen auf 15 Zeichen."
+  },
   "dashboard": {
     "heading": "Flottenübersicht",
     "empty": "Bisher hat sich kein Rechner gemeldet.",

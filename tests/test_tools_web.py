@@ -33,6 +33,7 @@ os.chdir(_TMPDIR)
 os.environ["ALLOWED_EMAILS"] = "root@example.com"
 
 import app
+import fleet
 import permissions
 
 PASS = 0
@@ -46,6 +47,8 @@ DOCUMENT = {"Sec-Fetch-Dest": "document"}
 IFRAME = {"Sec-Fetch-Dest": "iframe"}
 
 MACHINE = "PC-1"
+# Enrolled, because /machine/<name> is a 404 for a name the hub has no record of.
+fleet.issue_agent_identity(app.DB_PATH, MACHINE, actor="test")
 
 # The per-machine tabs, by the slug a link carries and the panel id it selects. This table IS
 # the contract: old /tools links redirect by slug, tabs.js resolves slug -> panel, and each JS

@@ -170,7 +170,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.167.0"
+HUB_VERSION = "1.168.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3585,7 +3585,19 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     # Re-derive the primary temperature from the reported sensor block, so the operator's
     # sensor choice applies to every agent immediately -- including ones too old to
     # receive config. Reports without a sensor block keep the agent's own pick.
-    temp_value = float(resolve_primary_temp(machine_name, float(temp), sensors))
+    #
+    # None when the machine has no temperature at all (a VM -- see report_temp). Such a
+    # report still refreshes the live caches, the status and the socket below; what it does
+    # NOT do is write a readings row, because readings.temp is NOT NULL and the only value
+    # that would fit is a made-up one. 0 was considered, since displayable_temp already reads
+    # it as "could not read", and rejected: the history chart plots whatever is stored, so a
+    # VM would draw a flat 0 °C line, and a "temp below 1" rule written to catch a dead sensor
+    # would fire on every VM in the fleet. The cost is that such a machine has no stored load
+    # or memory history either, since those columns ride the same row -- an empty chart that
+    # is honest, rather than a full one that is not.
+    resolved = resolve_primary_temp(machine_name,
+                                    float(temp) if temp is not None else None, sensors)
+    temp_value = float(resolved) if resolved is not None else None
     now = datetime.now()
     # A reading may carry the client's own timestamp (client_ts) -- e.g. a
     # backfilled reading that was buffered while the hub was unreachable. Store it
@@ -3599,21 +3611,22 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     timestamp_str = to_timestamp_str(reading_dt)
     timestamp_epoch = to_epoch_seconds(reading_dt)
 
-    if WRITE_CSV_ARCHIVE:
-        append_csv_archive(timestamp_str, machine_name, temp_value)
+    if temp_value is not None:
+        if WRITE_CSV_ARCHIVE:
+            append_csv_archive(timestamp_str, machine_name, temp_value)
 
-    # The blob rides at most one reading every SENSOR_BLOB_MIN_SECONDS -- see
-    # _should_store_sensor_blob for why, and why the charts do not notice. The METRICS below
-    # are extracted from every report regardless, so a machine reporting at 1 Hz because
-    # somebody is watching it stores 1 Hz history.
-    sensors_json = (json.dumps(sensors)
-                    if sensors and _should_store_sensor_blob(machine_name, timestamp_epoch)
-                    else None)
-    # Promote the chartable metrics from THIS report's sensor block into their own columns,
-    # each gated by its collection toggle -- a toggled-off metric is recorded as NULL.
-    reading_metrics = metrics_for_storage(sensors)
-    enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value, sensors_json,
-                    metrics=reading_metrics)
+        # The blob rides at most one reading every SENSOR_BLOB_MIN_SECONDS -- see
+        # _should_store_sensor_blob for why, and why the charts do not notice. The METRICS
+        # below are extracted from every report regardless, so a machine reporting at 1 Hz
+        # because somebody is watching it stores 1 Hz history.
+        sensors_json = (json.dumps(sensors)
+                        if sensors and _should_store_sensor_blob(machine_name, timestamp_epoch)
+                        else None)
+        # Promote the chartable metrics from THIS report's sensor block into their own
+        # columns, each gated by its collection toggle -- a toggled-off metric is NULL.
+        reading_metrics = metrics_for_storage(sensors)
+        enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value,
+                        sensors_json, metrics=reading_metrics)
 
     # Backfilled (historical) readings go into history only; they must not clobber
     # the "current" live-status caches with a stale value.
@@ -5751,10 +5764,20 @@ def report_temp():
     # BEFORE the identity gate below, because that gate writes (a rename, last_report_auth),
     # and a report refused for its payload must not have moved an enrollment first (review
     # on PR #119).
-    try:
-        temp_value = float(data['temp'])
-    except (TypeError, ValueError):
-        return jsonify({"error": "temp must be a number"}), 400
+    #
+    # **`temp: null` is a report, not a malformed one.** A machine with no CPU temperature
+    # sensor -- every VM: Windows Sandbox, Hyper-V, a cloud-GPU box -- has an identity, an
+    # uptime and a load to report, and the agent used to send nothing at all for want of a
+    # number here. The machine then never got an identity row, so it enrolled, heartbeated
+    # and was nowhere in the Inventory. The key itself stays required: an old agent always
+    # sends it, and a body without it is still not a report.
+    if data['temp'] is None:
+        temp_value = None
+    else:
+        try:
+            temp_value = float(data['temp'])
+        except (TypeError, ValueError):
+            return jsonify({"error": "temp must be a number"}), 400
 
     # --- identity gate (roadmap #29), then every write it guards ---
     # Under the ingest gate, so a delete of this machine cannot land between the two: see
@@ -5878,16 +5901,12 @@ def _build_fleet_summary(top):
             "FROM machine_info ORDER BY machine ASC"
         ).fetchall()
     rows = [dict(row) for row in db_rows]
-    known = {row["machine"] for row in rows}
-    # Same union get_machines() does: a machine that has reported telemetry but has no
-    # identity row yet still exists, and a total that omitted it would disagree with the
-    # Inventory beside it.
-    for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
-        if machine not in known:
-            rows.append({"machine": machine, "companion_version": None, "os_caption": None,
-                         "os_build": None, "ad_os": None, "updated_at": None,
-                         "update_channel": None})
-            known.add(machine)
+    # Same union get_machines() does: a machine with no identity row yet still exists, and a
+    # total that omitted it would disagree with the Inventory beside it.
+    for machine, updated_at in _rows_without_identity({row["machine"] for row in rows}):
+        rows.append({"machine": machine, "companion_version": None, "os_caption": None,
+                     "os_build": None, "ad_os": None, "updated_at": updated_at,
+                     "update_channel": None})
 
     # Narrow BEFORE enriching, exactly as get_machines does -- there is no reason to extract
     # diagnostics for machines the caller will never be shown, and every number below has to
@@ -6090,12 +6109,50 @@ def fleet_summary():
 
 def _all_known_machines():
     """Every machine name the hub knows, for building a cache key. Cheap: one indexed
-    column, plus the in-memory keys the roster union above also folds in."""
+    column, plus the names the roster union above also folds in."""
     with get_db_conn() as conn:
         names = {row["machine"] for row in conn.execute("SELECT machine FROM machine_info")}
-    names.update(latest_temp.keys())
-    names.update(latest_uptime.keys())
+    names.update(machine for machine, _ in _rows_without_identity(names))
     return names
+
+
+def _rows_without_identity(known):
+    """[(machine, updated_at)] for every machine the hub knows that has no machine_info row
+    among `known` -- the names the Inventory and the Dashboard add to the identity rows.
+
+    Two sources. A machine that has reported telemetry but whose identity write has not landed
+    (an older client, or the first report racing the write) is in the live caches, and has no
+    `updated_at` to give. An **enrolled agent that has never reported** has only its agents row,
+    and gets that row's last heartbeat as `updated_at`, so it reads online while it is.
+
+    **The second one is why this exists.** The roster used to be machine_info plus the caches,
+    and machine_info is written only by /api/report -- which a Windows agent did not send at all
+    while it had no CPU temperature to put in it. A Windows Sandbox and a cloud-GPU VM both
+    enrolled, heartbeated and showed online in /api/fleet/status, and were in neither the
+    Inventory nor the Dashboard; a command queued for one sat pending with no machine page to
+    say why. The agent now reports without a temperature, but an older one in the field still
+    will not, and an enrollment is a live credential: one the operator cannot see is one they
+    cannot revoke.
+
+    Case-folded against `known`, because Windows hostnames are and a rename (OpenClaw ->
+    OPENCLAW) can leave the agents row and the identity row differing only in case -- that is
+    one machine, and listing it twice would be the duplicate the serial merge exists to remove.
+    """
+    seen = {str(name).lower() for name in known}
+    extra = []
+    for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
+        if machine.lower() not in seen:
+            extra.append((machine, None))
+            seen.add(machine.lower())
+    for agent in fleet.list_agent_status(DB_PATH):
+        machine = agent["machine"]
+        if machine.lower() in seen:
+            continue
+        last_seen = agent.get("last_seen")
+        extra.append((machine, to_timestamp_str(datetime.fromtimestamp(int(last_seen)))
+                      if last_seen else None))
+        seen.add(machine.lower())
+    return extra
 
 
 @app.route('/api/machines')
@@ -6115,18 +6172,15 @@ def get_machines():
             "FROM machine_info ORDER BY machine ASC"
         ).fetchall()
     result = [dict(row) for row in rows]
-    known_machines = {row['machine'] for row in result}
-    # Also surface machines that have reported temps but no identity fields yet
-    # (e.g. an older client, or the very first report before a DB write lands).
-    for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
-        if machine not in known_machines:
-            result.append({
-                'machine': machine, 'asset_tag': None, 'serial_number': None,
-                'service_tag': None, 'manufacturer': None, 'model': None,
-                'companion_version': None, 'os_caption': None, 'os_version': None,
-                'os_build': None, 'os_arch': None, 'ad_os': None, 'updated_at': None,
-            })
-            known_machines.add(machine)
+    # Also surface machines with no identity row yet -- see _rows_without_identity for who
+    # those are, and for the enrolled-but-silent machine that went missing without it.
+    for machine, updated_at in _rows_without_identity({row['machine'] for row in result}):
+        result.append({
+            'machine': machine, 'asset_tag': None, 'serial_number': None,
+            'service_tag': None, 'manufacturer': None, 'model': None,
+            'companion_version': None, 'os_caption': None, 'os_version': None,
+            'os_build': None, 'os_arch': None, 'ad_os': None, 'updated_at': updated_at,
+        })
     # Narrow BEFORE enriching -- there is no reason to read sensors for machines the
     # caller will never be shown.
     result = access.filter_rows(result)
@@ -6185,14 +6239,21 @@ def machine_detail(machine):
         ).fetchone()
     uptime_seconds = get_latest_uptime(machine_name)
     temp = get_latest_temp(machine_name)
+    # An enrolled agent that has never reported is a machine too -- the list shows it (see
+    # _rows_without_identity), so its own page must not answer "Unknown machine".
+    enrolled_only = None
     if row is None and uptime_seconds is None and temp is None:
-        return None
+        enrolled_only = next((r for r in _rows_without_identity(set())
+                              if r[0] == machine_name), None)
+        if enrolled_only is None:
+            return None
 
     result = dict(row) if row else {
         'machine': machine_name, 'asset_tag': None, 'serial_number': None,
         'service_tag': None, 'manufacturer': None, 'model': None,
         'companion_version': None, 'os_caption': None, 'os_version': None,
-        'os_build': None, 'os_arch': None, 'updated_at': None,
+        'os_build': None, 'os_arch': None,
+        'updated_at': enrolled_only[1] if enrolled_only else None,
         'ad_ou': None, 'ad_dn': None, 'ad_owner': None, 'ad_os': None,
         'ad_disabled': None, 'ad_synced_at': None,
     }
@@ -7468,6 +7529,15 @@ def tools_page():
 @login_required
 @access.require_machine(permissions.VIEW)
 def machine_page(machine):
+    # **A name the hub has never heard of is a 404, not an empty machine page.** The URL is
+    # typed, and require_machine above only asks whether the name is in scope -- which for a
+    # fleet-wide operator is every string there is. The page then rendered for anything,
+    # every tab looked like a machine that had merely gone quiet, and its buttons queued
+    # commands for a name no agent will ever claim (fleet.create_command now refuses those
+    # too). machine_detail is the test because it is exactly what the page would load: if it
+    # has nothing, the page has nothing to show.
+    if machine_detail(machine) is None:
+        return render_template("denied.html", missing_machine=str(machine).strip()), 404
     return render_template(
         "machine.html", machine=machine,
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),

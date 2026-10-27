@@ -79,6 +79,10 @@ def main():
     try:
         permissions.init_permissions_db(db_path)
         fleet.init_fleet_db(db_path)
+        # Enrolled, because the command channel refuses a name no agent answers to
+        # (fleet.require_enrolled) -- and these checks are about scope, not about that.
+        for name in ("PC-1", "HR-9"):
+            fleet.issue_agent_identity(db_path, name, actor="test")
         settings.init_settings_db(db_path)
         users.init_users_db(db_path)
         settings.invalidate()
