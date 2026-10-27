@@ -32,6 +32,12 @@ The install script is a Jinja template rendered per code (templates/onboarding/)
 under hub/ because hub self-update and the container image ship only hub/; the agent
 installer it fetches is the repo's own agent/install/agent-install.ps1, which verifies the
 binary against the signed manifest exactly as a technician's install does.
+
+**A Linux machine onboards the same way** (hub 1.169.0): `/onboarding/run/<code>.sh` is
+templates/onboarding/onboard.sh, piped into a root bash by linux_command, and it runs the repo's
+agent-linux/install/install.sh -- which checks the binary against the signed Linux manifest --
+before it spends the code. The wizard picks Windows or Linux; the code, the redeem route and
+every rule above are shared, because a code admits one machine whatever it runs.
 """
 import re
 
@@ -58,6 +64,10 @@ STATUS_GLOBAL_PER_MINUTE = 1200
 #: technician would, signature check included.
 AGENT_INSTALLER_URL = (
     "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent/install/agent-install.ps1")
+#: The Linux counterpart (hub 1.169.0): the same install.sh a technician pipes into bash, which
+#: verifies the binary against the signed Linux manifest. From main for the reason above.
+AGENT_LINUX_INSTALLER_URL = (
+    "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh")
 
 _code_limiter = RateLimiter()
 _SAFE_URL = re.compile(r"https?://[A-Za-z0-9.\-:\[\]/_]+")
@@ -76,6 +86,32 @@ def _ps_quote(value):
     """A PowerShell single-quoted literal. Inside '...' only a quote is special, and it is
     escaped by doubling -- so this is the whole escaping rule, not an approximation of it."""
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def _sh_quote(value):
+    """A POSIX shell single-quoted literal. Inside '...' nothing is special and a quote cannot
+    appear, so a quote is closed, escaped and reopened -- the whole rule, as with _ps_quote."""
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def linux_command(script_url):
+    """The one line a Linux machine is set up with: fetch the per-code script and pipe it into
+    bash as root. ONE copy, used by the wizard, so the page cannot assemble its own (the
+    Windows half learned that the hard way -- see run_command).
+
+    curl or wget, whichever is there, chosen with `if` rather than `curl ... || wget ...`: an
+    `||` would run wget after a curl that failed HALFWAY, and bash would read the start of one
+    download followed by the whole of another. `sudo` is the common case; the wizard says to
+    drop it after `su -` on an appliance like OpenMediaVault, whose accounts are not sudoers.
+
+    Piped rather than saved and run, unlike the Windows command, because there is no antivirus
+    heuristic to step around here and no per-user folder to race: the script is read by the
+    root shell straight from the pipe, and the onboarding script wraps its body in main() so a
+    dropped connection runs nothing.
+    """
+    url = _sh_quote(script_url)
+    return (f"if command -v curl >/dev/null; then curl -fsSL {url}; "
+            f"else wget -qO- {url}; fi | sudo bash")
 
 
 def run_command(script_url):
@@ -230,6 +266,12 @@ def _add_public_routes(bp, db_path, base, valid_machine_name, machine_record):
     def run_cmd(code):
         return _launcher_response(db_path, base, code)
 
+    @bp.route("/onboarding/run/<code>.sh", methods=["GET"])
+    @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
+    @_code_limiter.limit(f"{PER_CLIENT_PER_MINUTE}/minute", key_func=_client_key)
+    def run_shell(code):
+        return _shell_response(db_path, base, code)
+
     @bp.route("/api/onboarding/redeem", methods=["POST"])
     @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
     @_code_limiter.limit(f"{PER_CLIENT_PER_MINUTE}/minute", key_func=_client_key)
@@ -257,6 +299,8 @@ def _check(db_path, base, data):
         "script_url": f"{base}/onboarding/run/{code}.ps1",
         "cmd_url": f"{base}/onboarding/run/{code}.cmd",
         "command": run_command(f"{base}/onboarding/run/{code}.ps1"),
+        # The Linux machine's one line (hub 1.169.0), built here for the reason `command` is.
+        "linux_command": linux_command(f"{base}/onboarding/run/{code}.sh"),
     }), 200
 
 
@@ -283,6 +327,26 @@ def _script_response(db_path, base, code):
                            hub_url=_ps_quote(base), code=_ps_quote(norm),
                            installer_url=_ps_quote(AGENT_INSTALLER_URL))
     resp = Response(body, mimetype="text/plain")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _shell_response(db_path, base, code):
+    """The Linux install script for one live code, as text/plain, piped into bash by
+    linux_command. Same rules as _script_response: rendered only for a live code, and nothing
+    interpolated but the normalised code and two URLs, each through _sh_quote.
+
+    **LF line endings are forced here**, not left to the checkout. A CR at the end of a line
+    reaches bash as part of the word -- `local CODE='ABC234'\\r` is a different code, and `fi\\r`
+    a syntax error -- and the hub is often checked out on a Windows workstation.
+    """
+    norm = _live_code(db_path, code)
+    if norm is None:
+        return _refused()
+    body = render_template("onboarding/onboard.sh",
+                           hub_url=_sh_quote(base), code=_sh_quote(norm),
+                           installer_url=_sh_quote(AGENT_LINUX_INSTALLER_URL))
+    resp = Response(body.replace("\r\n", "\n"), mimetype="text/plain")
     resp.headers["Cache-Control"] = "no-store"
     return resp
 

@@ -246,7 +246,8 @@ month of rows rewritten on a production hub's self-update for an empty chart.
   sensor* once, not every five seconds. A PC with a sensor reports exactly as before.
 - [ ] **Translations.** *Machine not found* reads correctly in German and Spanish.
 
-**Hub 1.169.0 + Linux agent 0.4.0: a real terminal on Linux, Remote from Ctrl+K.** Asked for
+**Hub 1.169.0 + Linux agent 0.4.0: a real terminal on Linux, Remote from Ctrl+K, Linux
+onboarding** (onboarding: see #29, *Built · hub 1.169.0*). Asked for
 2026-10-27: openmediavault's Terminal tab was still the one-shot `run_script` box, and so was
 the never-reported Windows Sandbox `035A185C-668A-4`. The Linux agent now answers `shell_open`
 on a Unix pty (posix_spawn with setsid and the slave opened by path, so the shell gets a
@@ -273,8 +274,17 @@ control, no stray processes after hang-up).
   operator without `remote_control` sees no Remote action on any row.
 - [ ] **Remote button.** A machine page's **Remote** button lands on that PC connecting, not on
   an empty picker.
-- [ ] **Translations.** *Remote* in the palette and the Linux terminal hints read correctly in
-  German and Spanish.
+- [ ] **Linux onboarding** (works with the released Linux 0.3.0; the terminal box above needs
+  0.4.0). Mint a code, open `/onboarding?code=…` from a Windows browser, switch to **Linux**,
+  and paste the line on a Linux box that has never had the agent: it installs, enrols, and the
+  wizard reaches *online*. `/var/lib/fleethub/agent/agent.json` is `-rw------- root`, and the
+  Onboarding list shows the box under the code. Run the same line again with a used code: it
+  says *invalid or has expired* and changes nothing. On OpenMediaVault, `su -` and the line
+  without `sudo` works too.
+- [ ] **Wizard guess.** Opened from a Linux desktop browser the wizard starts on **Linux**, and
+  from Windows or a phone it starts on **Windows**.
+- [ ] **Translations.** *Remote* in the palette, the Linux terminal hints and the wizard's
+  Windows/Linux switch read correctly in German and Spanish.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -6383,6 +6393,27 @@ other PC. `/api/report` also took telemetry from anything under any machine name
 closes both gaps. Hub and agents ship together, with enrolled-only telemetry **off** until the
 agents have updated. The Windows and Linux agents get a MINOR release that the hub does not
 gate on; the Android agent's release is owed locally (item 8).
+
+### Built · hub 1.169.0 -- Linux machines onboard with a code too
+Asked for 2026-10-27. The wizard's install step has a **Windows / Linux** switch, guessed from
+the browser but chosen by the person, because a headless server is usually set up from another
+computer. Linux gets one line (`onboarding_web.linux_command`):
+`if command -v curl …; then curl -fsSL '<hub>/onboarding/run/<code>.sh'; else wget -qO- …; fi | sudo bash`.
+`/onboarding/run/<code>.sh` is `templates/onboarding/onboard.sh`, rendered per code like the
+`.ps1`, and it mirrors that script step for step. It runs `agent-linux/install/install.sh` with
+no secret, which keeps the signed-manifest check. Only after that succeeds does it redeem under
+the short hostname (the name `AgentConfig.MachineName` reports) with the DMI serial. It then
+writes `agent.json` 0600 through `install(1)`, keeps any previous one, and restarts the unit.
+**No agent change was needed**, for the reason the 1.144.0 design gives: an agent that finds
+`agent.json` is enrolled. `install.sh` reads `FLEETHUB_ONBOARDING=1` so it stops ending on its
+TELEMETRY ONLY banner. It is an environment variable and not a flag because the script fetches
+`install.sh` from `main`, where an older copy dies on an unknown flag but ignores an unknown
+variable. Until that reaches `main`, the banner still prints, and the script says it is expected.
+*Rejected:* `curl … || wget …` (a curl that fails halfway would have bash read two scripts
+spliced together); saving the script to a file first, as Windows does (no antivirus heuristic
+to step around and no per-user folder to race: `main()` plus the pipe already guarantee a
+truncated download runs nothing). Checked in WSL against a stub hub: curl and wget, redeemed
+and refused, re-onboarding, a failed install that must not redeem, and a truncated download.
 
 ### Built · hub 1.144.0
 - **Administration → Onboarding** (`/onboarding-codes`, new capability **`manage_onboarding`**).

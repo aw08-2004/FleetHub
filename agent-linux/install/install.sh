@@ -419,6 +419,15 @@ main() {
 visible in \`ps\` while this ran. Use --secret-file or FLEETHUB_ENROLLMENT_SECRET next time."
     elif [ -f "$CONF_DIR/agent.secret" ]; then
         say "secret  -> keeping the existing $CONF_DIR/agent.secret"
+    elif [ "${FLEETHUB_ONBOARDING:-}" = "1" ]; then
+        # Run by the hub's onboarding script (hub/templates/onboarding/onboard.sh), which spends
+        # an onboarding code and writes this machine's own credential to agent.json right after
+        # this returns. No secret is the design there, so the TELEMETRY ONLY banner below would
+        # be telling the person at the machine that something went wrong when nothing did.
+        # An environment variable rather than a flag on purpose: the onboarding script fetches
+        # this file from main, and an older copy ignores an unknown variable where it would die
+        # on an unknown flag.
+        say "secret  -> none needed: an onboarding code enrols this machine next"
     else
         # Recorded, and repeated at the very end -- see the summary below for why once is not
         # enough.

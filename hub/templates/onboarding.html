@@ -53,16 +53,32 @@
         {# Step 2: run the installer. #}
         <section id="step-2" hidden>
             <p id="install-for"></p>
-            <p class="invite-meta">{{ t('onboarding.wizard.install_intro') }}</p>
-            <a class="google-btn onboarding-btn" id="download-cmd" href="#">{{ t('onboarding.wizard.download') }}</a>
-            <p class="invite-meta">{{ t('onboarding.wizard.download_hint') }}</p>
-            <details class="onboarding-alt">
-                <summary>{{ t('onboarding.wizard.alt_summary') }}</summary>
-                <label class="onboarding-label" for="ps-command">{{ t('onboarding.wizard.alt_intro') }}</label>
-                <textarea class="onboarding-command" id="ps-command" readonly rows="4"></textarea>
-                <button class="btn" type="button" id="copy-command">{{ t('onboarding.wizard.copy') }}</button>
-                <span class="invite-meta" id="copy-status"></span>
-            </details>
+            {# Which installer (hub 1.169.0). The page guesses from the browser, but a Linux
+               server usually has none, so the code is often typed on another computer -- the
+               switch is how that person says which machine they are setting up. #}
+            <div class="onboarding-os" role="radiogroup" aria-label="{{ t('onboarding.wizard.os_label') }}">
+                <button type="button" class="onboarding-os__choice" role="radio" aria-checked="true" data-os="windows" id="os-windows">{{ t('onboarding.wizard.os_windows') }}</button>
+                <button type="button" class="onboarding-os__choice" role="radio" aria-checked="false" data-os="linux" id="os-linux">{{ t('onboarding.wizard.os_linux') }}</button>
+            </div>
+            <div id="install-windows">
+                <p class="invite-meta">{{ t('onboarding.wizard.install_intro') }}</p>
+                <a class="google-btn onboarding-btn" id="download-cmd" href="#">{{ t('onboarding.wizard.download') }}</a>
+                <p class="invite-meta">{{ t('onboarding.wizard.download_hint') }}</p>
+                <details class="onboarding-alt">
+                    <summary>{{ t('onboarding.wizard.alt_summary') }}</summary>
+                    <label class="onboarding-label" for="ps-command">{{ t('onboarding.wizard.alt_intro') }}</label>
+                    <textarea class="onboarding-command" id="ps-command" readonly rows="4"></textarea>
+                    <button class="btn" type="button" id="copy-command">{{ t('onboarding.wizard.copy') }}</button>
+                    <span class="invite-meta" id="copy-status"></span>
+                </details>
+            </div>
+            <div id="install-linux" hidden>
+                <label class="onboarding-label" for="linux-command">{{ t('onboarding.wizard.linux_intro') }}</label>
+                <textarea class="onboarding-command" id="linux-command" readonly rows="6"></textarea>
+                <button class="btn" type="button" id="copy-linux">{{ t('onboarding.wizard.copy') }}</button>
+                <span class="invite-meta" id="copy-linux-status"></span>
+                <p class="invite-meta">{{ t('onboarding.wizard.linux_hint') }}</p>
+            </div>
             <p class="invite-meta" id="waiting-line">{{ t('onboarding.wizard.waiting') }}</p>
         </section>
 
