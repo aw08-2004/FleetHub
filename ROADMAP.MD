@@ -281,6 +281,10 @@ control, no stray processes after hang-up).
   Onboarding list shows the box under the code. Run the same line again with a used code: it
   says *invalid or has expired* and changes nothing. On OpenMediaVault, `su -` and the line
   without `sudo` works too.
+- [ ] **Windows terminal unchanged** (next Windows agent beta). Its terminal now runs on the
+  shared `agent-shared/Pty` runner. That is a move, not a change, but it is the code every PC
+  console goes through. Open two consoles, answer a `Read-Host`, Ctrl-C a `ping -t`, resize,
+  leave the page and come back, and close a tab: nothing differs from 3.48.x.
 - [ ] **Wizard guess.** Opened from a Linux desktop browser the wizard starts on **Linux**, and
   from Windows or a phone it starts on **Windows**.
 - [ ] **Translations.** *Remote* in the palette, the Linux terminal hints and the wizard's
