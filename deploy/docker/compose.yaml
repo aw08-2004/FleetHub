@@ -15,7 +15,9 @@ name: fleethub
 
 services:
   hub:
-    image: ghcr.io/aw08-2004/temp_monitor-hub:${HUB_TAG:-latest}
+    # Was ghcr.io/aw08-2004/temp_monitor-hub until 2026-10-27. The workflow still mirrors
+    # every tag there, so a host on the old line keeps updating, but it should move to this one.
+    image: ghcr.io/aw08-2004/fleethub:${HUB_TAG:-latest}
     container_name: fleethub-hub
     # Exactly one replica, ever: the schedulers, db_writer and Socket.IO state are in-process.
     restart: unless-stopped
