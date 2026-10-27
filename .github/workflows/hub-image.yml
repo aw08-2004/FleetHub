@@ -15,7 +15,8 @@ name: "Hub image"
 # as a reused HUB_VERSION. GHCR cannot rename or redirect a package, so the mirror stays until
 # ROADMAP.MD says every Docker host has moved to the new image line in compose.yaml. The
 # "already published" check covers both names, so the two can never carry different images
-# under one tag.
+# under one tag; re-running a push that failed between the names copies the image it already
+# published rather than rebuilding (see that step).
 #
 # Beta gets its own prefix rather than sharing X.Y.Z, because promoting beta to main carries
 # the same HUB_VERSION across -- a shared tag would make main's build collide with beta's.
@@ -102,6 +103,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Refuse a version that was already published
+        id: published
         if: github.event_name == 'push'
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -118,6 +120,17 @@ jobs:
           # answers "denied" for a package that does not exist yet, which is indistinguishable
           # from a real auth failure and would block the very first publish -- which is exactly
           # what fleethub's first run is.
+          #
+          # **A tag under the first name but not under a later one is a half-failed push, not a
+          # reuse.** The push loop is not atomic: fleethub:X can land and the mirror's push then
+          # fail on a GHCR 5xx. Refusing that on re-run left the mirror missing X for good, so
+          # old-compose hosts silently skipped the release (PR review). Rebuilding is no fix
+          # either -- a rebuild is not byte-identical, so the two names would carry different
+          # images under one tag. Instead the run switches to mode=mirror: no build, and Push
+          # copies the published image by digest, after checking its revision label is this
+          # commit. A tag present under every name, or under a later name but not the first, is
+          # still refused as a reuse.
+          present=(); missing=()
           for REPO in $REPOS; do
             reg_token=$(curl -fsS -u "${ACTOR}:${TOKEN}" \
               "https://ghcr.io/token?service=ghcr.io&scope=repository:${REPO}:pull,push" | jq -er .token)
@@ -127,20 +140,33 @@ jobs:
               -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
               "https://ghcr.io/v2/${REPO}/manifests/${TAG}")
             case "$code" in
-              404) echo "ghcr.io/${REPO}:${TAG} is not published yet." ;;
-              200) echo "::error::ghcr.io/${REPO}:${TAG} already exists. Bump HUB_VERSION in hub/app.py -- a reused number is a release no hub will install."
-                   exit 1 ;;
+              404) echo "ghcr.io/${REPO}:${TAG} is not published yet."; missing+=("$REPO") ;;
+              200) echo "ghcr.io/${REPO}:${TAG} already exists."; present+=("$REPO") ;;
               *)   echo "::error::GHCR answered HTTP ${code} for ghcr.io/${REPO}:${TAG}, so whether it already exists is unknown. Refusing to publish rather than risk overwriting it; re-run once the registry answers."
                    exit 1 ;;
             esac
           done
+          first="${REPOS%% *}"
+          if [[ ${#present[@]} -eq 0 ]]; then
+            echo "mode=fresh" >> "$GITHUB_OUTPUT"
+          elif [[ ${#missing[@]} -eq 0 || "${present[0]}" != "$first" ]]; then
+            echo "::error::ghcr.io/*:${TAG} already exists (under: ${present[*]}). Bump HUB_VERSION in hub/app.py -- a reused number is a release no hub will install."
+            exit 1
+          else
+            echo "::warning::${TAG} is under ${first} but not under ${missing[*]} -- finishing a half-failed push by copying it, not rebuilding."
+            { echo "mode=mirror"; echo "missing=${missing[*]}"; } >> "$GITHUB_OUTPUT"
+          fi
 
+      # The three build steps are skipped in mode=mirror: there is nothing to build, and a
+      # build there would be the different-image-under-one-tag the mode exists to avoid.
       - name: Check requirements.lock is current
+        if: steps.published.outputs.mode != 'mirror'
         # Before any image work: a lock that no longer covers requirements.txt would build an
         # image that crashes on import. Pure Python against the two files; no image needed.
         run: python3 tools/lock_hub_requirements.py --check
 
       - name: Pull the base image
+        if: steps.published.outputs.mode != 'mirror'
         run: |
           # Pulled here, with retries, rather than by `docker build --pull`: Docker Hub's auth
           # endpoint has timed out from GitHub's runners on this workflow's own runs (504s on
@@ -157,6 +183,7 @@ jobs:
           exit 1
 
       - name: Build
+        if: steps.published.outputs.mode != 'mirror'
         env:
           REPOS: ${{ steps.version.outputs.repos }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -187,8 +214,33 @@ jobs:
           REPOS: ${{ steps.version.outputs.repos }}
           VERSION_TAG: ${{ steps.version.outputs.version_tag }}
           MOVING_TAG: ${{ steps.version.outputs.moving_tag }}
+          MODE: ${{ steps.published.outputs.mode }}
+          MISSING: ${{ steps.published.outputs.missing }}
+          REVISION: ${{ github.sha }}
         run: |
           printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          if [[ "$MODE" == "mirror" ]]; then
+            # Finishing a half-failed push (see the check step): copy what the first name
+            # already carries, but only if this commit built it. A different revision means the
+            # number really was reused by another commit, and copying would spread that.
+            src="ghcr.io/${REPOS%% *}:${VERSION_TAG}"
+            docker pull "$src"
+            built=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$src")
+            if [[ "$built" != "$REVISION" ]]; then
+              echo "::error::${src} was built from ${built}, not ${REVISION}. Bump HUB_VERSION in hub/app.py -- a reused number is a release no hub will install."
+              exit 1
+            fi
+            docker tag "$src" "ghcr.io/${REPOS%% *}:${MOVING_TAG}"
+            docker push "ghcr.io/${REPOS%% *}:${MOVING_TAG}"
+            for REPO in $MISSING; do
+              docker tag "$src" "ghcr.io/${REPO}:${VERSION_TAG}"
+              docker tag "$src" "ghcr.io/${REPO}:${MOVING_TAG}"
+              docker push "ghcr.io/${REPO}:${VERSION_TAG}"
+              docker push "ghcr.io/${REPO}:${MOVING_TAG}"
+            done
+            docker logout ghcr.io
+            exit 0
+          fi
           # The version tag first: if the moving tag's push fails, `latest` still names the
           # previous release rather than one whose own tag never landed.
           for REPO in $REPOS; do
