@@ -121,15 +121,18 @@ jobs:
           # from a real auth failure and would block the very first publish -- which is exactly
           # what fleethub's first run is.
           #
-          # **A tag under the first name but not under a later one is a half-failed push, not a
-          # reuse.** The push loop is not atomic: fleethub:X can land and the mirror's push then
-          # fail on a GHCR 5xx. Refusing that on re-run left the mirror missing X for good, so
-          # old-compose hosts silently skipped the release (PR review). Rebuilding is no fix
-          # either -- a rebuild is not byte-identical, so the two names would carry different
-          # images under one tag. Instead the run switches to mode=mirror: no build, and Push
-          # copies the published image by digest, after checking its revision label is this
-          # commit. A tag present under every name, or under a later name but not the first, is
-          # still refused as a reuse.
+          # **A tag under the first name is not by itself a reuse -- it may be a half-failed
+          # push.** Push is not atomic: fleethub:X can land and a later push (the mirror's X, or
+          # any moving tag) then fail on a GHCR 5xx. Refusing every 200 on re-run left that
+          # gap for good, so old-compose hosts, or hosts tracking `latest`/`beta`, silently
+          # stayed on the previous release (PR review, twice). Rebuilding is no fix either -- a
+          # rebuild is not byte-identical, so the two names would carry different images under
+          # one tag. So when the first name has X, the run switches to mode=mirror: no build,
+          # and Push finishes the job by copying the published image by digest. **Whether that
+          # is a re-run or a real reuse is decided there, by the image's revision label**: only
+          # a run of the commit that built it may finish it; any other commit is refused. A tag
+          # under a later name but not the first cannot come from a half-failed push (the first
+          # name is pushed first) and is refused here.
           present=(); missing=()
           for REPO in $REPOS; do
             reg_token=$(curl -fsS -u "${ACTOR}:${TOKEN}" \
@@ -149,12 +152,12 @@ jobs:
           first="${REPOS%% *}"
           if [[ ${#present[@]} -eq 0 ]]; then
             echo "mode=fresh" >> "$GITHUB_OUTPUT"
-          elif [[ ${#missing[@]} -eq 0 || "${present[0]}" != "$first" ]]; then
+          elif [[ "${present[0]}" != "$first" ]]; then
             echo "::error::ghcr.io/*:${TAG} already exists (under: ${present[*]}). Bump HUB_VERSION in hub/app.py -- a reused number is a release no hub will install."
             exit 1
           else
-            echo "::warning::${TAG} is under ${first} but not under ${missing[*]} -- finishing a half-failed push by copying it, not rebuilding."
-            { echo "mode=mirror"; echo "missing=${missing[*]}"; } >> "$GITHUB_OUTPUT"
+            echo "::warning::${TAG} is already under ${present[*]} -- treating this as a re-run that finishes a half-failed push; Push refuses it unless this commit built that image."
+            { echo "mode=mirror"; echo "present=${present[*]}"; echo "missing=${missing[*]}"; } >> "$GITHUB_OUTPUT"
           fi
 
       # The three build steps are skipped in mode=mirror: there is nothing to build, and a
@@ -215,36 +218,55 @@ jobs:
           VERSION_TAG: ${{ steps.version.outputs.version_tag }}
           MOVING_TAG: ${{ steps.version.outputs.moving_tag }}
           MODE: ${{ steps.published.outputs.mode }}
+          PRESENT: ${{ steps.published.outputs.present }}
           MISSING: ${{ steps.published.outputs.missing }}
           REVISION: ${{ github.sha }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REF: ${{ github.ref_name }}
         run: |
           printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          # **Every version tag before any moving tag, across both names.** If a push fails,
+          # `latest` or `beta` still names the previous release rather than one whose own tag
+          # never landed under some name -- and the version tags are what the check step can
+          # see, so a re-run knows there is something to finish.
           if [[ "$MODE" == "mirror" ]]; then
-            # Finishing a half-failed push (see the check step): copy what the first name
-            # already carries, but only if this commit built it. A different revision means the
-            # number really was reused by another commit, and copying would spread that.
+            # Finishing a half-failed push (see the check step). Every name that already has
+            # the tag must carry this commit's build; a different revision means the number
+            # really was reused by another commit, and copying would spread that.
             src="ghcr.io/${REPOS%% *}:${VERSION_TAG}"
-            docker pull "$src"
-            built=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$src")
-            if [[ "$built" != "$REVISION" ]]; then
-              echo "::error::${src} was built from ${built}, not ${REVISION}. Bump HUB_VERSION in hub/app.py -- a reused number is a release no hub will install."
-              exit 1
-            fi
-            docker tag "$src" "ghcr.io/${REPOS%% *}:${MOVING_TAG}"
-            docker push "ghcr.io/${REPOS%% *}:${MOVING_TAG}"
+            for REPO in $PRESENT; do
+              docker pull "ghcr.io/${REPO}:${VERSION_TAG}"
+              built=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "ghcr.io/${REPO}:${VERSION_TAG}")
+              if [[ "$built" != "$REVISION" ]]; then
+                echo "::error::ghcr.io/${REPO}:${VERSION_TAG} was built from ${built}, not ${REVISION}. Bump HUB_VERSION in hub/app.py -- a reused number is a release no hub will install."
+                exit 1
+              fi
+            done
             for REPO in $MISSING; do
               docker tag "$src" "ghcr.io/${REPO}:${VERSION_TAG}"
-              docker tag "$src" "ghcr.io/${REPO}:${MOVING_TAG}"
               docker push "ghcr.io/${REPO}:${VERSION_TAG}"
-              docker push "ghcr.io/${REPO}:${MOVING_TAG}"
             done
-            docker logout ghcr.io
-            exit 0
+            # **Moving tags only if this is still the branch's release.** A re-run of an old
+            # failed run, after a newer HUB_VERSION has shipped, would otherwise drag `latest`
+            # or `beta` back to the older image (PR review). The label check above only proves
+            # this commit built it, not that it is still the newest. Read from the branch head
+            # with the same pattern as the version step.
+            git fetch --quiet --depth 1 origin "$REF"
+            head=$(git show FETCH_HEAD:hub/app.py | grep -oP '^HUB_VERSION\s*=\s*["\x27]\K[\d.]+(?=["\x27])' | head -n1)
+            if [[ "$head" != "$VERSION" ]]; then
+              echo "::warning::${REF} is now at HUB_VERSION ${head}, not ${VERSION}; leaving :${MOVING_TAG} where it is."
+              docker logout ghcr.io
+              exit 0
+            fi
+            for REPO in $REPOS; do
+              docker tag "$src" "ghcr.io/${REPO}:${MOVING_TAG}"
+            done
+          else
+            for REPO in $REPOS; do
+              docker push "ghcr.io/${REPO}:${VERSION_TAG}"
+            done
           fi
-          # The version tag first: if the moving tag's push fails, `latest` still names the
-          # previous release rather than one whose own tag never landed.
           for REPO in $REPOS; do
-            docker push "ghcr.io/${REPO}:${VERSION_TAG}"
             docker push "ghcr.io/${REPO}:${MOVING_TAG}"
           done
           docker logout ghcr.io
