@@ -167,11 +167,12 @@ public sealed class PtySessionRunner : IDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            if (_session is null || _session.Exited)
+            var session = _session;
+            if (session is null || session.Exited)
                 return "the shell exited";
 
-            var ended = Apply(await _channel.PullPtyInputAsync(_sessionId, _inCursor, ct))
-                        ?? StillWanted();
+            var ended = Apply(session, await _channel.PullPtyInputAsync(_sessionId, _inCursor, ct))
+                        ?? StillWanted(session);
             if (ended is not null) return ended;
 
             try { await Task.Delay(NextPollDelay(), ct); }
@@ -182,7 +183,7 @@ public sealed class PtySessionRunner : IDisposable
 
     /// <summary>Feed one input batch to the terminal. Returns why the session ends, or null to
     /// carry on.</summary>
-    private string? Apply(PtyInputBatch batch)
+    private string? Apply(IPtySession session, PtyInputBatch batch)
     {
         if (batch.Gone) return "the hub no longer has this session";
         if (!batch.Ok) return null;
@@ -190,8 +191,8 @@ public sealed class PtySessionRunner : IDisposable
         _lastHubOkUtc = DateTime.UtcNow;
         foreach (var item in batch.Items)
         {
-            if (item.Kind == "resize") _session!.Resize(item.Cols, item.Rows);
-            else _session!.Write(item.Data);   // verbatim: see IPtySession.Write
+            if (item.Kind == "resize") session.Resize(item.Cols, item.Rows);
+            else session.Write(item.Data);   // verbatim: see IPtySession.Write
         }
         // Only advance on something actually arriving: advancing on an EMPTY batch would push
         // the cursor past input the console had not queued yet, and the operator's next
@@ -205,13 +206,13 @@ public sealed class PtySessionRunner : IDisposable
     }
 
     /// <summary>The two silences that end a session from this side. Null while it is wanted.</summary>
-    private string? StillWanted()
+    private string? StillWanted(IPtySession session)
     {
         if ((DateTime.UtcNow - _lastHubOkUtc).TotalSeconds > OfflineGraceSeconds)
             return "lost contact with the hub";
         // Measured on the SESSION's own traffic, not on keystrokes alone: a build that prints
         // for an hour with nobody typing is not idle.
-        if ((DateTime.UtcNow - _session!.LastActivityUtc).TotalSeconds > PtyTimings.IdleTimeoutSeconds)
+        if ((DateTime.UtcNow - session.LastActivityUtc).TotalSeconds > PtyTimings.IdleTimeoutSeconds)
             return "idle timeout";
         return null;
     }
@@ -335,10 +336,15 @@ public sealed class PtySessionManager : IDisposable
 /// </summary>
 public static class PtyShellOpen
 {
+    /// <summary>What the hub's shell_open asked for: the session to attach to, the shell, and
+    /// the size, already clamped (see <see cref="ClampSize"/>).</summary>
+    public readonly record struct Request(string SessionId, string Shell, short Cols, short Rows);
+
     public static async Task<(bool Ok, string Text)> RunAsync(
         PtySessionManager sessions, IPtyChannel channel, ILogger log, PtySessionFactory factory,
-        string sessionId, string shell, short cols, short rows, CancellationToken ct)
+        Request request, CancellationToken ct)
     {
+        var (sessionId, shell, cols, rows) = request;
         var runner = new PtySessionRunner(sessionId, channel, log, factory);
         if (!sessions.TryAdd(runner))
         {

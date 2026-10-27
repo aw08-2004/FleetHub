@@ -72,15 +72,18 @@ public static class PtyTimings
 }
 
 /// <summary>
-/// The three terminal requests, given the agent's HttpClient and a way to make an authorised
-/// request. Each agent's FleetClient owns its own client and bearer token and passes them in;
-/// this holds the parts that must be identical everywhere -- the URLs, the 404-means-gone rule,
-/// the input parse -- so a fix to one cannot miss the other platform.
+/// The three terminal requests, bound to one agent's HttpClient, its way of making an
+/// authorised request, the hub's base URL and a logger. Each agent's FleetClient owns its own
+/// client and bearer token and builds one of these over them; this holds the parts that must be
+/// identical everywhere -- the URLs, the 404-means-gone rule, the input parse -- so a fix to one
+/// cannot miss the other platform. An object rather than static methods so each call carries
+/// only what differs per request.
 ///
 /// **Every method fails soft and never throws**, the rule FleetClient lives by: these run on a
 /// tight loop on a machine nobody is watching, and an exception escaping one ends the terminal.
 /// </summary>
-public static class PtyHttp
+public sealed class PtyHttp(
+    HttpClient http, Func<HttpMethod, string, HttpRequestMessage> authorized, string hubBase, ILogger log)
 {
     public static string InputUrl(string hubBase, string sessionId, int afterSeq) =>
         hubBase + "/api/agent/pty/" + Uri.EscapeDataString(sessionId) +
@@ -93,9 +96,7 @@ public static class PtyHttp
         hubBase + "/api/agent/pty/" + Uri.EscapeDataString(sessionId) + "/closed";
 
     /// <summary>Fetch keystrokes and resizes queued for this session.</summary>
-    public static async Task<PtyInputBatch> PullInputAsync(
-        HttpClient http, Func<HttpMethod, string, HttpRequestMessage> authorized, string hubBase,
-        string sessionId, int afterSeq, ILogger log, CancellationToken ct)
+    public async Task<PtyInputBatch> PullInputAsync(string sessionId, int afterSeq, CancellationToken ct)
     {
         var empty = Array.Empty<PtyInputItem>();
         try
@@ -152,9 +153,7 @@ public static class PtyHttp
 
     /// <summary>Post one output chunk. A retry MUST reuse the same seq -- the hub keys on it,
     /// and a fresh number would duplicate bytes into the middle of an escape sequence.</summary>
-    public static async Task<bool> PostOutputAsync(
-        HttpClient http, Func<HttpMethod, string, HttpRequestMessage> authorized, string hubBase,
-        string sessionId, int seq, string chunk, ILogger log, CancellationToken ct)
+    public async Task<bool> PostOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct)
     {
         var body = new JsonObject { ["seq"] = seq, ["chunk"] = chunk };
         try
@@ -173,9 +172,7 @@ public static class PtyHttp
 
     /// <summary>Tell the hub the terminal is over, so the console stops polling and can say
     /// why. Best-effort: if it does not land, the hub's own reaper closes it anyway.</summary>
-    public static async Task ReportClosedAsync(
-        HttpClient http, Func<HttpMethod, string, HttpRequestMessage> authorized, string hubBase,
-        string sessionId, string reason, ILogger log, CancellationToken ct)
+    public async Task ReportClosedAsync(string sessionId, string reason, CancellationToken ct)
     {
         var body = new JsonObject { ["reason"] = reason };
         try

@@ -66,7 +66,7 @@
         { slug: 'network', label: () => t('tools.tab.network') },
         { remote: true, label: () => t('palette.action_remote') },
     ];
-    const NO_REMOTE_PLATFORMS = ['linux', 'android'];
+    const NO_REMOTE_PLATFORMS = new Set(['linux', 'android']);
     const MAX_DEVICES = 12;
     const MAX_PAGES = 6;
     // Long enough that opening the palette twice in a minute costs one request, short enough
@@ -158,7 +158,7 @@
 
     /** The jump targets this row offers, in ArrowRight order. */
     function actionsFor(row) {
-        const remote = remoteBase() && !NO_REMOTE_PLATFORMS.includes(row.platform || '');
+        const remote = remoteBase() && !NO_REMOTE_PLATFORMS.has(row.platform || '');
         return ACTIONS.filter((a) => !a.remote || remote);
     }
 

@@ -252,7 +252,7 @@ def test_remote_is_offered_only_where_it_works():
           "getAll('machine')" in read(STATIC, "js", "remote-workspace.js"))
     # No Linux or Android agent answers a remote session.
     check("Linux and Android rows do not offer it",
-          "NO_REMOTE_PLATFORMS = ['linux', 'android']" in js)
+          "NO_REMOTE_PLATFORMS = new Set(['linux', 'android'])" in js)
     check("the roster carries the platform that decides it",
           "row['platform'] = platforms.get(row['machine'], '')"
           in read(os.path.join(ROOT, "hub", "app.py")))

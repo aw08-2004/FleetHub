@@ -35,7 +35,8 @@ public sealed class ShellOpenExecutor(PtySessionManager sessions, IPtyChannel ch
         log.LogInformation("Opening terminal {Id} ({Shell} {Cols}x{Rows})", sessionId, shell, cols, rows);
 
         var (ok, text) = await PtyShellOpen.RunAsync(
-            sessions, channel, log, PtySession.Start, sessionId, shell, cols, rows, ct);
+            sessions, channel, log, PtySession.Start,
+            new PtyShellOpen.Request(sessionId, shell, cols, rows), ct);
         return ok ? CommandResult.Ok(text) : CommandResult.Fail(text);
     }
 }

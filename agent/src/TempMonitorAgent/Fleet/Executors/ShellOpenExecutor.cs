@@ -57,7 +57,8 @@ public sealed class ShellOpenExecutor : ICommandExecutor
             sessionId, shell, cols, rows, OperatorTag.For(cmd.IssuedBy));
 
         var (ok, text) = await PtyShellOpen.RunAsync(
-            _sessions, _channel, _log, PtySession.Start, sessionId, shell, cols, rows, ct);
+            _sessions, _channel, _log, PtySession.Start,
+            new PtyShellOpen.Request(sessionId, shell, cols, rows), ct);
         return ok ? CommandResult.Ok(text) : CommandResult.Fail(text);
     }
 }

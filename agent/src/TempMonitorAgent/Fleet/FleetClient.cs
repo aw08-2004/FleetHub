@@ -1002,19 +1002,24 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     // enrolled check. Separate from the command endpoints above because a terminal is a stream,
     // not a command: no result, and a lifetime measured in an operator's attention span.
 
+    /// <summary>The shared terminal requests over this client. Built per call rather than once:
+    /// it costs one small object, and reading AgentConfig.HubBase each time keeps it honest if
+    /// the hub address is ever changed while the agent runs.</summary>
+    private PtyHttp Pty => new(_http, Authorized, AgentConfig.HubBase, _log);
+
     public Task<PtyInputBatch> PullPtyInputAsync(string sessionId, int afterSeq, CancellationToken ct) =>
         _identity.IsEnrolled
-            ? PtyHttp.PullInputAsync(_http, Authorized, AgentConfig.HubBase, sessionId, afterSeq, _log, ct)
+            ? Pty.PullInputAsync(sessionId, afterSeq, ct)
             : Task.FromResult(new PtyInputBatch(false, Array.Empty<PtyInputItem>(), afterSeq, false, false));
 
     public Task<bool> PostPtyOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct) =>
         _identity.IsEnrolled
-            ? PtyHttp.PostOutputAsync(_http, Authorized, AgentConfig.HubBase, sessionId, seq, chunk, _log, ct)
+            ? Pty.PostOutputAsync(sessionId, seq, chunk, ct)
             : Task.FromResult(false);
 
     public Task ReportPtyClosedAsync(string sessionId, string reason, CancellationToken ct) =>
         _identity.IsEnrolled
-            ? PtyHttp.ReportClosedAsync(_http, Authorized, AgentConfig.HubBase, sessionId, reason, _log, ct)
+            ? Pty.ReportClosedAsync(sessionId, reason, ct)
             : Task.CompletedTask;
 
     /// <summary>Report a command's result. Must run under the same agent_id that claimed it.</summary>
