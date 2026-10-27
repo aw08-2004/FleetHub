@@ -40,6 +40,7 @@ import assistant
 import assistant_guide
 import assistant_tools
 import console_session
+import fleet
 import permissions
 import settings
 
@@ -111,6 +112,9 @@ def seed():
         conn.execute("INSERT OR IGNORE INTO machine_info (machine) VALUES (?)", (name,))
     conn.commit()
     conn.close()
+    # ...and enrolled: the command channel refuses a name no agent answers to.
+    for name in ("PC-01", "PC-02"):
+        fleet.issue_agent_identity(DB, name, actor="test")
     permissions.create_group(DB, "Sales operators",
                              capabilities=[permissions.VIEW, permissions.ISSUE_COMMANDS,
                                            permissions.WIPE_DEVICE],

@@ -343,6 +343,11 @@
     "note": "Permissions come from the groups you belong to. Ask an administrator to add you to a group that covers this.",
     "back": "Back to dashboard"
   },
+  "machine_not_found": {
+    "title": "Machine not found",
+    "message": "The hub has no record of a machine called {name}.",
+    "note": "A machine appears here once its agent enrolls or reports. Check the spelling against Inventory -- Windows shortens long computer names to 15 characters."
+  },
   "dashboard": {
     "heading": "Fleet overview",
     "empty": "No machines have reported in yet.",

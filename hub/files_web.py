@@ -75,7 +75,9 @@ def create_files_blueprint(db_path, spool_dir, login_required, access, hub_url="
         return None
 
     def _queue(machine, command_type, params):
-        """Queue one file command and answer with its id."""
+        """Queue one file command and answer with its id. Refuses a name no agent enrolled
+        under -- see fleet.require_enrolled; a listing for one was how that was found."""
+        fleet.require_enrolled(db_path, machine)
         return fleet.create_command(
             db_path,
             machine=machine,

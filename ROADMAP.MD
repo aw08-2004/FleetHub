@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.167.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.168.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -225,6 +225,26 @@ rejected alternative, a hub-side timer locating with no map open, is recorded in
   once and then updates silently until it is dismissed.
 - [ ] **Translations.** The *Live* switch, its status line and the new setting read correctly in
   German and Spanish.
+
+**Hub 1.168.0 + Windows agent (next beta): machines with no temperature sensor, and names with
+no machine.** Found 2026-10-27: a Windows Sandbox (secret) and AIRGPU (onboarding code) both
+enrolled and heartbeated, and neither ever appeared in Inventory. The agent sent no telemetry
+without a CPU temperature, which no VM has, and the hub made a machine's row only from
+telemetry. Rejected: storing `0` as the VM's temperature, which would chart a flat 0 °C line
+and fire every "temp below 1" rule; and a `readings` table rebuild to allow NULL, which is a
+month of rows rewritten on a production hub's self-update for an empty chart.
+- [ ] **Enrolled, never reported.** After the beta hub updates, `035A185C-668A-4` (the Sandbox,
+  whose 36-character GUID name Windows cuts to 15) is in Inventory, online while it
+  heartbeats, with no serial or model. Older enrollments that never reported reappear too, as
+  offline (`DESKTOP-TPTM76D`, two old `SM-A155M-…`); deleting one revokes its credential.
+- [ ] **Not found.** `/machine/no-such-pc` shows *Machine not found*, naming it, not an empty
+  machine page. A real but offline machine's page still opens.
+- [ ] **No command for nobody.** Queuing anything for a name with no enrollment answers *No
+  enrolled agent answers to …*, and an offline enrolled PC still queues.
+- [ ] **VM reports** (needs the agent). On a Windows Sandbox with the new agent, the machine gains
+  serial, model and OS, shows no temperature, and the agent log says *No CPU temperature
+  sensor* once, not every five seconds. A PC with a sensor reports exactly as before.
+- [ ] **Translations.** *Machine not found* reads correctly in German and Spanish.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -616,6 +636,11 @@ a pin. Each release also writes `<agent>/manifests/<version>.json` (+ `.sig`), a
 the only thing a pin can install. Optional: backfill manifests for recent releases so the fleet
 can be pinned back to them. Download the release asset and run `sign_release.py --sign-agent`
 with that version, the asset url and `--manifest <agent>/manifests/<version>.json`.
+
+**18. VMs report without a temperature, owed on the machine with the signing key.** Hub
+1.168.0 first, then the Windows agent beta that carries it. It can ride the 3.49.0 beta in
+item 17: the change is in `Worker.TelemetryLoopAsync`, and the hub does not gate on it, so it
+needs no version constant of its own. Then the *VM reports* box in the beta list above.
 
 ---
 

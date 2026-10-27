@@ -313,6 +313,11 @@
     "note": "Los permisos provienen de los grupos a los que perteneces. Pide a un administrador que te añada a un grupo que lo incluya.",
     "back": "Volver al panel"
   },
+  "machine_not_found": {
+    "title": "Equipo no encontrado",
+    "message": "El hub no tiene constancia de ningún equipo llamado {name}.",
+    "note": "Un equipo aparece aquí en cuanto su agente se registra o envía datos. Comprueba el nombre en el Inventario -- Windows acorta los nombres de equipo largos a 15 caracteres."
+  },
   "dashboard": {
     "heading": "Resumen de la flota",
     "empty": "Todavía no se ha reportado ninguna máquina.",

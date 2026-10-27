@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ t('denied.title') }} - FleetHub{% endblock %}
+{% block title %}{{ t('machine_not_found.title') if missing_machine else t('denied.title') }} - FleetHub{% endblock %}
 {% block content %}
 {#
    Rendered for a 403 on a PAGE route (an API route gets JSON -- see
@@ -9,8 +9,22 @@
 
    The message never names a machine the caller can't see -- Access.require_machine
    phrases it from what they already typed in the URL.
+
+   Also the 404 for /machine/<name> when the hub has no record of that name
+   (`missing_machine`). Same page rather than a second template because the situation is
+   the same one -- a typed URL that leads nowhere -- and only the wording differs. Scope is
+   checked first, so the name it echoes is one the caller was allowed to ask about.
 #}
 <div class="empty-state" style="max-width: 520px; margin: var(--space-8) auto;">
+    {% if missing_machine %}
+    <h1 class="section-title" style="font-size: var(--text-lg);">{{ t('machine_not_found.title') }}</h1>
+    <p class="stat-card__meta" style="margin: var(--space-3) 0 var(--space-5);">
+        {{ t('machine_not_found.message', name=missing_machine) }}
+    </p>
+    <p class="stat-card__meta">
+        {{ t('machine_not_found.note') }}
+    </p>
+    {% else %}
     <h1 class="section-title" style="font-size: var(--text-lg);">{{ t('denied.title') }}</h1>
     <p class="stat-card__meta" style="margin: var(--space-3) 0 var(--space-5);">
         {{ message or t('denied.default_message') }}
@@ -18,6 +32,7 @@
     <p class="stat-card__meta">
         {{ t('denied.note') }}
     </p>
+    {% endif %}
     <a class="btn btn--primary" style="margin-top: var(--space-5);" href="{{ url_for('index') }}">{{ t('denied.back') }}</a>
 </div>
 {% endblock %}

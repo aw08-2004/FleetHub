@@ -41,8 +41,11 @@ public sealed class TelemetryReporter : IDisposable
         };
     }
 
+    /// <summary>Send one report. <paramref name="temp"/> is null on a machine with no CPU
+    /// temperature sensor (a VM), and is sent as JSON null rather than left out: the hub
+    /// requires the key, and reads null as "no reading" -- see Worker.TelemetryLoopAsync.</summary>
     public async Task<ReportResult> ReportAsync(
-        double temp, IReadOnlyList<SensorReading>? sensors, long? uptime, CancellationToken ct)
+        double? temp, IReadOnlyList<SensorReading>? sensors, long? uptime, CancellationToken ct)
     {
         var payload = BuildPayload(temp, sensors, uptime);
         HttpResponseMessage resp;
@@ -67,13 +70,14 @@ public sealed class TelemetryReporter : IDisposable
                 latest = TryParseLatestVersion(body);
                 await FlushOfflineAsync(ct);
             }
-            _log.LogInformation("Sent: {Temp}°C - Hub responded: {Status}", temp, status);
+            _log.LogInformation("Sent: {Temp} - Hub responded: {Status}",
+                temp is double t ? $"{t}°C" : "no temperature", status);
             return new ReportResult(true, status, latest);
         }
     }
 
     private Dictionary<string, object?> BuildPayload(
-        double temp, IReadOnlyList<SensorReading>? sensors, long? uptime)
+        double? temp, IReadOnlyList<SensorReading>? sensors, long? uptime)
     {
         var payload = new Dictionary<string, object?>
         {

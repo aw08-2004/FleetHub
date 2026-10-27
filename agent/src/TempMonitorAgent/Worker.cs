@@ -71,6 +71,11 @@ public sealed class Worker : BackgroundService
     private DateTime _lastEnrollAttemptUtc = DateTime.MinValue;
     private bool _telemetryOnlyLogged;
 
+    /// <summary>Whether "no CPU temperature sensor" has been logged since the sensor was last
+    /// seen. Once per transition, not per tick: a VM has no sensor for its whole life, and a
+    /// warning every five seconds would bury everything else in the log.</summary>
+    private bool _noTempLogged;
+
     /// <summary>Set by the telemetry loop when the hub reports a newer version, and by the
     /// update loop's own weekly clock. Read and cleared by the update loop.</summary>
     private volatile bool _updateDue;
@@ -178,45 +183,55 @@ public sealed class Worker : BackgroundService
                 bool includeUptime = (now - lastUptime).TotalSeconds >= AgentConfig.UptimeIntervalSeconds;
 
                 var snapshot = _sensors.Read();
-                if (snapshot.CpuTemp is double temp)
+                // **Reported with or without a CPU temperature.** This used to be the gate on
+                // the whole report, so a machine with no temperature sensor -- every VM:
+                // Windows Sandbox, Hyper-V, a cloud-GPU box -- never sent one. It enrolled and
+                // heartbeated, and the hub, which creates a machine's identity row only from
+                // a report, never listed it in Inventory. A null temp is now sent instead and
+                // the hub (1.168.0 and later) stores everything but the reading. An older hub
+                // refuses that report with a 400, which TelemetryReporter drops rather than
+                // retrying -- no worse than the nothing it got before.
+                if (snapshot.CpuTemp is null && !_noTempLogged)
                 {
-                    var result = await _reporter.ReportAsync(
-                        temp,
-                        includeSensors ? snapshot.Sensors : null,
-                        includeUptime ? SystemInfo.UptimeSeconds() : null,
-                        ct);
-
-                    if (includeSensors) lastSensor = now;
-                    if (includeUptime) lastUptime = now;
-
-                    // A report the HUB ACCEPTED is one of the two things that prove an
-                    // updated build works rather than merely starts, so it retires the
-                    // previous binary -- see SelfUpdater.ConfirmRunningBuild. The heartbeat
-                    // loop carries the other, because this branch only runs when the CPU
-                    // sensor produced a reading and an update's fate must not hang on that.
-                    //
-                    // **Gated on the result, not on reaching this line.** ReportAsync
-                    // swallows connectivity failures and returns Sent:false rather than
-                    // throwing (see TelemetryReporter), so a machine that boots the new
-                    // build into a dead network still gets here on its first tick -- and
-                    // confirming there would delete the rollback binary in precisely the
-                    // situation the binary is kept for. A non-2xx is not proof either: the
-                    // hub answered, but it did not take the report, and ticks are five
-                    // seconds apart so waiting for a real one costs nothing.
-                    if (result is { Sent: true, StatusCode: >= 200 and < 300 })
-                    {
-                        _updater.ConfirmRunningBuild();
-                    }
-
-                    if (result.LatestVersion is { Length: > 0 } lv &&
-                        VersionUtil.Compare(lv, AgentConfig.Version) > 0)
-                    {
-                        _updateDue = true;
-                    }
+                    _log.LogWarning("No CPU temperature sensor; reporting without a temperature");
+                    _noTempLogged = true;
                 }
-                else
+                else if (snapshot.CpuTemp is not null)
                 {
-                    _log.LogWarning("No CPU temperature reading this cycle");
+                    _noTempLogged = false;
+                }
+                var result = await _reporter.ReportAsync(
+                    snapshot.CpuTemp,
+                    includeSensors ? snapshot.Sensors : null,
+                    includeUptime ? SystemInfo.UptimeSeconds() : null,
+                    ct);
+
+                if (includeSensors) lastSensor = now;
+                if (includeUptime) lastUptime = now;
+
+                // A report the HUB ACCEPTED is one of the two things that prove an
+                // updated build works rather than merely starts, so it retires the
+                // previous binary -- see SelfUpdater.ConfirmRunningBuild. The heartbeat
+                // loop carries the other, because an older hub refuses a report with no
+                // temperature and an update's fate must not hang on that.
+                //
+                // **Gated on the result, not on reaching this line.** ReportAsync
+                // swallows connectivity failures and returns Sent:false rather than
+                // throwing (see TelemetryReporter), so a machine that boots the new
+                // build into a dead network still gets here on its first tick -- and
+                // confirming there would delete the rollback binary in precisely the
+                // situation the binary is kept for. A non-2xx is not proof either: the
+                // hub answered, but it did not take the report, and ticks are five
+                // seconds apart so waiting for a real one costs nothing.
+                if (result is { Sent: true, StatusCode: >= 200 and < 300 })
+                {
+                    _updater.ConfirmRunningBuild();
+                }
+
+                if (result.LatestVersion is { Length: > 0 } lv &&
+                    VersionUtil.Compare(lv, AgentConfig.Version) > 0)
+                {
+                    _updateDue = true;
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
