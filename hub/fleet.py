@@ -1749,10 +1749,22 @@ def require_enrolled(db_path, machine):
     revoked one) and already ends through the command's TTL, which is the right outcome
     there. Every other door is a button on a machine page, and that page is now a 404 for a
     name the hub does not know.
+
+    **Exact, not case-folded**, because claim_commands is: a command for `openclaw` is never
+    claimed by the agent enrolled as `OPENCLAW`, so queueing it would be the same silent
+    pending this exists to stop. The refusal names the enrolled spelling instead (review on
+    PR #182), since the Inventory lists that machine and "no agent answers" would read as false.
     """
     if not is_enrolled(db_path, machine):
+        typed = str(machine or "").strip()
+        spelled = next((name for name in enrolled_machines(db_path)
+                        if name.lower() == typed.lower()), None)
+        if spelled:
+            raise UnknownMachine(
+                f"The agent is enrolled as '{spelled}', not '{typed}'. Machine names are "
+                f"matched exactly -- use '{spelled}'.")
         raise UnknownMachine(
-            f"No enrolled agent answers to '{str(machine or '').strip()}', so nothing would "
+            f"No enrolled agent answers to '{typed}', so nothing would "
             f"ever run this command. Check the name against Inventory -- Windows shortens "
             f"computer names longer than 15 characters.")
 

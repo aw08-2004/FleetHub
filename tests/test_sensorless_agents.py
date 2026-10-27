@@ -16,6 +16,7 @@ Imports app the way test_inventory.py does (env + cwd set before import).
 import os
 import sys
 import tempfile
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -63,19 +64,16 @@ def test_null_temp_report():
     print("\n-- a VM reports with temp: null --")
     agent = fleet.issue_agent_identity(app.DB_PATH, "SANDBOX-VM", actor="test")
     # Intercepted rather than counted in SQLite: the writer is asynchronous, so "no row yet"
-    # would pass whether or not one was on its way.
-    enqueued = []
-    real_enqueue = app.enqueue_reading
-    app.enqueue_reading = lambda *a, **k: enqueued.append(a)
-    try:
+    # would pass whether or not one was on its way. mock.patch.object rather than pytest's
+    # monkeypatch, as in test_history_metrics.py: the house runner executes this file as a
+    # script, where there are no fixtures.
+    with mock.patch.object(app, "enqueue_reading") as enqueue:
         r = report("SANDBOX-VM", agent, temp=None, model="Virtual Machine",
                    serial_number="VM-SERIAL-0001", os_caption="Microsoft Windows 11 Enterprise",
                    uptime_seconds=120)
-    finally:
-        app.enqueue_reading = real_enqueue
     check("the report is accepted", r.status_code == 200)
     check("...without queueing a reading -- readings.temp has no honest value for it",
-          enqueued == [])
+          not enqueue.called)
     row = listed("SANDBOX-VM")
     check("...and the machine is in Inventory", row is not None)
     check("...online", row is not None and row["status"] == "online")
@@ -140,6 +138,14 @@ def test_unknown_names():
                     json={"machine": "OFFLINE-PC", "type": "run_script",
                           "params": {"script": "hostname"}})
     check("an enrolled machine still queues, online or not", r.status_code == 201)
+
+    r = client.post("/api/fleet/commands",
+                    json={"machine": "offline-pc", "type": "run_script",
+                          "params": {"script": "hostname"}})
+    check("a case-only mismatch is refused -- claims match exactly, so it would never run",
+          r.status_code == 400)
+    check("...naming the spelling the agent enrolled under",
+          "enrolled as 'OFFLINE-PC'" in (r.get_json() or {}).get("error", ""))
 
     # The schedulers go straight to create_command and must NOT be refused: a raise there
     # escapes their loops (see fleet.require_enrolled). Their unenrolled targets end by TTL.

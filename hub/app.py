@@ -6248,12 +6248,12 @@ def machine_detail(machine):
         if enrolled_only is None:
             return None
 
+    heard_at = enrolled_only[1] if enrolled_only else None
     result = dict(row) if row else {
         'machine': machine_name, 'asset_tag': None, 'serial_number': None,
         'service_tag': None, 'manufacturer': None, 'model': None,
         'companion_version': None, 'os_caption': None, 'os_version': None,
-        'os_build': None, 'os_arch': None,
-        'updated_at': enrolled_only[1] if enrolled_only else None,
+        'os_build': None, 'os_arch': None, 'updated_at': heard_at,
         'ad_ou': None, 'ad_dn': None, 'ad_owner': None, 'ad_os': None,
         'ad_disabled': None, 'ad_synced_at': None,
     }
