@@ -66,15 +66,23 @@ try
         Uninstaller = sp.GetRequiredService<FleetHubAgent.Update.SelfUninstaller>(),
     });
 
-    // The executors, which are the whole of what this agent can be TOLD to do today. Four out
+    // The executors, which are the whole of what this agent can be TOLD to do today. Five out
     // of the hub's ~thirty command types, and the gap is deliberate rather than unfinished:
-    // every other type backs a feature the console gates behind a MIN_*_AGENT version this
-    // agent sits below (see AgentConfig.Version), so an operator is never offered one. Anything
-    // that arrives anyway gets a result naming the platform -- see CommandDispatcher.
+    // the console reads this machine's capability report (derived from exactly this list) and
+    // offers nothing else. Anything that arrives anyway gets a result naming the platform --
+    // see CommandDispatcher.
     builder.Services.AddSingleton<ICommandExecutor, RestartExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, ShutdownExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RenameExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RunScriptExecutor>();
+
+    // The interactive terminal (0.4.0). Registering ShellOpenExecutor is what puts shell_open
+    // in the capability report, and that report is what switches the console's Terminal tab
+    // from the one-shot box to a real xterm for this machine. The manager is a singleton so
+    // the host disposes it at stop and hangs up every open shell.
+    builder.Services.AddSingleton<FleetHubAgent.Fleet.Shell.PtySessionManager>();
+    builder.Services.AddSingleton<IPtyChannel>(sp => sp.GetRequiredService<FleetClient>());
+    builder.Services.AddSingleton<ICommandExecutor, ShellOpenExecutor>();
 
     // What the machine's package manager says is available (roadmap #14's Linux half). Its
     // own loop in Worker, not the heartbeat: an apt dependency solve is seconds of work and

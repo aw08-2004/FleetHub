@@ -47,12 +47,26 @@
     // The machine page drops tabs the operator or the device cannot use, and tabs.js falls
     // back to Overview for a slug it does not have -- so offering Files here to someone
     // without issue_commands lands them on Overview, not on a 403.
+    //
+    // REMOTE is the odd one out (hub 1.169.0): it is not a tab of the machine page but the
+    // Remote page with `?machine=` on it, which remote-workspace.js already reads to open a
+    // screen on arrival -- so Ctrl+K, "042", Right to Remote, Enter is a live session on
+    // PC-042. It is
+    // offered only where it can work, decided from things the page already has:
+    //   * the sidebar's own Remote link, which the server renders only for remote_control
+    //     (the same trick pages() uses), and whose href we reuse so the URL cannot drift;
+    //   * the row's reported platform -- no Linux or Android agent answers a remote session.
+    //     An unreported platform keeps it, because most of the fleet reports none.
+    // Rejected: a separate "Remote" page entry per machine, which would double the list, and
+    // a client-side copy of the capability, which would be a second gate to keep in step.
     const ACTIONS = [
         { slug: null, label: () => t('palette.action_overview') },
         { slug: 'terminal', label: () => t('tools.tab.terminal') },
         { slug: 'files', label: () => t('tools.tab.files') },
         { slug: 'network', label: () => t('tools.tab.network') },
+        { remote: true, label: () => t('palette.action_remote') },
     ];
+    const NO_REMOTE_PLATFORMS = ['linux', 'android'];
     const MAX_DEVICES = 12;
     const MAX_PAGES = 6;
     // Long enough that opening the palette twice in a minute costs one request, short enough
@@ -135,12 +149,29 @@
         return wrap;
     }
 
-    function hrefFor(row, slug) {
+    /** The Remote page's URL as the sidebar renders it, or null when the sidebar has no
+     *  Remote link -- which is the server saying this operator lacks remote_control. */
+    function remoteBase() {
+        const link = document.querySelector('#app-sidebar a.sidebar__link[data-nav-prefix="/remote"]');
+        return link ? link.getAttribute('href') : null;
+    }
+
+    /** The jump targets this row offers, in ArrowRight order. */
+    function actionsFor(row) {
+        const remote = remoteBase() && NO_REMOTE_PLATFORMS.indexOf(row.platform || '') === -1;
+        return ACTIONS.filter((a) => !a.remote || remote);
+    }
+
+    function hrefFor(row, action) {
+        if (action && action.remote) {
+            return `${remoteBase()}?machine=${encodeURIComponent(row.machine)}`;
+        }
         const path = `/machine/${encodeURIComponent(row.machine)}`;
+        const slug = action && action.slug;
         return slug ? `${path}?tab=${slug}` : path;
     }
 
-    function deviceOption(row, index) {
+    function deviceOption(row, index, rowActions) {
         const option = document.createElement('div');
         option.id = `palette-opt-${index}`;
         option.setAttribute('role', 'option');
@@ -153,7 +184,7 @@
 
         const text = document.createElement('a');
         text.className = 'flex min-w-0 flex-1 flex-col no-underline';
-        text.href = hrefFor(row, null);
+        text.href = hrefFor(row, ACTIONS[0]);
         text.tabIndex = -1;
         const name = document.createElement('span');
         name.className = 'truncate font-medium text-text';
@@ -168,9 +199,9 @@
         const actions = document.createElement('span');
         actions.className = 'hidden shrink-0 items-center gap-1';
         actions.dataset.actions = '';
-        ACTIONS.forEach((a, i) => {
+        rowActions.forEach((a, i) => {
             const link = document.createElement('a');
-            link.href = hrefFor(row, a.slug);
+            link.href = hrefFor(row, a);
             link.tabIndex = -1;
             link.dataset.action = String(i);
             link.className = 'rounded-md px-2 py-0.5 text-xs text-muted no-underline hover:text-text';
@@ -233,8 +264,9 @@
             if (matches.length) {
                 nodes.push(heading(t('palette.devices')));
                 for (const row of matches) {
-                    const el = deviceOption(row, options.length);
-                    options.push({ kind: 'device', row, el });
+                    const actions = actionsFor(row);
+                    const el = deviceOption(row, options.length, actions);
+                    options.push({ kind: 'device', row, el, actions });
                     nodes.push(el);
                 }
             }
@@ -345,7 +377,10 @@
             if (e.key === 'ArrowRight' && input.selectionStart !== input.value.length) return;
             e.preventDefault();
             const step = e.key === 'ArrowRight' ? 1 : -1;
-            highlight(active, Math.min(Math.max(action + step, 0), ACTIONS.length - 1));
+            // The row's own count: a Linux row has no Remote, and stepping onto an index it
+            // does not have would leave Enter with nothing to open.
+            const last = options[active].actions.length - 1;
+            highlight(active, Math.min(Math.max(action + step, 0), last));
         } else if (e.key === 'Enter') {
             e.preventDefault();
             go();

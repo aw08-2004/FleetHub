@@ -117,7 +117,9 @@
 
     // ---------------- The strip ----------------
     function shellName(shell) {
-        return shell === 'cmd' ? 'cmd' : 'PowerShell';
+        // bash and sh since Linux agent 0.4.0. Spelled as the commands are, lower-case.
+        if (shell === 'cmd' || shell === 'bash' || shell === 'sh') return shell;
+        return 'PowerShell';
     }
 
     /** Consoles in tab order: oldest first, so opening one appends rather than reshuffling
@@ -771,7 +773,11 @@
     let wired = false;
 
     window.FleetPty = {
-        activate() {
+        /** `platform` is what fleet-terminal.js read off the machine: 'linux' for a Linux
+         *  agent that answers shell_open, anything else for a PC. It only changes the words
+         *  under the strip -- the shell picker has already been filled for the platform
+         *  over there, and everything else about a console is the same on both. */
+        activate({ platform } = {}) {
             if (paneEl) paneEl.hidden = false;
             if (legacyEl) legacyEl.hidden = true;
             for (const id of ['terminal-timeout', 'terminal-timeout-label',
@@ -782,7 +788,11 @@
 
             if (hintEl) {
                 hintEl.className = 'terminal__hint';
-                hintEl.textContent = t('machine.pty.hint', { max: MAX_CONSOLES });
+                // "running as SYSTEM" is wrong on a Linux box, which runs the shell as root,
+                // so it gets its own sentence rather than a substituted word.
+                hintEl.textContent = platform === 'linux'
+                    ? t('machine.pty.hint_linux', { max: MAX_CONSOLES })
+                    : t('machine.pty.hint', { max: MAX_CONSOLES });
             }
 
             const clearBtn = document.getElementById('terminal-clear');

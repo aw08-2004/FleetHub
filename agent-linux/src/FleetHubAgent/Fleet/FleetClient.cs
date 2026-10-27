@@ -22,14 +22,12 @@ namespace FleetHubAgent.Fleet;
 /// answering with nonsense is a false return value here, never an exception.
 ///
 /// This is a deliberately SMALL subset of the Windows agent's FleetClient (which is ~1150
-/// lines): enroll, heartbeat, poll, result, and streamed command output. The rest of that
-/// surface -- the ConPTY terminal endpoints, package downloads, backup and BIOS reporting --
-/// backs features this agent does not implement, and every one of them is gated in the
-/// console behind a MIN_*_AGENT version this agent deliberately sits below (see
-/// AgentConfig.Version). Porting an endpoint before its feature exists would be dead code
-/// carrying a bearer token.
+/// lines): enroll, heartbeat, poll, result, streamed command output, and -- since 0.4.0 -- the
+/// three terminal endpoints behind shell_open. The rest of that surface (package downloads,
+/// backup and BIOS reporting) backs features this agent does not implement, and porting an
+/// endpoint before its feature exists would be dead code carrying a bearer token.
 /// </summary>
-public sealed class FleetClient : IDisposable, IOutputSink
+public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
 {
     private readonly ILogger<FleetClient> _log;
     private readonly AgentState _state;
@@ -398,6 +396,107 @@ public sealed class FleetClient : IDisposable, IOutputSink
         {
             _log.LogWarning("Result report for {Id} failed: {Msg}", commandId, e.Message);
             return false;
+        }
+    }
+
+    // ---------------------------------------------------------------- interactive terminal
+    // The Windows agent's three, unchanged: hub/terminal.py is the other end and does not
+    // care which platform the bytes come from. Separate from the command endpoints above
+    // because a terminal is a stream -- no result, and a lifetime measured in an operator's
+    // attention span.
+
+    /// <summary>Fetch keystrokes and resizes queued for this session. Called on a tight loop
+    /// while a terminal is open, so it must be cheap and must never throw.</summary>
+    public async Task<PtyInputBatch> PullPtyInputAsync(string sessionId, int afterSeq, CancellationToken ct)
+    {
+        var empty = Array.Empty<PtyInputItem>();
+        if (!_identity.IsEnrolled) return new PtyInputBatch(false, empty, afterSeq, false, false);
+
+        try
+        {
+            using var req = Authorized(HttpMethod.Get, AgentConfig.PtyInputUrl(sessionId, afterSeq));
+            using var resp = await _http.SendAsync(req, ct);
+
+            // The hub forgot this session (reaped, or its database was reset). Nothing will
+            // ever arrive for it, so end the terminal rather than poll a 404 forever.
+            if (resp.StatusCode == HttpStatusCode.NotFound)
+                return new PtyInputBatch(true, empty, afterSeq, Closing: true, Gone: true);
+            if (!resp.IsSuccessStatusCode)
+                return new PtyInputBatch(false, empty, afterSeq, false, false);
+
+            var json = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var items = new List<PtyInputItem>();
+            if (json?["items"] is JsonArray array)
+            {
+                foreach (var node in array)
+                {
+                    if (node is null) continue;
+                    var seq = node["seq"]?.GetValue<int>() ?? -1;
+                    var kind = node["kind"]?.GetValue<string>() ?? "data";
+                    if (kind == "resize")
+                    {
+                        var size = node["size"];
+                        items.Add(new PtyInputItem(seq, "resize", "",
+                            (short)(size?["cols"]?.GetValue<int>() ?? 120),
+                            (short)(size?["rows"]?.GetValue<int>() ?? 30)));
+                    }
+                    else
+                    {
+                        items.Add(new PtyInputItem(seq, "data", node["data"]?.GetValue<string>() ?? "", 0, 0));
+                    }
+                }
+            }
+            return new PtyInputBatch(
+                true, items,
+                json?["next_seq"]?.GetValue<int>() ?? afterSeq,
+                json?["closing"]?.GetValue<bool>() ?? false,
+                Gone: false);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException
+                                     or JsonException or InvalidOperationException or FormatException)
+        {
+            // The last three are a hub answering 200 with something that is not the shape
+            // above. Same answer as unreachable: try again on the next tick.
+            _log.LogDebug("pty input poll for {Id} failed: {Msg}", sessionId, e.Message);
+            return new PtyInputBatch(false, empty, afterSeq, false, false);
+        }
+    }
+
+    /// <summary>Post one output chunk. A retry MUST reuse the same seq -- the hub keys on it,
+    /// and a fresh number would duplicate bytes into the middle of an escape sequence.</summary>
+    public async Task<bool> PostPtyOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct)
+    {
+        if (!_identity.IsEnrolled) return false;
+        var body = new JsonObject { ["seq"] = seq, ["chunk"] = chunk };
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, AgentConfig.PtyOutputUrl(sessionId));
+            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("pty output post for {Id} seq {Seq} failed: {Msg}", sessionId, seq, e.Message);
+            return false;
+        }
+    }
+
+    /// <summary>Tell the hub the terminal is over, so the console stops polling and can say
+    /// why. Best-effort: if it does not land, the hub's own reaper closes it anyway.</summary>
+    public async Task ReportPtyClosedAsync(string sessionId, string reason, CancellationToken ct)
+    {
+        if (!_identity.IsEnrolled) return;
+        var body = new JsonObject { ["reason"] = reason };
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, AgentConfig.PtyClosedUrl(sessionId));
+            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            _log.LogDebug("pty close report for {Id} failed: {Msg}", sessionId, e.Message);
         }
     }
 

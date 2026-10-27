@@ -11,6 +11,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
+import capabilities
 import fleet
 import permissions
 import settings
@@ -394,6 +395,57 @@ def main():
                   f"FleetPty.{handler}()" in term_js)
         check("...and fleet-terminal.js picks between them on who is in front",
               "owner === 'pty'" in term_js)
+
+        print("\n== Linux terminals (hub 1.169.0, Linux agent 0.4.0) ==")
+        # Before this, every shell name but cmd collapsed to "powershell" -- harmless while
+        # only Windows agents opened terminals, and a lie in the session row and the
+        # shell_open the moment a Linux box did.
+        CURRENT_USER = "super@x.com"
+        check("bash survives normalisation", terminal.normalize_shell("bash") == "bash")
+        check("sh survives normalisation", terminal.normalize_shell("SH ") == "sh")
+        check("the Windows names are unchanged",
+              terminal.normalize_shell("bat") == "cmd" and terminal.normalize_shell(None) == "powershell")
+        check("an unknown name still falls back rather than being stored verbatim",
+              terminal.normalize_shell("/bin/zsh") == "powershell")
+
+        capabilities.init_capabilities_db(db_path)
+        lnx_id, lnx_token = fleet.enroll_agent(db_path, "LNX-01", SECRET, SECRET)
+        capabilities.record_capabilities(db_path, "LNX-01", {
+            "platform": "linux", "commands": ["restart", "run_script", "shell_open"],
+            "features": []})
+        r = c.post("/api/fleet/pty", json={"machine": "LNX-01", "shell": "bash"})
+        check("a Linux machine reporting shell_open can open a bash terminal -> 201",
+              r.status_code == 201 and r.get_json()["shell"] == "bash")
+        claimed = fleet.claim_commands(db_path, lnx_id, "LNX-01")
+        check("...and its shell_open names bash, which is what the agent starts",
+              any(cmd["type"] == "shell_open" and cmd["params"]["shell"] == "bash"
+                  for cmd in claimed))
+
+        # An older Linux agent says exactly what it runs, and shell_open is not in it. The
+        # console does not offer the real terminal there, and the hub must not open a
+        # session nothing will ever attach to if something asks anyway.
+        fleet.enroll_agent(db_path, "LNX-OLD", SECRET, SECRET)
+        capabilities.record_capabilities(db_path, "LNX-OLD", {
+            "platform": "linux", "commands": ["restart", "run_script"], "features": []})
+        r = c.post("/api/fleet/pty", json={"machine": "LNX-OLD", "shell": "bash"})
+        check("a Linux machine without shell_open is refused", r.status_code == 400)
+        check("...and leaves no session behind in the operator's quota",
+              terminal.list_sessions(db_path, machine="LNX-OLD", operator="super@x.com",
+                                     active_only=True) == [])
+
+        # The console's half: fleet-terminal.js decides on the capability report, not on a
+        # version, because the Linux train is 0.x and every MIN_*_AGENT gate reads it as old.
+        term_js = read_static("js", "fleet-terminal.js")
+        check("fleet-terminal.js hands a Linux box to the pty on its shell_open claim",
+              "commands.indexOf('shell_open')" in term_js)
+        check("...and tells fleet-pty.js which platform it is",
+              "FleetPty.activate({ platform })" in term_js)
+        # A machine that enrolled but never sent /api/report has no version. It used to get
+        # the line terminal; every agent that can enroll today has a pseudoconsole.
+        check("a missing agent version no longer means the line terminal",
+              "(!version || !versionLess(version, MIN_PTY_AGENT))" in term_js)
+        check("fleet-pty.js names bash and sh tabs as themselves",
+              "shell === 'bash' || shell === 'sh'" in pty_js)
 
         print("\n== Terminals are not favoritable ==")
         # Nothing reusable to save: the params name a live session.

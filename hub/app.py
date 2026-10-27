@@ -170,7 +170,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.168.0"
+HUB_VERSION = "1.169.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -6190,7 +6190,12 @@ def get_machines():
     # with a temperature and reads as perfectly healthy while every command, terminal,
     # process and backup on it silently does nothing.
     enrolled = fleet.enrolled_machines(DB_PATH)
+    # The reported platform (roadmap #23), one query for the list. The Ctrl+K palette reads
+    # it to leave Remote off a Linux or Android row, where no agent answers a remote
+    # session. "" is "has not said", never Windows -- see capabilities.platforms_for.
+    platforms = capabilities.platforms_for(DB_PATH, [row['machine'] for row in result])
     for row in result:
+        row['platform'] = platforms.get(row['machine'], '')
         row['uptime_seconds'] = get_latest_uptime(row['machine'])
         row['temp'] = displayable_temp(get_latest_temp(row['machine']))
         row['diagnostics'] = extract_diagnostics(get_latest_sensors(row['machine']))

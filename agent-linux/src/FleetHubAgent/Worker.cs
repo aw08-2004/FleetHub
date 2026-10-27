@@ -48,6 +48,10 @@ public sealed class Worker : BackgroundService
     /// from re-dispatching something already running.</summary>
     private readonly ConcurrentDictionary<string, Task> _running = new();
 
+    /// <summary>The subset of <see cref="_running"/> that are open terminals (shell_open),
+    /// which the concurrency cap leaves out -- see PollAndDispatchAsync.</summary>
+    private readonly ConcurrentDictionary<string, byte> _terminals = new();
+
     /// <summary>Serialises enrollment. Both the heartbeat and command loops need an enrolled
     /// agent and either may be first, but enrolling twice would mint a second identity for one
     /// machine and duplicate it in the fleet.</summary>
@@ -388,7 +392,12 @@ public sealed class Worker : BackgroundService
             // and starting it a second time would run the operator's script twice.
             if (_running.ContainsKey(cmd.Id)) continue;
 
-            if (_running.Count >= AgentConfig.MaxConcurrentCommands)
+            // shell_open does not count toward the cap: it runs for as long as an operator
+            // keeps a terminal tab open, so counting it would let four idle terminals hold
+            // back every restart and script on this machine. Its own cap is
+            // AgentConfig.MaxPtySessions (see PtySessionManager).
+            var isTerminal = cmd.Type == "shell_open";
+            if (!isTerminal && _running.Count - _terminals.Count >= AgentConfig.MaxConcurrentCommands)
             {
                 // Left in the hub's queue rather than failed: it will be offered again on the
                 // next poll, when a slot has freed. Failing it here would tell the operator
@@ -398,6 +407,7 @@ public sealed class Worker : BackgroundService
                 break;
             }
 
+            if (isTerminal) _terminals[cmd.Id] = 0;
             var task = Task.Run(() => RunCommandAsync(cmd, ct), CancellationToken.None);
             _running[cmd.Id] = task;
             // Removed by the runner itself rather than by a continuation, so the slot is
@@ -442,6 +452,7 @@ public sealed class Worker : BackgroundService
         finally
         {
             _running.TryRemove(cmd.Id, out _);
+            _terminals.TryRemove(cmd.Id, out _);
         }
     }
 

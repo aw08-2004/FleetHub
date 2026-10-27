@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.168.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.169.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -245,6 +245,36 @@ month of rows rewritten on a production hub's self-update for an empty chart.
   serial, model and OS, shows no temperature, and the agent log says *No CPU temperature
   sensor* once, not every five seconds. A PC with a sensor reports exactly as before.
 - [ ] **Translations.** *Machine not found* reads correctly in German and Spanish.
+
+**Hub 1.169.0 + Linux agent 0.4.0: a real terminal on Linux, Remote from Ctrl+K.** Asked for
+2026-10-27: openmediavault's Terminal tab was still the one-shot `run_script` box, and so was
+the never-reported Windows Sandbox `035A185C-668A-4`. The Linux agent now answers `shell_open`
+on a Unix pty (posix_spawn with setsid and the slave opened by path, so the shell gets a
+controlling terminal without a managed-code fork). The console switches a Linux machine over
+when its capability report lists `shell_open`, not on a version, because the Linux train is
+0.x. A machine with no reported version at all now gets the real console instead of the line
+terminal. Rejected: `script(1)` as the pty owner (no resize, ever) and `forkpty` from .NET
+(unsafe fork of a multithreaded runtime), recorded in `UnixPty.cs`. Checked before merge: the
+pty on Ubuntu under WSL (controlling tty, Ctrl-C, resize, quiet broken pipe, `exit`, job
+control, no stray processes after hang-up).
+- [ ] **Sandbox console.** After the beta hub updates, `035A185C-668A-4`'s Terminal tab shows
+  the console tab strip and a `PS C:\Windows\system32>` prompt, not the *Connected to …* line
+  terminal. (If the Sandbox is gone, any enrolled machine with an empty *Agent* column.)
+- [ ] **Linux, old agent.** openmediavault on 0.3.0 still shows the one-shot box, and its hint
+  ends by naming Linux agent 0.4.0.
+- [ ] **Linux terminal** (needs Linux 0.4.0 beta, *Owed locally* item 19). On openmediavault the
+  tab opens a bash prompt as root. Check: `top` fills the window and follows a browser resize;
+  `sleep 60` stops on Ctrl-C; Tab completes a path; `apt install` answers its Y/n; a second
+  tab with **+**; leave the page and come back to the same shell; `exit` strikes the tab through.
+  Close a tab running `ping 1.1.1.1` and confirm on the box (`ps aux | grep ping`) that nothing
+  survives.
+- [ ] **Remote from Ctrl+K.** Ctrl+K, pick a Windows PC, → to **Remote**, Enter: the Remote page
+  opens with that PC connecting. openmediavault and the phones have no Remote action. An
+  operator without `remote_control` sees no Remote action on any row.
+- [ ] **Remote button.** A machine page's **Remote** button lands on that PC connecting, not on
+  an empty picker.
+- [ ] **Translations.** *Remote* in the palette and the Linux terminal hints read correctly in
+  German and Spanish.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -641,6 +671,15 @@ with that version, the asset url and `--manifest <agent>/manifests/<version>.jso
 1.168.0 first, then the Windows agent beta that carries it. It can ride the 3.49.0 beta in
 item 17: the change is in `Worker.TelemetryLoopAsync`, and the hub does not gate on it, so it
 needs no version constant of its own. Then the *VM reports* box in the beta list above.
+
+**19. The Linux terminal rides Linux 0.4.0, owed on the machine with the signing key.** Hub
+1.169.0 first, then the **Linux 0.4.0** beta from item 17, which now carries `shell_open` too
+(`agent-linux/release.ps1 -Version 0.4.0 -Channel beta -NotesFile .\release-notes\0.4.0.md`;
+the notes cover items 8, 10, 17 and this). Nothing in the hub names a version for it: the
+console reads `shell_open` from the capability report, so a different version number needs no
+hub change. Then the *Linux terminal* box in the beta list above. The agent's real-pty tests
+(`UnixPtyTests`) return early on Windows, so they ran only through a WSL harness. Run
+`dotnet test agent-linux/FleetHubAgent.slnx` once on a Linux box with the SDK.
 
 ---
 
@@ -4827,7 +4866,16 @@ access", and deleting the invite would take the answer with it.
 **Open parameters.** Whether a redemption should notify the admin who created the invite —
 today the audit trail is the only signal. Whether an invite should be able to name a
 directory group instead of an email, for the tenant that would rather not maintain either.
-## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0
+## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0
+
+> **Update (2026-10-27, hub 1.169.0) -- the PTY terminal is built**, unreleased until Linux
+> 0.4.0 (*Owed locally* item 19). `Fleet/Shell/UnixPty.cs` opens a Unix pty and starts a login
+> shell with `posix_spawn` (`POSIX_SPAWN_SETSID`, then the slave opened by path onto fd 0, so it
+> becomes the controlling terminal). It is not `forkpty`, which item 5 below assumed: forking a
+> multithreaded .NET runtime from managed code is unsafe. The runner, manager and
+> `ShellOpenExecutor` are ports of the Windows agent's, line for line where the hub protocol
+> dictates. The console switches on `shell_open` in the capability report, not on
+> `MIN_PTY_AGENT`. Still 🚧 for patch install and process end/restart.
 
 > **Status update (2026-09-30) — supersedes the opening below and *The manifest is not in the
 > repo*.** `0.3.0` was cut through `release.ps1` (`2afb06d`) with `agent-linux.manifest.json` and
@@ -5072,7 +5120,9 @@ is cut. Neither needed a hub change beyond the patch sources named below.
    Owed: the Linux agent release (see *The manifest is not in the repo* above -- this rides
    the same cut), and a look at the card against a real distribution with systemd, where the
    services column fills in.
-5. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` in place of ConPTY.
+5. ~~**PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` in place of ConPTY.~~ Built for
+   0.4.0 with `posix_spawn` rather than `forkpty`, and gated on the capability report rather
+   than `MIN_PTY_AGENT` -- see the 2026-10-27 update at the top of this entry.
 6. GPU and fan sensors. Remote view/control (#2) is a long way off and may never be worth it.
 
 **Known limitation, now fixed.** The volume walk used `DriveInfo.GetDrives()`, which
