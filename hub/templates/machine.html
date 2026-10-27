@@ -93,11 +93,11 @@
             {# A LINK to the Remote page, not a tab. The Remote page holds several PCs side by
                side and keeps each session alive while you work elsewhere; a second viewer
                embedded here would be two sessions for one screen.
-               No ?machine= yet: remote.js does not read one, and a parameter it ignores would
-               promise a screen that never opens. Pre-selecting this PC there is part of the
-               Devices phase of this redesign (ROADMAP note, hub 1.114.0). #}
+               It carries ?machine= since hub 1.169.0: remote-workspace.js opens a screen on
+               each one it is given, so this button lands on THIS PC already connecting rather
+               than on an empty picker -- the same URL the Ctrl+K Remote action builds. #}
             {% if cap.REMOTE_CONTROL in user_capabilities %}
-            <a class="btn btn--ghost" id="machine-open-remote" href="{{ url_for('remote_page') }}">{{ t('machine.open_remote') }}</a>
+            <a class="btn btn--ghost" id="machine-open-remote" href="{{ url_for('remote_page', machine=machine) }}">{{ t('machine.open_remote') }}</a>
             {% endif %}
         </div>
     </div>

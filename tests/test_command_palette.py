@@ -12,6 +12,8 @@ The silent failures this file exists to catch:
   * **A shortcut that eats a terminal's keystroke.** Ctrl+K is "kill to end of line" in most
     shells, and the remote viewer forwards every key to the PC. The guard for both is one line
     and nothing would notice it going.
+  * **A Remote action that offers what cannot happen** (hub 1.169.0): a session to someone
+    without remote_control, who would land on a 403, or to a Linux box no agent answers.
   * **Utilities with no CSS behind them.** The palette is built from Tailwind classes; if
     app.css was not rebuilt, the dialog renders as an unstyled box at the top-left corner.
 
@@ -232,6 +234,37 @@ def test_the_shortcut_is_not_stolen():
     check("Alt and Shift combinations are not the shortcut", "e.altKey" in guard and "e.shiftKey" in guard)
 
 
+def test_remote_is_offered_only_where_it_works():
+    print("\n-- the Remote action follows the sidebar's gate and the device's platform --")
+    js = read(STATIC, "js", "command-palette.js")
+    check("there is a Remote action", "t('palette.action_remote')" in js)
+    # The gate is the server's: the sidebar renders its Remote link only for remote_control.
+    # A palette that built /remote itself would offer a session to someone who gets a 403.
+    selector = 'a.sidebar__link[data-nav-prefix="/remote"]'
+    check("it reads the sidebar's own Remote link", selector in js)
+    full = render_with(set(permissions.CAPABILITIES))
+    plain = render_with({permissions.VIEW})
+    check("...which renders for a remote_control holder", 'data-nav-prefix="/remote"' in full)
+    check("...and not for a plain viewer", 'data-nav-prefix="/remote"' not in plain)
+    check("it opens the Remote page on that machine",
+          "?machine=${encodeURIComponent(row.machine)}" in js)
+    check("remote-workspace.js still reads ?machine=, which is what makes that open a screen",
+          "getAll('machine')" in read(STATIC, "js", "remote-workspace.js"))
+    # No Linux or Android agent answers a remote session.
+    check("Linux and Android rows do not offer it",
+          "NO_REMOTE_PLATFORMS = new Set(['linux', 'android'])" in js)
+    check("the roster carries the platform that decides it",
+          "row['platform'] = platforms.get(row['machine'], '')"
+          in read(os.path.join(ROOT, "hub", "app.py")))
+    # ArrowRight must stop at the row's last action: a Linux row has one fewer, and stepping
+    # past it would leave Enter with nothing to open.
+    check("arrow keys walk the row's own actions, not the global list",
+          "options[active].actions.length - 1" in js and "ACTIONS.length - 1" not in js)
+    machine = read(TEMPLATES, "machine.html")
+    check("the machine page's Remote button opens this PC too",
+          "url_for('remote_page', machine=machine)" in machine)
+
+
 def test_the_utilities_exist_in_the_build():
     print("\n-- every Tailwind class the palette leans on has CSS behind it --")
     path = os.path.join(STATIC, "css", "app.css")
@@ -250,6 +283,7 @@ def main():
     test_the_palette_is_rendered_and_loaded()
     test_the_palette_cannot_widen_what_you_see()
     test_the_shortcut_is_not_stolen()
+    test_remote_is_offered_only_where_it_works()
     test_the_utilities_exist_in_the_build()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0

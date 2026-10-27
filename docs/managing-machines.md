@@ -64,6 +64,17 @@ Ctrl-C, Tab completion, arrow keys, colour, progress bars and interactive prompt
 (`Read-Host`, `$Host.UI.PromptForChoice`) all behave as they would sitting at the machine,
 which is what makes it possible to drive something like `install.ps1` remotely.
 
+**On a Linux machine** (Linux agent 0.4.0 and hub 1.169.0 or later) it is the same terminal on a
+Unix pty: a login shell as root, `bash` or `sh` from the **Shell** box, with full-screen
+programs (`top`, `vim`, `less`), Ctrl-C and resizing working as they do over SSH. Everything
+below (tabs, persistence, isolation, cleanup, what is recorded) applies unchanged; closing a
+tab hangs up the shell's whole session. The console offers it when the machine's capability
+report lists `shell_open`. A Linux machine on an older agent keeps the one-shot `run_script`
+box.
+
+A machine that has **enrolled but never reported an agent version** (a Windows Sandbox or a VM
+on an agent from before sensorless telemetry) gets the real console too, since hub 1.169.0.
+
 That is a different mechanism from `run_script`, which still exists and is unchanged —
 favorites and automation use it, because a one-shot script has an exit code and a result
 worth recording. A terminal has neither. The distinction runs all the way through:

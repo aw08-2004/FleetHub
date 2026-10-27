@@ -27,6 +27,13 @@ const installFor = document.getElementById('install-for');
 const downloadCmd = document.getElementById('download-cmd');
 const psCommand = document.getElementById('ps-command');
 const copyStatus = document.getElementById('copy-status');
+const linuxCommand = document.getElementById('linux-command');
+const copyLinuxStatus = document.getElementById('copy-linux-status');
+const osChoices = Array.from(document.querySelectorAll('input[name="os"]'));
+const installPanels = {
+    windows: document.getElementById('install-windows'),
+    linux: document.getElementById('install-linux'),
+};
 const waitingLine = document.getElementById('waiting-line');
 const doneLine = document.getElementById('done-line');
 const fatal = document.getElementById('fatal-error');
@@ -40,6 +47,32 @@ function show(step) {
         dot.classList.toggle('onboarding-steps__item--active', i === step - 1);
         dot.classList.toggle('onboarding-steps__item--done', i < step - 1);
     });
+}
+
+// Which installer step 2 shows (hub 1.169.0). A GUESS from the browser, and only a guess: a
+// Linux server usually has no browser, so the person reading this page is often on a Windows
+// laptop setting up the box beside it -- which is why the switch exists and the guess only
+// picks where it starts. An Android user agent says "Linux" too and is not a Linux machine.
+function guessOs() {
+    const ua = navigator.userAgent || '';
+    return /Linux/.test(ua) && !/Android/.test(ua) ? 'linux' : 'windows';
+}
+
+function chooseOs(os) {
+    osChoices.forEach((radio) => { radio.checked = radio.value === os; });
+    installPanels.windows.hidden = os !== 'windows';
+    installPanels.linux.hidden = os !== 'linux';
+}
+
+async function copyFrom(textarea, statusEl) {
+    try {
+        await navigator.clipboard.writeText(textarea.value);
+        statusEl.textContent = t('onboarding.wizard.copied');
+    } catch {
+        // Refused outside a secure context; the text is selectable, so say so.
+        textarea.select();
+        statusEl.textContent = t('onboarding.wizard.copy_failed');
+    }
 }
 
 function showError(target, text) {
@@ -74,6 +107,9 @@ async function checkCode(raw) {
         // the script into the user's TEMP, where a non-elevated process could swap it before
         // it ran elevated.
         psCommand.value = body.command;
+        // The Linux one-liner, from the hub for the same reason (onboarding_web.linux_command).
+        linuxCommand.value = body.linux_command;
+        chooseOs(guessOs());
         try { history.replaceState(null, '', `/onboarding?code=${encodeURIComponent(code)}`); }
         catch { /* cosmetic only */ }
         show(2);
@@ -141,15 +177,14 @@ input.addEventListener('input', () => {
     try { input.setSelectionRange(pos, pos); } catch { /* not a text input */ }
 });
 
-document.getElementById('copy-command').addEventListener('click', async () => {
-    try {
-        await navigator.clipboard.writeText(psCommand.value);
-        copyStatus.textContent = t('onboarding.wizard.copied');
-    } catch {
-        // Refused outside a secure context; the text is selectable, so say so.
-        psCommand.select();
-        copyStatus.textContent = t('onboarding.wizard.copy_failed');
-    }
+document.getElementById('copy-command').addEventListener('click', () => {
+    void copyFrom(psCommand, copyStatus);
+});
+document.getElementById('copy-linux').addEventListener('click', () => {
+    void copyFrom(linuxCommand, copyLinuxStatus);
+});
+osChoices.forEach((radio) => {
+    radio.addEventListener('change', () => { if (radio.checked) chooseOs(radio.value); });
 });
 
 const preset = new URLSearchParams(location.search).get('code');

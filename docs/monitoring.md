@@ -6,7 +6,10 @@ Agents send telemetry to `POST /api/report`. Every console page requires OIDC si
 plus a permission group (see [Sign-in and permissions](access.md)). The sidebar has three
 sections: **Fleet** (Dashboard, Devices, Map, Alerts), **Operate** (Remote, Packages,
 Patches, Fleet tasks, Rules, Device policy) and **Administration** (Audit log, Settings,
-Permission groups, Users and others). **Ctrl+K** finds a device or a page by name.
+Permission groups, Users and others). **Ctrl+K** finds a device or a page by name; on a
+device, ←/→ picks Overview, Terminal, Files, Network or **Remote** before Enter. Remote opens
+the Remote page already connecting to that PC. It is offered only with `remote_control`, and
+not on Linux or Android devices.
 
 - **Dashboard** (`/`) -- fleet-wide counts, OS mix, live aggregates and attention lists.
 - **Devices** (`/inventory`) -- one row per machine, with filters, bulk actions (wake,

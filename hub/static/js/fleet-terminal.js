@@ -452,8 +452,22 @@
                         : t('machine.terminal.hint_no_scripts');
                     return;
                 }
-                // Scripts, but one-shot: the Linux agent has no persistent shell, no stdin
-                // and no pseudoconsole, so Stop/Reset and the per-run session would only
+                // A Linux agent that answers shell_open (0.4.0+) gets the same real terminal a
+                // PC does: a Unix pty on the box, xterm here. Decided by the CAPABILITY report
+                // rather than a version, because the Linux train is numbered 0.x and every
+                // MIN_*_AGENT comparison would read it as ancient. An explicit list is
+                // required -- silence permits commands in capabilities.py, but it cannot tell
+                // us a pty is on the other end, and guessing wrong opens a terminal that never
+                // attaches.
+                if (Array.isArray(commands) && commands.includes('shell_open') && window.FleetPty) {
+                    // bash/sh in the picker that decides what "+" opens -- not PowerShell.
+                    setShells('unix');
+                    owner = 'pty';
+                    FleetPty.activate({ platform });
+                    return;
+                }
+                // Otherwise scripts, but one-shot: an older Linux agent has no persistent
+                // shell, no stdin and no pty, so Stop/Reset and the per-run session would only
                 // promise things nothing on the other end answers.
                 setShells('unix');
                 setInteractive(false);
@@ -475,7 +489,17 @@
             // A modern agent gets a REAL console (ConPTY + xterm.js) instead of any of this.
             // The decision lives here because this is the one place that looks the agent
             // version up -- two terminals both deciding they are in charge would be a mess.
-            if (version && !versionLess(version, MIN_PTY_AGENT) && window.FleetPty) {
+            //
+            // **No version at all counts as modern** (hub 1.169.0). That is a machine whose
+            // agent enrolled and heartbeats but has never sent /api/report -- a Windows
+            // Sandbox or a VM with no temperature sensor, on an agent from before sensorless
+            // telemetry -- and it used to land on the line terminal below, the one built for
+            // the tail of a 3.1/3.2 rollout that finished long ago. Every agent that can
+            // enroll today is far past MIN_PTY_AGENT. Rejected: keep falling back until a
+            // version arrives, which leaves exactly those machines on the worse terminal
+            // indefinitely. If one really cannot answer, fleet-pty.js shows the session's
+            // close reason ("the agent never picked it up"), so nothing fails silently.
+            if ((!version || !versionLess(version, MIN_PTY_AGENT)) && window.FleetPty) {
                 owner = 'pty';
                 FleetPty.activate();
                 return;

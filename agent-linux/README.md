@@ -75,6 +75,7 @@ works against an unmodified hub.
 | **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from `/etc/fleethub/agent.secret` (0600, permissions *checked*, not assumed) or the env var of the same name |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect |
 | **Commands** | `restart`, `shutdown`, `rename`, `run_script`, with a running command's output streamed to the console as it is produced |
+| **Terminal** (0.4.0) | `shell_open`: a login shell as root on a Unix pty (`Fleet/Shell/`), streamed over the hub's `/api/agent/pty/*` endpoints like the Windows agent's ConPTY terminal. Started with `posix_spawn` + `setsid` and the slave opened by path, so the shell has a controlling terminal (job control, Ctrl-C, SIGWINCH) without forking the runtime. Exempt from the command concurrency cap, capped at eight per machine. The console offers it because the capability report lists `shell_open` |
 | **Patch inventory** | What `apt` or `dnf` says is available, change-only on the heartbeat, six-hourly on its own loop. Reporting only — nothing here installs a package, and the capability report is what stops the hub queueing one |
 | **Process list** | The machine page's Processes card: a `/proc` walk (CPU as a share of the whole machine, resident memory, owner, executable path, systemd unit from the cgroup), sampled every five seconds **only while somebody has the card open** and idle otherwise. Listing only -- ending or restarting a process is not implemented, and the card offers no menu for it. Claimed as the `processes` feature, which is what lets the console show the card to a 0.x agent |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops measuring it against the Windows train and stops queueing work it can never perform. Derived from the dispatcher, not written out |
@@ -95,8 +96,7 @@ above). In rough order of what would be worth doing next:
 2. **Ending and restarting processes** from the Processes card -- `kill_process` and
    `restart_process` executors (a `kill(2)` and a `systemctl restart` of the unit). The list
    itself is done.
-3. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` instead of ConPTY.
-4. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
+3. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
 
 The two **hub**-side gaps this agent used to work around are closed in hub 1.123.0: the
 `shell` enum names `bash` and `sh` (the substitution stays, because an old rule still arrives
@@ -113,6 +113,8 @@ src/FleetHubAgent/        the agent
   AgentConfig.cs          version, endpoints, cadence, state paths
   Worker.cs               the five loops
   Fleet/                  hub client, dispatcher, executors, capability report, output streaming
+  Fleet/Shell/            the interactive terminal's pty: UnixPty and PtySession (the runner,
+                          registry and hub calls are ../agent-shared/Pty, shared with Windows)
   Patch/                  what apt/dnf says is available, and the heartbeat payload for it
   Update/                 the signed self-update: manifest verification and the swap
   Telemetry/              /proc and /sys readers, the report builder

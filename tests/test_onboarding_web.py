@@ -213,6 +213,58 @@ def main():
         check("a guessed code gets no script", c.get("/onboarding/run/ZZZZZZ.ps1").status_code == 404)
         check("...and no launcher", c.get("/onboarding/run/ZZZZZZ.cmd").status_code == 404)
 
+        print("\n== The Linux install script (hub 1.169.0) ==")
+        reset_limits()
+        sh = c.get(f"/onboarding/run/{code}.sh")
+        shell = sh.get_data(as_text=True)
+        check("the .sh is served as plain text, uncached",
+              sh.status_code == 200 and sh.mimetype == "text/plain"
+              and sh.headers.get("Cache-Control") == "no-store")
+        check("...naming this hub and this code, shell-quoted",
+              f"local hub_url='{HUB}'" in shell and f"local code='{code}'" in shell)
+        # bash reads a CR as part of the word: `local CODE='ABC234'\r` is another code.
+        check("...with no carriage return anywhere", "\r" not in shell)
+        check("...running the signed Linux installer with no secret",
+              f"'{onboarding_web.AGENT_LINUX_INSTALLER_URL}'" in shell
+              and "--secret" not in shell and 'bash "$work/install.sh" --hub "$hub_url"' in shell)
+        # A failed install must not burn the code: the redeem comes after the installer, and
+        # the installer's failure ends the script.
+        check("...installing BEFORE spending the code",
+              shell.index('bash "$work/install.sh"') < shell.index("/api/onboarding/redeem"))
+        check("...never printing the token",
+              "echo \"$token\"" not in shell and "printf '%s\\n' \"$token\"" not in shell)
+        check("...writing agent.json 0600 in one step, never widened then narrowed",
+              "install -m 0600 -o root -g root /dev/stdin \"$identity\"" in shell
+              and not any("chmod" in line for line in shell.splitlines()
+                          if not line.lstrip().startswith("#")))
+        # A pipe is not a file: a dropped connection must define half a function and run
+        # nothing, so the last line is the only one that acts.
+        check("...wrapped in main(), called on the last line",
+              shell.rstrip().splitlines()[-1] == 'main "$@"')
+        # The redeemed name must be the name the agent then reports (AgentConfig.MachineName,
+        # i.e. .NET's Environment.MachineName: the hostname up to the first dot).
+        check("...redeeming under the short hostname the agent will send",
+              'machine="${machine%%.*}"' in shell)
+        quoted = onboarding_web._sh_quote("it's")
+        check("_sh_quote closes, escapes and reopens a quote", quoted == "'it'\\''s'")
+        linux = info["linux_command"]
+        check("check hands the wizard the Linux one-liner for the same code",
+              f"'{HUB}/onboarding/run/{code}.sh'" in linux and linux.endswith("| sudo bash"))
+        # `curl ... || wget ...` would run wget after a curl that failed halfway, and bash
+        # would read the start of one download followed by all of the other.
+        check("...choosing curl or wget with if, never chaining them with ||",
+              linux.startswith("if command -v curl") and "||" not in linux)
+        with open(wizard_js, encoding="utf-8") as fh:
+            check("...and the wizard shows it as given",
+                  "linuxCommand.value = body.linux_command;" in fh.read())
+        check("a guessed code gets no Linux script",
+              c.get("/onboarding/run/ZZZZZZ.sh").status_code == 404)
+        installer = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 "agent-linux", "install", "install.sh")
+        with open(installer, encoding="utf-8") as fh:
+            check("install.sh knows an onboarding install needs no secret",
+                  '"${FLEETHUB_ONBOARDING:-}" == "1"' in fh.read())
+
         print("\n== Status, then redeem (what the script does) ==")
         reset_limits()
         check("status is 'waiting' before the script runs",

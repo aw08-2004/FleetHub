@@ -116,7 +116,8 @@
     "empty": "Nothing matches “{query}”.",
     "loading": "Loading devices…",
     "hint": "↑↓ move · ←→ choose a tab · Enter open · Esc close",
-    "action_overview": "Overview"
+    "action_overview": "Overview",
+    "action_remote": "Remote"
   },
   "device_groups": {
     "heading": "Device groups",
@@ -2758,7 +2759,7 @@
       "hint": "Enter runs · Shift+Enter for a new line · ↑/↓ history · Ctrl+L clears. Scripts run as SYSTEM. cd and variables persist; set a per-run timeout above.",
       "hint_old_streaming": "This machine reports agent v{version}. Live output and run_script need v{required} — it will refuse scripts until it self-updates. {base}",
       "hint_old_interactive": "This machine reports agent v{version}. A persistent shell (cd persistence, answering prompts) needs v{required}; until it self-updates, each command runs in a fresh process. {base}",
-      "hint_linux": "Linux machine: scripts run as root under bash (sh where bash is missing), one command per process -- cd and variables do not carry over, and there is no stdin. Enter runs · Shift+Enter for a new line · ↑/↓ history · Ctrl+L clears.",
+      "hint_linux": "Linux machine: scripts run as root under bash (sh where bash is missing), one command per process -- cd and variables do not carry over, and there is no stdin. Enter runs · Shift+Enter for a new line · ↑/↓ history · Ctrl+L clears. Linux agent 0.4.0 or later gives this machine a real interactive terminal.",
       "hint_linux_legacy": "This Linux machine runs agent v{version}, which is too old to report its platform or update itself -- re-run install.sh on it to move it to the current Linux agent. Scripts still run here as root under bash (sh where bash is missing), one command per process: cd and variables do not carry over, and there is no stdin.",
       "hint_no_scripts": "This machine reports that it cannot run scripts. That is a limit of its platform, not of its agent version, so an update will not change it.",
       "hint_no_scripts_android": "Android devices cannot run scripts -- there is no shell for an app to run one in. That is a limit of the platform, not of the agent version, so an update will not change it.",
@@ -3058,6 +3059,7 @@
       "favorite_pasted": "[favorite \"{name}\": {lines} lines pasted, the first {ran} ran as they arrived — the last is waiting for Enter]",
       "favorite_loaded": "[loaded favorite \"{name}\" — review it, then press Enter]",
       "hint": "Real consoles on the machine, running as SYSTEM. Enter, Ctrl-C, Tab completion and interactive prompts all work. Ctrl-Shift-C / Ctrl-Shift-V copy and paste (Ctrl-C is passed through to the shell). \"+\" opens another console (up to {max}); \"×\" or a middle-click on a tab ends one. Sessions survive leaving this page and are listed on every computer you sign in from — come back and your shells, working directories and scrollback are still there.",
+      "hint_linux": "Real terminals on the machine, running as root under bash (sh where bash is missing). Enter, Ctrl-C, Tab completion, full-screen programs like top and vim, and interactive prompts all work. Ctrl-Shift-C / Ctrl-Shift-V copy and paste (Ctrl-C is passed through to the shell). \"+\" opens another terminal (up to {max}); \"×\" or a middle-click on a tab ends one. Sessions survive leaving this page and are listed on every computer you sign in from — come back and your shells, working directories and scrollback are still there.",
       "clear_title": "Clear the front console's scrollback",
       "save_fav_title": "Save a script as a favorite (any selected text is used as a starting point)",
       "shell_title": "Shell used when you open another console with +"
@@ -5336,6 +5338,11 @@
       "code_label": "Onboarding code",
       "continue": "Continue",
       "install_for": "Code \"{label}\" is valid.",
+      "os_label": "Operating system of the machine you are setting up",
+      "os_windows": "Windows",
+      "os_linux": "Linux",
+      "linux_intro": "On the Linux machine, paste this command into a terminal. It asks for your password, then installs the agent and enrols the machine:",
+      "linux_hint": "If your account cannot use sudo, which is usual on OpenMediaVault, run su - first, then paste the command without the word sudo at the end. The installer needs systemd and a 64-bit Intel or AMD machine.",
       "install_intro": "Download the installer and open it. Windows asks for administrator rights; allow it. The window shows each step and ends with a success line.",
       "download": "Download installer",
       "download_hint": "If Windows warns that the file is unrecognised, choose More info, then Run anyway.",

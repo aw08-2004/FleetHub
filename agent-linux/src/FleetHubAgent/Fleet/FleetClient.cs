@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using FleetHubAgent.State;
 using FleetHub.Shared;
+using FleetHub.Shared.Pty;
 
 namespace FleetHubAgent.Fleet;
 
@@ -22,14 +23,12 @@ namespace FleetHubAgent.Fleet;
 /// answering with nonsense is a false return value here, never an exception.
 ///
 /// This is a deliberately SMALL subset of the Windows agent's FleetClient (which is ~1150
-/// lines): enroll, heartbeat, poll, result, and streamed command output. The rest of that
-/// surface -- the ConPTY terminal endpoints, package downloads, backup and BIOS reporting --
-/// backs features this agent does not implement, and every one of them is gated in the
-/// console behind a MIN_*_AGENT version this agent deliberately sits below (see
-/// AgentConfig.Version). Porting an endpoint before its feature exists would be dead code
-/// carrying a bearer token.
+/// lines): enroll, heartbeat, poll, result, streamed command output, and -- since 0.4.0 -- the
+/// three terminal endpoints behind shell_open. The rest of that surface (package downloads,
+/// backup and BIOS reporting) backs features this agent does not implement, and porting an
+/// endpoint before its feature exists would be dead code carrying a bearer token.
 /// </summary>
-public sealed class FleetClient : IDisposable, IOutputSink
+public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
 {
     private readonly ILogger<FleetClient> _log;
     private readonly AgentState _state;
@@ -400,6 +399,31 @@ public sealed class FleetClient : IDisposable, IOutputSink
             return false;
         }
     }
+
+    // ---------------------------------------------------------------- interactive terminal
+    // The three terminal requests are agent-shared/Pty/PtyProtocol.cs (PtyHttp), the same code
+    // the Windows agent runs: the URLs, the 404-means-gone rule and the input parse are the hub
+    // protocol. This client supplies its HttpClient and bearer token, and the enrolled check.
+
+    /// <summary>The shared terminal requests over this client. Built per call rather than once:
+    /// it costs one small object, and reading AgentConfig.HubBase each time keeps it honest if
+    /// the hub address is ever changed while the agent runs.</summary>
+    private PtyHttp Pty => new(_http, Authorized, AgentConfig.HubBase, _log);
+
+    public Task<PtyInputBatch> PullPtyInputAsync(string sessionId, int afterSeq, CancellationToken ct) =>
+        _identity.IsEnrolled
+            ? Pty.PullInputAsync(sessionId, afterSeq, ct)
+            : Task.FromResult(new PtyInputBatch(false, Array.Empty<PtyInputItem>(), afterSeq, false, false));
+
+    public Task<bool> PostPtyOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct) =>
+        _identity.IsEnrolled
+            ? Pty.PostOutputAsync(sessionId, seq, chunk, ct)
+            : Task.FromResult(false);
+
+    public Task ReportPtyClosedAsync(string sessionId, string reason, CancellationToken ct) =>
+        _identity.IsEnrolled
+            ? Pty.ReportClosedAsync(sessionId, reason, ct)
+            : Task.CompletedTask;
 
     private HttpRequestMessage Authorized(HttpMethod method, string url)
     {

@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.168.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.169.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -245,6 +245,50 @@ month of rows rewritten on a production hub's self-update for an empty chart.
   serial, model and OS, shows no temperature, and the agent log says *No CPU temperature
   sensor* once, not every five seconds. A PC with a sensor reports exactly as before.
 - [ ] **Translations.** *Machine not found* reads correctly in German and Spanish.
+
+**Hub 1.169.0 + Linux agent 0.4.0: a real terminal on Linux, Remote from Ctrl+K, Linux
+onboarding** (onboarding: see #29, *Built · hub 1.169.0*). Asked for
+2026-10-27: openmediavault's Terminal tab was still the one-shot `run_script` box, and so was
+the never-reported Windows Sandbox `035A185C-668A-4`. The Linux agent now answers `shell_open`
+on a Unix pty (posix_spawn with setsid and the slave opened by path, so the shell gets a
+controlling terminal without a managed-code fork). The console switches a Linux machine over
+when its capability report lists `shell_open`, not on a version, because the Linux train is
+0.x. A machine with no reported version at all now gets the real console instead of the line
+terminal. Rejected: `script(1)` as the pty owner (no resize, ever) and `forkpty` from .NET
+(unsafe fork of a multithreaded runtime), recorded in `UnixPty.cs`. Checked before merge: the
+pty on Ubuntu under WSL (controlling tty, Ctrl-C, resize, quiet broken pipe, `exit`, job
+control, no stray processes after hang-up).
+- [ ] **Sandbox console.** After the beta hub updates, `035A185C-668A-4`'s Terminal tab shows
+  the console tab strip and a `PS C:\Windows\system32>` prompt, not the *Connected to …* line
+  terminal. (If the Sandbox is gone, any enrolled machine with an empty *Agent* column.)
+- [ ] **Linux, old agent.** openmediavault on 0.3.0 still shows the one-shot box, and its hint
+  ends by naming Linux agent 0.4.0.
+- [ ] **Linux terminal** (needs Linux 0.4.0 beta, *Owed locally* item 19). On openmediavault the
+  tab opens a bash prompt as root. Check: `top` fills the window and follows a browser resize;
+  `sleep 60` stops on Ctrl-C; Tab completes a path; `apt install` answers its Y/n; a second
+  tab with **+**; leave the page and come back to the same shell; `exit` strikes the tab through.
+  Close a tab running `ping 1.1.1.1` and confirm on the box (`ps aux | grep ping`) that nothing
+  survives.
+- [ ] **Remote from Ctrl+K.** Ctrl+K, pick a Windows PC, → to **Remote**, Enter: the Remote page
+  opens with that PC connecting. openmediavault and the phones have no Remote action. An
+  operator without `remote_control` sees no Remote action on any row.
+- [ ] **Remote button.** A machine page's **Remote** button lands on that PC connecting, not on
+  an empty picker.
+- [ ] **Linux onboarding** (works with the released Linux 0.3.0; the terminal box above needs
+  0.4.0). Mint a code, open `/onboarding?code=…` from a Windows browser, switch to **Linux**,
+  and paste the line on a Linux box that has never had the agent: it installs, enrols, and the
+  wizard reaches *online*. `/var/lib/fleethub/agent/agent.json` is `-rw------- root`, and the
+  Onboarding list shows the box under the code. Run the same line again with a used code: it
+  says *invalid or has expired* and changes nothing. On OpenMediaVault, `su -` and the line
+  without `sudo` works too.
+- [ ] **Windows terminal unchanged** (next Windows agent beta). Its terminal now runs on the
+  shared `agent-shared/Pty` runner. That is a move, not a change, but it is the code every PC
+  console goes through. Open two consoles, answer a `Read-Host`, Ctrl-C a `ping -t`, resize,
+  leave the page and come back, and close a tab: nothing differs from 3.48.x.
+- [ ] **Wizard guess.** Opened from a Linux desktop browser the wizard starts on **Linux**, and
+  from Windows or a phone it starts on **Windows**.
+- [ ] **Translations.** *Remote* in the palette, the Linux terminal hints and the wizard's
+  Windows/Linux switch read correctly in German and Spanish.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -641,6 +685,15 @@ with that version, the asset url and `--manifest <agent>/manifests/<version>.jso
 1.168.0 first, then the Windows agent beta that carries it. It can ride the 3.49.0 beta in
 item 17: the change is in `Worker.TelemetryLoopAsync`, and the hub does not gate on it, so it
 needs no version constant of its own. Then the *VM reports* box in the beta list above.
+
+**19. The Linux terminal rides Linux 0.4.0, owed on the machine with the signing key.** Hub
+1.169.0 first, then the **Linux 0.4.0** beta from item 17, which now carries `shell_open` too
+(`agent-linux/release.ps1 -Version 0.4.0 -Channel beta -NotesFile .\release-notes\0.4.0.md`;
+the notes cover items 8, 10, 17 and this). Nothing in the hub names a version for it: the
+console reads `shell_open` from the capability report, so a different version number needs no
+hub change. Then the *Linux terminal* box in the beta list above. The agent's real-pty tests
+(`UnixPtyTests`) return early on Windows, so they ran only through a WSL harness. Run
+`dotnet test agent-linux/FleetHubAgent.slnx` once on a Linux box with the SDK.
 
 ---
 
@@ -4827,7 +4880,19 @@ access", and deleting the invite would take the answer with it.
 **Open parameters.** Whether a redemption should notify the admin who created the invite —
 today the audit trail is the only signal. Whether an invite should be able to name a
 directory group instead of an email, for the tenant that would rather not maintain either.
-## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0
+## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0
+
+> **Update (2026-10-27, hub 1.169.0) -- the PTY terminal is built**, unreleased until Linux
+> 0.4.0 (*Owed locally* item 19). `Fleet/Shell/UnixPty.cs` opens a Unix pty and starts a login
+> shell with `posix_spawn` (`POSIX_SPAWN_SETSID`, then the slave opened by path onto fd 0, so it
+> becomes the controlling terminal). It is not `forkpty`, which item 5 below assumed: forking a
+> multithreaded .NET runtime from managed code is unsafe. The runner, registry, hub calls,
+> timings and the shell_open body are `agent-shared/Pty/`, compiled into the Windows agent as
+> well (the Windows agent moved onto it in the same change, with no behaviour change; its 747
+> tests pass). A port was the first version, and SonarCloud's duplication gate refused it:
+> two copies of the hub protocol would let a cursor bug fixed on one platform survive on the
+> other. Only the pty is per agent. The console switches on `shell_open` in the capability report, not on
+> `MIN_PTY_AGENT`. Still 🚧 for patch install and process end/restart.
 
 > **Status update (2026-09-30) — supersedes the opening below and *The manifest is not in the
 > repo*.** `0.3.0` was cut through `release.ps1` (`2afb06d`) with `agent-linux.manifest.json` and
@@ -5072,7 +5137,9 @@ is cut. Neither needed a hub change beyond the patch sources named below.
    Owed: the Linux agent release (see *The manifest is not in the repo* above -- this rides
    the same cut), and a look at the card against a real distribution with systemd, where the
    services column fills in.
-5. **PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` in place of ConPTY.
+5. ~~**PTY terminal** (`MIN_PTY_AGENT` 3.15.0) — `forkpty` in place of ConPTY.~~ Built for
+   0.4.0 with `posix_spawn` rather than `forkpty`, and gated on the capability report rather
+   than `MIN_PTY_AGENT` -- see the 2026-10-27 update at the top of this entry.
 6. GPU and fan sensors. Remote view/control (#2) is a long way off and may never be worth it.
 
 **Known limitation, now fixed.** The volume walk used `DriveInfo.GetDrives()`, which
@@ -6333,6 +6400,27 @@ other PC. `/api/report` also took telemetry from anything under any machine name
 closes both gaps. Hub and agents ship together, with enrolled-only telemetry **off** until the
 agents have updated. The Windows and Linux agents get a MINOR release that the hub does not
 gate on; the Android agent's release is owed locally (item 8).
+
+### Built · hub 1.169.0 -- Linux machines onboard with a code too
+Asked for 2026-10-27. The wizard's install step has a **Windows / Linux** switch, guessed from
+the browser but chosen by the person, because a headless server is usually set up from another
+computer. Linux gets one line (`onboarding_web.linux_command`):
+`if command -v curl …; then curl -fsSL '<hub>/onboarding/run/<code>.sh'; else wget -qO- …; fi | sudo bash`.
+`/onboarding/run/<code>.sh` is `templates/onboarding/onboard.sh`, rendered per code like the
+`.ps1`, and it mirrors that script step for step. It runs `agent-linux/install/install.sh` with
+no secret, which keeps the signed-manifest check. Only after that succeeds does it redeem under
+the short hostname (the name `AgentConfig.MachineName` reports) with the DMI serial. It then
+writes `agent.json` 0600 through `install(1)`, keeps any previous one, and restarts the unit.
+**No agent change was needed**, for the reason the 1.144.0 design gives: an agent that finds
+`agent.json` is enrolled. `install.sh` reads `FLEETHUB_ONBOARDING=1` so it stops ending on its
+TELEMETRY ONLY banner. It is an environment variable and not a flag because the script fetches
+`install.sh` from `main`, where an older copy dies on an unknown flag but ignores an unknown
+variable. Until that reaches `main`, the banner still prints, and the script says it is expected.
+*Rejected:* `curl … || wget …` (a curl that fails halfway would have bash read two scripts
+spliced together); saving the script to a file first, as Windows does (no antivirus heuristic
+to step around and no per-user folder to race: `main()` plus the pipe already guarantee a
+truncated download runs nothing). Checked in WSL against a stub hub: curl and wget, redeemed
+and refused, re-onboarding, a failed install that must not redeem, and a truncated download.
 
 ### Built · hub 1.144.0
 - **Administration → Onboarding** (`/onboarding-codes`, new capability **`manage_onboarding`**).

@@ -1124,12 +1124,36 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         # is offline and never will" without this: a shell_open that expired means the
         # machine never picked it up.
         if body["status"] == terminal.STATUS_OPEN and found.get("command_id"):
-            command = fleet.get_command(db_path, found["command_id"])
-            if command and command["status"] == fleet.STATUS_EXPIRED:
-                terminal.finish_session(db_path, found["id"], "the agent never picked it up")
+            reason = _never_attached(fleet.get_command(db_path, found["command_id"]))
+            if reason:
+                terminal.finish_session(db_path, found["id"], reason)
                 body["status"] = terminal.STATUS_CLOSED
-                body["close_reason"] = "the agent never picked it up"
+                body["close_reason"] = reason
         return jsonify(body), 200
+
+    def _never_attached(command):
+        """Why a session still `open` never will attach, or None while it still might.
+
+        Expired is the machine never picking the command up. FINISHED while the session is
+        still open is the other case, added in hub 1.169.0: the agent claimed shell_open and
+        answered without ever attaching -- an agent too old to know the command ("unknown
+        command type"). That became reachable when a machine with no reported version began
+        getting the real console instead of the line terminal, and without this the console
+        sat at Connecting forever. The agent's own answer is shown, because it says why.
+        A terminal that did attach is not `open` by then: its first output marks it live
+        (terminal.push_output), and every way the agent ends a session reports it closed
+        BEFORE the command completes. If that report was lost, closing here with the
+        command's own answer is the right outcome anyway.
+        """
+        if not command:
+            return None
+        if command["status"] == fleet.STATUS_EXPIRED:
+            return "the agent never picked it up"
+        if command["status"] in (fleet.STATUS_FAILED, fleet.STATUS_DONE):
+            said = ((command.get("result") or {}).get("output") or "").strip().splitlines()
+            return ("the agent did not open a terminal: " + said[0][:200]) if said else \
+                "the agent did not open a terminal"
+        return None
 
     @bp.route("/api/fleet/pty/<session_id>/clear", methods=["POST"])
     @login_required

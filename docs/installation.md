@@ -8,8 +8,8 @@ Service, the PawnIO sensor driver, and SCM failure-recovery for self-updates).
 
 ### Onboarding a PC with a code (no enrollment secret)
 
-A Windows PC can enrol itself without the fleet-wide `AGENT_ENROLLMENT_SECRET`
-(roadmap #29):
+A Windows PC or a Linux machine can enrol itself without the fleet-wide
+`AGENT_ENROLLMENT_SECRET` (roadmap #29):
 
 1. In the console, **Administration → Onboarding → New code**. Give it a label, pick how
    long it lasts (1 hour, 1 day or 7 days), and copy the six-character code or the link.
@@ -26,6 +26,21 @@ Administrators. Each code works once. The Onboarding list shows which machine us
 from which IP. **Revoke** on a used code also revokes that machine's agent.
 
 `HUB_URL` must be the hub's public `https://` address; the script refuses anything else.
+
+**A Linux machine onboards the same way** (hub 1.169.0). After step 2, pick **Linux** on the
+install step (the page guesses from the browser, but a headless server is usually set up from
+another computer). Paste the one-line command it shows into a terminal on the machine:
+
+```
+if command -v curl >/dev/null; then curl -fsSL '<hub>/onboarding/run/<CODE>.sh'; else wget -qO- '<hub>/onboarding/run/<CODE>.sh'; fi | sudo bash
+```
+
+It installs the agent with `agent-linux/install/install.sh`, which checks the build against the
+fleet's signed Linux manifest. Only when that succeeds does it spend the code, and it writes
+the machine's credential to `/var/lib/fleethub/agent/agent.json` (0600, root). An account that
+is not in sudoers (usual on OpenMediaVault) runs `su -` first and drops the `sudo`. The machine
+is enrolled under its hostname up to the first dot, which is the name the agent reports. The
+same requirements as a technician's install apply: x86-64, glibc, systemd and OpenSSL 3.
 
 ### Telemetry only from enrolled agents
 

@@ -120,7 +120,63 @@
     resize: vertical;
 }
 
+/* Windows / Linux (hub 1.169.0): real radio inputs inside labels, drawn as the two halves of
+   one control so it reads as "which one" rather than as two actions. The input stays in the
+   layout but invisible, so the keyboard, a screen reader and a click on the label all work the
+   way a radio group does, and the checked half is styled from :checked -- the state and the
+   look cannot disagree. */
+.onboarding-os {
+    display: flex;
+    margin: 0 0 var(--space-4);
+    padding: 0;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.onboarding-os__legend {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+}
+
+.onboarding-os__choice {
+    flex: 1;
+    position: relative;
+    padding: var(--space-2) var(--space-3);
+    text-align: center;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.onboarding-os__choice + .onboarding-os__choice {
+    border-left: 1px solid var(--card-border);
+}
+
+.onboarding-os__choice input {
+    position: absolute;
+    opacity: 0;
+    inset: 0;
+    margin: 0;
+    cursor: pointer;
+}
+
+.onboarding-os__choice:has(input:checked) {
+    background: var(--accent-fill);
+    color: var(--accent-contrast);
+    font-weight: 600;
+}
+
+.onboarding-os__choice:has(input:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
 /* components.css is not loaded on the public page, so its one plain button is styled here. */
+#install-linux .btn,
 .onboarding-alt .btn {
     background: var(--surface);
     color: var(--text);

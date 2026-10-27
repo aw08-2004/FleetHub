@@ -82,6 +82,7 @@ public static class AgentConfig
     public static string CommandOutputUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/output";
 
+
     /// <summary>
     /// Does <paramref name="url"/> actually address OUR hub?
     ///
@@ -151,6 +152,7 @@ public static class AgentConfig
 
     /// <summary>Default per-command timeout when the console does not send one.</summary>
     public const int DefaultCommandTimeoutSeconds = 600;
+
 
     // --- Live output streaming ---------------------------------------------
     // The Windows agent's three constants, unchanged and for the same reasons. They are sized

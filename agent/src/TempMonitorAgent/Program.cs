@@ -5,6 +5,7 @@ using TempMonitorAgent.Bios;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Executors;
 using TempMonitorAgent.Fleet.Shell;
+using FleetHub.Shared.Pty;
 using TempMonitorAgent.Files;
 using TempMonitorAgent.Network;
 using TempMonitorAgent.Remote;
