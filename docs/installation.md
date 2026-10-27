@@ -295,14 +295,14 @@ is the release, and the hub never updates itself.
 
 The hub also ships as a public container image, `ghcr.io/aw08-2004/fleethub`, built
 by `.github/workflows/hub-image.yml` on every push to `main` that touches `hub/`. It is public,
-like the repository it is built from, so the hub host needs no `docker login`.
+like the repository it is built from, so the hub host needs no `docker login`. It runs on
+Docker Engine (Linux) or Docker Desktop (Windows). Agents need no change as long as the
+public `HUB_URL` stays the same: they know only that URL and pin no certificate.
 
 Until 2026-10-27 the image was `ghcr.io/aw08-2004/temp_monitor-hub`. Every tag is still
 pushed under that name too, so a host on an older `compose.yaml` keeps updating, but change
 its `image:` line to `fleethub` the next time you touch it — the old name is a mirror that
-will be retired. It runs on
-Docker Engine (Linux) or Docker Desktop (Windows). Agents need no change as long as the
-public `HUB_URL` stays the same: they know only that URL and pin no certificate.
+will be retired.
 
 Start from the template beside the compose file, fill in the required values, then start:
 
