@@ -15,6 +15,10 @@ Flask-SocketIO
 # `wmi` used to sit beside this and was dropped: nothing in hub/ ever imported it, but the
 # import at module scope made every module that imports app.py Windows-only.
 pywin32; sys_platform == "win32"
+# The server. cheroot runs new installs (serve.py: HTTPS on 29443 -- waitress cannot do TLS);
+# waitress stays because every hub installed before 1.170.0 still launches `waitress-serve`
+# from its WinSW service, and a self-update never rewrites that service definition.
+cheroot
 waitress
 # Backup encryption (AES-256-GCM). Authlib already depends on it, so this is a newly
 # explicit requirement rather than a new download -- but backups.py must not be at the

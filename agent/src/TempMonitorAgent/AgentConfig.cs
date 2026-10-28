@@ -29,7 +29,7 @@ public static class AgentConfig
 
     // --- Hub endpoints -----------------------------------------------------
     // Base URL is overridable via FLEETHUB_HUB (legacy: TEMP_MONITOR_HUB) for local
-    // testing (e.g. http://localhost:3001).
+    // testing (e.g. https://localhost:29443).
     public static string HubBase =>
         (Env("HUB", "HUB") ?? "https://your.hub.url").TrimEnd('/');
 

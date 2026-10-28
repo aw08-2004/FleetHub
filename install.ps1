@@ -60,8 +60,16 @@ param(
     [switch]$SkipDefenderExclusion,
 
     # --- Hub ---
-    [int]$HubPort = 3001,
+    # 29443 and HTTPS since hub 1.170.0 (hub/serve.py says why; 3001 is IANA-assigned to
+    # another product). Applies to a NEW hub, or to an existing one with -MigrateHubServer --
+    # a re-install over a hub still on waitress/3001 keeps that server and port unless asked.
+    [int]$HubPort = 29443,
     [string]$HubInstallDir,
+    [switch]$MigrateHubServer,
+    # Operator certificate (PEM) for the hub's HTTPS listener; copied to <hub>\tls\. Without
+    # them the hub generates a self-signed pair there on first start.
+    [string]$HubTlsCert,
+    [string]$HubTlsKey,
 
     # --- TURN relay (coturn in a dedicated WSL2 distro) ---
     # Used by -Component Turn, and by -Component Hub when the hub also hosts the relay.
@@ -2427,11 +2435,55 @@ function Install-Hub {
     $turnDistroExists   = $turnPlan.DistroExists
     $turnNeedsWslConfig = $turnPlan.NeedsWslConfig
 
+    # Which server this hub runs, decided BEFORE .env is rewritten because the answer decides
+    # which keys go into it. A hub whose existing service still launches waitress stays on
+    # waitress, on the port its service already has: moving it to HTTPS on 29443 also needs the
+    # tunnel/proxy origin changed at the same moment, and a re-install run to fix something
+    # unrelated must not take the console dark. -MigrateHubServer is that deliberate move.
+    $legacyHubExec = $null
+    $legacyHubArgs = $null
+    $priorXml = Join-Path $hubDir "$HubServiceId.xml"
+    if ((Test-Path $priorXml) -and -not $MigrateHubServer) {
+        try {
+            $prior = [xml](Get-Content -LiteralPath $priorXml -Raw)
+            if ("$($prior.service.executable) $($prior.service.arguments)" -match 'waitress') {
+                $legacyHubExec = [string]$prior.service.executable
+                $legacyHubArgs = [string]$prior.service.arguments
+                if ($legacyHubArgs -match '--port=(\d+)') { $HubPort = [int]$Matches[1] }
+            }
+        } catch {
+            Warn "Could not read the existing service definition ($($_.Exception.Message)); installing the current server."
+        }
+    }
+    $hubTls = -not $legacyHubExec
+
+    if ($hubTls -and ($HubTlsCert -or $HubTlsKey)) {
+        if (-not ($HubTlsCert -and $HubTlsKey)) { Die "-HubTlsCert and -HubTlsKey go together; pass both or neither." }
+        foreach ($f in @($HubTlsCert, $HubTlsKey)) {
+            if (-not (Test-Path -LiteralPath $f)) { Die "Certificate file not found: $f" }
+        }
+        # Copied to the default paths rather than referenced where they lie: the hub then needs
+        # no extra .env keys, and a later move or cleanup of the operator's source folder cannot
+        # break the listener. serve.py never overwrites a pair that is already there.
+        $tlsDir = Join-Path $hubDir "tls"
+        if (-not (Test-Path $tlsDir)) { New-Item -ItemType Directory -Path $tlsDir -Force | Out-Null }
+        Copy-Item -LiteralPath $HubTlsCert -Destination (Join-Path $tlsDir "hub.crt") -Force
+        Copy-Item -LiteralPath $HubTlsKey  -Destination (Join-Path $tlsDir "hub.key") -Force
+        Ok "Installed the operator certificate into $tlsDir"
+    }
+
     $lines = @(
         "FLASK_SECRET_KEY=$flaskSecret"
         "ALLOWED_EMAILS=$allowedEmails"
         "HUB_URL=$hubUrlValue"
     )
+    if ($hubTls) {
+        $lines += "FLEETHUB_PORT=$HubPort"
+        # Operator-set certificate paths survive a re-install, like SESSION_LIFETIME_DAYS below.
+        foreach ($k in @("FLEETHUB_TLS_CERT", "FLEETHUB_TLS_KEY")) {
+            if ($existing[$k]) { $lines += "$k=$($existing[$k])" }
+        }
+    }
     # Only write the keys that were actually configured. A blank GOOGLE_CLIENT_ID= line
     # would read as "Google is configured" to a naive check; the hub tests for a non-empty
     # value, but leaving the key out entirely is what makes the .env honest about what
@@ -2523,15 +2575,20 @@ print("ok")
     # default 8 -- and that cap only means anything if the pool it is drawn from has room to
     # spare. Hence 128 rather than 32: it is what makes raising that setting toward the size
     # of a real fleet a supported thing to do rather than a way to hang the console.
+    #
+    # Since hub 1.170.0 the server is cheroot via hub\serve.py, which serves HTTPS and carries
+    # the same 128 as its THREADS constant -- this comment is still where the number is
+    # explained. A hub kept on waitress (see $legacyHubExec above) is re-registered with its
+    # own command line, byte for byte.
     $HubThreads  = 128
-    $scriptsDir  = Join-Path (Split-Path $pythonExe -Parent) "Scripts"
-    $waitressExe = Join-Path $scriptsDir "waitress-serve.exe"
-    if (Test-Path $waitressExe) {
-        $hubExec = $waitressExe
-        $hubArgs = "--host=0.0.0.0 --port=$HubPort --threads=$HubThreads wsgi:application"
+    if ($legacyHubExec) {
+        $hubExec = $legacyHubExec
+        $hubArgs = $legacyHubArgs
+        Say "Keeping this hub on its current server (waitress, port $HubPort, plain HTTP)."
+        Say "To move it to HTTPS on 29443, re-run with -MigrateHubServer and change the tunnel/proxy origin with it."
     } else {
         $hubExec = $pythonExe
-        $hubArgs = "-m waitress --host=0.0.0.0 --port=$HubPort --threads=$HubThreads wsgi:application"
+        $hubArgs = "serve.py"
     }
 
     # Retire the legacy scheduled task if this box predates the service, so the two don't
@@ -2561,7 +2618,7 @@ print("ok")
 <service>
   <id>$HubServiceId</id>
   <name>$HubServiceName</name>
-  <description>FleetHub hub (Flask/Socket.IO via waitress).</description>
+  <description>FleetHub hub (Flask/Socket.IO via $(if ($hubTls) { 'cheroot, HTTPS' } else { 'waitress' })).</description>
   <executable>$([System.Security.SecurityElement]::Escape($hubExec))</executable>
   <arguments>$([System.Security.SecurityElement]::Escape($hubArgs))</arguments>
   <workingdirectory>$([System.Security.SecurityElement]::Escape((Join-Path $hubDir $HubCodeSubdir)))</workingdirectory>
@@ -2584,18 +2641,38 @@ print("ok")
 
     Step "Starting hub"
     Say "Waiting for the hub to respond..."
-    $live = $false
-    foreach ($i in 1..20) {
-        Start-Sleep -Seconds 1
-        try {
-            Invoke-WebRequest -Uri "http://localhost:$HubPort/" -UseBasicParsing -TimeoutSec 2 | Out-Null
-            $live = $true
-            break
-        } catch {
-            if ($_.Exception.Response) { $live = $true; break }
+    $hubScheme = if ($hubTls) { "https" } else { "http" }
+    $localHubUrl = "${hubScheme}://localhost:$HubPort/"
+    # The probe has to accept the hub's self-signed certificate, and the two PowerShells need
+    # two different switches for that: 7+ has -SkipCertificateCheck (and ignores
+    # ServicePointManager entirely), 5.1 has only the process-wide callback, which is restored
+    # afterwards so nothing later in this run inherits "trust everything". The first serve.py
+    # start also generates the certificate, hence the longer wait.
+    $probeArgs = @{ Uri = $localHubUrl; UseBasicParsing = $true; TimeoutSec = 2 }
+    $savedCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+    if ($hubTls) {
+        if ($PSVersionTable.PSVersion.Major -ge 6) { $probeArgs.SkipCertificateCheck = $true }
+        else {
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
         }
     }
-    if ($live) { Ok "Hub responding on http://localhost:$HubPort/" }
+    $live = $false
+    try {
+        foreach ($i in 1..30) {
+            Start-Sleep -Seconds 1
+            try {
+                Invoke-WebRequest @probeArgs | Out-Null
+                $live = $true
+                break
+            } catch {
+                if ($_.Exception.Response) { $live = $true; break }
+            }
+        }
+    } finally {
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $savedCallback
+    }
+    if ($live) { Ok "Hub responding on $localHubUrl" }
     else { Warn "No response yet on port $HubPort -- check 'Get-Service $HubServiceId' and $hubDir\$HubServiceId.wrapper.log." }
 
     # ---- Bring up the coturn TURN server (roadmap #2) ----
@@ -2627,8 +2704,9 @@ print("ok")
 
   Done.
 
-  Hub URL (local) : http://localhost:$HubPort/
+  Hub URL (local) : $localHubUrl
   Hub URL (public): $hubUrlValue
+  Proxy origin    : $(if ($hubTls) { "https://<this host>:$HubPort  (self-signed unless you supplied -HubTlsCert; tunnel: No TLS Verify, nginx: proxy_ssl_verify off)" } else { "http://<this host>:$HubPort" })
   Location        : $hubDir
   Config          : $envPath
   Service         : $HubServiceName  (Get-Service $HubServiceId)

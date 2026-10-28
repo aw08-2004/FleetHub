@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.169.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.170.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -307,6 +307,24 @@ control, no stray processes after hang-up).
   from Windows or a phone it starts on **Windows**.
 - [ ] **Translations.** *Remote* in the palette, the Linux terminal hints and the wizard's
   Windows/Linux switch read correctly in German and Spanish.
+
+**Hub 1.170.0: new installs serve HTTPS on 29443 (cheroot), existing hubs stay on 3001**
+(*Hub listener moved to HTTPS on 29443* below; *Owed locally* item 20)
+- [ ] **Existing hub untouched.** The beta hub self-updates to 1.170.0 and is still on waitress
+  and 3001: `FleetHub.xml` unchanged, the tunnel still works, `pip show cheroot` shows it was
+  installed alongside.
+- [ ] **Fresh install.** `install.ps1 -Component Hub` on a clean VM: the service runs
+  `python.exe serve.py`, the probe reports `https://localhost:29443/`, and `tls\hub.crt` /
+  `hub.key` exist with only SYSTEM and Administrators on the folder.
+- [ ] **Re-install keeps the server.** Re-running the installer over the beta hub prints
+  *Keeping this hub on its current server* and leaves it on 3001.
+- [ ] **Migration.** `-MigrateHubServer` on a test hub, with the Cloudflare tunnel origin
+  switched to `https://localhost:29443` + No TLS Verify: sign-in, a console tab's live
+  updates, a terminal, a file pull over 100 MB and Remote all work.
+- [ ] **Own certificate.** `-HubTlsCert` / `-HubTlsKey` with a real PEM pair: the hub serves
+  it (check the fingerprint in a browser on the origin), and a restart does not replace it.
+- [ ] **Docker.** An existing compose deployment pulls `beta` and still answers on 3001; a new
+  one from `example.env` answers `https://127.0.0.1:29443/` and the container reports healthy.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -712,6 +730,49 @@ console reads `shell_open` from the capability report, so a different version nu
 hub change. Then the *Linux terminal* box in the beta list above. The agent's real-pty tests
 (`UnixPtyTests`) return early on Windows, so they ran only through a WSL harness. Run
 `dotnet test agent-linux/FleetHubAgent.slnx` once on a Linux box with the SDK.
+
+**20. The hub's HTTPS listener needs a real Windows install.** Hub 1.170.0's `serve.py` was
+run and tested on the development PC, but the installer's service path was only parsed, not
+run: a fresh install on a clean VM, a re-install over a waitress hub, and `-MigrateHubServer`
+with the tunnel switched. Then the *Hub 1.170.0* boxes in the beta list above.
+
+---
+
+## 🚧 Hub listener moved to HTTPS on 29443   ·   hub 1.170.0 (new installs only)
+
+**Why.** The hub listened on plain HTTP on 3001, which IANA assigns to `origo-native`
+(OrigoDB). The new port was chosen against the IANA service-name and port-number registry
+(CSV, 2026-10-28): **29443** sits inside **29170-29998**, the largest unassigned block in the
+registered range with no "unauthorized use" note, clear of the Windows ephemeral range
+(49152+), of Windows' excluded port ranges on the dev PC, and of the TURN relay's ports. At
+the same time the hub now serves **HTTPS itself**, so the tunnel's or proxy's hop to it is
+encrypted too, not only the public side.
+
+**How.** `hub/serve.py` runs cheroot with its built-in ssl adapter: the same 128-thread pool,
+a 120 s socket timeout and the 1 GB body cap waitress used to impose without anyone choosing
+it. `hub/tls.py` generates a self-signed EC certificate on first start under `<state>/tls/`
+and never overwrites an existing pair, so an operator's own PEM (`-HubTlsCert` / `-HubTlsKey`,
+or `FLEETHUB_TLS_CERT` / `FLEETHUB_TLS_KEY`) is safe.
+
+**New installs only.** A self-update never rewrites the WinSW service, so existing hubs keep
+`waitress-serve --port=3001`, and waitress stays in `requirements.txt` for them. A re-install
+over such a hub keeps it as well; `install.ps1 -MigrateHubServer` is the deliberate move,
+because it has to happen together with the tunnel/proxy origin change. The Docker image
+defaults to the old 3001/plain listener for the same reason, since a pull replaces the image
+but not the operator's `.env`; `example.env` opts new deployments in.
+
+**Rejected.**
+- *A bundled Caddy/nginx in front of a loopback-only waitress.* That is a second service to
+  install, update and supervise on Windows, plus a sidecar in Docker, for what one in-process
+  ssl adapter does.
+- *Moving every hub on update.* The console would go dark until someone changed the tunnel.
+- *3001 as it was.* It is assigned to another product.
+- *29170, the start of the free block.* Rejected for 29443, whose suffix says HTTPS, now that
+  the hub really serves it.
+- *Generating the certificate with `New-SelfSignedCertificate`.* It is Windows-only and
+  exports PFX, which cheroot cannot load without openssl.
+
+**Still open:** the Windows installer path (*Owed locally* item 20) and the beta boxes above.
 
 ---
 

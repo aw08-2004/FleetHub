@@ -39,10 +39,15 @@ services:
       # 10001.
       - fleethub-state:/state
     ports:
-      # Loopback only: TLS is terminated in front of the hub (Cloudflare tunnel, nginx), and
-      # ProxyFix trusts exactly one hop. Publish on 0.0.0.0 only if that proxy is on another
-      # host.
-      - "127.0.0.1:3001:3001"
+      # Loopback only: the public TLS is terminated in front of the hub (Cloudflare tunnel,
+      # nginx), and ProxyFix trusts exactly one hop. Publish on 0.0.0.0 only if that proxy is
+      # on another host.
+      #
+      # The port follows FLEETHUB_PORT from .env. example.env sets 29443 with FLEETHUB_TLS=1
+      # (the hub then serves HTTPS to the proxy too, hub 1.170.0+); a .env written before that
+      # has neither key, so it falls back to 3001 and plain HTTP -- the image's own default --
+      # and an existing deployment is not moved by pulling this file.
+      - "127.0.0.1:${FLEETHUB_PORT:-3001}:${FLEETHUB_PORT:-3001}"
     # Uncomment on a LINUX host (and drop `ports:`) if the hub must send Wake-on-LAN packets
     # itself. On the default bridge network the hub is never on a target's subnet, so only
     # the agent-relayed wake works -- which is the primary path anyway. Docker Desktop's

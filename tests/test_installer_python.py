@@ -202,21 +202,25 @@ Get-PythonCandidates | ForEach-Object {{ "CAND: $($_.Exe)" }}
           exes[0] in got and exes[1] in got)
 
     # Test-ExistingHubBitness walks from <executable> to the python.exe beside it, or one level
-    # up for Scripts\waitress-serve.exe -- the two shapes install.ps1 writes.
+    # up for Scripts\waitress-serve.exe -- the shapes install.ps1 writes: waitress-serve on a
+    # hub installed before 1.170.0, python.exe + serve.py since.
     hub = os.path.join(work, "hub")
     os.makedirs(os.path.join(hub, "Scripts"), exist_ok=True)
     open(os.path.join(hub, "python.exe"), "w").close()
-    with open(os.path.join(hub, "FleetHub.xml"), "w", encoding="utf-8") as fh:
-        fh.write(f"<service><executable>{os.path.join(hub, 'Scripts', 'waitress-serve.exe')}"
-                 "</executable></service>")
-    for bits, loud in ((32, True), (64, False)):
-        out = run(shell, work, f"""
+    shapes = (("waitress-serve", os.path.join(hub, "Scripts", "waitress-serve.exe")),
+              ("python.exe serve.py", os.path.join(hub, "python.exe")))
+    for shape, exe in shapes:
+        with open(os.path.join(hub, "FleetHub.xml"), "w", encoding="utf-8") as fh:
+            fh.write(f"<service><executable>{exe}</executable></service>")
+        for bits, loud in ((32, True), (64, False)):
+            out = run(shell, work, f"""
 function Get-PythonBits($Exe, $PyArgs) {{ {bits} }}
 Test-ExistingHubBitness '{hub}'
 "DONE"
 """, fakes=False)
-        check(f"{tag}: a reinstall over a {bits}-bit service is {'loud' if loud else 'quiet'}",
-              "DONE" in out and (("running 32-bit Python" in out) == loud))
+            check(f"{tag}: a reinstall over a {bits}-bit {shape} service is "
+                  f"{'loud' if loud else 'quiet'}",
+                  "DONE" in out and (("running 32-bit Python" in out) == loud))
 
 
 def main():
@@ -234,6 +238,12 @@ def main():
     hub = src.split("function Install-Hub", 1)[1].split("\nfunction ", 1)[0]
     check("the hub install checks the existing service's bitness",
           "Test-ExistingHubBitness" in hub)
+    # A re-install run to fix something unrelated must not move a waitress/3001 hub to HTTPS
+    # on 29443 behind the operator's back: the tunnel still dials the old origin.
+    check("a hub still on waitress keeps its server unless -MigrateHubServer",
+          "-not $MigrateHubServer" in hub and "$legacyHubArgs" in hub
+          and "$hubArgs = $legacyHubArgs" in hub)
+    check("a new hub runs serve.py", '$hubArgs = "serve.py"' in hub)
 
     found = shells()
     if not found:

@@ -25,7 +25,7 @@ SESSION_LIFETIME_DAYS=7                 # optional; see "Staying signed in" belo
 **Google.** In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
 create an **OAuth 2.0 Client ID** (Application type: Web application) and add the
 redirect URI `https://your.domain.com/auth/callback` (plus
-`http://localhost:3001/auth/callback` for local dev). Then:
+`https://localhost:29443/auth/callback` for local dev). Then:
 
 ```
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
