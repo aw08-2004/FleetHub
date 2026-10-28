@@ -82,6 +82,21 @@ def server_config(environ, state_root):
     }
 
 
+def key_dir_to_protect(cfg, state_root):
+    """The directory whose ACL serve.py may tighten for the private key, or None.
+
+    **Only the hub's own `<STATE_ROOT>/tls`.** protect_directory replaces the inherited ACL
+    with SYSTEM + Administrators + the hub's account, which is right for a folder the hub
+    created and wrong for one an operator pointed FLEETHUB_TLS_KEY into: a shared C:\\certs\\
+    that IIS or a backup agent also reads would silently lose those readers, and nothing in
+    the hub's log would explain the other service's failure. An operator's key keeps the
+    permissions the operator gave it.
+    """
+    own = os.path.normcase(os.path.abspath(os.path.join(state_root, "tls")))
+    key_dir = os.path.normcase(os.path.dirname(os.path.abspath(cfg["key"])))
+    return key_dir if key_dir == own else None
+
+
 def _machine_name():
     import socket
 
@@ -128,10 +143,16 @@ def main():
         _, _, created = tls.ensure_certificate(cfg["cert"], cfg["key"], cfg["hostnames"])
         # The private key sits under STATE_ROOT, beneath C:\Program Files on Windows, whose
         # inherited ACL grants every local user read -- the same exposure envfile.protect
-        # closes for .env. Fails soft and is silent once correct.
-        note = envfile.protect_directory(os.path.dirname(os.path.abspath(cfg["key"])))
-        if note:
-            print(f"[serve] {note}", flush=True)
+        # closes for .env. Fails soft and is silent once correct. Only OUR tls folder, though:
+        # see key_dir_to_protect for why an operator's key directory is left alone.
+        own_dir = key_dir_to_protect(cfg, hub_app.STATE_ROOT)
+        if own_dir:
+            note = envfile.protect_directory(own_dir)
+            if note:
+                print(f"[serve] {note}", flush=True)
+        else:
+            print(f"[serve] TLS key {cfg['key']} is outside the hub's own tls folder; its "
+                  "permissions are left as the operator set them.", flush=True)
         summary = tls.certificate_summary(cfg["cert"]) or {}
         print(f"[serve] TLS certificate {'generated' if created else 'loaded'}: "
               f"{cfg['cert']} (sans={summary.get('sans')}, expires {summary.get('not_after')}, "

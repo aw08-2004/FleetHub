@@ -93,6 +93,15 @@ def test_config_defaults():
     check("an unparsable port falls back to 29443, not a crash",
           serve.server_config({"FLEETHUB_PORT": "x"}, "/s")["port"] == 29443)
 
+    # Re-ACLing an operator's shared certificate folder would cut off its other readers.
+    own = serve.server_config({}, "/srv/hub")
+    check("the hub's own tls folder is tightened",
+          serve.key_dir_to_protect(own, "/srv/hub")
+          == os.path.normcase(os.path.abspath(os.path.join("/srv/hub", "tls"))))
+    shared = serve.server_config({"FLEETHUB_TLS_KEY": "/certs/hub.key"}, "/srv/hub")
+    check("an operator's key folder is left alone",
+          serve.key_dir_to_protect(shared, "/srv/hub") is None)
+
 
 def test_certificate(work):
     print("\n-- tls.ensure_certificate: generate once, never overwrite --")
