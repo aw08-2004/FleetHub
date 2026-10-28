@@ -170,7 +170,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.169.0"
+HUB_VERSION = "1.170.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1445,7 +1445,8 @@ def start_agent_version_watcher():
 
 # ================================
 # HUB SELF-UPDATE  --  opt-in (HUB_AUTO_UPDATE=1). Update in place, then exit; the
-# supervising service relaunches waitress, which re-imports the new code.
+# supervising service relaunches the server (serve.py's cheroot, or waitress-serve on a hub
+# installed before 1.170.0), which re-imports the new code.
 #
 # Two source strategies, chosen by what's on disk:
 #   .git present  -> fetch + reset --hard origin/main (developer clones, and hubs
@@ -1885,7 +1886,7 @@ def perform_hub_update(code_dir):
     return _tree_version_is_newer(code_dir)
 
 def restart_hub():
-    """Exit non-zero so the supervisor treats it as a failure and relaunches waitress with
+    """Exit non-zero so the supervisor treats it as a failure and relaunches the server with
     the new code. Under the WinSW service that's `onfailure action="restart"` (~5s); under
     the legacy SYSTEM Scheduled Task the 2-min repetition trigger relaunches regardless of
     exit code. Abrupt by design -- WAL + per-batch commits make this as safe as the crash
@@ -2140,6 +2141,10 @@ from rate_limit import RateLimiter
 rate_limiter = RateLimiter(app)
 # Trust one hop of X-Forwarded-* from nginx, so url_for(_external=True) builds
 # HUB_URL (e.g. https://your.domain.com/...) instead of the local bind address/scheme.
+# The hop is HTTPS since 1.170.0 (serve.py), which changes nothing here: TLS on the origin
+# encrypts the proxy's connection, it does not authenticate it. A client that reaches
+# 29443 directly can still forge these headers, exactly as it could on 3001 before -- keep
+# the port reachable from the proxy only.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 print(f"[hub] Configured public URL: {HUB_URL}")
 # cors_allowed_origins is pinned to our own origin, NOT "*". engine.io does not send a
@@ -2151,13 +2156,13 @@ print(f"[hub] Configured public URL: {HUB_URL}")
 # today, but that is the browser's default doing the work, not ours. The socket carries
 # live telemetry for the whole fleet and is same-origin in every real deployment.
 #
-# THIS CONFIG COSTS ONE WAITRESS THREAD PER OPEN TAB. polling + threading means engineio
+# THIS CONFIG COSTS ONE SERVER THREAD PER OPEN TAB. polling + threading means engineio
 # serves a poll by blocking a worker on a queue until a packet arrives or the ping cycle
 # expires (~25s), and index.html/machine.html both open a socket -- so the serving thread
 # pool has to be sized by concurrent operator tabs, not by request rate. waitress's default
-# of 4 starves the hub outright; install.ps1 passes --threads explicitly and explains why.
-# Don't drop the transport pin to "fix" this: waitress has no WebSocket support, so
-# allowing upgrades here just breaks the socket.
+# of 4 (cheroot's: 10) starves the hub outright; serve.py and install.ps1 pass 128 explicitly
+# and explain why. Don't drop the transport pin to "fix" this: neither cheroot nor waitress
+# has WebSocket support, so allowing upgrades here just breaks the socket.
 socketio = SocketIO(
     app,
     cors_allowed_origins=[HUB_URL.rstrip("/")],
@@ -2988,7 +2993,7 @@ def _complete_login(user_info, provider):
 
 def _callback_url(endpoint):
     # Anchor the callback to HUB_URL rather than url_for(_external=True): behind a TLS
-    # terminator (nginx/Cloudflare) the request can reach waitress as plain http, so the
+    # terminator (nginx/Cloudflare) the request can reach the hub as plain http, so the
     # _external form emits http://.../auth/callback -- which the provider rejects as a
     # redirect_uri mismatch. HUB_URL is the authoritative public origin (https://...).
     return HUB_URL.rstrip("/") + url_for(endpoint)
@@ -7595,6 +7600,13 @@ if __name__ == "__main__":
     # Load/Clock flicker. See wsgi.py for how to re-enable on an agent-less box.
     # start_local_logger()
 
-    # Use socketio.run instead of app.run
+    # Use socketio.run instead of app.run. A dev run only -- the service runs serve.py --
+    # but on the same port and scheme, so an OAuth redirect URI registered for local
+    # development (https://localhost:29443/auth/callback) works under both.
+    import tls
+    _cert, _key, _ = tls.ensure_certificate(
+        os.path.join(STATE_ROOT, "tls", "hub.crt"), os.path.join(STATE_ROOT, "tls", "hub.key"),
+        [LOCAL_MACHINE])
     print(f"Starting hub on {LOCAL_MACHINE}...")
-    socketio.run(app, host="0.0.0.0", port=3001, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=29443, debug=False, allow_unsafe_werkzeug=True,
+                 ssl_context=(_cert, _key))
