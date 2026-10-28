@@ -244,6 +244,11 @@ def main():
           "-not $MigrateHubServer" in hub and "$legacyHubArgs" in hub
           and "$hubArgs = $legacyHubArgs" in hub)
     check("a new hub runs serve.py", '$hubArgs = "serve.py"' in hub)
+    # The same trap one step later: a hub already on serve.py with a custom FLEETHUB_PORT must
+    # come back on that port when -HubPort was not passed again.
+    check("a re-install keeps the .env's FLEETHUB_PORT unless -HubPort is passed",
+          "$HubPortGiven = $PSBoundParameters.ContainsKey('HubPort')" in src
+          and "-not $HubPortGiven" in hub and '$existing["FLEETHUB_PORT"]' in hub)
 
     found = shells()
     if not found:

@@ -102,7 +102,14 @@ def ensure_certificate(cert_path, key_path, hostnames):
     for path in (cert_path, key_path):
         parent = os.path.dirname(os.path.abspath(path))
         os.makedirs(parent, exist_ok=True)
-    with open(key_path, "wb") as fh:
+    # Created 0600 rather than chmod-ed after the write, so on Linux/Docker the key is never
+    # readable by others, not even for the moment between the two. The chmod still follows:
+    # O_CREAT's mode applies only to a NEW file, and a key left over from a half-written pair
+    # keeps whatever mode it had. On Windows neither does much -- the directory ACL
+    # (envfile.protect_directory) does this job.
+    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0),
+                 0o600)
+    with os.fdopen(fd, "wb") as fh:
         fh.write(key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8,
@@ -111,7 +118,7 @@ def ensure_certificate(cert_path, key_path, hostnames):
     try:
         os.chmod(key_path, 0o600)
     except OSError:
-        pass  # Windows: the directory ACL (envfile.protect_directory) does this job
+        pass
     with open(cert_path, "wb") as fh:
         fh.write(cert.public_bytes(serialization.Encoding.PEM))
     return cert_path, key_path, True

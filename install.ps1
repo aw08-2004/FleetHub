@@ -135,6 +135,9 @@ $LegacyHubDir       = "C:\Program Files\TempMonitor\Hub"
 # installed. The elevation relaunch below forwards every bound parameter, so this stays true in
 # the elevated process too.
 $InstallDirGiven = $PSBoundParameters.ContainsKey('InstallDir')
+# Same question for -HubPort: Install-Hub keeps the port an existing hub's .env already has
+# unless one was passed, and inside a function $PSBoundParameters is the function's, not ours.
+$HubPortGiven = $PSBoundParameters.ContainsKey('HubPort')
 if ($InstallDirGiven) {
     $InstallDir      = $InstallDir.TrimEnd('\')
     $AgentInstallDir = $InstallDir
@@ -2456,6 +2459,12 @@ function Install-Hub {
         }
     }
     $hubTls = -not $legacyHubExec
+    # A re-install over a hub already on serve.py keeps the port its .env has, for the same
+    # reason the legacy branch above keeps waitress's: the proxy origin is dialling it, and a
+    # re-install run to fix something else must not move it. An explicit -HubPort still wins.
+    if ($hubTls -and -not $HubPortGiven -and $existing["FLEETHUB_PORT"] -match '^\d+$') {
+        $HubPort = [int]$existing["FLEETHUB_PORT"]
+    }
 
     if ($hubTls -and ($HubTlsCert -or $HubTlsKey)) {
         if (-not ($HubTlsCert -and $HubTlsKey)) { Die "-HubTlsCert and -HubTlsKey go together; pass both or neither." }

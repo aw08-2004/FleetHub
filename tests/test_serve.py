@@ -87,8 +87,9 @@ def test_config_defaults():
     check("FLEETHUB_TLS=0 turns TLS off (the Docker legacy default)", cfg["tls"] is False)
     check("operator certificate paths are honoured",
           cfg["cert"] == "/c.pem" and cfg["key"] == "/k.pem")
+    # Exact list position, not membership: the machine name comes first, the HUB_URL host last.
     check("the HUB_URL host is offered to the certificate",
-          "fleet.example.com" in cfg["hostnames"])
+          cfg["hostnames"][-1] == "fleet.example.com")
     check("an unparsable port falls back to 29443, not a crash",
           serve.server_config({"FLEETHUB_PORT": "x"}, "/s")["port"] == 29443)
 
