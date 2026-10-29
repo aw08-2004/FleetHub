@@ -31,6 +31,7 @@ Flask-free. The web half (assistant_web.py) injects the provider call, the dispa
 link resolver, which is what lets tests/test_assistant.py drive the loop with a fake model.
 """
 import json
+import math
 import re
 import sqlite3
 import threading
@@ -812,6 +813,23 @@ DEFAULT_MAX_WAIT_MINUTES = 60
 WAIT_SLICE_SECONDS = 1.0
 
 
+def _wait_amount(value, key):
+    """One of `wait`'s numbers as (error, float); absent is 0. NaN and infinity are refused
+    with the negatives: `int(round(inf))` raises, and json.loads reads `Infinity` and `NaN`
+    as numbers, so a model can send either (found in review, PR #189)."""
+    if value is None or value == "":
+        return None, 0.0
+    if isinstance(value, bool):
+        return f"{key} must be a number", 0.0
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return f"{key} must be a number", 0.0
+    if not math.isfinite(value) or value < 0:
+        return f"{key} must be a finite number, zero or more", 0.0
+    return None, value
+
+
 def wait_request(arguments, limit_seconds):
     """The `wait` call's arguments as (error, asked_seconds, granted_seconds).
 
@@ -828,18 +846,13 @@ def wait_request(arguments, limit_seconds):
         return "the arguments must be a JSON object", 0, 0
     total = 0.0
     for key, factor in (("seconds", 1), ("minutes", 60)):
-        value = arguments.get(key)
-        if value is None or value == "":
-            continue
-        if isinstance(value, bool):
-            return f"{key} must be a number", 0, 0
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
-            return f"{key} must be a number", 0, 0
-        if value != value or value < 0:         # NaN, or negative
-            return f"{key} must be zero or more", 0, 0
+        error, value = _wait_amount(arguments.get(key), key)
+        if error:
+            return error, 0, 0
         total += value * factor
+    # Finite parts can still sum past float range (1e308 minutes is inf seconds).
+    if not math.isfinite(total):
+        return "that wait is too long to be a number of seconds", 0, 0
     asked = int(round(total))
     if asked < 1:
         return "say how long to wait: seconds, minutes, or both (at least 1 second)", 0, 0

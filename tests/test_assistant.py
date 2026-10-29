@@ -1533,7 +1533,9 @@ def test_wait_arguments():
     check("over the limit is cut, not refused",
           assistant.wait_request({"minutes": 90}, 3600) == (None, 5400, 3600))
     for bad in ({}, {"seconds": 0}, {"seconds": -5}, {"seconds": True},
-                {"seconds": "soon"}, {"minutes": float("nan")}, "[1]", "{"):
+                {"seconds": "soon"}, {"minutes": float("nan")}, {"minutes": float("inf")},
+                {"seconds": "inf"}, {"minutes": 1e999}, '{"seconds": Infinity}',
+                {"minutes": 1e308, "seconds": 1e308}, "[1]", "{"):
         error, _asked, _granted = assistant.wait_request(bad, 600)
         check(f"refused: {bad!r}", bool(error))
 

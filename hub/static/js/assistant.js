@@ -547,7 +547,7 @@
     function showElapsed() {
         if (!thinking) return;
         const node = thinking.querySelector('.asst__elapsed');
-        const base = run && run.clock;
+        const base = run?.clock;
         node.textContent = base
             ? `· ${durationText(base.elapsed + (performance.now() - base.seen) / 1000)}`
             : '';
