@@ -89,7 +89,7 @@ jobs:
           # The new name first: Push walks this list in order, so the name operators are told
           # to use is never the one left behind by a half-failed push.
           owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
-          repos="${owner}/fleethub ${owner}/temp_monitor-hub"
+          repos="${owner}/fleethub"
           if [[ "$REF" == "beta" ]]; then
             version_tag="beta-${v}"; moving_tag="beta"
           else
