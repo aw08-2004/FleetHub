@@ -72,7 +72,7 @@ def create_schedules_blueprint(login_required, access):
             return refusals.refuse(schedule_spec.ScheduleError(error))
         try:
             count = max(1, min(MAX_PREVIEW, int(data.get("count") or 5)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):  # OverflowError: count Infinity
             count = 5
         anchor = data.get("anchor")
         anchor = (int(anchor) if isinstance(anchor, (int, float)) and not isinstance(anchor, bool)

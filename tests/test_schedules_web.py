@@ -113,6 +113,13 @@ def main():
                             f'"anchor": {raw}, "count": 1}}')
             check(f"anchor {raw} is ignored, not a 500 ({r.status_code})",
                   r.status_code == 200 and r.get_json()["next"][0] > before)
+        # The same literals as a count: int(Infinity) raises OverflowError, not ValueError.
+        for raw in ("Infinity", "-Infinity", "NaN", "1e300", '"many"'):
+            r = c.post("/api/schedules/preview", content_type="application/json",
+                       data=f'{{"spec": {{"kind": "weekly", "days_mask": 127, "times": [180]}}, '
+                            f'"count": {raw}}}')
+            check(f"count {raw} falls back or is capped, not a 500 ({r.status_code})",
+                  r.status_code == 200 and 1 <= len(r.get_json()["next"]) <= 10)
 
         r = c.post("/api/schedules/preview", json={
             "spec": {"kind": "window", "days_mask": 31, "start_minute": 480,
