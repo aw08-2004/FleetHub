@@ -231,6 +231,23 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 names.add(name)
         return names
 
+    def _max_wait_seconds():
+        """`ai.assistant_max_wait_minutes` in seconds, read per call so a lowered limit binds
+        the next wait rather than the next restart."""
+        try:
+            minutes = int(setting("ai.assistant_max_wait_minutes")
+                          or assistant.DEFAULT_MAX_WAIT_MINUTES)
+        except (TypeError, ValueError):
+            minutes = assistant.DEFAULT_MAX_WAIT_MINUTES
+        return max(1, minutes) * 60
+
+    def _call_details(name, arguments):
+        """What the panel shows while a call runs: for a wait, how long it will be."""
+        if name != assistant.WAIT_TOOL:
+            return {}
+        error, _asked, granted = assistant.wait_request(arguments, _max_wait_seconds())
+        return {} if error else {"seconds": granted}
+
     def _wait_for_command(session_data, path, query, seconds, cancelled):
         """Poll a command's output route until the command has finished, or `seconds` pass.
 
@@ -285,6 +302,16 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 return {"ok": True, "tier": assistant_tools.TIER_READ,
                         "data": assistant_guide.find_pages(
                             args.get("topic"), caps, lambda key: labels.get(key, key))}
+            if name == assistant.WAIT_TOOL:
+                error, asked, granted = assistant.wait_request(args, _max_wait_seconds())
+                if error:
+                    return {"ok": False, "error": error}
+                waited, stopped = assistant.wait_for(granted, cancelled)
+                return {"ok": True, "tier": assistant_tools.TIER_READ,
+                        "data": {"asked_seconds": asked, "waited_seconds": waited,
+                                 "cut_to_limit": granted < asked,
+                                 "limit_seconds": _max_wait_seconds(),
+                                 "stopped_by_operator": stopped}}
             if name == "list_endpoints":
                 found = assistant_tools.matching_endpoints(
                     catalog, args.get("q"), lambda e: all(c in caps for c in e["caps"]))
@@ -477,9 +504,16 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         # A turn still answering: the panel renders what is stored, then polls the run from
         # `seq` on, so nothing already shown arrives twice.
         active = runs.active(chat_id, _owner())
-        run = {"id": active[0], "seq": active[1]} if active else None
+        # `runs`: each turn's start and end, for the "Worked for" line under it (issue #167).
+        # The active one's start rides on `run` too, so a reopened chat's timer counts from
+        # when the turn began, not from when the page was opened.
+        timings = assistant.list_runs(db_path, chat_id)
+        run = None
+        if active:
+            started = next((r["started_at"] for r in timings if r["id"] == active[0]), None)
+            run = {"id": active[0], "seq": active[1], "started_at": started}
         return jsonify({"chat": chat, "messages": shown, "actions": actions,
-                        "run": run}), 200
+                        "run": run, "runs": timings}), 200
 
     @bp.route("/api/assistant/chats/<chat_id>", methods=["PATCH"])
     @login_required
@@ -533,6 +567,7 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         run_id = runs.start(chat_id, owner)
         if not run_id:
             return "the assistant is still answering in this conversation", 409, None
+        assistant.record_run_start(db_path, run_id, chat_id)
 
         perms = access.current() or {}
         caps = set(perms.get("capabilities") or ())
@@ -575,10 +610,16 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                                    emit=lambda e: runs.emit(run_id, e),
                                    cancelled=lambda: runs.cancelled(run_id),
                                    max_steps=max_steps, result_chars=result_chars,
-                                   context_chars=context_chars)
+                                   context_chars=context_chars, call_details=_call_details)
             except Exception:                           # noqa: BLE001
                 print(f"[assistant] turn failed:\n{traceback.format_exc()}")
                 runs.emit(run_id, {"type": "error", "error": GENERIC_ERROR})
+            finally:
+                try:
+                    assistant.record_run_end(db_path, run_id)
+                except Exception:                       # noqa: BLE001
+                    print(f"[assistant] recording a turn's end failed:\n"
+                          f"{traceback.format_exc()}")
 
         def name_it():
             """Name the conversation from its first message, beside the answer rather than
@@ -648,6 +689,9 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
         state["events"] = [dict(event, content=_render(event.get("content", "")))
                            if event.get("type") == "text" else dict(event)
                            for event in state["events"]]
+        # The hub's clock with every poll: the panel's "working for" timer counts from
+        # `now - started_at`, so a browser whose clock is minutes off still shows the truth.
+        state["now"] = time.time()
         return jsonify(state), 200
 
     @bp.route("/api/assistant/runs/<run_id>/cancel", methods=["POST"])

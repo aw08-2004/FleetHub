@@ -830,6 +830,13 @@ REGISTRY = (
     # Provider calls per operator message. Each tool step is one call; eight covers "find the
     # hot ones, read the worst, check its processes, answer" with room for a retry.
     _s("ai.assistant_max_steps", "ai", "int", 8, minimum=1),
+    # The longest one `wait` call may pause a turn (hub 1.171.0). A wait holds one of the
+    # assistant's four workers for its whole length -- assistant.WAIT_TOOL says why, and what
+    # was rejected instead -- so this is what keeps one operator's "wait for the overnight
+    # install" from queuing everybody else's questions. A floor and **no maximum**, like every
+    # other ai.* number (hub 1.137.0, owner's decision): the help text says what a large
+    # value costs, and the admin decides.
+    _s("ai.assistant_max_wait_minutes", "ai", "int", 60, minimum=1, unit="minutes"),
     # Characters of ONE tool result the model reads (hub 1.135.6). 12,000 is about 3,000 tokens
     # and suits a small local model; a large hosted one can take far more, and an operator
     # whose answers keep arriving cut can raise it here. The floor keeps one machine's report

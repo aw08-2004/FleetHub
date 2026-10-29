@@ -466,16 +466,54 @@
 /* Copy, under a message. Quiet until the message is pointed at, like Claude's own. */
 .asst__msg-actions {
     display: flex;
+    align-items: center;
     gap: var(--space-1);
     margin-top: 2px;
+}
+
+/* Only the buttons fade: the time beside them (issue #167) is there to be read without
+   pointing at anything. */
+.asst__msg-actions .asst__icon {
     opacity: 0.35;
     transition: opacity 0.15s;
 }
 
-.asst__user:hover .asst__msg-actions,
-.asst__turn-body:hover .asst__msg-actions,
-.asst__msg-actions:focus-within {
+.asst__user:hover .asst__msg-actions .asst__icon,
+.asst__turn-body:hover .asst__msg-actions .asst__icon,
+.asst__msg-actions:focus-within .asst__icon {
     opacity: 1;
+}
+
+/* When a message was written, and how long a turn took (issue #167). */
+.asst__time {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.asst__step-row {
+    display: flex;
+    gap: var(--space-2);
+    align-items: baseline;
+}
+
+.asst__step-row .asst__step {
+    flex: 1;
+    min-width: 0;
+}
+
+.asst__worked {
+    font-size: var(--text-xs);
+    color: var(--muted);
+}
+
+.asst__elapsed {
+    font-variant-numeric: tabular-nums;
+}
+
+.asst__action-title .asst__time {
+    font-weight: normal;
 }
 
 .asst__msg-actions .asst__icon {

@@ -1527,6 +1527,10 @@
           "label": "Assistenten-Schritte pro Nachricht",
           "help": "Wie oft der Assistent für eine Nachricht ein Werkzeug aufrufen und den Anbieter erneut fragen darf. Jeder Schritt ist eine Anfrage an den Anbieter. Es gibt keine Obergrenze: Ein sehr großer Wert lässt ein Modell, das zu keinem Ergebnis kommt, weiter fragen und Kosten verursachen, bis jemand Stopp drückt."
         },
+        "assistant_max_wait_minutes": {
+          "label": "Längste Wartezeit des Assistenten",
+          "help": "Wie lange eine einzelne Wartezeit den Assistenten anhalten darf, wenn er warten soll oder vor einer erneuten Prüfung auf einen Neustart oder eine Installation wartet. Eine längere Wartezeit wird auf diesen Wert gekürzt, und der Assistent sagt das. Jede wartende Unterhaltung belegt einen der vier Arbeitsplätze des Assistenten, bis sie fertig ist; Fragen anderer Operatoren warten dann hinter langen Wartezeiten. Stopp beendet eine Wartezeit sofort."
+        },
         "assistant_result_chars": {
           "label": "Ergebnisgröße des Assistenten",
           "help": "Wie viele Zeichen einer Werkzeugantwort der Assistent liest, etwa vier pro Token. Mehr zeigt ihm einen größeren Teil einer langen Liste oder Befehlsausgabe auf einmal, aber jeder weitere Schritt sendet sie erneut, sodass jede Anfrage langsamer und teurer wird und das Kontextfenster eines kleinen Modells überlaufen kann. Die Antwort weist auf gekürzte Inhalte hin."
@@ -3989,7 +3993,9 @@
     "off": "Der Assistent ist nicht verfügbar: {reason}",
     "thinking": "Denkt nach...",
     "using_tool": "Liest {tool}...",
+    "waiting": "Warte {duration}, bis {until}...",
     "tools_used": "Verwendet: {tools}",
+    "worked_for": "Gearbeitet: {duration}",
     "action_title": "Wartet auf Ihre Bestätigung",
     "action_title_machine": "Wartet auf Ihre Bestätigung für {machine}",
     "state": {

@@ -1604,6 +1604,10 @@
           "label": "Assistant steps per message",
           "help": "How many times the assistant may call a tool and ask the provider again for one message. Each step is one request to the provider. There is no upper limit: a very large value lets a model that never settles keep asking, and paying, until somebody presses Stop."
         },
+        "assistant_max_wait_minutes": {
+          "label": "Longest assistant wait",
+          "help": "How long one wait may pause the assistant, when it is told to wait or waits for a reboot or an install before checking again. A longer wait is cut to this, and the assistant says so. Each waiting conversation holds one of the assistant's four workers until it is done, so other operators' questions queue behind long waits. Stop ends a wait at once."
+        },
         "assistant_result_chars": {
           "label": "Assistant result size",
           "help": "How many characters of one tool answer the assistant reads, about four to a token. Larger lets it see more of a long list or command output at once, but every later step resends it, so each request is slower and costs more, and a small model's context window can overflow. The answer says when something was cut."
@@ -4112,7 +4116,9 @@
     "off": "The assistant is not available: {reason}",
     "thinking": "Thinking...",
     "using_tool": "Reading {tool}...",
+    "waiting": "Waiting {duration}, until {until}...",
     "tools_used": "Used: {tools}",
+    "worked_for": "Worked for {duration}",
     "action_title": "Waiting for your confirmation",
     "action_title_machine": "Waiting for your confirmation on {machine}",
     "state": {

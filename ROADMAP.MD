@@ -363,6 +363,25 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
 - [ ] **Back to the interval.** Switch to *Every N hours*: the interval field is editable
   again and "Next due" goes back to last attempt + N hours.
 
+**Hub 1.171.0, same release: assistant timestamps and the `wait` tool** (#26, issue #167)
+- [ ] **Times on every message.** Ask something that needs a tool or two. Your message, each
+  working step and the answer each show a time; pointing at one shows the full date. Reload
+  the page: the same times come back.
+- [ ] **Working timer.** While it answers, the line at the bottom reads *Thinking... · 0m 12s*
+  and counts up. When it finishes, *Worked for ...* appears under the answer, and is still
+  there after a reload. A conversation from before the update shows times on its messages
+  but no *Worked for* lines -- correct, those turns were never timed.
+- [ ] **Wait.** "Wait one minute, then tell me how many machines are online." The bottom line
+  reads *Waiting 1m 00s, until HH:MM* with the timer still running, and the answer arrives
+  about a minute later.
+- [ ] **Stop ends a wait.** "Wait 30 minutes" then **Stop**: the turn ends within a second or
+  two, not 30 minutes later.
+- [ ] **Limit.** Set *Longest assistant wait* to 1 minute and ask for 5: it waits one minute
+  and says the wait was cut. Set it back to 60.
+- [ ] **A real provider calls it.** Against the configured model (not the test stand-in),
+  "restart PC-xx, wait five minutes, then check it is back" uses `wait` rather than
+  re-reading the machine over and over.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
 **Read this first when working on the machine that holds the signing key.** Everything below
@@ -6182,7 +6201,7 @@ unencrypted is this feature's).
 
 ---
 
-## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2, redesign hub 1.135.3, titles hub 1.135.4, modes hub 1.135.5, package building hub 1.136.0, turn-based history hub 1.137.0   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
+## ✅ 26. Console assistant — one conversation, pinned beside every page   ·   hub 1.135.0, rule tools hub 1.135.1, narrowing hub 1.135.2, redesign hub 1.135.3, titles hub 1.135.4, modes hub 1.135.5, package building hub 1.136.0, turn-based history hub 1.137.0, timestamps and `wait` hub 1.171.0   ·   `assistant.py` / `assistant_tools.py` / `assistant_web.py`
 
 The four AI surfaces #24 built each answered one kind of question on one page. The assistant is
 one conversation that reaches all of them, and the rest of the hub, through tools. It is a
@@ -6389,6 +6408,27 @@ names, and can do what the signed-in operator can.
   (PR #107 review) -- no input breaks once the arithmetic is guarded, and a ceiling there is the
   same guess the owner asked to remove. The non-AI settings keep theirs: most are real bounds
   (a percentage, map zoom, the 60 s push hold), not guesses.
+
+### Timestamps and the `wait` tool (hub 1.171.0, issue #167)
+- **Every message, step and action card shows when it was written**, in the browser's time
+  zone (unlike a schedule's preview, which is hub time: these say when something happened).
+  The epochs are the hub's -- stored `created_at`, or `at` on a live RunLog event -- so a step
+  shows the same time live and after a reload.
+- **How long it worked.** A ticking timer beside *Thinking...*, counted from the hub's clock
+  (each poll carries `now`, the page adds only the time since), and *Worked for ...* under each
+  finished turn. Durations come from a new `assistant_runs` table (start when the message is
+  accepted, end in the worker's `finally`). Rejected: deriving them from message times -- a
+  turn waiting on a confirmation card would count the operator's pause as work, and a
+  follow-up turn after a click has no operator message to measure from. A turn the hub
+  restarted under has no end and shows no duration rather than an invented one.
+- **`wait`** pauses a turn for `seconds`/`minutes`, a second at a time so **Stop** lands within
+  a second, then the model carries on. Capped per call by `ai.assistant_max_wait_minutes`
+  (60; floor 1, no maximum, like every `ai.*` number): a wait holds one of the four assistant
+  workers for its whole length. A longer request is **cut, not refused**, and the result says
+  so -- a refusal only teaches the model the limit by spending a step on it. Rejected: a
+  resumable turn that frees its worker while waiting (right for multi-hour waits, and a
+  rewrite of `run_turn` into a state machine); no cap at all (the operator who asked is not
+  the one whose questions queue). A hub restart ends a wait with its turn, as before.
 
 ### Open
 - Pages publishing a selection through `FleetShell.setContext` (Inventory's checked rows, the

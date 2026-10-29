@@ -1527,6 +1527,10 @@
           "label": "Pasos del asistente por mensaje",
           "help": "Cuántas veces puede el asistente llamar a una herramienta y volver a preguntar al proveedor por un mensaje. Cada paso es una solicitud al proveedor. No hay límite superior: un valor muy grande permite que un modelo que nunca concluye siga preguntando, y generando costes, hasta que alguien pulse Detener."
         },
+        "assistant_max_wait_minutes": {
+          "label": "Espera máxima del asistente",
+          "help": "Cuánto tiempo puede pausar al asistente una sola espera, cuando se le pide esperar o cuando espera un reinicio o una instalación antes de volver a comprobar. Una espera más larga se recorta a este valor y el asistente lo indica. Cada conversación en espera ocupa uno de los cuatro trabajadores del asistente hasta que termina, así que las preguntas de otros operadores esperan detrás de las esperas largas. Detener termina una espera al instante."
+        },
         "assistant_result_chars": {
           "label": "Tamaño de resultado del asistente",
           "help": "Cuántos caracteres de una respuesta de herramienta lee el asistente, unos cuatro por token. Más le permite ver a la vez una parte mayor de una lista larga o de la salida de un comando, pero cada paso posterior la reenvía, así que cada solicitud es más lenta y cuesta más, y la ventana de contexto de un modelo pequeño puede desbordarse. La respuesta indica cuándo se recorta el contenido."
@@ -3989,7 +3993,9 @@
     "off": "El asistente no está disponible: {reason}",
     "thinking": "Pensando...",
     "using_tool": "Leyendo {tool}...",
+    "waiting": "Esperando {duration}, hasta las {until}...",
     "tools_used": "Usado: {tools}",
+    "worked_for": "Trabajó durante {duration}",
     "action_title": "Esperando su confirmación",
     "action_title_machine": "Esperando su confirmación en {machine}",
     "state": {

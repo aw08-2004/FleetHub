@@ -392,10 +392,62 @@
         }
     }
 
+    // ---------------- Times (issue #167) ----------------
+    // Every message says when it was written, and a turn says how long the assistant worked
+    // on it. Clock times are the BROWSER's local time, unlike a schedule's preview: they say
+    // when something happened, which the operator reads against their own clock. The epochs
+    // themselves are the hub's (stored rows, or `at` on a live event), so a step shows the
+    // same time live and after a reload.
+    function isToday(date) {
+        const now = new Date();
+        return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()
+            && date.getDate() === now.getDate();
+    }
+
+    function clockText(epoch) {
+        const date = new Date(epoch * 1000);
+        const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (isToday(date)) return time;
+        return `${date.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`;
+    }
+
+    /** A <time> for one message; the full date and seconds in its tooltip. */
+    function stamp(epoch) {
+        if (!epoch) return null;
+        const node = el('time', 'asst__time', clockText(epoch));
+        const date = new Date(epoch * 1000);
+        node.dateTime = date.toISOString();
+        node.title = date.toLocaleString();
+        return node;
+    }
+
+    /** 45s, 2m 05s, 1h 02m -- short enough to tick beside "Thinking..." every second. */
+    function durationText(seconds) {
+        const secs = Math.max(0, Math.round(seconds));
+        if (secs < 60) return `${secs}s`;
+        const mins = Math.floor(secs / 60);
+        if (mins < 60) return `${mins}m ${String(secs % 60).padStart(2, '0')}s`;
+        return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
+    }
+
+    /** "Worked for 2m 14s" under a finished turn. Nothing for a turn with no end (the hub
+     *  restarted under it): no duration is better than an invented one. */
+    function addWorked(startedAt, endedAt) {
+        if (!startedAt || !endedAt || endedAt < startedAt) return;
+        const node = el('div', 'asst__worked',
+            t('assistant.worked_for', { duration: durationText(endedAt - startedAt) }));
+        node.title = `${new Date(startedAt * 1000).toLocaleString()} – ${new Date(endedAt * 1000).toLocaleString()}`;
+        turnBody().appendChild(node);
+        keepThinkingLast();
+        scrollDown();
+    }
+
     /** A copy button for one message. `getText` is read at click time, so an answer copies
      *  the text as it reads on screen -- link labels, not the paths behind them. */
-    function messageActions(getText) {
+    function messageActions(getText, at) {
         const row = el('div', 'asst__msg-actions');
+        const when = stamp(at);
+        if (when) row.appendChild(when);
         const button = el('button', 'asst__icon asst__copy');
         button.type = 'button';
         const label = t('assistant.copy');
@@ -423,13 +475,13 @@
     /** Text the operator typed, or a hub note: always plain text. Kept apart from the
      *  markdown path so nothing typed into this page can reach the renderer -- one function
      *  switching on a role was flagged by CodeQL (code scanning #158). */
-    function addUser(text) {
+    function addUser(text, at) {
         empty.hidden = true;
         turn = null;
         const wrap = el('div', 'asst__user');
         const node = el('div', 'asst__msg--user');
         node.textContent = text;
-        wrap.append(node, messageActions(() => text));
+        wrap.append(node, messageActions(() => text, at));
         thread.appendChild(wrap);
         scrollDown();
     }
@@ -439,15 +491,25 @@
     }
 
     /** An answer, or a working step, from the server after render_links() built its links. */
-    function addAnswer(content, { tools = [], step = false } = {}) {
+    function addAnswer(content, { tools = [], step = false, at = null } = {}) {
         const body = turnBody();
         if (content) {
             const node = el('div', step ? 'asst__step' : 'asst__answer');
             node.appendChild(renderMarkdown(content));
-            body.appendChild(node);
+            if (step) {
+                // A step carries its time on the left, like a log line: "14:02 let me check
+                // the deployments" is the "when did it check what" the issue asked for.
+                const row = el('div', 'asst__step-row');
+                const when = stamp(at);
+                if (when) row.appendChild(when);
+                row.appendChild(node);
+                body.appendChild(row);
+            } else {
+                body.appendChild(node);
+            }
             // Answers only: a working step ("let me check the deployments") is not text
             // anybody wants to paste into a ticket.
-            if (!step) body.appendChild(messageActions(() => node.innerText.trim()));
+            if (!step) body.appendChild(messageActions(() => node.innerText.trim(), at));
         }
         if (tools.length) body.appendChild(toolsChip(tools));
         keepThinkingLast();
@@ -471,11 +533,24 @@
             thinking = el('div', 'asst__thinking');
             const dots = el('span', 'asst__dots');
             dots.append(el('i'), el('i'), el('i'));
-            thinking.append(dots, el('span'));
+            thinking.append(dots, el('span', 'asst__thinking-text'), el('span', 'asst__elapsed'));
         }
-        thinking.lastChild.textContent = text;
+        thinking.querySelector('.asst__thinking-text').textContent = text;
+        showElapsed();
         turnBody().appendChild(thinking);
         scrollDown();
+    }
+
+    /** How long the run being listened to has been working, beside "Thinking...". Counted
+     *  from the HUB's clock: the poll carries the hub's `now`, and the page only adds the
+     *  time since that poll -- so a browser clock that is off moves nothing. */
+    function showElapsed() {
+        if (!thinking) return;
+        const node = thinking.querySelector('.asst__elapsed');
+        const base = run && run.clock;
+        node.textContent = base
+            ? `· ${durationText(base.elapsed + (performance.now() - base.seen) / 1000)}`
+            : '';
     }
 
     // ---------------- Action cards ----------------
@@ -504,7 +579,10 @@
         if (action.auto) title = t('assistant.action_auto_title', { mode: modeName(action.mode) });
         else if (action.machine) title = t('assistant.action_title_machine', { machine: action.machine });
         else title = t('assistant.action_title');
-        card.appendChild(el('div', 'asst__action-title', title));
+        const head = el('div', 'asst__action-title', title);
+        const when = stamp(action.created_at);
+        if (when) head.append(' ', when);
+        card.appendChild(head);
         if (action.impact || action.risk) {
             // The model's own judgement, as the hub stored it with the action: what it
             // said this would do, and how risky it called it. In Auto mode this is the
@@ -747,15 +825,21 @@
         if (chatId !== id) return;      // another chat was opened meanwhile
         mode = (data.chat && data.chat.mode) || 'ask';
         renderMode();
+        // A finished turn sorts in at its END, so its "Worked for" line lands under the last
+        // thing it wrote -- including a follow-up turn after a confirmation, which has no
+        // operator message of its own to hang off.
         const items = [
             ...data.messages.map((m) => ({ at: m.created_at, m })),
             ...data.actions.map((a) => ({ at: a.created_at, a })),
+            ...(data.runs || []).filter((r) => r.ended_at).map((r) => ({ at: r.ended_at, r })),
         ].sort((x, y) => x.at - y.at);
         for (const item of items) {
             if (item.a) renderAction(item.a);
-            else if (item.m.role === 'user') addUser(item.m.content);
+            else if (item.r) addWorked(item.r.started_at, item.r.ended_at);
+            else if (item.m.role === 'user') addUser(item.m.content, item.m.created_at);
             else if (item.m.role === 'assistant') {
-                addAnswer(item.m.content, { tools: item.m.tools, step: item.m.step });
+                addAnswer(item.m.content, { tools: item.m.tools, step: item.m.step,
+                                            at: item.m.created_at });
             } else addPlain('asst__step', item.m.content);
         }
         if (data.run) listen(data.run.id, data.run.seq);
@@ -796,7 +880,10 @@
 
     /** Stop polling. The run itself goes on in the hub; see the file comment. */
     function stopListening() {
-        if (run) clearTimeout(run.timer);
+        if (run) {
+            clearTimeout(run.timer);
+            clearInterval(run.ticker);
+        }
         run = null;
         busy(false);
         setThinking(null);
@@ -804,10 +891,24 @@
 
     function listen(runId, after) {
         stopListening();
-        run = { id: runId, chatId, after, timer: null };
+        // `clock`: the elapsed time the hub last reported, and when this page saw it.
+        run = { id: runId, chatId, after, timer: null, clock: null, ticker: null };
         busy(true);
         setThinking(t('assistant.thinking'));
+        run.ticker = setInterval(showElapsed, 1000);
         run.timer = setTimeout(poll, 300);
+    }
+
+    /** What a `started` tool event says while it runs. A wait says how long and until when,
+     *  so "Waiting 10m 00s, until 14:32" replaces a bare "Reading wait...". */
+    function toolText(event) {
+        if (event.name === 'wait' && event.seconds) {
+            return t('assistant.waiting', {
+                duration: durationText(event.seconds),
+                until: clockText((event.at || Date.now() / 1000) + event.seconds),
+            });
+        }
+        return t('assistant.using_tool', { tool: event.name });
     }
 
     async function poll() {
@@ -827,14 +928,18 @@
         // The operator switched chats while this request was out: its events belong to a
         // chat no longer on screen, and will be read from storage when that chat is opened.
         if (run !== current) return;
+        if (data.started_at && data.now) {
+            current.clock = { elapsed: data.now - data.started_at, seen: performance.now() };
+            showElapsed();
+        }
         for (const event of data.events || []) {
             current.after = Math.max(current.after, event.seq);
             if (event.type === 'text') {
-                addAnswer(event.content, { step: !event.final });
+                addAnswer(event.content, { step: !event.final, at: event.at });
             } else if (event.type === 'tool') {
                 if (event.action) renderAction(event.action);
                 if (event.state === 'started') {
-                    setThinking(t('assistant.using_tool', { tool: event.name }));
+                    setThinking(toolText(event));
                 } else {
                     setThinking(t('assistant.thinking'));
                 }
@@ -856,6 +961,7 @@
         }
         if (data.done) {
             stopListening();
+            addWorked(data.started_at, data.ended_at);
             await loadChats();
             awaitName(current.chatId, NAME_CHECKS);
             return;
@@ -894,7 +1000,9 @@
                 chatId = chat.id;
                 remember(CHAT_KEY, chatId);
             }
-            addUser(text);
+            // The browser's clock for a message just typed: the hub's stored time replaces it
+            // on the next reload, and the two differ only by the browser's clock error.
+            addUser(text, Date.now() / 1000);
             input.value = '';
             autosize();
             const response = await fetch(`/api/assistant/chats/${encodeURIComponent(chatId)}/messages`, {

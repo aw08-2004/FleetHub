@@ -325,7 +325,8 @@ def test_ai_numbers_have_floors_but_no_ceilings():
     big = {"ai.assistant_max_steps": 500, "ai.max_tokens": 200000,
            "ai.timeout_seconds": 3600, "ai.assistant_result_chars": 1000000,
            "ai.assistant_context_chars": 2000000, "ai.draft_retention_days": 3650,
-           "ai.assistant_history_days": 3650, "ai.assistant_staging_hours": 8760}
+           "ai.assistant_history_days": 3650, "ai.assistant_staging_hours": 8760,
+           "ai.assistant_max_wait_minutes": 10080}
     for key, value in big.items():
         check(f"{key} accepts {value}", _accepts(db, {key: value}))
         check(f"...and the form puts no max on it", _field(db, "ai", key).get("max") is None)
@@ -334,6 +335,7 @@ def test_ai_numbers_have_floors_but_no_ceilings():
     check("...and below it is refused",
           _rejects(db, {"ai.assistant_context_chars": 7999}))
     check("a step limit of zero is still refused", _rejects(db, {"ai.assistant_max_steps": 0}))
+    check("a wait limit of zero is refused", _rejects(db, {"ai.assistant_max_wait_minutes": 0}))
 
 
 def test_set_many_is_all_or_nothing():
