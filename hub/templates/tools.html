@@ -79,6 +79,7 @@
 <script src="{{ url_for('static', filename='js/machine-context.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fleet-api.js') }}"></script>
 {% if cap.MANAGE_BACKUPS in user_capabilities %}
+<script src="{{ url_for('static', filename='js/schedule-picker.js') }}"></script>
 <script src="{{ url_for('static', filename='js/backups.js') }}"></script>
 {% endif %}
 {% if cap.MANAGE_FIRMWARE in user_capabilities %}

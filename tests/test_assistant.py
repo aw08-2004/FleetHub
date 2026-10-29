@@ -14,6 +14,12 @@
   * **A tier table that names a route that does not exist.** A typo in assistant_tools.py does
     not raise -- the misspelled route simply falls through to the default tier. Every rule the
     tables name is checked against the live url_map.
+  * **A wait that cannot be stopped, or has no ceiling** (hub 1.171.0). A wait holds an
+    assistant worker; one that ignores Stop, or takes "wait 3 days" at its word, quietly
+    leaves every other operator's question queued.
+  * **A turn time that is made up.** The "Worked for" line must come from the turn's stored
+    start and end, so a deleted chat takes its timings with it and an unfinished turn shows
+    none.
 
 Run from the repo root so `import app` resolves.
 """
@@ -1515,6 +1521,130 @@ def test_alerts_page_offers_the_hand_off():
         settings.invalidate()
 
 
+# ---------------------------------------------------------------- issue #167, hub 1.171.0
+def test_wait_arguments():
+    print("\n-- a wait is read in seconds, minutes or both, and cut to the limit --")
+    check("seconds", assistant.wait_request({"seconds": 30}, 600) == (None, 30, 30))
+    check("minutes", assistant.wait_request({"minutes": 2}, 600) == (None, 120, 120))
+    check("both are added", assistant.wait_request({"minutes": 1, "seconds": 5}, 600)
+          == (None, 65, 65))
+    check("a JSON string is read", assistant.wait_request('{"seconds": "12"}', 600)
+          == (None, 12, 12))
+    check("over the limit is cut, not refused",
+          assistant.wait_request({"minutes": 90}, 3600) == (None, 5400, 3600))
+    for bad in ({}, {"seconds": 0}, {"seconds": -5}, {"seconds": True},
+                {"seconds": "soon"}, {"minutes": float("nan")}, {"minutes": float("inf")},
+                {"seconds": "inf"}, {"minutes": 1e999}, '{"seconds": Infinity}',
+                {"minutes": 1e308, "seconds": 1e308}, "[1]", "{"):
+        error, _asked, _granted = assistant.wait_request(bad, 600)
+        check(f"refused: {bad!r}", bool(error))
+
+    clock = {"now": 0.0}
+    slept = []
+
+    def fake_sleep(seconds):
+        slept.append(seconds)
+        clock["now"] += seconds
+
+    waited, stopped = assistant.wait_for(5, lambda: False, sleep=fake_sleep,
+                                         clock=lambda: clock["now"])
+    check(f"a whole wait waits it all ({waited}, {stopped})", waited == 5 and not stopped)
+    check("...a second at a time, so Stop is seen within a second",
+          slept and max(slept) <= assistant.WAIT_SLICE_SECONDS)
+    clock["now"] = 0.0
+    waited, stopped = assistant.wait_for(3600, lambda: clock["now"] >= 3,
+                                         sleep=fake_sleep, clock=lambda: clock["now"])
+    check(f"a cancelled wait stops early and says so ({waited}, {stopped})",
+          stopped and waited == 3)
+
+
+def test_wait_through_the_app():
+    print("\n-- the wait tool runs, is cut to the setting, and Stop ends it --")
+    admin = client_for("tester@example.com")
+    check("every operator is offered wait",
+          "wait" in {s["function"]["name"] for s in assistant_tools.tool_specs(set())})
+
+    chat_id = new_chat(admin)
+    SCRIPT[:] = [call("wait", seconds=1, reason="the reboot"), say("it is back")]
+    status, events = converse(admin, chat_id, "wait a second")
+    started = [e for e in events if e.get("type") == "tool" and e.get("state") == "started"]
+    result = json.loads(tool_messages(chat_id)[-1]["content"])
+    check(f"a short wait runs and the turn carries on ({status})",
+          status == 202 and events[-1]["type"] == "done")
+    check("the started event says how long", started and started[0].get("seconds") == 1)
+    check(f"its result says what happened ({result})",
+          result.get("ok") and result["data"]["waited_seconds"] == 1
+          and result["data"]["cut_to_limit"] is False)
+
+    # The ceiling and Stop, in one real wait: half an hour asked under a one-minute limit,
+    # stopped as soon as it starts. Nothing is patched, so this is the code that runs.
+    settings.set_many(DB, {"ai.assistant_max_wait_minutes": 1}, "test")
+    settings.invalidate()
+    try:
+        chat_id = new_chat(admin)
+        SCRIPT[:] = [call("wait", minutes=30)]
+        r = admin.post(f"/api/assistant/chats/{chat_id}/messages", json={"text": "wait"})
+        run_id = r.get_json()["run_id"]
+        started = []
+        deadline = time.time() + 5
+        while time.time() < deadline and not started:
+            events = admin.get(f"/api/assistant/runs/{run_id}?after_seq=-1").get_json()["events"]
+            started = [e for e in events
+                       if e.get("name") == "wait" and e.get("state") == "started"]
+            time.sleep(0.02)
+        check("the panel is told the cut length, not the asked one",
+              started and started[0].get("seconds") == 60)
+        stopped_at = time.time()
+        admin.post(f"/api/assistant/runs/{run_id}/cancel", json={})
+        events = wait_run(admin, run_id, timeout=5)
+        check(f"Stop ends a long wait at once ({time.time() - stopped_at:.1f}s)",
+              events and events[-1].get("error") == "stopped"
+              and time.time() - stopped_at < 4)
+        data = json.loads(tool_messages(chat_id)[-1]["content"])["data"]
+        check(f"the result says it was cut to the setting ({data})",
+              data["asked_seconds"] == 1800 and data["cut_to_limit"] is True
+              and data["limit_seconds"] == 60 and data["waited_seconds"] < 60)
+        check("...and that the operator stopped it", data["stopped_by_operator"] is True)
+    finally:
+        settings.set_many(DB, {"ai.assistant_max_wait_minutes": 60}, "test")
+        settings.invalidate()
+    SCRIPT[:] = []
+
+
+def test_turns_are_timed():
+    print("\n-- every event, message and turn carries the hub's time --")
+    admin = client_for("tester@example.com")
+    chat_id = new_chat(admin)
+    before = time.time()
+    SCRIPT[:] = [call("fleet_summary"), say("all fine")]
+    r = admin.post(f"/api/assistant/chats/{chat_id}/messages", json={"text": "how is it"})
+    run_id = r.get_json()["run_id"]
+    wait_run(admin, run_id)
+    state = admin.get(f"/api/assistant/runs/{run_id}?after_seq=-1").get_json()
+    check("every live event has the hub's time",
+          state["events"] and all(before <= e.get("at", 0) <= time.time()
+                                  for e in state["events"]))
+    check("the poll carries the run's start, end and the hub's clock",
+          before <= state["started_at"] <= state["ended_at"] <= state["now"])
+
+    opened = admin.get(f"/api/assistant/chats/{chat_id}").get_json()
+    timings = opened["runs"]
+    check(f"the finished turn is stored with its start and end ({timings})",
+          len(timings) == 1 and timings[0]["id"] == run_id
+          and before <= timings[0]["started_at"] <= timings[0]["ended_at"])
+    check("every message shown has a time",
+          all(m.get("created_at") for m in opened["messages"]))
+    check("a finished chat hands back no run to listen to", opened["run"] is None)
+
+    # A turn the hub restarted under: started, never ended. No duration is invented for it.
+    assistant.record_run_start(DB, "orphan", chat_id, now=before)
+    orphan = [r for r in assistant.list_runs(DB, chat_id) if r["id"] == "orphan"]
+    check("an unfinished turn has no end", orphan and orphan[0]["ended_at"] is None)
+
+    admin.delete(f"/api/assistant/chats/{chat_id}")
+    check("deleting the chat deletes its timings", assistant.list_runs(DB, chat_id) == [])
+
+
 def main():
     test_assistant_is_off_until_turned_on()
     seed()
@@ -1557,6 +1687,9 @@ def main():
     test_package_building_follows_the_modes()
     test_absolute_links_to_this_hub()
     test_the_last_machine_by_name_is_found()
+    test_wait_arguments()
+    test_wait_through_the_app()
+    test_turns_are_timed()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

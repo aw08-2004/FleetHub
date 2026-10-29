@@ -183,6 +183,9 @@ UNMARKED_RULES = frozenset({
     "/api/agent/files/transfer/<transfer_id>",
     "/api/language",
     "/api/hub/update",
+    # Not a stream but not a change either: a calculator over the request body (the
+    # schedule picker's next runs, schedules_web.py), fired on every pause in typing.
+    "/api/schedules/preview",
 })
 
 #: app.py's own mutating routes have no blueprint; they are about the machine record, except

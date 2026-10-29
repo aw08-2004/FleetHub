@@ -194,7 +194,21 @@ Your conversations are listed on the left of the Assistant page (fold the column
 panel button), and behind the clock button when it is pinned. A conversation keeps answering if
 you switch to another one; it shows a spinner in the list until it is done. Each conversation is
 named after what you asked for in its first message; rename it with the pencil beside it, and
-your name is kept. Every message and answer has a copy button underneath.
+your name is kept. Every message and answer has a copy button underneath, next to the time it
+was written; the assistant's working steps ("checking the deployments...") carry their time on
+the left, so you can see when it checked what. Times are in your browser's time zone; point at
+one for the full date. While it works, the line at the bottom counts how long it has been at
+it, and a finished answer ends with **Worked for 2m 14s** -- the time from your message to its
+last word, including any wait. A follow-up after you confirm an action gets its own line.
+
+**Waiting.** Ask it to wait ("restart PC-12, wait ten minutes, then check it came back") and it
+pauses for that long, showing *Waiting 10m 00s, until 14:32* with the timer still running, then
+carries on. It also waits on its own when something needs time, such as a reboot or an install.
+One wait is at most *Longest assistant wait* (Settings → AI, 60 minutes); a longer one is cut
+to that and the assistant tells you. **Stop** ends a wait at once. A waiting
+conversation holds one of the assistant's four workers, so long waits make other operators'
+questions queue, which is why the limit exists. A hub restart ends the wait along with the rest
+of that answer.
 
 It can read anything you can see and links every machine it names -- click a link and the page
 opens beside the panel. It can also act, with exactly your permissions:

@@ -31,6 +31,7 @@ Flask-free. The web half (assistant_web.py) injects the provider call, the dispa
 link resolver, which is what lets tests/test_assistant.py drive the loop with a fake model.
 """
 import json
+import math
 import re
 import sqlite3
 import threading
@@ -160,6 +161,20 @@ def init_assistant_db(db_path):
                             ("mode", "TEXT NOT NULL DEFAULT 'ask'")):
             if column not in columns:
                 conn.execute(f"ALTER TABLE assistant_actions ADD COLUMN {column} {ddl}")
+        # When each turn started and ended (hub 1.171.0, issue #167): what the panel's "Worked
+        # for 2m 14s" under a past turn reads. Not derived from the message times, because a
+        # turn that waits on a confirmation card would count the operator's coffee break as
+        # the assistant working, and a follow-up turn after a click has no operator message
+        # to measure from at all. `ended_at` NULL is a turn the hub restarted under; the panel
+        # shows no duration for it rather than a made-up one.
+        conn.execute("""CREATE TABLE IF NOT EXISTS assistant_runs (
+                            id         TEXT PRIMARY KEY,
+                            chat_id    TEXT NOT NULL,
+                            started_at REAL NOT NULL,
+                            ended_at   REAL
+                        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_assistant_runs_chat "
+                     "ON assistant_runs(chat_id, started_at)")
 
 
 # ---------------------------------------------------------------------------------------
@@ -235,6 +250,7 @@ def list_chats(db_path, owner, limit=50):
 def _delete_chat_rows(conn, chat_id):
     conn.execute("DELETE FROM assistant_messages WHERE chat_id = ?", (chat_id,))
     conn.execute("DELETE FROM assistant_actions WHERE chat_id = ?", (chat_id,))
+    conn.execute("DELETE FROM assistant_runs WHERE chat_id = ?", (chat_id,))
     conn.execute("DELETE FROM assistant_chats WHERE id = ?", (chat_id,))
 
 
@@ -256,6 +272,29 @@ def prune_chats(db_path, retention_days, now=None):
         for chat_id in old:
             _delete_chat_rows(conn, chat_id)
     return len(old)
+
+
+def record_run_start(db_path, run_id, chat_id, now=None):
+    """A turn began: written when the operator's message is accepted, not when a worker picks
+    it up, so a turn that queued behind other operators' answers counts the queue too -- the
+    operator was waiting either way."""
+    with get_conn(db_path) as conn:
+        conn.execute("INSERT OR IGNORE INTO assistant_runs (id, chat_id, started_at) "
+                     "VALUES (?,?,?)", (str(run_id), str(chat_id), float(now or time.time())))
+
+
+def record_run_end(db_path, run_id, now=None):
+    with get_conn(db_path) as conn:
+        conn.execute("UPDATE assistant_runs SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
+                     (float(now or time.time()), str(run_id)))
+
+
+def list_runs(db_path, chat_id):
+    with get_conn(db_path) as conn:
+        rows = conn.execute("SELECT id, started_at, ended_at FROM assistant_runs "
+                            "WHERE chat_id = ? ORDER BY started_at", (str(chat_id),)).fetchall()
+    return [{"id": r["id"], "started_at": r["started_at"], "ended_at": r["ended_at"]}
+            for r in rows]
 
 
 def append_message(db_path, chat_id, role, content="", *, tool_calls=None, tool_call_id="",
@@ -682,7 +721,8 @@ class RunLog:
                 if run["chat_id"] == chat_id and not run["done"]:
                     return None
             self._runs[run_id] = {"chat_id": chat_id, "owner": owner, "events": [],
-                                  "done": False, "cancel": False, "ended_at": None}
+                                  "done": False, "cancel": False,
+                                  "started_at": time.time(), "ended_at": None}
         return run_id
 
     def emit(self, run_id, event):
@@ -693,11 +733,13 @@ class RunLog:
             # chat list carries it instead.
             if not run or run["done"]:
                 return
-            event = dict(event, seq=len(run["events"]))
+            # `at` is the hub's clock, so a step shown live carries the same time it shows
+            # after a reload, where it comes from the stored message (issue #167).
+            event = dict(event, seq=len(run["events"]), at=time.time())
             run["events"].append(event)
             if event.get("type") in ("done", "error"):
                 run["done"] = True
-                run["ended_at"] = time.time()
+                run["ended_at"] = event["at"]
 
     def cancel(self, run_id, owner):
         with self._lock:
@@ -737,13 +779,100 @@ class RunLog:
             if not run or run["owner"] != owner:
                 return None
             events = [e for e in run["events"] if e["seq"] > after_seq]
-            return {"chat_id": run["chat_id"], "done": run["done"], "events": events}
+            return {"chat_id": run["chat_id"], "done": run["done"], "events": events,
+                    "started_at": run["started_at"], "ended_at": run["ended_at"]}
 
     def _prune(self):
         cutoff = time.time() - self.KEEP_SECONDS
         for run_id in [k for k, r in self._runs.items()
                        if r["done"] and (r["ended_at"] or 0) < cutoff]:
             del self._runs[run_id]
+
+
+# ---------------------------------------------------------------------------------------
+# Waiting (hub 1.171.0)
+# ---------------------------------------------------------------------------------------
+# The `wait` tool: "reboot PC-12, wait ten minutes, then check it came back" as one request.
+# Before it, a model had only command_output's wait_seconds (90 s at most, and only for a
+# command it had queued), so it either reported "queued" and stopped, or burned its step
+# budget re-reading a machine that had not rebooted yet.
+#
+# **A wait holds one assistant worker for its whole length.** The turn is a Python call
+# stack on a pool thread, so pausing it pauses the thread. That is why the length has a
+# ceiling (`ai.assistant_max_wait_minutes`): four conversations each waiting an hour would
+# leave every other operator's question queued behind them. Rejected: a resumable turn that
+# frees its worker and is picked up again by a timer -- the right shape for long waits, and
+# a rewrite of run_turn into a state machine; the ceiling is the honest version until a
+# real need for multi-hour waits shows up. Also rejected: no ceiling, "because the operator
+# asked for it" -- the operator who asked is not the one whose answers stop.
+#
+# A hub restart ends a wait with the rest of the turn (see RunLog). Stop ends it within a
+# second, because the wait sleeps in slices and checks the run's cancel flag between them.
+WAIT_TOOL = "wait"
+DEFAULT_MAX_WAIT_MINUTES = 60
+WAIT_SLICE_SECONDS = 1.0
+
+
+def _wait_amount(value, key):
+    """One of `wait`'s numbers as (error, float); absent is 0. NaN and infinity are refused
+    with the negatives: `int(round(inf))` raises, and json.loads reads `Infinity` and `NaN`
+    as numbers, so a model can send either (found in review, PR #189)."""
+    if value is None or value == "":
+        return None, 0.0
+    if isinstance(value, bool):
+        return f"{key} must be a number", 0.0
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return f"{key} must be a number", 0.0
+    if not math.isfinite(value) or value < 0:
+        return f"{key} must be a finite number, zero or more", 0.0
+    return None, value
+
+
+def wait_request(arguments, limit_seconds):
+    """The `wait` call's arguments as (error, asked_seconds, granted_seconds).
+
+    Accepts `seconds` and `minutes` (either or both, summed) because models say "wait 10
+    minutes" and then do the arithmetic wrong about a third of the time. A request over the
+    limit is CUT, not refused: refusing it would make the model retry with a smaller number,
+    a step spent learning a limit the result can simply state."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments or "{}")
+        except (TypeError, ValueError):
+            return "the arguments were not valid JSON", 0, 0
+    if not isinstance(arguments, dict):
+        return "the arguments must be a JSON object", 0, 0
+    total = 0.0
+    for key, factor in (("seconds", 1), ("minutes", 60)):
+        error, value = _wait_amount(arguments.get(key), key)
+        if error:
+            return error, 0, 0
+        total += value * factor
+    # Finite parts can still sum past float range (1e308 minutes is inf seconds).
+    if not math.isfinite(total):
+        return "that wait is too long to be a number of seconds", 0, 0
+    asked = int(round(total))
+    if asked < 1:
+        return "say how long to wait: seconds, minutes, or both (at least 1 second)", 0, 0
+    return None, asked, min(asked, max(1, int(limit_seconds)))
+
+
+def wait_for(seconds, cancelled, *, sleep=time.sleep, clock=time.monotonic,
+             slice_seconds=WAIT_SLICE_SECONDS):
+    """Sleep `seconds`, a slice at a time, until done or `cancelled()`. Returns the seconds
+    actually waited and whether it was stopped. `sleep` and `clock` are injectable so the
+    tests do not spend an hour proving an hour."""
+    start = clock()
+    deadline = start + max(0, seconds)
+    while True:
+        if cancelled():
+            return int(round(clock() - start)), True
+        left = deadline - clock()
+        if left <= 0:
+            return int(round(clock() - start)), False
+        sleep(min(slice_seconds, left))
 
 
 COMPACT_TEXT_CHARS = 300
@@ -1006,13 +1135,15 @@ def fit_result(result, limit=MAX_TOOL_RESULT_CHARS):
 
 def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools, execute,
              emit, cancelled=lambda: False, max_steps=DEFAULT_MAX_STEPS,
-             result_chars=MAX_TOOL_RESULT_CHARS, context_chars=DEFAULT_CONTEXT_CHARS):
+             result_chars=MAX_TOOL_RESULT_CHARS, context_chars=DEFAULT_CONTEXT_CHARS,
+             call_details=lambda name, arguments: {}):
     """One operator message through to a final answer. Writes every message as it goes.
 
     `complete_step(messages, tools)` -> (error, {"content", "tool_calls"}) is ai.complete_chat
     with the config bound. `execute(name, arguments)` -> dict is the web layer's dispatcher; it
     returns {"ok": bool, "tier": ..., "data"|"error": ..., "action": {...}?}. `emit(event)`
-    feeds the RunLog.
+    feeds the RunLog. `call_details(name, arguments)` -> dict is merged into a call's
+    `started` event -- how the panel learns how long a `wait` will be before it ends.
 
     The step bound is what ends a model that keeps calling tools without converging. It ends
     with a sentence, not a silent stop, so the operator can tell "it gave up" from "it hung".
@@ -1053,7 +1184,11 @@ def run_turn(db_path, chat_id, *, system_prompt, user_text, complete_step, tools
                                    tool_call_id=pending["id"], tool_name=pending["name"])
                 emit({"type": "error", "error": "stopped"})
                 return
-            emit({"type": "tool", "name": call["name"], "state": "started"})
+            try:
+                details = call_details(call["name"], call["arguments"]) or {}
+            except Exception:                           # noqa: BLE001
+                details = {}            # cosmetic: never the reason a tool call fails
+            emit(dict(details, type="tool", name=call["name"], state="started"))
             try:
                 result = execute(call["name"], call["arguments"])
             except Exception as exc:                    # noqa: BLE001
@@ -1346,6 +1481,12 @@ def system_prompt(*, operator, capabilities, scope, pages, context, today, langu
         "action, do exactly that before anything else. Read-only checks (reg query, "
         "gpresult, Get-*) are commands too: use `find` or `tail` on command_output to read "
         "the part that matters instead of running them again.",
+        "When the operator says to wait, or something needs time before it is worth checking "
+        "again (a reboot, an install, the next agent report), call wait with that time "
+        "instead of stopping at 'it is pending' -- then check and report. Never wait without "
+        "a reason, and never more than once in a row for the same thing. The hub may cut a "
+        "long wait short; its result says how long you really waited, so tell the operator "
+        "if it was cut.",
         tools_note,
         "",
         *AGENT_LOGS_PROMPT,

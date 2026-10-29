@@ -262,6 +262,32 @@ def test_coercion():
     check("non-list for a url_list is rejected",
           _rejects(db, {"remote.turn_urls": "turn:relay.example.com:3478"}))
 
+    # A schedule is a schedule_spec "fire" spec, or None for "use the interval". The silent
+    # failure would be a spec that validates here and means something else to the scheduler,
+    # which is why the spec module is the only validator rather than a copy of its rules.
+    print("\n-- schedule (backups at set times) --")
+    check("the default is None: the interval stays in charge",
+          settings.get(db, "backup.hub_schedule") is None)
+    check("a weekly spec is stored cleaned",
+          _accepts(db, {"backup.hub_schedule": {"kind": "weekly", "days_mask": 127,
+                                                "times": [180, "60"], "extra": 1}})
+          and settings.get(db, "backup.hub_schedule")
+          == {"kind": "weekly", "days_mask": 127, "times": [60, 180]})
+    check("a JSON string is accepted",
+          _accepts(db, {"backup.files_schedule": '{"kind": "cron", "expr": "@daily"}'})
+          and settings.get(db, "backup.files_schedule") == {"kind": "cron", "expr": "0 0 * * *"})
+    check("blank clears it back to None",
+          _accepts(db, {"backup.files_schedule": ""})
+          and settings.get(db, "backup.files_schedule") is None)
+    check("a bad cron is rejected",
+          _rejects(db, {"backup.hub_schedule": {"kind": "cron", "expr": "0 3 * *"}}))
+    check("a never-firing cron is rejected",
+          _rejects(db, {"backup.hub_schedule": {"kind": "cron", "expr": "0 0 30 2 *"}}))
+    check("a window is not a fire schedule",
+          _rejects(db, {"backup.hub_schedule": {"kind": "window", "days_mask": 1,
+                                                "start_minute": 0, "duration_minutes": 60}}))
+    check("unparseable JSON is rejected", _rejects(db, {"backup.hub_schedule": "{nope"}))
+
 
 def test_range_validation():
     print("\n-- bounds are enforced at the edges --")
@@ -299,7 +325,8 @@ def test_ai_numbers_have_floors_but_no_ceilings():
     big = {"ai.assistant_max_steps": 500, "ai.max_tokens": 200000,
            "ai.timeout_seconds": 3600, "ai.assistant_result_chars": 1000000,
            "ai.assistant_context_chars": 2000000, "ai.draft_retention_days": 3650,
-           "ai.assistant_history_days": 3650, "ai.assistant_staging_hours": 8760}
+           "ai.assistant_history_days": 3650, "ai.assistant_staging_hours": 8760,
+           "ai.assistant_max_wait_minutes": 10080}
     for key, value in big.items():
         check(f"{key} accepts {value}", _accepts(db, {key: value}))
         check(f"...and the form puts no max on it", _field(db, "ai", key).get("max") is None)
@@ -308,6 +335,7 @@ def test_ai_numbers_have_floors_but_no_ceilings():
     check("...and below it is refused",
           _rejects(db, {"ai.assistant_context_chars": 7999}))
     check("a step limit of zero is still refused", _rejects(db, {"ai.assistant_max_steps": 0}))
+    check("a wait limit of zero is refused", _rejects(db, {"ai.assistant_max_wait_minutes": 0}))
 
 
 def test_set_many_is_all_or_nothing():
