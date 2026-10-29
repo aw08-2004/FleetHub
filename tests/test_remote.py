@@ -84,6 +84,36 @@ def main():
         check("agent receives exactly the console's answer", len(agent_view["signals"]) == 1)
         check("agent's view is the answer", agent_view["signals"][0]["kind"] == "answer")
 
+        print("\n== Trickled candidates reach the browser in a form it accepts ==")
+        # The silent failure: SIPSorcery trickles candidates without the `candidate:` prefix,
+        # Chrome's addIceCandidate rejects them, remote.js swallowed it, and only the host
+        # candidate in the offer SDP was ever usable -- so no session could use TURN.
+        bare = "442922399 1 udp 1677730047 203.0.113.7 57692 typ srflx raddr 0.0.0.0 rport 0 generation 0"
+        relay_line = "3403437127 1 udp 8447 198.51.100.9 58456 typ relay raddr 0.0.0.0 rport 0 generation 0"
+        after = remote.get_signals(db_path, sid, remote.SENDER_CONSOLE, after_seq=0)["next_seq"]
+        remote.add_signal(db_path, sid, remote.SENDER_AGENT, "ice",
+                          {"candidate": bare, "sdpMid": "0", "sdpMLineIndex": 0})
+        remote.add_signal(db_path, sid, remote.SENDER_AGENT, "ice",
+                          {"candidate": "candidate:" + relay_line, "sdpMid": "0", "sdpMLineIndex": 0})
+        got = remote.get_signals(db_path, sid, remote.SENDER_CONSOLE, after_seq=after)["signals"]
+        check("an agent's bare srflx candidate is stored with the prefix",
+              got[0]["payload"]["candidate"] == "candidate:" + bare)
+        check("sdpMid and sdpMLineIndex ride along unchanged",
+              got[0]["payload"]["sdpMid"] == "0" and got[0]["payload"]["sdpMLineIndex"] == 0)
+        check("an already-prefixed candidate is not prefixed twice",
+              got[1]["payload"]["candidate"] == "candidate:" + relay_line)
+        check("an SDP-line form loses its a=",
+              remote.normalize_ice_payload({"candidate": "a=candidate:" + bare})["candidate"]
+              == "candidate:" + bare)
+        check("an empty candidate (end of gathering) is left alone",
+              remote.normalize_ice_payload({"candidate": ""}) == {"candidate": ""})
+        check("a payload with no candidate string is left alone",
+              remote.normalize_ice_payload({"candidate": None}) == {"candidate": None}
+              and remote.normalize_ice_payload("x") == "x")
+        check("an offer is never touched",
+              remote.get_signals(db_path, sid, remote.SENDER_CONSOLE, after_seq=0)
+              ["signals"][0]["payload"] == {"sdp": "v=0..."})
+
         expect_raise("unknown sender rejected", ValueError,
                      lambda: remote.add_signal(db_path, sid, "martian", "offer", {}))
         expect_raise("unknown kind rejected", ValueError,
