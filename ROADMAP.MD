@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.170.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.170.1**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -325,6 +325,14 @@ control, no stray processes after hang-up).
   it (check the fingerprint in a browser on the origin), and a restart does not replace it.
 - [ ] **Docker.** An existing compose deployment pulls `beta` and still answers on 3001; a new
   one from `example.env` answers `https://127.0.0.1:29443/` and the container reports healthy.
+
+**Hub 1.170.1: Authlib and certifi floors, so a self-update moves an installed hub off the
+vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.22)
+- [ ] **Packages upgraded.** The beta hub self-updates to 1.170.1, and `pip show authlib
+  certifi` in its Python then reports Authlib 1.9.1+ and certifi 2026.10.23+. Before this,
+  both lines were unversioned and `pip install -r` left whatever was installed alone.
+- [ ] **Sign-in still works** with Google and with the OIDC provider after the upgrade.
+- [ ] **Socket rescan** of `beta` no longer reports the Authlib or certifi CVEs.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
