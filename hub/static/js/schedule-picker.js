@@ -68,6 +68,39 @@
         return spec.kind;
     }
 
+    /** The editor's starting draft for every mode: defaults, with the stored spec's own mode
+     *  filled in from it. Per mode, so flipping between modes does not throw away what was
+     *  typed. */
+    function draftFrom(initial) {
+        const draft = {
+            weekly: { days_mask: 0b0011111, times: [120] },
+            interval: { every: 6, unit: 'hours' },
+            window: { days_mask: 0b0011111, start: 480, end: 1080 },
+            cron: { expr: '' },
+        };
+        switch (initial?.kind) {
+            case 'weekly':
+                draft.weekly = { days_mask: initial.days_mask, times: initial.times.slice() };
+                break;
+            case 'interval': {
+                const hours = initial.every_minutes % 60 === 0;
+                draft.interval = { every: hours ? initial.every_minutes / 60 : initial.every_minutes,
+                                   unit: hours ? 'hours' : 'minutes' };
+                break;
+            }
+            case 'window':
+                draft.window = { days_mask: initial.days_mask, start: initial.start_minute,
+                                 end: (initial.start_minute + initial.duration_minutes) % 1440 };
+                break;
+            case 'cron':
+                draft.cron = { expr: initial.expr };
+                break;
+            default:
+                break;
+        }
+        return draft;
+    }
+
     /**
      * mount(container, options) -> { get() }
      *
@@ -86,27 +119,9 @@
                                                          : ['weekly', 'interval', 'cron']);
         const onChange = typeof opts.onChange === 'function' ? opts.onChange : function () {};
 
-        // The draft, per mode, so flipping between modes does not throw away what was typed.
         const initial = opts.value || null;
         let mode = modeOf(initial, !!opts.allowNone);
-        const draft = {
-            weekly: { days_mask: 0b0011111, times: [120] },
-            interval: { every: 6, unit: 'hours' },
-            window: { days_mask: 0b0011111, start: 480, end: 1080 },
-            cron: { expr: '' },
-        };
-        if (initial && initial.kind === 'weekly') {
-            draft.weekly = { days_mask: initial.days_mask, times: initial.times.slice() };
-        } else if (initial && initial.kind === 'interval') {
-            const hours = initial.every_minutes % 60 === 0;
-            draft.interval = { every: hours ? initial.every_minutes / 60 : initial.every_minutes,
-                               unit: hours ? 'hours' : 'minutes' };
-        } else if (initial && initial.kind === 'window') {
-            draft.window = { days_mask: initial.days_mask, start: initial.start_minute,
-                             end: (initial.start_minute + initial.duration_minutes) % 1440 };
-        } else if (initial && initial.kind === 'cron') {
-            draft.cron = { expr: initial.expr };
-        }
+        const draft = draftFrom(initial);
 
         const root = el('div', 'schedule-picker');
         const modeRow = el('div', 'flex flex-wrap items-center gap-2');
@@ -305,7 +320,7 @@
 
         function changed() {
             clearTimeout(timer);
-            timer = setTimeout(() => refreshPreview(false), PREVIEW_DELAY_MS);
+            timer = setTimeout(() => { void refreshPreview(false); }, PREVIEW_DELAY_MS);
         }
 
         modeSelect.addEventListener('change', () => {
@@ -315,7 +330,7 @@
         });
 
         renderBody();
-        refreshPreview(true);
+        void refreshPreview(true);   // it reports its own failures under the field
 
         return { get: () => accepted };
     }

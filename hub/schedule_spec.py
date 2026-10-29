@@ -149,6 +149,31 @@ def _parse_value(text, low, high, names, field):
     return value
 
 
+def _parse_step(part, step_text, field):
+    """The `/step` of one list entry, 1 when it has none. `5/` is refused, not read as 1."""
+    if not step_text and not part.endswith("/"):
+        return 1
+    if not step_text.isdigit() or int(step_text) == 0:
+        raise ScheduleError(f"{field}: step '{step_text}' must be a positive number.")
+    return int(step_text)
+
+
+def _parse_span(base, stepped, low, high, field, names):
+    """(start, end) of one entry before its step: `*`, `a-b`, or `a` -- which runs to the
+    field's end when stepped (`5/15`), and is just itself otherwise."""
+    if base == "*":
+        return low, high
+    if "-" in base:
+        a, _, b = base.partition("-")
+        start = _parse_value(a, low, high, names, field)
+        end = _parse_value(b, low, high, names, field)
+        if start > end:
+            raise ScheduleError(f"{field}: range '{base}' runs backwards.")
+        return start, end
+    start = _parse_value(base, low, high, names, field)
+    return start, (high if stepped else start)
+
+
 def _parse_field(text, low, high, field, names=None):
     """One cron field to a frozenset. Accepts `*`, `a`, `a-b`, lists, and `/step` on `*`,
     a range or a single start (`5/15` = 5,20,35,50)."""
@@ -159,22 +184,8 @@ def _parse_field(text, low, high, field, names=None):
         if not part:
             raise ScheduleError(f"{field}: empty entry in '{text}'.")
         base, _, step_text = part.partition("/")
-        step = 1
-        if step_text or part.endswith("/"):
-            if not step_text.isdigit() or int(step_text) == 0:
-                raise ScheduleError(f"{field}: step '{step_text}' must be a positive number.")
-            step = int(step_text)
-        if base == "*":
-            start, end = low, high
-        elif "-" in base:
-            a, _, b = base.partition("-")
-            start = _parse_value(a, low, high, names, field)
-            end = _parse_value(b, low, high, names, field)
-            if start > end:
-                raise ScheduleError(f"{field}: range '{base}' runs backwards.")
-        else:
-            start = _parse_value(base, low, high, names, field)
-            end = high if step_text else start
+        step = _parse_step(part, step_text, field)
+        start, end = _parse_span(base, bool(step_text), low, high, field, names)
         values.update(range(start, end + 1, step))
     return frozenset(values)
 
@@ -336,19 +347,33 @@ def _local_date(epoch, clock):
     return datetime.date(stamp.tm_year, stamp.tm_mon, stamp.tm_mday)
 
 
-def _next_calendar(spec, after, n, clock):
-    matches, minutes = _day_plan(spec)
+def _walk_forward(slots_on, after, n, clock):
+    """The first `n` epochs strictly after `after`, walking local days forward from the day
+    before (a slot past midnight-DST) for at most SEARCH_DAYS. `slots_on(date)` gives one
+    day's epochs, sorted; the strictly-increasing check drops a slot DST made repeat."""
     found = []
-    date = _local_date(after, clock) - datetime.timedelta(days=1)  # a slot past midnight-DST
+    date = _local_date(after, clock) - datetime.timedelta(days=1)
     for _ in range(SEARCH_DAYS + 2):
-        if matches(date):
-            for s in _instants(date, minutes, clock):
-                if s > after and (not found or s > found[-1]):
-                    found.append(s)
-                    if len(found) >= n:
-                        return found
+        for s in slots_on(date):
+            if s > after and (not found or s > found[-1]):
+                found.append(s)
+                if len(found) >= n:
+                    return found
         date += datetime.timedelta(days=1)
     return found
+
+
+def _next_calendar(spec, after, n, clock):
+    matches, minutes = _day_plan(spec)
+    return _walk_forward(lambda date: _instants(date, minutes, clock) if matches(date) else (),
+                         after, n, clock)
+
+
+def _latest_on(date, matches, minutes, now, clock):
+    """The latest slot on local `date` that is not after `now`, or None."""
+    if not matches(date):
+        return None
+    return next((s for s in reversed(_instants(date, minutes, clock)) if s <= now), None)
 
 
 def _latest_calendar(spec, now, anchor, clock):
@@ -358,10 +383,9 @@ def _latest_calendar(spec, now, anchor, clock):
     for _ in range(SEARCH_DAYS + 2):
         if floor is not None and date < floor:
             return None
-        if matches(date):
-            for s in reversed(_instants(date, minutes, clock)):
-                if s <= now:
-                    return s if anchor is None or s > anchor else None
+        latest = _latest_on(date, matches, minutes, now, clock)
+        if latest is not None:
+            return latest if anchor is None or latest > anchor else None
         date -= datetime.timedelta(days=1)
     return None
 
@@ -477,23 +501,18 @@ def next_openings(spec, after, n=5, clock=None):
     cron = parse_cron(spec["expr"])
     minutes = cron.minutes_of_day()
     matching = set(minutes)
-    found = []
-    date = _local_date(after, clock) - datetime.timedelta(days=1)
-    for _ in range(SEARCH_DAYS + 2):
-        if cron.day_matches(date):
-            ran_past_midnight = (DAY_MINUTES - 1 in matching
-                                 and cron.day_matches(date - datetime.timedelta(days=1)))
-            for mod in minutes:
-                if (mod - 1 in matching) if mod else ran_past_midnight:
-                    continue
-                s = int(clock.mktime((date.year, date.month, date.day,
-                                      mod // 60, mod % 60, 0, 0, 0, -1)))
-                if s > after and (not found or s > found[-1]):
-                    found.append(s)
-                    if len(found) >= n:
-                        return found
-        date += datetime.timedelta(days=1)
-    return found
+
+    def openings_on(date):
+        if not cron.day_matches(date):
+            return ()
+        # 00:00 opens only if the window was not already open at 23:59 the day before.
+        ran_past_midnight = (DAY_MINUTES - 1 in matching
+                             and cron.day_matches(date - datetime.timedelta(days=1)))
+        opens = [mod for mod in minutes
+                 if not ((mod - 1 in matching) if mod else ran_past_midnight)]
+        return _instants(date, opens, clock)
+
+    return _walk_forward(openings_on, after, n, clock)
 
 
 def preview(spec, purpose, now, n=5, anchor=None, clock=None):
