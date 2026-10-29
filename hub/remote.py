@@ -426,18 +426,56 @@ def expire_sessions(db_path, now=None):
 # ================================
 # SIGNALING RELAY
 # ================================
+CANDIDATE_PREFIX = "candidate:"
+
+
+def normalize_ice_payload(payload):
+    """A trickled candidate in the form a browser's addIceCandidate accepts:
+    `candidate:<foundation> <component> ...`.
+
+    **The agent sends it without the `candidate:` prefix** -- SIPSorcery's
+    RTCIceCandidate.candidate is the bare attribute value -- and Chrome rejects that string
+    outright. remote.js swallows the rejection, so every trickled agent candidate was thrown
+    away and the browser only ever saw the host candidate inlined in the offer's SDP: the
+    agent's srflx and TURN relay candidates never reached it. Nothing could connect except on
+    the operator's own LAN, and every other session fell back to the hub relay after
+    RELAY_AFTER_MS, however healthy the TURN server was (found 2026-10-29 on a Cloudflare TURN
+    key: both peers had relay candidates, ICE never paired them).
+
+    Fixed here rather than in the agent so every agent already in the field is fixed by a hub
+    update, and here rather than in remote.js so every consumer of the signal (the console, a
+    share link, the desktop client) gets the same string. The agent's parser accepts both forms,
+    which is why the browser's candidates going the other way always worked. Idempotent, and
+    anything that is not a non-empty candidate string is passed through untouched.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    candidate = payload.get("candidate")
+    if not isinstance(candidate, str):
+        return payload
+    text = candidate.strip()
+    if not text or text.lower().startswith(CANDIDATE_PREFIX):
+        return payload
+    if text.lower().startswith("a=" + CANDIDATE_PREFIX):
+        return {**payload, "candidate": text[2:]}
+    return {**payload, "candidate": CANDIDATE_PREFIX + text}
+
+
 def add_signal(db_path, session_id, sender, kind, payload):
     """Store one signaling message for the other side to poll. Returns its seq (the row id).
 
     Refuses signals on a session that isn't live, an unknown sender/kind, an oversized payload,
     or a session already at the per-session signal cap -- each of which is either a bug or an
-    abuse rather than legitimate trickle ICE.
+    abuse rather than legitimate trickle ICE. A trickled candidate is stored in the form a
+    browser accepts (normalize_ice_payload).
     """
     session_id = str(session_id)
     if sender not in _SENDERS:
         raise ValueError(f"unknown sender {sender!r}")
     if kind not in SIGNAL_KINDS:
         raise ValueError(f"unknown signal kind {kind!r}")
+    if kind == "ice":
+        payload = normalize_ice_payload(payload)
     payload_json = json.dumps(payload, separators=(",", ":"))
     if len(payload_json) > MAX_SIGNAL_BYTES:
         raise ValueError("signal payload too large")

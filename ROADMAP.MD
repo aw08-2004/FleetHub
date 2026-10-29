@@ -334,6 +334,17 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
 - [ ] **Sign-in still works** with Google and with the OIDC provider after the upgrade.
 - [ ] **Socket rescan** of `beta` no longer reports the Authlib or certifi CVEs.
 
+**Hub 1.170.2: Remote connects through TURN instead of falling back to the hub relay**
+(roadmap #2; found 2026-10-29 on OPENCLAW with the Cloudflare TURN key)
+- [ ] **Off-LAN PC reads Live, not Live (via hub).** From a browser on another network than the
+  PC, open Remote to OPENCLAW: the badge reads **Live** within a few seconds, and
+  `chrome://webrtc-internals` shows the selected pair with a `relay` candidate on
+  `turn.cloudflare.com`. Before this, every such session waited 20 s and switched to the hub.
+- [ ] **Same-LAN PC still connects directly** (host pair, no relay).
+- [ ] **No TURN configured** (clear the Cloudflare key on a test hub): the hub relay still takes
+  over as before.
+- [ ] **Sharing link** to the same PC connects the same way.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
 **Read this first when working on the machine that holds the signing key.** Everything below
@@ -2234,6 +2245,20 @@ URLs Cloudflare says browsers block, and **if Cloudflare cannot be reached it sk
 rather than failing the session.** Rejected: storing the block as a settings field, because the
 settings table is readable without `manage_settings` and the block holds a credential. No agent
 change was needed: both peers already took entries with several URLs and a username/credential.
+
+**TURN was never used across networks until hub 1.170.2.** Found 2026-10-29 on OPENCLAW with
+the Cloudflare key configured and working: both peers gathered Cloudflare relay candidates, and
+the session still fell back to the hub relay every time. The agent trickles candidates without
+the `candidate:` prefix (SIPSorcery's `RTCIceCandidate.candidate` is the bare attribute), Chrome
+rejects that string in `addIceCandidate`, and remote.js swallowed the rejection -- so the
+browser only ever had the host candidate inlined in the offer SDP. The hub now adds the prefix
+where a signal is stored (`remote.normalize_ice_payload`), which fixes every agent in the field
+without a release, and remote.js logs a rejected candidate instead of hiding it. With the
+prefix the same session connected in about 2 s on a Cloudflare UDP relay. *Rejected:* fixing it
+only in the agent (every PC would need a release first, and an old agent would stay broken) and
+only in remote.js (the share page and the desktop client read the same signal). Prefixing at
+the source in `RemotePeer.cs` is still worth doing in a later agent release; the hub's
+normalisation is idempotent, so the two do not conflict.
 
 - **Session injection (agent, `Remote/SessionInjector.cs`)** — the service duplicates its own
   SYSTEM token, retargets `TokenSessionId` to the active interactive session (enabling `SeTcb`),

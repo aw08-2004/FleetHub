@@ -728,7 +728,7 @@
                     if (clipboard) clipboard.setCapable(!!sig.payload?.clipboard);
                     await pc.setRemoteDescription({ type: 'offer', sdp: sig.payload.sdp });
                     remoteSet = true;
-                    for (const ice of pendingIce) await pc.addIceCandidate(ice).catch(() => {});
+                    for (const ice of pendingIce) await addRemoteIce(ice);
                     pendingIce = [];
                     const answer = await pc.createAnswer();
                     await pc.setLocalDescription(answer);
@@ -744,12 +744,23 @@
                         sdpMid: sig.payload.sdpMid,
                         sdpMLineIndex: sig.payload.sdpMLineIndex,
                     };
-                    if (remoteSet) await pc.addIceCandidate(cand).catch(() => {});
+                    if (remoteSet) await addRemoteIce(cand);
                     else pendingIce.push(cand);
                 }
             } catch (e) {
                 hint(t('machine.remote.signaling_error', { error: e.message }));
             }
+        }
+
+        /** Add one of the agent's candidates. A rejected candidate does not fail the session --
+         *  another may still connect -- but it is logged rather than swallowed: until hub
+         *  1.170.2 every trickled agent candidate was rejected (no `candidate:` prefix, see
+         *  remote.normalize_ice_payload) and a bare catch hid it, so the only symptom was every
+         *  session falling back to the hub relay with a TURN server that worked. */
+        function addRemoteIce(cand) {
+            return pc.addIceCandidate(cand).catch((e) => {
+                console.warn('[remote] ICE candidate rejected', cand.candidate, e);
+            });
         }
 
         /** End a session on the hub. Split out from stop() so it can also retire a session
