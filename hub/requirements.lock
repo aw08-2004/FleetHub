@@ -564,8 +564,8 @@ pycparser==3.12 \
 python-dotenv==1.2.4 \
     --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc
     # via -r requirements.txt
-python-engineio==4.15.0 \
-    --hash=sha256:36588829409446492cbabfe8f5cdeb47a120b6f502ab34a0307acc632a4687c3
+python-engineio==4.15.1 \
+    --hash=sha256:745cb3c07701c719a2906439a00b67e44ef042904036568530a2c3a8cf18c89a
     # via python-socketio
 python-socketio==5.17.0 \
     --hash=sha256:b5826fd2f8aa02e11347816349b74ac6b53e8a4f4e4b1cf1388e1aff19b7f3f4
