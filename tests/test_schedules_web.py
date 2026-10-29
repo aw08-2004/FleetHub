@@ -72,7 +72,7 @@ def main():
         app = Flask(__name__)
         app.secret_key = "test"
         access = create_access(db_path, {"super@x.com"})
-        app.register_blueprint(create_schedules_blueprint(db_path, fake_login_required, access))
+        app.register_blueprint(create_schedules_blueprint(fake_login_required, access))
 
         @app.before_request
         def _seed_session():
@@ -105,6 +105,14 @@ def main():
             "spec": {"kind": "interval", "every_minutes": 60}, "anchor": anchor, "count": 2})
         check("an interval counts from the anchor it is given",
               r.get_json()["next"] == [anchor + 3600, anchor + 7200])
+        # request.get_json() reads the non-standard Infinity and NaN literals: each used to
+        # reach int() and answer 500 on a view-only route. Out of range = no anchor.
+        for raw in ("Infinity", "-Infinity", "NaN", "1e300", "true"):
+            r = c.post("/api/schedules/preview", content_type="application/json",
+                       data='{"spec": {"kind": "interval", "every_minutes": 60}, '
+                            f'"anchor": {raw}, "count": 1}}')
+            check(f"anchor {raw} is ignored, not a 500 ({r.status_code})",
+                  r.status_code == 200 and r.get_json()["next"][0] > before)
 
         r = c.post("/api/schedules/preview", json={
             "spec": {"kind": "window", "days_mask": 31, "start_minute": 480,

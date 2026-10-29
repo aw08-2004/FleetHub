@@ -1576,47 +1576,38 @@ def test_wait_through_the_app():
           result.get("ok") and result["data"]["waited_seconds"] == 1
           and result["data"]["cut_to_limit"] is False)
 
-    # The ceiling, without waiting it out: wait_for is swapped for one that returns at once.
-    real_wait_for = assistant.wait_for
-    assistant.wait_for = lambda seconds, cancelled, **kw: (seconds, False)
+    # The ceiling and Stop, in one real wait: half an hour asked under a one-minute limit,
+    # stopped as soon as it starts. Nothing is patched, so this is the code that runs.
     settings.set_many(DB, {"ai.assistant_max_wait_minutes": 1}, "test")
     settings.invalidate()
     try:
         chat_id = new_chat(admin)
-        SCRIPT[:] = [call("wait", minutes=30), say("waited")]
-        _status, events = converse(admin, chat_id, "wait half an hour")
-        started = [e for e in events if e.get("type") == "tool" and e.get("state") == "started"]
-        data = json.loads(tool_messages(chat_id)[-1]["content"])["data"]
-        check("a wait over the setting is cut to it",
-              data["asked_seconds"] == 1800 and data["waited_seconds"] == 60
-              and data["cut_to_limit"] is True and data["limit_seconds"] == 60)
-        check("...and the panel is told the cut length, not the asked one",
+        SCRIPT[:] = [call("wait", minutes=30)]
+        r = admin.post(f"/api/assistant/chats/{chat_id}/messages", json={"text": "wait"})
+        run_id = r.get_json()["run_id"]
+        started = []
+        deadline = time.time() + 5
+        while time.time() < deadline and not started:
+            events = admin.get(f"/api/assistant/runs/{run_id}?after_seq=-1").get_json()["events"]
+            started = [e for e in events
+                       if e.get("name") == "wait" and e.get("state") == "started"]
+            time.sleep(0.02)
+        check("the panel is told the cut length, not the asked one",
               started and started[0].get("seconds") == 60)
+        stopped_at = time.time()
+        admin.post(f"/api/assistant/runs/{run_id}/cancel", json={})
+        events = wait_run(admin, run_id, timeout=5)
+        check(f"Stop ends a long wait at once ({time.time() - stopped_at:.1f}s)",
+              events and events[-1].get("error") == "stopped"
+              and time.time() - stopped_at < 4)
+        data = json.loads(tool_messages(chat_id)[-1]["content"])["data"]
+        check(f"the result says it was cut to the setting ({data})",
+              data["asked_seconds"] == 1800 and data["cut_to_limit"] is True
+              and data["limit_seconds"] == 60 and data["waited_seconds"] < 60)
+        check("...and that the operator stopped it", data["stopped_by_operator"] is True)
     finally:
-        assistant.wait_for = real_wait_for
         settings.set_many(DB, {"ai.assistant_max_wait_minutes": 60}, "test")
         settings.invalidate()
-
-    # Stop, for real: a ten-minute wait has to end within a couple of seconds.
-    chat_id = new_chat(admin)
-    SCRIPT[:] = [call("wait", minutes=10)]
-    r = admin.post(f"/api/assistant/chats/{chat_id}/messages", json={"text": "wait"})
-    run_id = r.get_json()["run_id"]
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        events = admin.get(f"/api/assistant/runs/{run_id}?after_seq=-1").get_json()["events"]
-        if any(e.get("name") == "wait" and e.get("state") == "started" for e in events):
-            break
-        time.sleep(0.02)
-    stopped_at = time.time()
-    admin.post(f"/api/assistant/runs/{run_id}/cancel", json={})
-    events = wait_run(admin, run_id, timeout=5)
-    check(f"Stop ends a long wait at once ({time.time() - stopped_at:.1f}s)",
-          events and events[-1].get("error") == "stopped"
-          and time.time() - stopped_at < 4)
-    result = json.loads(tool_messages(chat_id)[-1]["content"])
-    check("...and the model is told the operator stopped it",
-          result["data"]["stopped_by_operator"] is True)
     SCRIPT[:] = []
 
 

@@ -33,6 +33,10 @@ import refusals
 import schedule_spec
 
 MAX_PREVIEW = 10
+# An anchor past this (2100-01-01) is not a last run: it is a typo or an attack. The bound
+# also keeps out the `Infinity` and `NaN` literals request.get_json() accepts, which reached
+# int() and turned a view-only route into a 500 (found in review, PR #189).
+MAX_ANCHOR = 4102444800
 
 
 def hub_utc_offset_seconds(now=None):
@@ -40,7 +44,9 @@ def hub_utc_offset_seconds(now=None):
     return int(time.localtime(now if now is not None else time.time()).tm_gmtoff)
 
 
-def create_schedules_blueprint(db_path, login_required, access):
+def create_schedules_blueprint(login_required, access):
+    """No `db_path`, unlike its siblings: the preview reads nothing stored. The /schedule
+    overview (Schedules, phase 6) is the first route here that will need it."""
     bp = Blueprint("schedules", __name__)
     can_view = access.require(permissions.VIEW)
 
@@ -69,7 +75,8 @@ def create_schedules_blueprint(db_path, login_required, access):
         except (TypeError, ValueError):
             count = 5
         anchor = data.get("anchor")
-        anchor = int(anchor) if isinstance(anchor, (int, float)) and anchor > 0 else None
+        anchor = (int(anchor) if isinstance(anchor, (int, float)) and not isinstance(anchor, bool)
+                  and 0 < anchor < MAX_ANCHOR else None)
         return jsonify({
             "spec": spec,
             "next": schedule_spec.preview(spec, purpose, now, count, anchor=anchor),

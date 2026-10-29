@@ -2751,7 +2751,7 @@ app.register_blueprint(create_rules_blueprint(
 
 # Schedules: the hub-time preview every schedule picker asks for its next runs. `view`
 # only, because a preview is a calculator; saving a schedule is gated where it is stored.
-app.register_blueprint(create_schedules_blueprint(DB_PATH, login_required, access))
+app.register_blueprint(create_schedules_blueprint(login_required, access))
 
 # Self-healing watchdogs (roadmap #20). No variable resolver and no config injection, unlike
 # the rules blueprint above, and the absence is the feature: a watchdog is never evaluated on
