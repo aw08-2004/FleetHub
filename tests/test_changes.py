@@ -136,11 +136,13 @@ def test_every_writing_blueprint_has_a_topic():
             continue
         if not rule.rule.startswith("/api/"):
             continue
+        if rule.rule in changes.UNMARKED_RULES or rule.rule in changes.UNMARKED_PATHS:
+            continue        # never marks, so it needs no topic -- in a blueprint or not
         if "." in rule.endpoint:
             blueprint = rule.endpoint.split(".", 1)[0]
             if blueprint not in changes.BLUEPRINT_TOPICS:
                 missing.add(blueprint)
-        elif rule.rule not in changes.UNMARKED_RULES and rule.rule not in changes.UNMARKED_PATHS:
+        else:
             app_endpoints.add(rule.endpoint)
     check(f"every blueprint with a write maps to a topic (missing: {sorted(missing)})",
           not missing)

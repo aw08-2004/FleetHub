@@ -120,6 +120,7 @@ from assistant_web import RouteDispatcher, create_assistant_blueprint
 from webfetch_web import create_webfetch_blueprint
 from correlate_web import create_correlate_blueprint
 from rules_web import create_rules_blueprint
+from schedules_web import create_schedules_blueprint
 from watchdogs_web import create_watchdogs_blueprint
 from tickets_web import create_tickets_blueprint
 import device_groups
@@ -170,7 +171,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.170.2"
+HUB_VERSION = "1.171.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2748,6 +2749,10 @@ app.register_blueprint(create_rules_blueprint(
     lambda: _rules_config(),
 ))
 
+# Schedules: the hub-time preview every schedule picker asks for its next runs. `view`
+# only, because a preview is a calculator; saving a schedule is gated where it is stored.
+app.register_blueprint(create_schedules_blueprint(DB_PATH, login_required, access))
+
 # Self-healing watchdogs (roadmap #20). No variable resolver and no config injection, unlike
 # the rules blueprint above, and the absence is the feature: a watchdog is never evaluated on
 # the hub, so there is nothing here to resolve. See watchdogs.py's module docstring.
@@ -5298,6 +5303,7 @@ def backup_scheduler():
                 interval_hours=settings.get_int(DB_PATH, "backup.hub_interval_hours"),
                 keep=settings.get_int(DB_PATH, "backup.hub_keep_generations"),
                 hub_version=HUB_VERSION,
+                schedule=settings.get(DB_PATH, "backup.hub_schedule"),
             )
             if run is not None:
                 if run["status"] == backups.RUN_SUCCEEDED:
@@ -5316,6 +5322,7 @@ def backup_scheduler():
                 fleet_include=settings.get_list(DB_PATH, "backup.files_include"),
                 fleet_exclude=settings.get_list(DB_PATH, "backup.files_exclude"),
                 interval_hours=settings.get_int(DB_PATH, "backup.files_interval_hours"),
+                schedule=settings.get(DB_PATH, "backup.files_schedule"),
                 full_every=settings.get_int(DB_PATH, "backup.files_full_every"),
                 keep_chains=settings.get_int(DB_PATH, "backup.files_keep_chains"),
                 limits={

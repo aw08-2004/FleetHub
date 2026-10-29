@@ -98,13 +98,15 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         enabled = settings.get_bool(db_path, "backup.hub_enabled")
         destination_id = settings.get(db_path, "backup.hub_destination") or ""
         last_success = backups.get_state(db_path, backups.LAST_SUCCESS_STATE_KEY)
+        schedule = settings.get(db_path, "backup.hub_schedule")
         return {
             "enabled": bool(enabled),
             "destination_id": destination_id,
             "interval_hours": interval,
+            "schedule": schedule,
             "keep_generations": settings.get_int(db_path, "backup.hub_keep_generations"),
             "last_success_at": int(last_success) if last_success else None,
-            "next_due_at": (backups.next_due_at(db_path, interval)
+            "next_due_at": (backups.next_due_at(db_path, interval, schedule)
                             if enabled and destination_id else None),
             "running": backups.backup_in_progress(),
         }
@@ -131,6 +133,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             "include": defaults["fleet_include"],
             "exclude": defaults["fleet_exclude"],
             "interval_hours": settings.get_int(db_path, "backup.files_interval_hours"),
+            "schedule": settings.get(db_path, "backup.files_schedule"),
             "full_every": settings.get_int(db_path, "backup.files_full_every"),
             "keep_chains": settings.get_int(db_path, "backup.files_keep_chains"),
             "max_file_mb": settings.get_int(db_path, "backup.files_max_file_mb"),
@@ -171,6 +174,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         return backups.files_dispatch_once(
             db_path, log_dir, **_fleet_file_defaults(),
             interval_hours=settings.get_int(db_path, "backup.files_interval_hours"),
+            schedule=settings.get(db_path, "backup.files_schedule"),
             full_every=settings.get_int(db_path, "backup.files_full_every"),
             limits={
                 "max_file_mb": settings.get_int(db_path, "backup.files_max_file_mb"),

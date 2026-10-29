@@ -1183,6 +1183,10 @@
         "label": "Copiar cada",
         "help": "Con qué frecuencia se toma una instantánea de la base de datos del hub."
       },
+      "backup.hub_schedule": {
+        "label": "Copia de seguridad a las",
+        "help": "Horas fijas para la copia de seguridad de la base de datos del hub, definidas con el selector de la página Copias de seguridad. Reemplaza el intervalo mientras está definido; un horario perdido mientras el hub estaba apagado se ejecuta una vez al volver."
+      },
       "backup.hub_keep_generations": {
         "label": "Conservar este número de copias",
         "help": "Las generaciones más antiguas se eliminan del destino tras cada copia correcta. 14 = dos semanas con la cadencia diaria predeterminada."
@@ -1206,6 +1210,10 @@
       "backup.files_interval_hours": {
         "label": "Copiar los archivos de los PC cada",
         "help": "Con qué frecuencia se pide a cada equipo que ejecute una copia de archivos."
+      },
+      "backup.files_schedule": {
+        "label": "Copia de archivos de los PC a las",
+        "help": "Horas fijas para la copia de seguridad de archivos por PC, definidas con el selector de la página Copias de seguridad. Reemplaza el intervalo mientras está definido; un PC apagado a esa hora se copia una vez cuando vuelve."
       },
       "backup.files_full_every": {
         "label": "Hacer una copia completa cada",
@@ -2247,7 +2255,9 @@
       "choose_destination": "Elige un destino…",
       "interval": "Copiar cada (horas)",
       "keep": "Conservar este número de copias",
-      "rotation_note": "Las copias más antiguas que excedan ese número se eliminan del destino tras cada subida correcta."
+      "rotation_note": "Las copias más antiguas que excedan ese número se eliminan del destino tras cada subida correcta.",
+      "when": "Cuándo hacer la copia de seguridad",
+      "use_interval": "Cada N horas (el intervalo de arriba)"
     },
     "runs": {
       "title": "Copias recientes",
@@ -2298,7 +2308,8 @@
       "exclude_placeholder": "p. ej. *.tmp o **\\node_modules\\**",
       "add": "Añadir",
       "remove": "Quitar {value}",
-      "tokens": "Tokens disponibles"
+      "tokens": "Tokens disponibles",
+      "when": "Cuándo copiar los archivos de los PC"
     },
     "fleet_run": {
       "title": "Copiar ahora",
@@ -2494,6 +2505,37 @@
     "restored_of": "{done} / {total}",
     "restore_to": "{machine} → {dir}",
     "unknown": "—"
+  },
+  "schedule": {
+    "mode": {
+      "none": "Sin programar",
+      "weekly": "A horas fijas",
+      "interval": "Cada…",
+      "window": "Entre horas fijas",
+      "cron": "Expresión cron (avanzado)"
+    },
+    "day": {
+      "mon": "Lun",
+      "tue": "Mar",
+      "wed": "Mié",
+      "thu": "Jue",
+      "fri": "Vie",
+      "sat": "Sáb",
+      "sun": "Dom"
+    },
+    "at": "a las",
+    "add_time": "Agregar una hora",
+    "remove_time": "Quitar esta hora",
+    "every": "Cada",
+    "unit": {
+      "minutes": "minutos",
+      "hours": "horas"
+    },
+    "from": "desde",
+    "until": "hasta",
+    "cron_help": "Cinco campos: minuto, hora, día del mes, mes, día de la semana (0 o 7 = domingo). Si ambos campos de día están definidos, basta con uno. Se ejecuta en la hora del hub.",
+    "next_runs": "Próximas ejecuciones ({zone}, hora del hub): {runs}",
+    "next_openings": "Próximas aperturas ({zone}, hora del hub): {runs}"
   },
   "machine": {
     "live_temp": "Temperatura en vivo",

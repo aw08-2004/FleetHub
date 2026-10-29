@@ -1183,6 +1183,10 @@
         "label": "Sichern alle",
         "help": "Wie oft ein Snapshot der Hub-Datenbank erstellt wird."
       },
+      "backup.hub_schedule": {
+        "label": "Sichern um",
+        "help": "Feste Zeiten für die Sicherung der Hub-Datenbank, eingestellt mit der Auswahl auf der Seite „Sicherungen“. Ersetzt das Intervall, solange gesetzt; ein Termin, der verpasst wurde, während der Hub aus war, wird einmal nachgeholt."
+      },
       "backup.hub_keep_generations": {
         "label": "So viele Sicherungen aufbewahren",
         "help": "Ältere Generationen werden nach jeder erfolgreichen Sicherung am Ziel gelöscht. 14 = zwei Wochen bei der täglichen Standardfrequenz."
@@ -1206,6 +1210,10 @@
       "backup.files_interval_hours": {
         "label": "PC-Dateien sichern alle",
         "help": "Wie oft jeder Computer aufgefordert wird, eine Dateisicherung auszuführen."
+      },
+      "backup.files_schedule": {
+        "label": "PC-Dateien sichern um",
+        "help": "Feste Zeiten für die Dateisicherung pro PC, eingestellt mit der Auswahl auf der Seite „Sicherungen“. Ersetzt das Intervall, solange gesetzt; ein PC, der zum Termin aus war, wird einmal gesichert, sobald er zurück ist."
       },
       "backup.files_full_every": {
         "label": "Vollsicherung alle",
@@ -2247,7 +2255,9 @@
       "choose_destination": "Ziel auswählen…",
       "interval": "Sichern alle (Stunden)",
       "keep": "So viele Sicherungen aufbewahren",
-      "rotation_note": "Ältere Sicherungen jenseits dieser Anzahl werden nach jedem erfolgreichen Upload am Ziel gelöscht."
+      "rotation_note": "Ältere Sicherungen jenseits dieser Anzahl werden nach jedem erfolgreichen Upload am Ziel gelöscht.",
+      "when": "Wann sichern",
+      "use_interval": "Alle N Stunden (Intervall oben)"
     },
     "runs": {
       "title": "Letzte Sicherungen",
@@ -2298,7 +2308,8 @@
       "exclude_placeholder": "z. B. *.tmp oder **\\node_modules\\**",
       "add": "Hinzufügen",
       "remove": "{value} entfernen",
-      "tokens": "Verfügbare Token"
+      "tokens": "Verfügbare Token",
+      "when": "Wann PC-Dateien sichern"
     },
     "fleet_run": {
       "title": "Jetzt sichern",
@@ -2494,6 +2505,37 @@
     "restored_of": "{done} / {total}",
     "restore_to": "{machine} → {dir}",
     "unknown": "—"
+  },
+  "schedule": {
+    "mode": {
+      "none": "Nicht geplant",
+      "weekly": "Zu festen Zeiten",
+      "interval": "Alle…",
+      "window": "Zwischen festen Zeiten",
+      "cron": "Cron-Ausdruck (erweitert)"
+    },
+    "day": {
+      "mon": "Mo",
+      "tue": "Di",
+      "wed": "Mi",
+      "thu": "Do",
+      "fri": "Fr",
+      "sat": "Sa",
+      "sun": "So"
+    },
+    "at": "um",
+    "add_time": "Uhrzeit hinzufügen",
+    "remove_time": "Diese Uhrzeit entfernen",
+    "every": "Alle",
+    "unit": {
+      "minutes": "Minuten",
+      "hours": "Stunden"
+    },
+    "from": "von",
+    "until": "bis",
+    "cron_help": "Fünf Felder: Minute, Stunde, Tag im Monat, Monat, Wochentag (0 oder 7 = Sonntag). Sind beide Tagesfelder gesetzt, genügt eines davon. Läuft in der Zeit des Hubs.",
+    "next_runs": "Nächste Läufe ({zone}, Hub-Zeit): {runs}",
+    "next_openings": "Nächste Öffnungen ({zone}, Hub-Zeit): {runs}"
   },
   "machine": {
     "live_temp": "Live-Temperatur",

@@ -224,7 +224,24 @@ function buildControl(field) {
         || field.type === 'path_list') return buildListControl(field);
     if (field.type === 'enum') return buildEnumControl(field);
     if (field.type === 'str') return buildTextControl(field);
+    if (field.type === 'schedule') return buildScheduleControl(field);
     return buildNumberControl(field);
+}
+
+// A `schedule` setting is edited with the schedule picker on the page that owns it (the
+// Backups page today), never here: the picker asks the hub for the next runs in hub time,
+// which a bare text box cannot. So this is read-only -- it shows the stored spec, and it
+// exists at all so a schedule section that IS someday given a Settings tab does not fall
+// through to the number input, which would discard the value and save null over it.
+function buildScheduleControl(field) {
+    const input = document.createElement('input');
+    input.className = 'input setting__input';
+    input.id = controlId(field.key);
+    input.type = 'text';
+    input.autocomplete = 'off';
+    input.readOnly = true;
+    input.value = field.value ? JSON.stringify(field.value) : '';
+    return input;
 }
 
 function buildCheckboxControl(field) {

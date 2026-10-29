@@ -129,6 +129,9 @@ READ_POSTS = {
     ("POST", "/api/device-groups/preview"),
     ("POST", "/api/policy/preview"),
     ("POST", "/api/backups/preview"),
+    # A schedule's next runs in hub time (schedules_web.py). A calculator over the body: it
+    # reads nothing about the fleet, so the assistant can answer "when would this run?".
+    ("POST", "/api/schedules/preview"),
     ("POST", "/api/ai/query"),
     ("POST", "/api/ai/summary"),
     ("POST", "/api/ai/machines/<machine>/ask"),

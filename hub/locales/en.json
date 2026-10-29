@@ -1260,6 +1260,10 @@
         "label": "Back up every",
         "help": "Measured from the last ATTEMPT, not the last success -- a destination that has been down for a week is retried on this cadence rather than on every scheduler tick."
       },
+      "backup.hub_schedule": {
+        "label": "Back up at",
+        "help": "Fixed times for the hub database backup, set with the picker on the Backups page. Replaces the interval while set; a slot missed while the hub was down is taken once when it comes back."
+      },
       "backup.hub_keep_generations": {
         "label": "Keep this many backups",
         "help": "After a successful upload, older backups beyond this count are DELETED from the destination. At the default daily cadence this is two weeks of history. Counted from what the destination actually holds, so a file you delete by hand is not silently replaced."
@@ -1283,6 +1287,10 @@
       "backup.files_interval_hours": {
         "label": "Back up PC files every",
         "help": "Measured from the last attempt on each machine, so a laptop that was off is picked up when it returns rather than skipped."
+      },
+      "backup.files_schedule": {
+        "label": "Back up PC files at",
+        "help": "Fixed times for per-PC file backups, set with the picker on the Backups page. Replaces the interval while set; a PC that was off at the slot is backed up once when it comes back."
       },
       "backup.files_full_every": {
         "label": "Take a full backup every",
@@ -2352,7 +2360,9 @@
       "choose_destination": "Choose a destination…",
       "interval": "Back up every (hours)",
       "keep": "Keep this many backups",
-      "rotation_note": "Older backups beyond that count are deleted from the destination after each successful upload."
+      "rotation_note": "Older backups beyond that count are deleted from the destination after each successful upload.",
+      "when": "When to back up",
+      "use_interval": "Every N hours (the interval above)"
     },
     "runs": {
       "title": "Recent backups",
@@ -2403,7 +2413,8 @@
       "exclude_placeholder": "e.g. *.tmp or **\\node_modules\\**",
       "add": "Add",
       "remove": "Remove {value}",
-      "tokens": "Available tokens"
+      "tokens": "Available tokens",
+      "when": "When to back up PC files"
     },
     "fleet_run": {
       "title": "Back up now",
@@ -2608,6 +2619,37 @@
     "restored_of": "{done} / {total}",
     "restore_to": "{machine} → {dir}",
     "unknown": "—"
+  },
+  "schedule": {
+    "mode": {
+      "none": "Not scheduled",
+      "weekly": "At set times",
+      "interval": "Every…",
+      "window": "Between set times",
+      "cron": "Cron expression (advanced)"
+    },
+    "day": {
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat",
+      "sun": "Sun"
+    },
+    "at": "at",
+    "add_time": "Add a time",
+    "remove_time": "Remove this time",
+    "every": "Every",
+    "unit": {
+      "minutes": "minutes",
+      "hours": "hours"
+    },
+    "from": "from",
+    "until": "until",
+    "cron_help": "Five fields: minute, hour, day of month, month, day of week (0 or 7 = Sunday). When both day fields are set, either one matches. Runs in the hub's time.",
+    "next_runs": "Next runs ({zone}, hub time): {runs}",
+    "next_openings": "Next opens ({zone}, hub time): {runs}"
   },
   "machine": {
     "live_temp": "Live Temperature",

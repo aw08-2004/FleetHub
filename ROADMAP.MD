@@ -118,7 +118,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-23
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-29
 
 **How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
 `beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.170.1**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.171.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -344,6 +344,24 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
 - [ ] **No TURN configured** (clear the Cloudflare key on a test hub): the hub relay still takes
   over as before.
 - [ ] **Sharing link** to the same PC connects the same way.
+
+**Hub 1.171.0: backups at set times or on a cron expression** (*Schedules*, phase 1)
+- [ ] **Nothing moved on update.** Before touching anything, Fleet tasks → Backup shows
+  *Every N hours (the interval above)* for both the hub database and PC files, and the
+  "Next due" line is the same as before the update.
+- [ ] **Set times run at the slot.** Set the hub database to *At set times*, today, two or
+  three minutes ahead. **Next runs** lists that time first, labelled with the hub's UTC
+  offset; the run appears in the history within a minute of it, labelled *Scheduled*, and
+  not again an hour later.
+- [ ] **Hub time, not browser time.** From a browser set to a different time zone, the
+  **Next runs** times are unchanged.
+- [ ] **Cron.** `0 3 * * 0` previews five Sundays at 03:00; `0 3 * *` shows an error under
+  the box and saves nothing (reload: the old schedule is still there).
+- [ ] **A laptop catches up once.** With PC files on set times, shut a test laptop across a
+  slot, start it a few hours later: one backup within a minute of it reporting, not one per
+  missed slot.
+- [ ] **Back to the interval.** Switch to *Every N hours*: the interval field is editable
+  again and "Next due" goes back to last attempt + N hours.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -754,6 +772,69 @@ hub change. Then the *Linux terminal* box in the beta list above. The agent's re
 run and tested on the development PC, but the installer's service path was only parsed, not
 run: a fresh install on a clean VM, a re-install over a waitress hub, and `-MigrateHubServer`
 with the tunnel switched. Then the *Hub 1.170.0* boxes in the beta list above.
+
+---
+
+## 🚧 Schedules -- backups, rules, scripts, reports and discovery at set times   ·   phase 1 (backups) hub 1.171.0   ·   `schedule_spec.py`, `schedules_web.py`, `static/js/schedule-picker.js`
+
+Asked for on 2026-10-29: "let me run Rules, Backups etc on a schedule or on cron timers".
+Until then the hub had two ideas of time -- an interval counted from the last attempt
+(backups) and the weekly maintenance window (patches) -- and neither could say "every night
+at 02:00". The interval drifts later by however long each run took to be noticed.
+
+**One spec module, storage in each feature.** `schedule_spec.py` is Flask-free and owns no
+table: it validates a spec (`weekly` days + times, `interval`, `cron`, and for spans
+`window`) and answers the two questions a scheduler asks, `latest_slot` ("has a slot passed
+since I last ran?") and `next_fires`. Each feature keeps its spec on its own row or setting,
+next to its own history, target model and permission gate. The console has one picker,
+`schedule-picker.js`, which shows a server-computed preview in **hub** time -- the browser
+never computes a next run, because it may be in another zone.
+
+**What a late slot does is per feature, decided from stored state** (so "the hub was down"
+and "the tick ran 40 s late" are the same case):
+
+| Job | A slot that was missed |
+|---|---|
+| Hub DB backup, PC file backups | runs once, late (a late backup is still worth having) |
+| Timed rule (phase 2) | runs only within the rule's grace (default 15 min); otherwise recorded as missed |
+| Scheduled report (phase 4) | runs if within 24 h, otherwise recorded as missed |
+| Scheduled discovery (phase 5) | 30 min grace, otherwise skipped |
+
+Saving or re-enabling a schedule arms it at that moment, so saving "Sundays 03:00" on a
+Wednesday never fires anything at once.
+
+**Phases**, one PR into `beta` each:
+1. ✅ **Foundation + backups** (hub 1.171.0): the spec module, `POST /api/schedules/preview`,
+   the picker, a `schedule` settings type, and `backup.hub_schedule` /
+   `backup.files_schedule`. Unset means "use the interval", so no hub changes behaviour on
+   update. A never-run hub still backs up at once when enabled.
+2. 📋 **Timed rules**: `trigger: schedule` on a rule, with the condition optional and checked
+   at fire time. Scripts and saved commands on a schedule are timed rules, not a new
+   entity, so they inherit targets, scope, the command kill switch, `issue_commands`, the
+   cooldown floor, `max_targets_per_tick` and `rule_fires` history. This resolves the
+   drafter's *A schedule is not a rule* item below. `RULE_FORBIDDEN_COMMANDS` does not
+   change: `reboot`, `shutdown` and `run_script` were never in it.
+3. 📋 **Active hours** on condition rules: the window gates only the firing step;
+   `matched_since` keeps counting outside it.
+4. 📋 **Scheduled reports**, emailed, behind a new `schedule_reports` capability.
+5. 📋 **Scheduled discovery**, off by default behind a fleet switch, at most every 6 h, and
+   only on a subnet still on that machine's adapters at fire time -- the narrowed form of
+   #18's "no schedule" decision.
+6. 📋 **A /schedule overview**: read-only agenda for the next 7 days, plus recent misses.
+
+**Rejected:**
+- *A central jobs table* with a polymorphic payload. Each feature already has its own
+  history, targets and gate; a central table would need its own copy of every gate, which
+  is a second way around each one.
+- *croniter / APScheduler.* A new dependency in a hub that self-updates by copying files, for
+  ~200 lines, and neither knows Monday-first masks, windows or an injected clock.
+  APScheduler would be a second scheduler beside the `tick()` threads.
+- *A seconds field, `@reboot`, Quartz `L W # ?`.* Seconds mean nothing against a 15-60 s
+  tick; `@reboot` means nothing on a hub that restarts on every update; Quartz is a dialect
+  operators would have to look up.
+- *Per-machine time zones.* One helpdesk, one clock, as patches.py already decided.
+- *Turning `*_interval_hours` into a spec.* It has been an int in every settings table since
+  1.28.0; a second key that overrides it is no migration at all.
 
 ---
 

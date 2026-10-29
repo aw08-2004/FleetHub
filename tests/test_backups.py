@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import backups
 import capabilities
 import fleet
+import schedule_spec
 
 PASS = 0
 FAIL = 0
@@ -1043,6 +1044,16 @@ def main():
               backups.files_due_at(rot_db, "PC-NEVER", 24) == 0)
         check("...and not due again right after an attempt",
               backups.files_due_at(rot_db, "PC-C", 24) == 1_800_000_000 + 24 * 3600)
+        # A fixed-time schedule replaces the interval: the slot after the last attempt,
+        # not 24 hours after it -- otherwise "nightly" drifts by however late each run was.
+        nightly = {"kind": "weekly", "days_mask": 0b1111111, "times": [180]}
+        sched_due = backups.files_due_at(rot_db, "PC-C", 24, nightly)
+        check("with a schedule, due at the next 03:00 after the attempt",
+              sched_due == schedule_spec.next_fires(nightly, 1_800_000_000, 1)[0]
+              and time.localtime(sched_due).tm_hour == 3
+              and 1_800_000_000 < sched_due <= 1_800_000_000 + 24 * 3600)
+        check("...and never-run is still due at once",
+              backups.files_due_at(rot_db, "PC-NEVER", 24, nightly) == 0)
 
         backups.complete_file_run(rot_db, run_id, object_key="p/x.fhb",
                                   stored_bytes=500, file_count=42)
@@ -1889,6 +1900,38 @@ def main():
                   backups.tick(db_path, log_dir, enabled=True, destination_id=dest_id,
                                interval_hours=1, keep=2,
                                now=int(attempt_before) + 3660) is None)
+
+            # A fixed-time schedule. The interval is passed as 1 hour on purpose: if the
+            # schedule were ignored, every check below that expects "not due" would run.
+            backups.build_client = lambda record, secret: bucket
+            nightly = {"kind": "weekly", "days_mask": 0b1111111, "times": [180]}
+            one_am = int(time.mktime((2027, 1, 4, 1, 0, 0, 0, 0, -1)))
+            three_am = int(time.mktime((2027, 1, 4, 3, 0, 0, 0, 0, -1)))
+            backups.set_state(db_path, backups.LAST_ATTEMPT_STATE_KEY, one_am)
+            check("scheduled: next_due_at is the 03:00 slot, not attempt + interval",
+                  backups.next_due_at(db_path, 1, nightly) == three_am)
+            check("scheduled: not due a minute before the slot",
+                  backups.tick(db_path, log_dir, enabled=True, destination_id=dest_id,
+                               interval_hours=1, keep=2, now=three_am - 60,
+                               schedule=nightly) is None)
+            slot_run = backups.tick(db_path, log_dir, enabled=True, destination_id=dest_id,
+                                    interval_hours=1, keep=2, now=three_am + 30,
+                                    schedule=nightly)
+            check("scheduled: runs at the slot", slot_run is not None
+                  and slot_run["trigger"] == backups.TRIGGER_SCHEDULE)
+            check("scheduled: not again an hour later, whatever the interval says",
+                  backups.tick(db_path, log_dir, enabled=True, destination_id=dest_id,
+                               interval_hours=1, keep=2, now=three_am + 3600,
+                               schedule=nightly) is None)
+            week_later = three_am + 7 * 86400 + 600
+            check("scheduled: a hub down for a week catches up once",
+                  backups.tick(db_path, log_dir, enabled=True, destination_id=dest_id,
+                               interval_hours=1, keep=2, now=week_later,
+                               schedule=nightly) is not None
+                  and backups.tick(db_path, log_dir, enabled=True, destination_id=dest_id,
+                                   interval_hours=1, keep=2, now=week_later + 60,
+                                   schedule=nightly) is None)
+            backups.build_client = lambda record, secret: broken
 
             # ============================================================
             print("\n== Concurrency ==")

@@ -60,7 +60,7 @@ import ai
 Setting = namedtuple("Setting", [
     "key",       # "data.retention_days" -- the section is the prefix, by convention
     "section",   # "computer" | "hub" | "data" | "fleet"
-    "type",      # "int"|"float"|"bool"|"str"|"enum"|"str_list"|"path_list"|"url_list"
+    "type",      # "int"|"float"|"bool"|"str"|"enum"|"str_list"|"path_list"|"url_list"|"schedule"
     "default",   # MUST equal the constant this replaced
     "minimum",   # numeric bounds; None for non-numeric types
     "maximum",
@@ -463,6 +463,12 @@ REGISTRY = (
     _s("backup.hub_destination", "backup", "str", ""),
     _s("backup.hub_interval_hours", "backup", "int", 24, minimum=1, maximum=720,
        unit="hours"),
+    # A fixed-time schedule ("daily at 02:00") that REPLACES the interval when set. None,
+    # the default, keeps the interval -- so a hub that never touches this behaves exactly as
+    # before it existed. Two keys rather than turning the interval into a spec: the interval
+    # has been an int in every settings table in the field since 1.28.0, and a migration that
+    # rewrote it would be one more thing to get wrong on a hub nobody is watching.
+    _s("backup.hub_schedule", "backup", "schedule", None),
     _s("backup.hub_keep_generations", "backup", "int", 14, minimum=1, maximum=365,
        unit="generations"),
 
@@ -480,6 +486,7 @@ REGISTRY = (
         "**\\node_modules\\**", "**\\.git\\**", "*.iso", "*.vhdx", "*.vmdk"]),
     _s("backup.files_interval_hours", "backup", "int", 24, minimum=1, maximum=720,
        unit="hours"),
+    _s("backup.files_schedule", "backup", "schedule", None),
     _s("backup.files_full_every", "backup", "int", 7, minimum=1, maximum=90, unit="runs"),
     _s("backup.files_keep_chains", "backup", "int", 4, minimum=1, maximum=52, unit="chains"),
     _s("backup.files_max_file_mb", "backup", "int", 2048, minimum=1, maximum=102400,
@@ -1154,6 +1161,24 @@ def coerce_and_validate(setting, raw, lang=None):
             return backup_paths.validate_patterns(raw, kind=kind)
         except ValueError as e:
             raise ValueError(f"{label}: {e}")
+
+    if setting.type == "schedule":
+        # A schedule_spec "fire" spec, or None for "not scheduled -- use the interval". The
+        # spec module is the only validator, so a setting and a rule can never disagree
+        # about what "0 3 * * 0" means. A JSON string is accepted for the same transport
+        # reason numbers arrive as "85". Imported lazily like backup_paths above.
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            return None
+        import schedule_spec
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                raise ValueError(f"{label}: A schedule must be an object.")
+        error, spec = schedule_spec.validate(raw, schedule_spec.PURPOSE_FIRE)
+        if error:
+            raise ValueError(f"{label}: {error}")
+        return spec
 
     raise bad("unsupported_type", type=repr(setting.type))
 
