@@ -77,7 +77,7 @@ public sealed class LocalGroupPolicy(string root, Action<bool> refresh) : ILocal
             ? Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(PolicyPath))) : null;
         if (onDisk != file.LoadedHash) return false;
         Directory.CreateDirectory(Path.GetDirectoryName(PolicyPath)!);
-        // gpt.ini FIRST (review on #192). The other order fails badly: a gpt.ini that cannot be
+        // gpt.ini FIRST. The other order fails badly: a gpt.ini that cannot be
         // written (gpedit or a scanner holding it) after Registry.pol was replaced leaves the
         // new values on disk under the old version, and the next pass finds nothing to change,
         // so nothing ever bumps it and Windows skips the GPO until the runner's forced repair.

@@ -259,8 +259,8 @@ public class LocalGroupPolicyTests
     [Fact]
     public void A_gpt_ini_that_cannot_be_written_leaves_Registry_pol_as_it_was()
     {
-        // The other order left new values under an old version that no later pass would bump
-        // (review on #192). A directory where gpt.ini should be stands in for a locked file.
+        // The other order left new values under an old version that no later pass would bump.
+        // A directory where gpt.ini should be stands in for a locked file.
         var root = Path.Combine(Path.GetTempPath(), "fleethub-lgpo-" + Guid.NewGuid().ToString("N"));
         try
         {
