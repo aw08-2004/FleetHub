@@ -446,6 +446,81 @@ if ($Uninstall) {
     $gpoMarkerKey = "HKLM:\SOFTWARE\FleetHub\GroupPolicy"
     $gpoMarked = (Get-ItemProperty -LiteralPath $gpoMarkerKey -Name Written -ErrorAction SilentlyContinue).Written
     if ($gpoMarked) {
+        # Since agent 3.50 the values live in the PC's local GPO (Machine\Registry.pol), and
+        # Windows writes them into the registry from there -- so deleting them from the
+        # registry alone would see them put back at the next policy refresh. The marked
+        # entries come out of the file first: every other entry is copied byte for byte (it is
+        # whoever ran gpedit.msc's), and a file this cannot read is left exactly as it is.
+        $gpRoot = Join-Path $env:SystemRoot "System32\GroupPolicy"
+        $pol = Join-Path $gpRoot "Machine\Registry.pol"
+        if (Test-Path -LiteralPath $pol) {
+            try {
+                $ours = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                foreach ($entry in @($gpoMarked)) { [void]$ours.Add($entry) }
+                $bytes = [IO.File]::ReadAllBytes($pol)
+                $unicode = [Text.Encoding]::Unicode
+                if ($bytes.Length -lt 8 -or [Text.Encoding]::ASCII.GetString($bytes, 0, 4) -ne "PReg" -or
+                    [BitConverter]::ToUInt32($bytes, 4) -ne 1) { throw "not a version 1 Registry.pol" }
+                $kept = [IO.MemoryStream]::new()
+                $kept.Write($bytes, 0, 8)
+                $at = 8
+                $removed = 0
+                # [key NUL ; name NUL ; type ; size ; data] -- brackets and semicolons UTF-16LE.
+                while ($at -lt $bytes.Length) {
+                    $start = $at
+                    if ([BitConverter]::ToUInt16($bytes, $at) -ne 0x5B) { throw "unexpected byte at $at" }
+                    $at += 2
+                    $from = $at
+                    while ([BitConverter]::ToUInt16($bytes, $at) -ne 0) { $at += 2 }
+                    $key = $unicode.GetString($bytes, $from, $at - $from)
+                    if ([BitConverter]::ToUInt16($bytes, $at + 2) -ne 0x3B) { throw "unexpected byte at $at" }
+                    $at += 4
+                    $from = $at
+                    while ([BitConverter]::ToUInt16($bytes, $at) -ne 0) { $at += 2 }
+                    $name = $unicode.GetString($bytes, $from, $at - $from)
+                    $at += 2
+                    $typed = [BitConverter]::ToUInt16($bytes, $at) -eq 0x3B
+                    if ($typed) {
+                        $size = [BitConverter]::ToUInt32($bytes, $at + 8)
+                        $at += 14 + $size
+                    }
+                    if ($at + 2 -gt $bytes.Length -or [BitConverter]::ToUInt16($bytes, $at) -ne 0x5D) {
+                        throw "unexpected byte at $at"
+                    }
+                    $at += 2
+                    # A Disabled template's delete is ours too: the marker says "key|Name", the
+                    # file "**del.Name" (RegistryPolFile.Delete strips both). Left in, Windows
+                    # would go on deleting that value, and gpedit showing it Disabled, after
+                    # FleetHub is gone.
+                    $leaf = if ($name.StartsWith("**del.", [StringComparison]::OrdinalIgnoreCase)) { $name.Substring(6) } else { $name }
+                    if ($typed -and $ours.Contains("$key|$leaf")) { $removed++; continue }
+                    $kept.Write($bytes, $start, $at - $start)
+                }
+                if ($removed -gt 0) {
+                    [IO.File]::WriteAllBytes($pol, $kept.ToArray())
+                    # The Group Policy service skips a GPO whose version did not move: bump the
+                    # computer half (low word), as GptIni.Bump does in the agent.
+                    $ini = Join-Path $gpRoot "gpt.ini"
+                    if (Test-Path -LiteralPath $ini) {
+                        $lines = [IO.File]::ReadAllLines($ini, [Text.Encoding]::GetEncoding(28591))
+                        for ($i = 0; $i -lt $lines.Count; $i++) {
+                            if ($lines[$i] -match '^\s*Version\s*=\s*(\d+)\s*$') {
+                                # Arithmetic, not -band: PowerShell reads 0xFFFF0000 as a negative int.
+                                $version = [int64]$Matches[1]
+                                $machine = $version % 65536 + 1
+                                if ($machine -gt 65535) { $machine = 1 }
+                                $lines[$i] = "Version=$($version - $version % 65536 + $machine)"
+                            }
+                        }
+                        [IO.File]::WriteAllLines($ini, $lines, [Text.Encoding]::GetEncoding(28591))
+                    }
+                    & gpupdate.exe /target:computer /wait:0 | Out-Null
+                    Ok "Removed $removed FleetHub value(s) from the local Group Policy"
+                }
+            } catch {
+                Warn "Left the local Group Policy as it is ($($_.Exception.Message)); its FleetHub values stay until removed in gpedit.msc"
+            }
+        }
         foreach ($entry in @($gpoMarked)) {
             $at = $entry.IndexOf('|')
             if ($at -le 0) { continue }

@@ -485,6 +485,12 @@
         if (!result.agent_supports_registry && result.registry.length) {
             host.appendChild(el('p', 'setting__help', t('gpo.rsop.agent_too_old')));
         }
+        // Where the values land (phase 2): an administrator at the PC who opens gpedit.msc
+        // sees them only when the agent writes the local GPO, and should know which to expect.
+        if (result.agent_supports_registry && result.registry.length) {
+            host.appendChild(el('p', 'setting__help', result.agent_writes_local_gpo
+                ? t('gpo.rsop.local_gpo') : t('gpo.rsop.direct_registry')));
+        }
 
         if (result.links.length) {
             const section = el('div', 'gpo-section');
@@ -530,7 +536,9 @@
                 const tr = el('tr');
                 tr.appendChild(el('td', null, entry.name));
                 const state = el('td', null, admxSummary(entry));
-                if ((entry.deletes || []).length) state.title = t('gpo.admx.deletes_later');
+                if ((entry.deletes || []).length && !result.agent_writes_local_gpo) {
+                    state.title = t('gpo.admx.deletes_old_agent');
+                }
                 tr.appendChild(state);
                 tr.appendChild(el('td', 'stat-card__meta', entry.gpo));
                 body.appendChild(tr);
@@ -549,10 +557,15 @@
                 const setting = el('td', 'gpo-mono', `${entry.path}\\${entry.name}`);
                 if (entry.admx_name) setting.appendChild(el('div', 'stat-card__meta', entry.admx_name));
                 tr.appendChild(setting);
-                tr.appendChild(el('td', 'gpo-mono', displayValue(entry.value)));
+                const deleted = entry.type === 'delete';
+                tr.appendChild(el('td', 'gpo-mono', deleted ? t('gpo.rsop.deleted') : displayValue(entry.value)));
                 tr.appendChild(el('td', 'stat-card__meta', entry.gpo));
+                // A delete never reaches an agent that cannot write the local GPO, so it would
+                // otherwise sit at "Waiting for the PC" for ever.
+                const pending = deleted && !result.agent_writes_local_gpo
+                    ? t('gpo.rsop.delete_needs_agent') : t('gpo.rsop.pending');
                 const state = el('td', entry.state ? `gpo-state--${entry.state}` : 'stat-card__meta',
-                    entry.state ? (result.state_labels[entry.state] || entry.state) : t('gpo.rsop.pending'));
+                    entry.state ? (result.state_labels[entry.state] || entry.state) : pending);
                 if (entry.state_detail) state.title = entry.state_detail;
                 tr.appendChild(state);
                 body.appendChild(tr);

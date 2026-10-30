@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.172.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.173.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -411,6 +411,26 @@ editor** (#32, gpedit-style editor phase 1)
   hub folder holding the PC: the resultant set shows *Disabled* from that policy and the app
   list value is removed from the PC.
 
+**Hub 1.173.0 + Windows agent (next MINOR, 3.50.0): values go into the PC's local Group
+Policy** (#32, gpedit-style editor phase 2)
+- [ ] **gpedit.msc shows it.** On a beta PC with the 3.50.0 beta agent, the setting from the
+  1.172.0 boxes above reads *Enabled* in `gpedit.msc` (Computer Configuration → Administrative
+  Templates → Windows Components → App Privacy), `gpresult /h` lists it under Local Group
+  Policy, and the resultant set says the agent writes the local Group Policy.
+- [ ] **The upgrade moves, it does not flicker.** On a PC that ran 3.48/3.49 with a FleetHub
+  value applied, update to 3.50.0: the value is in `gpedit.msc` afterwards, `reg query` shows the
+  same data throughout, and the resultant set stays *Applied*.
+- [ ] **gpedit is somebody else.** In `gpedit.msc` on the PC, change the FleetHub setting and
+  click OK: within two minutes the resultant set shows *Managed elsewhere*, and FleetHub does
+  not change it back. Set it to *Not configured* instead on a second PC: FleetHub puts it back.
+- [ ] **Disabled deletes.** Set *Let Windows apps access account information* to **Disabled**:
+  the resultant set shows `LetAppsAccessAccountInfo` as *Deleted*, `reg query` no longer lists
+  it, and `gpedit.msc` shows the setting *Disabled*.
+- [ ] **Unlink and uninstall clean up.** Unlink the policy: within two minutes the setting is
+  *Not configured* in `gpedit.msc` and the value is gone. Uninstall with
+  `agent-install.ps1 -Uninstall` on a PC with a FleetHub value and one set in gpedit by hand:
+  only FleetHub's is gone.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
 **Read this first when working on the machine that holds the signing key.** Everything below
@@ -518,6 +538,16 @@ real set (3,557 settings, 1.8 MB zipped, parsed in 0.6 s). Neither has met the o
 HTTP on a real PC. Owed: cut the agent as a beta with
 `.\release.ps1 -Version 3.49.0 -Channel beta -NotesFile .\release-notes\3.49.0.md` (write the
 notes first) after the beta hub runs 1.172.0, then the four boxes under *Hub 1.172.0* above.
+
+**4e. The local GPO (#32 editor, phase 2), hub 1.173.0 then agent 3.50.0 -- agent not
+released.** `RegistryPolFile` round-trips this machine's real gpedit-written `Registry.pol`
+byte for byte, and the runner is tested against a fake Windows that applies the file; but
+neither `RefreshPolicyEx` nor the uninstall script's `Registry.pol` editor has run on a PC.
+Owed: cut `.\release.ps1 -Version 3.50.0 -Channel beta -NotesFile .\release-notes\3.50.0.md`
+after the beta hub runs 1.173.0, then the five boxes under *Hub 1.173.0* above. If 3.49.0 has not
+been cut by the time this reaches `beta`, cut 3.50.0 alone: it carries phase 1's agent half too,
+and the 1.172.0 boxes are checked against it. **Every agent release in this plan is a MINOR**
+(owner, 2026-10-30), a fix-up included.
 
 **4b. Disk usage (#27), hub 1.138.0 then agent 3.40.0 -- released 2026-10-05**, tag
 `agent-v3.40.0` on `541c120`, manifest in `5767724`. What remains is the first-contact list
@@ -1149,7 +1179,8 @@ Phase 1 is built:
 
 **Not yet, and why:** settings writing outside `SOFTWARE\Policies` (385 of 3,557 on Windows 11)
 and QWORD settings are listed greyed; User Configuration is greyed until phase 3; a Disabled
-setting's `delete` values are left out until phase 2 gives the agent Registry.pol's `**del.`.
+setting's `delete` values are left out until phase 2 gives the agent Registry.pol's `**del.`
+(done in hub 1.173.0, below).
 
 **Rejected:** templates bundled in `hub/` (stale on release day, megabytes in every
 self-update); operator uploads of `PolicyDefinitions` (the owner chose the PCs' own set,
@@ -1157,6 +1188,52 @@ self-update); operator uploads of `PolicyDefinitions` (the owner chose the PCs' 
 parsing in the browser (two implementations of "what does Enabled write" would drift); `admx`
 values resolved at heartbeat time (a deleted catalogue would change PCs); letting a template
 value win silently over a typed one in the same policy (no answer an operator could predict).
+
+### Built · hub 1.173.0 + agent (unreleased, 3.50.0) -- the local GPO (gpedit's editor, phase 2)
+
+**Reverses one rejection above, on purpose.** "Authoring real Windows GPOs" was rejected because
+SYSVOL is not ours and the agent is not assumed domain-joined. The local GPO is neither: it is
+the PC's own `C:\Windows\System32\GroupPolicy`, which exists on every Windows PC, domain or
+not, and is exactly what `gpedit.msc` edits. Writing it is what makes FleetHub's settings show up
+in the tools an administrator at the PC reaches for -- before this, `gpedit.msc` said *Not
+configured* over a value that was in force.
+
+- **The agent writes `Machine\Registry.pol`, Windows writes the registry**
+  (`RegistryPolFile.cs`, `LocalGroupPolicy.cs`). PReg v1, parsed strictly: a file that does not
+  parse is refused, never salvaged. Every entry the agent did not write goes back out with its
+  original bytes, so gpedit's `**del.`/`**delvals.`, binary and QWORD entries survive. Each save
+  bumps the machine half of `gpt.ini`'s `Version` and lists the registry extension pair in
+  `gPCMachineExtensionNames`, then calls `RefreshPolicyEx` -- without both, the Group Policy
+  service skips the change.
+- **Two places to read** (`GroupPolicyRunner.cs`): the file says what local policy says, the
+  registry what is in force. Not on the marker but in the file is gpedit's, and left alone;
+  ours but changed in the file is let go; ours but removed from the file is put back. A domain
+  GPO overriding our value is reported `managed_elsewhere` and NOT let go: the value stays in the
+  local GPO and wins again if the domain policy goes. The registry is only believed five
+  minutes after the last refresh, because a refresh is asynchronous.
+- **A gpedit save mid-pass loses the pass, not the marker.** `Save` writes only if the file
+  still hashes as loaded; released entries leave the marker only after a successful save.
+- **Disabled deletes** (hub `REG_DELETE`): a Disabled template's deletes are `delete` rows, merged
+  last-wins by id like values, written as `**del.Name`. Sent only to agents reporting `lgpo` in
+  `gpo_features`, so an older agent's document never moves over rows it cannot apply.
+- **Migration**: a marked value missing from the file but holding its written data in the
+  registry is an older agent's direct write -- moved into the file if wanted, deleted from the
+  registry directly if not (no GPO entry would ever remove it).
+- **Not in force**: a value in the file that the registry lacks after settling is an `error`
+  (local policy processing switched off, typically), and forces at most one refresh an hour.
+- `gpo_features: ["lgpo"]` on the heartbeat, stored in `machine_gpo_agent.features` and written
+  only when it changes; the resultant set says per PC which way the values go.
+- Uninstall: `GroupPolicyRunner.Release` retries a racing gpedit save rather than dropping the
+  marker over values still in the file; `agent-install.ps1 -Uninstall` carries a small PReg
+  editor of its own that removes only marked entries and leaves a file it cannot read alone.
+
+**Rejected:** writing both the registry and the file (two writers of one value, and gpedit
+would still show the file's answer); keeping the marker inside `Registry.pol` (gpedit rewrites
+the file and would drop it); refreshing synchronously (`RefreshPolicyEx` has no documented
+synchronous mode; the settle window is honest about that); a forced refresh after every save
+(it re-runs every extension of every GPO -- the version bump is enough for a plain one);
+`**delvals.` for list settings (it deletes every value in the key, including ones FleetHub does
+not own).
 
 ---
 

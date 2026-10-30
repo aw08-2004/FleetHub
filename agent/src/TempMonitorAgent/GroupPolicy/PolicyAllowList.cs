@@ -23,6 +23,10 @@ public static class PolicyAllowList
     public const string String = "string";
     public const string ExpandString = "expand_string";
     public const string MultiString = "multi_string";
+    /// <summary>Not a value: "delete this one" -- what a Disabled Administrative Template asks
+    /// for (phase 2). Written as a Registry.pol <c>**del.</c> entry, so it only ever exists in
+    /// the local GPO; the hub sends it only to an agent reporting <c>lgpo</c>.</summary>
+    public const string Delete = "delete";
 
     public const string Root = @"SOFTWARE\Policies\";
     public const int MaxPathChars = 255;
@@ -70,7 +74,7 @@ public static class PolicyAllowList
 
     private static string? ContentRefusal(PolicyValue value) => value.Type switch
     {
-        Dword => null,
+        Dword or Delete => null,
         String or ExpandString => IsBadText(value.Text)
             ? "the text is too long or contains a NUL" : null,
         MultiString => value.Lines.Count > MaxLines || value.Lines.Any(IsBadText)

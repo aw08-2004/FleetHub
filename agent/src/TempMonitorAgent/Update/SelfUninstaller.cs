@@ -212,10 +212,13 @@ public sealed class SelfUninstaller(ILogger<SelfUninstaller> log)
                 log.LogError(e, "Could not release Windows Update control before uninstalling");
             }
             // And the Group Policy registry values (roadmap #32), on the same terms and for the
-            // same reason: only values this agent wrote and that still hold what it wrote.
+            // same reason: only values this agent wrote and that still hold what it wrote --
+            // taken out of the local GPO since 3.50, which Windows then removes from the
+            // registry. InvalidDataException: a Registry.pol it cannot parse is left as it is.
             try { TempMonitorAgent.GroupPolicy.GroupPolicyRunner.ReleaseMachine(); }
             catch (Exception e) when (e is UnauthorizedAccessException or IOException
-                                           or System.Security.SecurityException)
+                                           or System.Security.SecurityException
+                                           or InvalidDataException)
             {
                 log.LogError(e, "Could not remove Group Policy values before uninstalling");
             }

@@ -101,6 +101,11 @@ REG_SZ = "string"
 REG_EXPAND_SZ = "expand_string"
 REG_MULTI_SZ = "multi_string"
 REGISTRY_TYPES = (REG_DWORD, REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ)
+# Not a type an operator can type: "delete this value", what a Disabled Administrative Template
+# often asks for (phase 2). The agent writes it into the local GPO as a Registry.pol `**del.`
+# entry, so it goes only to an agent that reports "lgpo" (resolve_for). An older agent writes
+# the registry directly and has no honest way to delete a value it never owned.
+REG_DELETE = "delete"
 MAX_PATH_CHARS = 255
 MAX_VALUE_NAME_CHARS = 255
 MAX_STRING_CHARS = 2048
@@ -234,6 +239,13 @@ def init_gpo_db(db_path):
             )
             """
         )
+        # How the agent applies the document, from its `gpo_features` (phase 2). "lgpo": into
+        # the PC's local GPO, where gpedit.msc and gpresult see it; absent: straight into the
+        # registry, as agents before 3.50 do. Comma-separated, sorted. NULL on rows from
+        # before the column, which reads exactly as an agent that sent no features.
+        agent_columns = {row["name"] for row in conn.execute("PRAGMA table_info(machine_gpo_agent)")}
+        if "features" not in agent_columns:
+            conn.execute("ALTER TABLE machine_gpo_agent ADD COLUMN features TEXT")
 
 
 # ================================================================ the cache
@@ -343,9 +355,9 @@ _VALUE_CLEANERS = {REG_DWORD: _dword, REG_MULTI_SZ: _multi_string,
                    REG_SZ: _string, REG_EXPAND_SZ: _string}
 
 
-def _registry_value(raw):
-    if not isinstance(raw, dict):
-        raise PolicyRejected("a registry value must be an object")
+def _registry_target(raw):
+    """The (path, name) a registry row names, through the same allow-list for a value and a
+    delete."""
     path = normalize_registry_path(raw.get("path"))
     error = registry_path_error(path)
     if error:
@@ -355,12 +367,27 @@ def _registry_value(raw):
         raise PolicyRejected("a registry value needs a value name (the default value cannot be set)")
     if len(name) > MAX_VALUE_NAME_CHARS or "\\" in name or any(ord(c) < 32 for c in name):
         raise PolicyRejected(f"the value name {name!r} is not valid")
+    return path, name
+
+
+def _registry_value(raw):
+    if not isinstance(raw, dict):
+        raise PolicyRejected("a registry value must be an object")
+    path, name = _registry_target(raw)
     kind = str(raw.get("type") or "").strip()
     cleaner = _VALUE_CLEANERS.get(kind)
     if cleaner is None:
         raise PolicyRejected(f"the value type must be one of {', '.join(REGISTRY_TYPES)}")
     return {"id": setting_id(path, name), "path": path, "name": name, "type": kind,
             "value": cleaner(name, raw.get("value"))}
+
+
+def _delete_row(raw):
+    """A value a template setting deletes, in the row shape the document carries. Accepts the
+    `{path, name}` phase 1 stored, so a policy saved before phase 2 deletes too."""
+    path, name = _registry_target(raw if isinstance(raw, dict) else {})
+    return {"id": setting_id(path, name), "path": path, "name": name, "type": REG_DELETE,
+            "value": None}
 
 
 def _bounded_list(raw, what, limit):
@@ -424,8 +451,9 @@ def _admx_entry(raw):
     except admx.AdmxRejected as e:
         raise PolicyRejected(f"{_admx_name(template)}: {e}")
     values = [_registry_value(row) for row in compiled["rows"]]
+    deletes = [_delete_row(row) for row in compiled["deletes"]]
     return {"set": digest, "ref": ref, "name": _admx_name(template), "state": state,
-            "options": options, "values": values, "deletes": compiled["deletes"]}
+            "options": options, "values": values, "deletes": deletes}
 
 
 def _admx(raw, registry):
@@ -439,9 +467,10 @@ def _admx(raw, registry):
         if entry["ref"] in seen_refs:
             raise PolicyRejected(f"{entry['name']} is set twice in this policy")
         seen_refs.add(entry["ref"])
-        for value in entry["values"]:
+        for value in entry["values"] + entry["deletes"]:
             if value["id"] in owners:
-                raise PolicyRejected(f"{entry['name']} writes {value['path']}\\{value['name']},"
+                verb = "deletes" if value["type"] == REG_DELETE else "writes"
+                raise PolicyRejected(f"{entry['name']} {verb} {value['path']}\\{value['name']},"
                                      f" which {owners[value['id']]} also sets in this policy")
             owners[value["id"]] = entry["name"]
         clean.append(entry)
@@ -943,7 +972,9 @@ def _merge_admx(registry, templates, entries, winner):
     """Apply one policy's template settings over what earlier policies left. A setting this
     policy names REPLACES that setting's earlier values whole: the values an earlier policy's
     template wrote are dropped first (unless something else has since taken them over), so an
-    option the later state does not write does not linger from the earlier one."""
+    option the later state does not write does not linger from the earlier one. Its deletes
+    are rows like its values, so a nearer Disabled's delete beats a farther Enabled's value
+    for the same id exactly as a nearer value would."""
     for entry in entries:
         ref = entry["ref"]
         for sid in [sid for sid, value in registry.items() if value.get("admx_ref") == ref]:
@@ -951,8 +982,9 @@ def _merge_admx(registry, templates, entries, winner):
         templates[ref] = {"ref": ref, "name": entry["name"], "state": entry["state"],
                           "options": entry["options"], "deletes": entry.get("deletes") or [],
                           **winner}
+        rows = entry["values"] + [_delete_row(d) for d in entry.get("deletes") or []]
         registry.update({value["id"]: {**value, "admx_ref": ref, "admx_name": entry["name"],
-                                       **winner} for value in entry["values"]})
+                                       **winner} for value in rows})
 
 
 def _merge(applied):
@@ -1000,12 +1032,18 @@ def config_overrides(db_path, machine):
     return {key: entry["value"] for key, entry in rsop(db_path, machine)["agent_settings"].items()}
 
 
-def resolve_for(db_path, machine):
+def resolve_for(db_path, machine, features=()):
     """The registry document the agent applies: {"version", "values": [...]}. Always returns a
     document -- an EMPTY one when nothing applies, which is what tells the agent to remove the
-    values it wrote (the watchdog/device-policy release valve)."""
+    values it wrote (the watchdog/device-policy release valve).
+
+    Delete rows go only to an agent whose `features` include "lgpo" (see REG_DELETE). Left out
+    for any other, which would drop them anyway; leaving them out also keeps that agent's
+    document version from moving over rows it can never apply."""
+    deletes = "lgpo" in features
     values = [{"id": e["id"], "path": e["path"], "name": e["name"], "type": e["type"],
-               "value": e["value"]} for e in rsop(db_path, machine)["registry"]]
+               "value": e["value"]} for e in rsop(db_path, machine)["registry"]
+              if deletes or e["type"] != REG_DELETE]
     return {"version": _hash(values), "values": values}
 
 
@@ -1018,20 +1056,43 @@ def config_version(base_version, overrides):
 
 
 # ================================================================ agent reports
-def note_agent(db_path, machine, version, now=None):
-    """Remember that this PC's agent can apply a registry document."""
+# The features an agent may report. Anything else is dropped rather than stored: the column
+# is read back into the console, and a free-form list from an agent is not something to show.
+AGENT_FEATURES = ("lgpo",)
+
+
+def clean_features(raw):
+    """The known features in `raw` (an agent's `gpo_features`), sorted -- [] for anything
+    that is not a list."""
+    if not isinstance(raw, list):
+        return []
+    return sorted({f for f in raw if isinstance(f, str) and f in AGENT_FEATURES})
+
+
+def note_agent(db_path, machine, version, features=(), now=None):
+    """Remember that this PC's agent can apply a registry document, and how."""
     with get_conn(db_path) as conn:
         conn.execute(
-            "INSERT INTO machine_gpo_agent (machine, version, seen_at) VALUES (?, ?, ?)"
+            "INSERT INTO machine_gpo_agent (machine, version, seen_at, features) VALUES (?, ?, ?, ?)"
             " ON CONFLICT(machine) DO UPDATE SET version = excluded.version,"
-            " seen_at = excluded.seen_at",
-            (machine, str(version or "")[:64], int(now or time.time())))
+            " seen_at = excluded.seen_at, features = excluded.features",
+            (machine, str(version or "")[:64], int(now or time.time()),
+             ",".join(clean_features(list(features)))))
+
+
+def agent_features(db_path, machine):
+    """The features this PC's agent reported, or None when it has never said it can apply a
+    registry document at all."""
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT features FROM machine_gpo_agent WHERE machine = ?",
+                           (machine,)).fetchone()
+    if row is None:
+        return None
+    return [f for f in (row["features"] or "").split(",") if f]
 
 
 def agent_supports(db_path, machine):
-    with get_conn(db_path) as conn:
-        return conn.execute("SELECT 1 FROM machine_gpo_agent WHERE machine = ?",
-                            (machine,)).fetchone() is not None
+    return agent_features(db_path, machine) is not None
 
 
 def _clean_state(entry, machine, now):

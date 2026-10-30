@@ -239,7 +239,11 @@
       "links": "Geltende Richtlinien in Verarbeitungsreihenfolge (die letzte gewinnt bei einem Konflikt)",
       "none": "Für diesen PC gilt keine Richtlinie.",
       "agent_too_old": "Der Agent dieses PCs hat noch keine Unterstützung für Gruppenrichtlinien gemeldet, daher werden die Registrierungswerte unten nicht angewendet. Agent-Einstellungen und Skripte schon.",
+      "local_gpo": "Der Agent dieses PCs schreibt die Registrierungswerte unten in die lokale Gruppenrichtlinie des PCs, daher zeigen gpedit.msc und gpresult sie auf dem PC an. Eine Domänenrichtlinie, die denselben Wert setzt, hat weiterhin Vorrang.",
+      "direct_registry": "Der Agent dieses PCs schreibt die Registrierungswerte unten direkt in die Registrierung, daher zeigt gpedit.msc auf dem PC sie nicht an. Ab Agent 3.50 werden sie stattdessen in die lokale Gruppenrichtlinie geschrieben.",
       "pending": "Wartet auf den PC",
+      "deleted": "Gelöscht",
+      "delete_needs_agent": "Erfordert Agent 3.50 oder neuer",
       "col": {
         "node": "Verknüpft bei",
         "setting": "Einstellung",
@@ -260,7 +264,7 @@
       "agent_help": "Überschreibt den hubweiten Wert dieser Einstellungen auf den PCs, für die diese Richtlinie gilt. Funktioniert mit jeder Agent-Version.",
       "add_setting": "Einstellung hinzufügen…",
       "registry": "Registrierungswerte",
-      "registry_help": "Wird nur unter HKLM\\SOFTWARE\\Policies geschrieben, von Agents, die das unterstützen. Ein bereits vorhandener Wert, den FleetHub nicht geschrieben hat, bleibt unverändert und wird als anderweitig verwaltet gemeldet.",
+      "registry_help": "Wird nur unter HKLM\\SOFTWARE\\Policies geschrieben, von Agents, die das unterstützen, und zwar in die lokale Gruppenrichtlinie des PCs, daher zeigt gpedit.msc auf dem PC sie an. Ein bereits vorhandener Wert, den FleetHub nicht gesetzt hat, bleibt unverändert und wird als anderweitig verwaltet gemeldet.",
       "add_value": "Wert hinzufügen",
       "path": "Schlüsselpfad",
       "path_placeholder": "SOFTWARE\\Policies\\Microsoft\\Edge",
@@ -319,7 +323,7 @@
       "back": "Zurück zur Liste",
       "apply": "OK",
       "list_explicit_help": "Eine pro Zeile: Name=Wert",
-      "deletes_later": "Windows löscht einige Werte, wenn diese Einstellung deaktiviert wird. FleetHub löscht noch keine Werte; es entfernt nur Werte, die es selbst geschrieben hat.",
+      "deletes_old_agent": "Windows löscht einige Werte, wenn diese Einstellung deaktiviert wird. Der Agent dieses PCs ist älter als 3.50 und löscht sie nicht; er entfernt nur Werte, die er selbst geschrieben hat.",
       "unsupported": {
         "outside_policy_tree": "Schreibt außerhalb von HKLM\\SOFTWARE\\Policies und kann daher hier nicht per Richtlinie gesetzt werden",
         "qword": "Verwendet einen QWORD-Wert, den eine Richtlinie noch nicht setzen kann"

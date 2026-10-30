@@ -92,6 +92,7 @@ public sealed record PolicyValue
                 },
                 PolicyAllowList.String or PolicyAllowList.ExpandString =>
                     value with { Text = raw?.GetValue<string>() ?? "" },
+                PolicyAllowList.Delete => value,
                 _ => null,
             };
         }

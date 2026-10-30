@@ -31,12 +31,25 @@ hub were wrong. To find the value an ADMX setting writes, look it up in the temp
 documentation (Edge, Chrome, Office and Windows all publish them) and enter the key path,
 value name, type and value.
 
-**FleetHub never overwrites a value it did not write.** A value that already exists, set by a
+**The values go into the PC's local Group Policy.** Since agent 3.50 the agent writes them
+into the PC's own local GPO (`C:\Windows\System32\GroupPolicy\Machine\Registry.pol`) and
+asks Windows to apply it, exactly as `gpedit.msc` does when you click OK. So `gpedit.msc` on
+the PC shows FleetHub's settings as configured, `gpresult` lists them under Local Group Policy,
+and Windows itself writes the values and removes them again when they stop applying. A domain
+GPO is applied after the local one and so still wins over FleetHub, which is the order an
+administrator expects. Older agents write the values straight into the registry; the resultant
+set says which a PC does.
+
+**FleetHub never overwrites a value it did not set.** A value that already exists, set by a
 domain GPO, Intune or a person, is left alone and shown as **Managed elsewhere** in the
-resultant set. A value FleetHub set that something else later changes is let go and shown the
-same way, so FleetHub never fights a domain GPO. A value FleetHub set that somebody simply
-deletes is put back. When a value stops applying (its policy is unlinked, disabled or
-deleted), the agent removes it, as long as it still holds what FleetHub wrote.
+resultant set; so is a setting somebody made in `gpedit.msc` on the PC. A value FleetHub set
+that somebody later changes in `gpedit.msc` is let go and shown the same way, so FleetHub never
+fights the PC's own administrator. A value FleetHub set that somebody simply removes (sets to
+*Not configured*) is put back. When a domain policy overrides a FleetHub value, the PC reports
+it as **Managed elsewhere** a few minutes after the change; the FleetHub value stays in the local
+GPO and takes effect again if the domain policy goes. When a value stops applying (its policy
+is unlinked, disabled or deleted), the agent takes it out of the local GPO, as long as it still
+holds what FleetHub wrote.
 
 **Scripts** run through the normal command queue, on PCs that are online, as
 `gpo:<policy id>`. The only variable a policy script can use is `{{sys.machine}}`; a script that
@@ -65,8 +78,9 @@ values typed in by hand, and those values are what the PCs receive. So:
 - **Settings that write outside `HKLM\SOFTWARE\Policies`**, and settings that use a QWORD
   value, are listed greyed out with the reason and cannot be set.
 - **User Configuration** settings are shown but cannot be set yet.
-- **Some settings delete a value when Disabled.** FleetHub does not delete values yet: the
-  agent removes only values it wrote itself. The resultant set marks such settings.
+- **Some settings delete a value when Disabled.** FleetHub deletes it too, the way gpedit
+  does: the local GPO says "delete this value", and the resultant set shows it as **Deleted**.
+  This needs agent 3.50; an older agent is not sent deletes, and the resultant set says so.
 - **A policy sets each registry value once.** A template setting and a typed value, or two
   template settings, that write the same value are refused when the policy is saved.
 
@@ -129,12 +143,22 @@ set says when a PC's agent has not, instead of showing the values as pending for
 agent applies its document on its own one-minute loop and keeps it across restarts, so a PC
 that boots without network keeps its policy.
 
-When the hub uninstalls an agent, the agent first removes the registry values it wrote. An
-uninstall with `agent-install.ps1 -Uninstall` removes the values listed in the agent's marker
-(`HKLM\SOFTWARE\FleetHub\GroupPolicy`).
+Agent 3.50 and newer write the local GPO; the resultant set says so for each PC. The first
+time agent 3.50 runs on a PC, it moves the values an older agent wrote directly into the local
+GPO with the same data, so nothing a user sees changes. If Windows does not apply a value that
+is in the local GPO (local policy processing turned off by a domain policy, for example), the
+PC reports an error for it after a few minutes, and the agent forces one policy refresh an hour
+at most to try again.
+
+When the hub uninstalls an agent, the agent first takes the values it set out of the local GPO.
+An uninstall with `agent-install.ps1 -Uninstall` does the same for the values listed in the
+agent's marker (`HKLM\SOFTWARE\FleetHub\GroupPolicy`), copies every other entry of the local
+GPO back unchanged, and leaves a local GPO it cannot read exactly as it is.
 
 ## Not supported
 
 - **User settings (HKCU)** are not supported yet, typed or from a template.
 - FleetHub does not create or edit **real Windows GPOs** in your domain, and does not touch
-  SYSVOL.
+  SYSVOL. It edits only each PC's own local GPO.
+- Leaving `gpedit.msc` open on a PC while FleetHub changes that PC's policy, and then clicking
+  OK, can overwrite FleetHub's change; the agent puts its values back within a minute.

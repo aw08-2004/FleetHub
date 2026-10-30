@@ -204,9 +204,22 @@ def test_heartbeat(policy):
           [v["name"] for v in reply.get("gpo_document", {}).get("values", [])]
           == ["HideFirstRunExperience"])
     check("...and the hub remembers that it can", gpo.agent_supports(app.DB_PATH, "FIL-1"))
+    check("...writing the registry directly, as it sent no features",
+          gpo.agent_features(app.DB_PATH, "FIL-1") == [])
     r = agent.post("/api/agent/heartbeat", json={"gpo_version": reply["gpo_version"]},
                    headers=headers)
     check("an agent already holding the version is sent nothing", "gpo_document" not in r.get_json())
+    r = agent.post("/api/agent/heartbeat",
+                   json={"gpo_version": reply["gpo_version"], "gpo_features": ["lgpo", "bogus", 7]},
+                   headers=headers)
+    check("an agent updated to write the local GPO is noticed, unknown features dropped",
+          r.status_code == 200 and gpo.agent_features(app.DB_PATH, "FIL-1") == ["lgpo"])
+    root = client_for("root@example.com")
+    result = root.get("/api/gpo/rsop/FIL-1").get_json()
+    check("the resultant set says this PC's values go into its local GPO",
+          result["agent_supports_registry"] and result["agent_writes_local_gpo"])
+    agent.post("/api/agent/heartbeat", json={"gpo_version": reply["gpo_version"]}, headers=headers)
+    check("...and notices a downgrade too", gpo.agent_features(app.DB_PATH, "FIL-1") == [])
 
     root = client_for("root@example.com")
     version = first.get("config_version")
