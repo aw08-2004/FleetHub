@@ -366,6 +366,13 @@ def test_battery_charge_is_the_charge_level_only():
                s("Memory", 41.0, "Load", "/ram", "Generic Memory")]
     check("a desktop has no battery => None", app.extract_diagnostics(desktop)["battery_pct"] is None)
 
+    # Two packs: the first in block order wins. Not the minimum -- a flat spare in a hot-swap
+    # bay would alert forever on a laptop that is fine (see _battery_charge_pct).
+    two = [s("Charge Level", 90.0, "Level", "/battery/0", "Internal"),
+           s("Charge Level", 5.0, "Level", "/battery/1", "Bay spare")]
+    check("two batteries => the first one's charge, not the lowest",
+          app.extract_diagnostics(two)["battery_pct"] == 90.0)
+
     unread = [s("Charge Level", None, "Level", "/battery/0", "DELL 1VX1H")]
     check("an unread (NaN -> null) charge => None",
           app.extract_diagnostics(unread)["battery_pct"] is None)
