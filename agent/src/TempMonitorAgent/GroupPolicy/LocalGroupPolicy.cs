@@ -77,11 +77,18 @@ public sealed class LocalGroupPolicy(string root, Action<bool> refresh) : ILocal
             ? Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(PolicyPath))) : null;
         if (onDisk != file.LoadedHash) return false;
         Directory.CreateDirectory(Path.GetDirectoryName(PolicyPath)!);
-        WriteAtomically(PolicyPath, file.ToBytes());
-        // Latin-1 both ways: one byte per char, so whatever encoding the file was written in
-        // comes back out unchanged around the two lines touched here.
+        // gpt.ini FIRST (review on #192). The other order fails badly: a gpt.ini that cannot be
+        // written (gpedit or a scanner holding it) after Registry.pol was replaced leaves the
+        // new values on disk under the old version, and the next pass finds nothing to change,
+        // so nothing ever bumps it and Windows skips the GPO until the runner's forced repair.
+        // This way round a failure leaves Registry.pol as it was and the next pass redoes both;
+        // the worst case is a version bumped for a file that then failed to write, which
+        // Windows reads as one harmless extra pass. Latin-1 both ways: one byte per char, so
+        // whatever encoding gpt.ini was written in comes back out unchanged around the two
+        // lines touched here.
         var ini = File.Exists(IniPath) ? File.ReadAllText(IniPath, Encoding.Latin1) : null;
         WriteAtomically(IniPath, Encoding.Latin1.GetBytes(GptIni.Bump(ini)));
+        WriteAtomically(PolicyPath, file.ToBytes());
         return true;
     }
 

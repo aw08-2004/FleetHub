@@ -255,4 +255,32 @@ public class LocalGroupPolicyTests
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void A_gpt_ini_that_cannot_be_written_leaves_Registry_pol_as_it_was()
+    {
+        // The other order left new values under an old version that no later pass would bump
+        // (review on #192). A directory where gpt.ini should be stands in for a locked file.
+        var root = Path.Combine(Path.GetTempPath(), "fleethub-lgpo-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var local = new LocalGroupPolicy(root, _ => { });
+            Directory.CreateDirectory(local.IniPath);
+            var file = local.Load();
+            file.Set(Dword(Edge, "A", 1));
+            Assert.ThrowsAny<Exception>(() => local.Save(file));
+            Assert.False(System.IO.File.Exists(local.PolicyPath));
+
+            Directory.Delete(local.IniPath);
+            var retry = local.Load();
+            retry.Set(Dword(Edge, "A", 1));
+            Assert.True(retry.Changed);
+            Assert.True(local.Save(retry));
+            Assert.Equal("dword:1", local.Load().Get(Edge, "A"));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
 }
