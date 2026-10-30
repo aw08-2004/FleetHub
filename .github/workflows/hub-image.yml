@@ -19,10 +19,17 @@ name: "Hub image"
 # tags stop moving: `beta` was replaced by beta-latest, and a host left on it stays on its last
 # image rather than following beta under a second name.
 #
-# At equal versions latest goes to the stable build: promoting beta to main carries beta's
-# HUB_VERSION across, so main's build moves latest on >=, beta's only on a strictly higher
-# number. Neither ever moves it to a lower number, so a re-run of an old run cannot drag it
-# back.
+# **latest is recomputed, not handed over.** The `latest` job reads stable-latest and
+# beta-latest back from the registry and points latest at the higher HUB_VERSION; at equal
+# versions it takes the stable build, because promoting beta to main carries beta's number
+# across. Any run of that job therefore reaches the same answer, whichever branch triggered
+# it. That is what makes the job's own concurrency group safe: GitHub keeps one running and
+# one pending run per group and cancels the older pending one, so a cancelled latest run loses
+# nothing the next one does not redo. The first version moved latest from inside the image job
+# under one publish group shared by main and beta, which let a beta push cancel a pending main
+# release outright -- its X.Y.Z and stable-latest never published, and nothing re-ran it (PR
+# review). It never moves latest to a lower number than it holds, and an unreadable latest or
+# channel tag -- including an image with no version label -- leaves it where it is.
 #
 # **Every tag is also pushed to the old name, ghcr.io/<owner>/temp_monitor-hub.** The package
 # was published under the pre-rename name from 1.143.0 to 1.168.0 (renamed 2026-10-27), and
@@ -74,11 +81,10 @@ on:
       - "tools/lock_hub_requirements.py"
       - ".github/workflows/hub-image.yml"
 
-# Publishing runs share one group across main and beta: both may move `latest`, and two runs
-# reading and moving it at once could leave it on the lower version. Pull requests only build,
-# so they keep a group per ref.
+# Per ref, so a beta push can never queue behind or cancel a main release. The one tag both
+# branches move, latest, has its own group on the `latest` job below.
 concurrency:
-  group: hub-image-${{ github.event_name == 'push' && 'publish' || github.ref }}
+  group: hub-image-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -87,6 +93,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      repos: ${{ steps.version.outputs.repos }}
 
     steps:
       - name: Checkout repository
@@ -110,16 +118,15 @@ jobs:
           owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
           repos="${owner}/fleethub"
           if [[ "$REF" == "beta" ]]; then
-            version_tag="beta-${v}"; moving_tag="beta-latest"; channel="beta"
+            version_tag="beta-${v}"; moving_tag="beta-latest"
           else
-            version_tag="${v}"; moving_tag="stable-latest"; channel="stable"
+            version_tag="${v}"; moving_tag="stable-latest"
           fi
           {
             echo "version=$v"
             echo "repos=$repos"
             echo "version_tag=$version_tag"
             echo "moving_tag=$moving_tag"
-            echo "channel=$channel"
           } >> "$GITHUB_OUTPUT"
 
       - name: Refuse a version that was already published
@@ -243,12 +250,11 @@ jobs:
           REVISION: ${{ github.sha }}
           VERSION: ${{ steps.version.outputs.version }}
           REF: ${{ github.ref_name }}
-          CHANNEL: ${{ steps.version.outputs.channel }}
         run: |
           printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           # **Every version tag before any moving tag, across both names.** If a push fails,
-          # `stable-latest`, `beta-latest` and `latest` still name the previous release rather than one whose own tag
-          # never landed under some name -- and the version tags are what the check step can
+          # `stable-latest` or `beta-latest` still names the previous release rather than one
+          # whose own tag never landed under some name -- and the version tags are what the check step can
           # see, so a re-run knows there is something to finish.
           if [[ "$MODE" == "mirror" ]]; then
             # Finishing a half-failed push (see the check step). Every name that already has
@@ -271,12 +277,11 @@ jobs:
             # failed run, after a newer HUB_VERSION has shipped, would otherwise drag
             # `stable-latest` or `beta-latest` back to the older image (PR review). The label
             # check above only proves this commit built it, not that it is still the newest.
-            # Read from the branch head with the same pattern as the version step. Leaving here
-            # also leaves `latest` alone, which the comparison below would do anyway.
+            # Read from the branch head with the same pattern as the version step.
             git fetch --quiet --depth 1 origin "$REF"
             head=$(git show FETCH_HEAD:hub/app.py | grep -oP '^HUB_VERSION\s*=\s*["\x27]\K[\d.]+(?=["\x27])' | head -n1)
             if [[ "$head" != "$VERSION" ]]; then
-              echo "::warning::${REF} is now at HUB_VERSION ${head}, not ${VERSION}; leaving :${MOVING_TAG} and :latest where they are."
+              echo "::warning::${REF} is now at HUB_VERSION ${head}, not ${VERSION}; leaving :${MOVING_TAG} where it is."
               docker logout ghcr.io
               exit 0
             fi
@@ -284,7 +289,6 @@ jobs:
               docker tag "$src" "ghcr.io/${REPO}:${MOVING_TAG}"
             done
           else
-            src="ghcr.io/${REPOS%% *}:${VERSION_TAG}"
             for REPO in $REPOS; do
               docker push "ghcr.io/${REPO}:${VERSION_TAG}"
             done
@@ -292,38 +296,101 @@ jobs:
           for REPO in $REPOS; do
             docker push "ghcr.io/${REPO}:${MOVING_TAG}"
           done
+          docker logout ghcr.io
 
-          # **`latest` last, and only forward.** Whatever it names now is read back from the
-          # registry rather than assumed, because the other channel may have moved it since
-          # this branch last published. The first name decides for all of them, as everywhere
-          # in this file. "Could not look" leaves it alone -- the same rule as the check step:
-          # a guess here could put a stable host on an older or a beta image.
+  # Points latest at the newer of stable-latest and beta-latest (see the header). Runs after
+  # every publish on either branch, in one group shared by both, so two runs never read and
+  # move latest at once. It needs only what the image job pushed, so it even runs after an image
+  # job that left its own moving tag alone: the answer it computes does not depend on why it ran.
+  latest:
+    needs: image
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: hub-image-latest
+      cancel-in-progress: false
+
+    steps:
+      - name: Point latest at the newer channel
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REPOS: ${{ needs.image.outputs.repos }}
+        run: |
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          # The first name decides for all of them, as everywhere in this file.
           first="${REPOS%% *}"
           reg_token=$(curl -fsS -u "${ACTOR}:${TOKEN}" \
             "https://ghcr.io/token?service=ghcr.io&scope=repository:${first}:pull" | jq -er .token)
           echo "::add-mask::${reg_token}"
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -I \
-            -H "Authorization: Bearer ${reg_token}" \
-            -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
-            "https://ghcr.io/v2/${first}/manifests/latest")
-          case "$code" in
-            404) current="" ;;
-            200)
-              docker pull "ghcr.io/${first}:latest"
-              current=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "ghcr.io/${first}:latest") ;;
-            *)
-              echo "::warning::GHCR answered HTTP ${code} for ghcr.io/${first}:latest; leaving :latest where it is. Re-run once the registry answers."
-              docker logout ghcr.io
-              exit 0 ;;
-          esac
-          # sort -V puts the higher version last. Main moves latest on >=, beta only on >.
-          higher=$(printf '%s\n%s\n' "${current:-0.0.0}" "$VERSION" | sort -V | tail -n1)
-          if [[ -z "$current" ]] || { [[ "$higher" == "$VERSION" ]] && { [[ "$CHANNEL" == "stable" ]] || [[ "$current" != "$VERSION" ]]; }; }; then
-            for REPO in $REPOS; do
-              docker tag "$src" "ghcr.io/${REPO}:latest"
-              docker push "ghcr.io/${REPO}:latest"
-            done
+
+          # Sets the variable named $2 to the HUB_VERSION under tag $1, or to "absent" on a 404.
+          # **Anything else fails the job** -- a registry error, or an image whose version label
+          # is missing or not MAJOR.MINOR.PATCH. The first version read an unlabelled latest as
+          # empty and took that for "no latest", so it would have overwritten an image it could
+          # not date, even with a lower number (PR review). Could not look is not absent: the
+          # same rule as the image job's check step, and red so someone re-runs it.
+          read_version() {
+            local tag="$1" code v
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -I \
+              -H "Authorization: Bearer ${reg_token}" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/${first}/manifests/${tag}")
+            case "$code" in
+              404) printf -v "$2" '%s' absent; return 0 ;;
+              200) ;;
+              *) echo "::error::GHCR answered HTTP ${code} for ghcr.io/${first}:${tag}; leaving :latest where it is. Re-run once the registry answers."
+                 return 1 ;;
+            esac
+            docker pull --quiet "ghcr.io/${first}:${tag}" || return 1
+            v=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "ghcr.io/${first}:${tag}")
+            if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::ghcr.io/${first}:${tag} has no usable org.opencontainers.image.version label ('${v}'); leaving :latest where it is rather than guess its age."
+              return 1
+            fi
+            printf -v "$2" '%s' "$v"
+          }
+          read_version stable-latest stable || exit 1
+          read_version beta-latest beta || exit 1
+          read_version latest current || exit 1
+          echo "stable-latest=${stable} beta-latest=${beta} latest=${current}"
+
+          # sort -V puts the higher version last. A tie goes to stable: promotion carries
+          # beta's number to main, and at that point stable is the confirmed build of it.
+          if [[ "$stable" == absent && "$beta" == absent ]]; then
+            echo "Neither channel tag is published yet; nothing for latest to name."
+            exit 0
+          elif [[ "$beta" == absent ]]; then
+            pick=stable-latest; want="$stable"
+          elif [[ "$stable" == absent ]]; then
+            pick=beta-latest; want="$beta"
+          elif [[ "$(printf '%s\n%s\n' "$stable" "$beta" | sort -V | tail -n1)" == "$stable" ]]; then
+            pick=stable-latest; want="$stable"
           else
-            echo "latest is at ${current}; ${CHANNEL} ${VERSION} is not newer, so it stays there."
+            pick=beta-latest; want="$beta"
           fi
+
+          # Never backwards: a latest that holds a higher number than both channels (pushed by
+          # hand, or by a channel tag that was later moved back) stays until a channel passes it.
+          if [[ "$current" != absent && "$current" != "$want" \
+                && "$(printf '%s\n%s\n' "$current" "$want" | sort -V | tail -n1)" == "$current" ]]; then
+            echo "::warning::latest is at ${current}, above ${pick} ${want}; leaving it there."
+            exit 0
+          fi
+          src="ghcr.io/${first}:${pick}"
+          if [[ "$current" != absent ]] && \
+             [[ "$(docker inspect --format '{{ .Id }}' "$src")" == "$(docker inspect --format '{{ .Id }}' "ghcr.io/${first}:latest")" ]]; then
+            echo "latest already names ${pick} (${want})."
+          else
+            echo "Moving latest to ${pick} (${want})."
+          fi
+          # Pushed even when it already matches under the first name: a run that failed between
+          # the names left the others behind, and re-pushing an existing image is a no-op.
+          for REPO in $REPOS; do
+            docker tag "$src" "ghcr.io/${REPO}:latest"
+            docker push "ghcr.io/${REPO}:latest"
+          done
           docker logout ghcr.io
