@@ -129,6 +129,8 @@ import pc_tree
 from pc_tree_web import create_pc_tree_blueprint
 import gpo
 from gpo_web import create_gpo_blueprint
+import admx
+from admx_web import create_admx_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
@@ -171,7 +173,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.171.0"
+HUB_VERSION = "1.172.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -226,6 +228,10 @@ FILE_SPOOL_DIR = os.path.join(LOG_DIR, "filespool")
 # the main database rather than in it. A system drive's history is millions of rows, and the
 # main database is the file every backup copies and every query shares. See disk_history.py.
 DISK_HISTORY_DIR = os.path.join(LOG_DIR, "disk_history")
+# Administrative Templates the PCs uploaded, one parsed catalogue per Windows build (roadmap
+# #32). Beside the database for the disk-history reason: a catalogue is megabytes, and the
+# PCs send it again if it is lost, so it is working data rather than something to back up.
+ADMX_DIR = os.path.join(LOG_DIR, "admx")
 # Ticket screenshots (roadmap #31): <root>/<ticket_id>/<attachment_id>.jpg. Outside the
 # database for the disk-history reason, and under LOG_DIR rather than the install root because
 # they are short-lived working data with a retention of their own, not operator files kept
@@ -2707,6 +2713,10 @@ app.register_blueprint(create_pc_tree_blueprint(
 # `issue_commands` for a policy that runs a script, and the writer's scope must cover every PC
 # a write can reach -- see gpo_web.py.
 app.register_blueprint(create_gpo_blueprint(DB_PATH, login_required, access))
+# Its Administrative Templates: the PCs upload their own PolicyDefinitions, and the editor reads
+# the parsed catalogue under `view` -- see admx_web.py. A template setting is SAVED as part of a
+# policy above, never here.
+app.register_blueprint(create_admx_blueprint(DB_PATH, login_required, access))
 
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
@@ -3887,6 +3897,8 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     pc_tree.rename_machine(DB_PATH, dropped, survivor)
     # And its policy history, or every run-once policy script runs a second time on it.
     gpo.rename_machine(DB_PATH, dropped, survivor)
+    # The survivor reports its own template set on its next heartbeat.
+    admx.forget_machine(DB_PATH, dropped)
     # Same reasoning for deployment targets: the merged-away hostname is the survivor, so
     # a deploy aimed at the old name must follow it rather than stall forever on a
     # machine that no longer exists.
@@ -5462,6 +5474,8 @@ tickets.init_tickets_db(DB_PATH)
 device_groups.init_device_groups_db(DB_PATH)
 pc_tree.init_pc_tree_db(DB_PATH)
 gpo.init_gpo_db(DB_PATH)
+admx.init_admx_db(DB_PATH)
+admx.configure(ADMX_DIR)
 ai.init_ai_db(DB_PATH)
 assistant.init_assistant_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
@@ -6694,6 +6708,7 @@ def delete_machine(machine):
     # Same hazard through the PC tree: a reused hostname must not land in the old box's folder.
     pc_tree.forget_machine(DB_PATH, machine_name)
     gpo.forget_machine(DB_PATH, machine_name)
+    admx.forget_machine(DB_PATH, machine_name)
     # And drop its deployment targets, so a deploy isn't left stuck at 9/10 waiting on a
     # machine whose command rows fleet.delete_machine has just removed.
     packages.forget_machine(DB_PATH, machine_name)

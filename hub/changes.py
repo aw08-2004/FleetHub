@@ -57,6 +57,8 @@ MAX_PENDING = 500
 #: record's writes are profile fields -- deleting one deliberately leaves group membership
 #: alone (users.delete_user). An AD sync that moves a machine marks `permissions` itself.
 BLUEPRINT_TOPICS = {
+    # Its one write is an agent uploading a template set, which the editor's set picker shows.
+    "admx": "gpo",
     "ai": "settings",
     "apitokens": "tokens",
     "apps": "apps",

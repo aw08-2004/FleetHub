@@ -11,6 +11,8 @@ The silent failures this file exists to catch:
   * **A `view`-only route that writes**, and a resultant set readable for a PC outside scope.
   * **The heartbeat not carrying the result**: config overrides that never reach the agent, a
     registry document sent to an agent that never asked for one, or none sent to one that did.
+  * **A template upload taken from anyone**, or a set list that tells a scoped operator which
+    Windows builds run on PCs outside their scope.
 
 Run from the repo root so `import app` resolves.
 """
@@ -26,6 +28,7 @@ os.environ["HUB_LOG_DIR"] = os.path.join(_TMPDIR, "logs")
 os.chdir(_TMPDIR)
 os.environ["ALLOWED_EMAILS"] = "root@example.com"
 
+import admx
 import app
 import fleet
 import gpo
@@ -241,12 +244,56 @@ def test_heartbeat(policy):
           r.get_json().get("gpo_document") == {"values": []})
 
 
+def test_admx_web():
+    print("\n-- Administrative Templates --")
+    import test_admx
+    digest = admx.set_hash(test_admx.FILES)
+    body = test_admx.zipped(test_admx.FILES)
+    agent = app.app.test_client()
+    r = agent.post(f"/api/agent/gpo/templates?hash={digest}", data=body)
+    check("an upload without an agent token is refused", r.status_code == 401)
+    agent_id, token = fleet.enroll_agent(app.DB_PATH, "ASU-1", "secret", "secret")
+    headers = {"Authorization": f"Bearer {agent_id}:{token}"}
+    r = agent.post("/api/agent/heartbeat", json={"admx_hash": digest}, headers=headers)
+    check("a PC reporting an unknown set is asked for it", r.get_json().get("admx_wanted") is True)
+    r = agent.post(f"/api/agent/gpo/templates?hash={'0' * 64}", data=body, headers=headers)
+    check("an upload under the wrong hash is refused", r.status_code == 400)
+    r = agent.post(f"/api/agent/gpo/templates?hash={digest}", data=body, headers=headers)
+    check("the PC's upload is stored", r.status_code == 200 and r.get_json()["status"] == "stored")
+    r = agent.post("/api/agent/heartbeat", json={"admx_hash": digest}, headers=headers)
+    check("...and it is not asked again", "admx_wanted" not in r.get_json())
+
+    viewer = client_for("viewer@example.com")
+    check("a viewer scoped to other PCs is not told about a build only ASU-1 runs",
+          viewer.get("/api/gpo/admx/sets").get_json()["sets"] == [])
+    root = client_for("root@example.com")
+    sets = root.get("/api/gpo/admx/sets").get_json()["sets"]
+    check("an unrestricted operator sees it", [s["hash"] for s in sets] == [digest])
+    r = viewer.get(f"/api/gpo/admx/{digest}/tree")
+    check("the templates themselves are readable with view",
+          r.status_code == 200 and len(r.get_json()["policies"]) == 4)
+    r = viewer.get(f"/api/gpo/admx/{digest}/policy?ref=Microsoft.Policies.Edge:RestoreOnStartup")
+    check("so is one setting's detail", r.status_code == 200 and r.get_json()["presentation"])
+    check("an unknown setting is a 404",
+          viewer.get(f"/api/gpo/admx/{digest}/policy?ref=nope").status_code == 404)
+    r = viewer.post("/api/gpo", json={"name": "T", "settings": {"admx": [
+        {"set": digest, "ref": "Microsoft.Policies.Edge:HideFirstRunExperience",
+         "state": "enabled"}]}})
+    check("writing a template setting still needs manage_group_policy", r.status_code == 403)
+    r = root.post("/api/gpo", json={"name": "Template", "settings": {"admx": [
+        {"set": digest, "ref": "Microsoft.Policies.Edge:HideFirstRunExperience",
+         "state": "enabled"}]}})
+    check("with it, a template setting saves through the policy route", r.status_code == 201)
+    root.delete(f"/api/gpo/{r.get_json()['id']}")
+
+
 def main():
     setup()
     test_gates()
     policy, _link = test_scope_and_scripts()
     test_script_edit_reach()
     test_heartbeat(policy)
+    test_admx_web()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

@@ -53,6 +53,11 @@
         <div id="gpo-agent-rows"></div>
         <select class="input" id="gpo-agent-add" aria-label="{{ t('gpo.editor.add_setting') }}"></select>
 
+        <h3 class="perm-subhead">{{ t('gpo.admx.heading') }}</h3>
+        <p class="setting__help">{{ t('gpo.admx.help') }}</p>
+        <div id="gpo-admx-rows"></div>
+        <button class="btn" type="button" id="gpo-admx-add">{{ t('gpo.admx.browse') }}</button>
+
         <h3 class="perm-subhead">{{ t('gpo.editor.registry') }}</h3>
         <p class="setting__help">{{ t('gpo.editor.registry_help') }}</p>
         <div id="gpo-registry-rows"></div>
@@ -69,6 +74,57 @@
     <div class="modal__foot">
         <button type="button" class="btn btn--ghost" id="gpo-cancel">{{ t('common.cancel') }}</button>
         <button type="button" class="btn btn--primary" id="gpo-save">{{ t('common.save') }}</button>
+    </div>
+</dialog>
+
+{# The Administrative Templates browser, gpedit's layout: Computer / User Configuration and the
+   categories on the left, the settings of the selected one on the right, and one setting's
+   Enabled / Disabled / Not configured page in place of the list. Opened over the policy editor;
+   group-policy.js fills it from /api/gpo/admx. #}
+<dialog class="modal gpo-admx-modal" id="gpo-admx-dialog" aria-labelledby="gpo-admx-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="gpo-admx-title">{{ t('gpo.admx.heading') }}</h2>
+    </div>
+    <div class="modal__body">
+        <div id="gpo-admx-browse">
+            <div class="gpo-admx-toolbar">
+                <select class="input" id="gpo-admx-set" aria-label="{{ t('gpo.admx.set') }}"></select>
+                <input class="input" id="gpo-admx-search" type="search" autocomplete="off"
+                       placeholder="{{ t('gpo.admx.search') }}" aria-label="{{ t('gpo.admx.search') }}">
+            </div>
+            <p class="setting__help" id="gpo-admx-empty" hidden>{{ t('gpo.admx.no_sets') }}</p>
+            <div class="gpo-admx-layout">
+                <nav class="gpo-admx-tree" id="gpo-admx-tree" aria-label="{{ t('gpo.admx.tree_label') }}"></nav>
+                <div class="gpo-admx-list" id="gpo-admx-list"></div>
+            </div>
+        </div>
+        <div id="gpo-admx-setting" hidden>
+            <h3 class="perm-subhead" id="gpo-admx-setting-title"></h3>
+            <p class="setting__error" id="gpo-admx-reason" hidden></p>
+            <div class="gpo-admx-setting">
+                <div>
+                    <fieldset class="gpo-admx-states">
+                        <legend class="setting__label">{{ t('gpo.admx.col_state') }}</legend>
+                        <label class="checkbox"><input type="radio" name="gpo-admx-state" value="not_configured"> {{ t('gpo.admx.state_not_configured') }}</label>
+                        <label class="checkbox"><input type="radio" name="gpo-admx-state" value="enabled"> {{ t('gpo.admx.state_enabled') }}</label>
+                        <label class="checkbox"><input type="radio" name="gpo-admx-state" value="disabled"> {{ t('gpo.admx.state_disabled') }}</label>
+                    </fieldset>
+                    <h4 class="setting__label">{{ t('gpo.admx.options') }}</h4>
+                    <div id="gpo-admx-options"></div>
+                </div>
+                <div>
+                    <h4 class="setting__label">{{ t('gpo.admx.explain') }}</h4>
+                    <p class="gpo-admx-explain" id="gpo-admx-explain"></p>
+                </div>
+            </div>
+            <div class="gpo-admx-actions">
+                <button type="button" class="btn btn--ghost" id="gpo-admx-back">{{ t('gpo.admx.back') }}</button>
+                <button type="button" class="btn btn--primary" id="gpo-admx-ok">{{ t('gpo.admx.apply') }}</button>
+            </div>
+        </div>
+    </div>
+    <div class="modal__foot">
+        <button type="button" class="btn btn--ghost" id="gpo-admx-close">{{ t('common.close') }}</button>
     </div>
 </dialog>
 {% endif %}

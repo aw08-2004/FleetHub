@@ -57,6 +57,7 @@ public sealed class Worker : BackgroundService
     private readonly PtySessionManager _ptys;
     private readonly WatchdogRunner _watchdogs;
     private readonly TempMonitorAgent.GroupPolicy.GroupPolicyRunner _groupPolicy;
+    private readonly TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader _policyDefinitions;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll
     /// loop from re-dispatching something already running.</summary>
@@ -91,7 +92,8 @@ public sealed class Worker : BackgroundService
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
         TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
         SelfUpdater updater, ShellSessionManager shells, PtySessionManager ptys,
-        WatchdogRunner watchdogs, TempMonitorAgent.GroupPolicy.GroupPolicyRunner groupPolicy)
+        WatchdogRunner watchdogs, TempMonitorAgent.GroupPolicy.GroupPolicyRunner groupPolicy,
+        TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader policyDefinitions)
     {
         _log = log;
         _state = state;
@@ -104,6 +106,7 @@ public sealed class Worker : BackgroundService
         _ptys = ptys;
         _watchdogs = watchdogs;
         _groupPolicy = groupPolicy;
+        _policyDefinitions = policyDefinitions;
         _enrollmentSecret = ReadEnrollmentSecret();
     }
 
@@ -598,7 +601,42 @@ public sealed class Worker : BackgroundService
                 // itself threw. Logged and continued, like the watchdog loop.
                 _log.LogWarning(e, "Group Policy pass failed");
             }
+            await PolicyDefinitionsPassAsync(ct);
             if (!await DelayAsync(TempMonitorAgent.GroupPolicy.GroupPolicyRunner.TickSeconds, ct)) break;
+        }
+    }
+
+    /// <summary>Keep the Administrative Templates hash current, and upload the set when the hub
+    /// asked for it (roadmap #32). On the policy loop because it is the same feature and a
+    /// minute's latency is nothing for a once-per-build upload; never on the heartbeat, which a
+    /// multi-megabyte upload over a slow link would hold up long enough to read the PC
+    /// offline. Its own try/catch, so a template folder that cannot be read never stops the
+    /// policy pass above it.</summary>
+    private async Task PolicyDefinitionsPassAsync(CancellationToken ct)
+    {
+        string? zip = null;
+        try
+        {
+            _policyDefinitions.Refresh();
+            if (!_policyDefinitions.TakeUploadRequest(out _)) return;
+            // Not the update staging folder: SelfUpdater owns that one and clears it.
+            var folder = Path.Combine(AgentConfig.ProgramDataDir, "gpo");
+            Directory.CreateDirectory(folder);
+            zip = Path.Combine(folder, "policy-definitions.zip");
+            var hash = _policyDefinitions.WriteZip(zip);
+            if (await _fleet.UploadPolicyDefinitionsAsync(zip, hash, ct))
+                _log.LogInformation("Uploaded this PC's Administrative Templates ({Hash})", hash);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.LogWarning(e, "Could not read or upload the Administrative Templates");
+        }
+        finally
+        {
+            if (zip is not null)
+            {
+                try { File.Delete(zip); } catch (IOException) { /* next pass overwrites it */ }
+            }
         }
     }
 

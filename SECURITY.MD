@@ -55,7 +55,12 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
    write can reach must be in the writer's scope, and a link keeps its author's scope after
    more PCs are filed beneath its node. `manage_group_policy` is security-sensitive on its
    own: `SOFTWARE\Policies` holds Windows Defender and firewall policy, so it can weaken a
-   PC's protection without `issue_commands`. Grant it as carefully as that
+   PC's protection without `issue_commands`. Grant it as carefully as that.
+   Administrative Templates change none of this: a template setting is compiled on the hub into
+   the same allow-listed values. The templates themselves are uploaded by agents, so the hub
+   treats them as hostile input: one PC per unknown set is asked, the upload is size-capped,
+   every zip entry must be a bare `.admx`/`.adml` name (nothing is extracted to disk), the set's
+   hash is recomputed and must match the one claimed, and XML with a DTD is refused outright.
 7. **Signed Updates:** Binary replacements verified before execution. **Version pins widen
    what a compromised hub can choose** (roadmap #21): the hub sends a version string, the agent
    builds the manifest url from a compiled-in base on `main` and installs only what the offline

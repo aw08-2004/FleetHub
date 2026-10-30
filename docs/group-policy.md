@@ -19,6 +19,7 @@ The page has the tree on the left:
 | Kind | What it does | Needs |
 |---|---|---|
 | **Agent settings** | Overrides hub settings marked as agent settings (report interval, sensor interval, network collection, the ticket tray and its submitters, the sensor preference) on the PCs the policy applies to | any agent version |
+| **Administrative Templates** | The settings `gpedit.msc` shows -- Enabled, Disabled or Not configured, with their options -- saved as the registry values they write | an agent that supports Group Policy; the templates come from your PCs (see below) |
 | **Registry values** | Writes DWORD, string, expandable-string and multi-string values under `HKLM\SOFTWARE\Policies` | an agent that supports Group Policy (see below) |
 | **Scripts** | Runs a library script once on each PC the policy applies to, and again only when the script itself changes | the *Issue commands* capability as well |
 
@@ -41,6 +42,37 @@ deleted), the agent removes it, as long as it still holds what FleetHub wrote.
 `gpo:<policy id>`. The only variable a policy script can use is `{{sys.machine}}`; a script that
 needs a live reading is skipped with a reason rather than run with "unknown" in it. A script a
 policy uses cannot be deleted from the library.
+
+## Administrative Templates
+
+In the policy editor, **Browse templates…** opens the tree Windows' Local Group Policy Editor
+shows: **Computer Configuration** and its categories on the left, the settings of the selected
+category on the right. Search finds a setting by name across every category. Open a setting
+to choose **Enabled**, **Disabled** or **Not configured**, fill in its options (they apply only
+when Enabled, as in gpedit) and read its help text.
+
+**The templates come from your PCs.** A Windows agent that supports them hashes its own
+`C:\Windows\PolicyDefinitions` (the `.admx` files with their English, German and Spanish
+`.adml`) and the hub asks one PC per Windows build to send the set. Every PC on that build
+shares it, so a fleet sends a handful of sets, not one per PC. When your PCs run different
+builds, pick the set at the top of the browser; the one most of your PCs report is selected
+first. Templates you add to a PC's `PolicyDefinitions` (Edge, Chrome, Office) are picked up
+when that PC's folder changes.
+
+A template setting is saved as the registry values it writes, checked by the same rules as
+values typed in by hand, and those values are what the PCs receive. So:
+
+- **Settings that write outside `HKLM\SOFTWARE\Policies`**, and settings that use a QWORD
+  value, are listed greyed out with the reason and cannot be set.
+- **User Configuration** settings are shown but cannot be set yet.
+- **Some settings delete a value when Disabled.** FleetHub does not delete values yet: the
+  agent removes only values it wrote itself. The resultant set marks such settings.
+- **A policy sets each registry value once.** A template setting and a typed value, or two
+  template settings, that write the same value are refused when the policy is saved.
+
+Between policies, a template setting follows the usual order: the policy that wins replaces the
+setting whole, so a nearer policy's **Disabled** does not leave the farther policy's options
+behind.
 
 ## Which policy wins
 
@@ -103,8 +135,6 @@ uninstall with `agent-install.ps1 -Uninstall` removes the values listed in the a
 
 ## Not supported
 
-- **ADMX templates** are not imported; enter the values they write instead.
-- **User settings (HKCU)** are not supported. Per-user hives are loaded only while somebody is
-  signed in.
+- **User settings (HKCU)** are not supported yet, typed or from a template.
 - FleetHub does not create or edit **real Windows GPOs** in your domain, and does not touch
   SYSVOL.

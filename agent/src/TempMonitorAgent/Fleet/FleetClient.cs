@@ -91,6 +91,11 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// exactly how the hub tells an agent that cannot apply registry policy from one that can.</summary>
     public TempMonitorAgent.GroupPolicy.GroupPolicyRunner? GroupPolicy { get; set; }
 
+    /// <summary>This PC's Administrative Templates (roadmap #32): its hash rides every
+    /// heartbeat, and the hub's <c>admx_wanted</c> answer queues one upload. Set from
+    /// Program.cs for the reason given on <see cref="Watchdogs"/>.</summary>
+    public TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader? PolicyDefinitions { get; set; }
+
     /// <summary>Takes the agent off this PC when the hub says its machine was deleted with
     /// "uninstall the agent" ticked (roadmap #30). Handed over after construction for the
     /// reason <see cref="Watchdogs"/> is. Null means the reason is heard and nothing happens.</summary>
@@ -292,6 +297,10 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
                 policyStates = TempMonitorAgent.GroupPolicy.GroupPolicyReporter.TakeIfChanged();
                 if (policyStates is not null) body["gpo"] = policyStates.DeepClone();
             }
+            // Administrative Templates (roadmap #32): the hash of this PC's PolicyDefinitions on
+            // every heartbeat, which is all the hub needs to know whether it holds this set. The
+            // files themselves go up separately, only when asked (UploadPolicyDefinitionsAsync).
+            if (PolicyDefinitions?.Hash is { } templates) body["admx_hash"] = templates;
             // What this build can do (roadmap #23), the first capabilities block a Windows agent
             // has sent. **Features only, never `commands`**: the hub reads an absent command
             // list as "can run anything" and a present one as the whole truth, so listing
@@ -653,6 +662,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         {
             var root = JsonNode.Parse(body)?.AsObject();
             if (root is null) return;
+            // The hub lacks this PC's template set and has picked this PC to send it. Only
+            // queued here; the upload runs on the policy loop, off the heartbeat's clock.
+            if (root["admx_wanted"]?.GetValue<bool>() == true) PolicyDefinitions?.RequestUpload();
             if (!root.TryGetPropertyValue("gpo_document", out var node) || node is null) return;
             var version = root["gpo_version"]?.GetValue<string>() ?? "";
             var document = TempMonitorAgent.GroupPolicy.PolicyDocument.Parse(node, version);
@@ -1592,6 +1604,37 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             _log.LogDebug("Disk usage POST failed: {Msg}", e.Message);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Upload this PC's Administrative Templates as a zip (roadmap #32), streamed from disk
+    /// with a Content-Length like the disk-usage history below. Returns whether the hub took
+    /// it; a refusal is logged and not retried until the hub asks again, which it does only
+    /// while it still lacks the set and this PC still holds the claim on sending it.
+    /// </summary>
+    public async Task<bool> UploadPolicyDefinitionsAsync(string path, string hash, CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/gpo/templates?hash={Uri.EscapeDataString(hash)}";
+        try
+        {
+            var length = new FileInfo(path).Length;
+            using var body = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                                            1024 * 1024, useAsync: true);
+            using var req = Authorized(HttpMethod.Post, url);
+            req.Content = new StreamContent(body);
+            req.Content.Headers.ContentLength = length;
+            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode) return true;
+            _log.LogWarning("Hub refused the Administrative Templates upload ({Status}): {Body}",
+                            (int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
+        {
+            _log.LogWarning(e, "Administrative Templates upload failed ({Kind}): {Msg}",
+                            e.GetType().Name, e.GetBaseException().Message);
         }
         return false;
     }
