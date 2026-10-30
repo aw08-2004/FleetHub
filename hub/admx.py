@@ -547,7 +547,15 @@ def _drop_dangling(categories, policies):
 
 # ================================================================ upload and storage
 def _catalog_path(digest):
-    return os.path.join(_root, f"{digest}.json.gz")
+    """Where a set's catalogue lives. `digest` is always clean_hash()'s 64 hex characters, so it
+    cannot leave `_root`; the containment check is said again here anyway, on the joined path,
+    because that is the form a reader (and CodeQL's py/path-injection, alerts #201-#203 on the
+    first cut of this) can see is safe without tracing every caller."""
+    root = os.path.realpath(_root)
+    path = os.path.realpath(os.path.join(root, f"{digest}.json.gz"))
+    if not path.startswith(root + os.sep):
+        raise AdmxRejected("that is not a template set")
+    return path
 
 
 def _read_zip(path):
