@@ -1045,6 +1045,21 @@ def _normalize_level(level, action):
     return ACTION_LEVELS.get(str(action), DEFAULT_AUDIT_LEVEL)
 
 
+#: Called with the stored level after every audit row is committed, so the open Audit Log
+#: pages re-read (app.py points it at the change notifier). A hook rather than an import:
+#: this module stays Flask-free and socket-free, and with nothing set -- a test, a script --
+#: auditing simply notifies nobody. Rejected: marking `audit` from the after-request hook,
+#: which misses every row a background writer adds (schedulers, sweeps, the rule
+#: evaluator) -- the page would look live and skip exactly those lines.
+_audit_listener = None
+
+
+def set_audit_listener(listener):
+    """Install the callable told `listener(level)` about each new audit row (None to clear)."""
+    global _audit_listener
+    _audit_listener = listener
+
+
 def audit(db_path, actor, action, target=None, detail=None, level=None):
     """Record one line in the append-only audit trail. Never raises on a bad
     detail payload -- auditing must not be able to break the action it records.
@@ -1056,13 +1071,21 @@ def audit(db_path, actor, action, target=None, detail=None, level=None):
         detail_json = json.dumps(detail, sort_keys=True) if detail is not None else None
     except (TypeError, ValueError):
         detail_json = json.dumps({"_unserializable": str(detail)})
+    stored_level = _normalize_level(level, action)
     with get_conn(db_path) as conn:
         conn.execute(
             "INSERT INTO audit_log(ts, actor, action, target, detail_json, level) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (int(time.time()), str(actor), str(action), target, detail_json,
-             _normalize_level(level, action)),
+            (int(time.time()), str(actor), str(action), target, detail_json, stored_level),
         )
+    # After the commit, so a page that re-reads on the notice finds the row. Swallowed for
+    # the same reason as a bad payload: a notice must not be able to fail the action.
+    listener = _audit_listener
+    if listener is not None:
+        try:
+            listener(stored_level)
+        except Exception as e:
+            print(f"[audit] Change notice failed: {e}")
 
 
 def _decode_audit_row(row):

@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.171.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.171.1**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -381,6 +381,17 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
 - [ ] **A real provider calls it.** Against the configured model (not the test stand-in),
   "restart PC-xx, wait five minutes, then check it is back" uses `wait` rather than
   re-reading the machine over and over.
+
+**Hub 1.171.1: the Audit Log keeps open rows open, and re-reads only on a new line**
+- [ ] **Open stays open.** On a beta hub with agents reporting, open the Audit Log, press
+  **Details** on two rows and wait a minute. Both stay open (before: they closed every ~5 s,
+  because the page re-read on every fleet notice, `status` included).
+- [ ] **New lines still arrive.** With those rows open, change something that audits (save a
+  setting, edit a device group) in another tab. The new line appears at the top within a few
+  seconds, and the two rows are still open below it.
+- [ ] **Security timing stays private.** As an operator with *View audit log* but not *View
+  security audit*, keep the Audit Log open while somebody else signs in or opens a Remote
+  session. The list does not refresh. An operator holding both sees the security line arrive.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -1094,7 +1105,7 @@ moment for anything to push.
 
 **The design: notify, then refetch through the gated route.** `changes.py` (Flask-free)
 coalesces `(topic, machine)` marks and pushes them as one `changes` event per ~750 ms flush.
-`app.py` marks from four places:
+`app.py` marks from five places:
 - **One `after_request` hook** marks every 2xx write under `/api/`. The topic comes from the
   blueprint (`changes.BLUEPRINT_TOPICS`), the machine from the URL or, for an agent's write,
   from its bearer token (`auth_helpers.bearer_agent` sets `g.agent_machine`). Streams are
@@ -1107,6 +1118,14 @@ coalesces `(topic, machine)` marks and pushes them as one `changes` event per ~7
 - **`status_watcher`**, every 5 s, compares each machine's derived status with its last answer
   and marks `status` on a transition. It also compares a one-row signature of the `alerts`
   table, so all of that table's dozen writers are covered without a mark at each one.
+- **`fleet.audit`** marks `audit` or `audit_security` (by the row's level) after every row it
+  commits, through a listener app.py installs (hub 1.171.1). Until then the Audit Log watched
+  `'*'` and rebuilt itself on every fleet notice -- every ~5 s on a busy hub, `status` alone
+  ticking that often -- which collapsed every Details row the reader had open. The page now
+  also keeps the ids of open rows across a re-read. Rejected: pausing the re-read while any
+  row is open, which leaves a page that looks live and is not; and marking from the
+  after-request hook, which never sees what a scheduler or sweep audits. Security rows get
+  their own topic because the notice's timing alone tells a reader when somebody signed in.
 
 Rooms decide the audience: a machine's notice goes to `fleet:all` plus `machine:<name>`, a
 fleet-wide one to `viewers:all`. Either way it is delivered once per listener.

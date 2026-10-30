@@ -12,8 +12,11 @@
 //    seconds and bulk operations land many rows on one, so "skip N" would duplicate and
 //    drop lines while an operator reads.
 //
-// No polling: an audit trail is evidence, not a live dashboard, and a list that reorders
-// itself under a reader is worse than one they refresh when they want to.
+// No polling. The list re-reads only when a new audit line was actually written (the
+// `audit` / `audit_security` notices, fleet.audit), and a re-read never takes away what the
+// reader has in hand: open detail rows come back open, and it waits while they page, type
+// or select text. Watching every notice ('*') used to re-read every few seconds on a busy
+// fleet -- `status` alone ticks every 5 s -- and collapsed every row the reader had opened.
 
 const auditHost = document.getElementById('audit-host');
 const auditStatus = document.getElementById('audit-status');
@@ -41,6 +44,9 @@ let loading = false;
 let searchDebounce = null;
 let levelOptionsBuilt = false;
 let tbody = null;           // the current table body, appended to when paging
+// Ids of the entries whose detail row the reader has opened. A re-read rebuilds the table,
+// so the open state cannot live on the rows themselves -- same as processes.js `expanded`.
+const expanded = new Set();
 
 async function api(path, options) {
     const resp = await fetch(path, options);
@@ -114,21 +120,20 @@ function appendEntry(entry) {
         ? '--' : String(entry.target)));
 
     const actionTd = document.createElement('td');
-    const toggle = el('button', 'btn btn--ghost', t('audit.details'));
+    const toggle = el('button', 'btn btn--ghost');
     toggle.type = 'button';
     actionTd.appendChild(toggle);
     tr.appendChild(actionTd);
 
     const detailTr = document.createElement('tr');
     detailTr.className = 'audit-detail';
-    detailTr.hidden = true;
     const detailTd = document.createElement('td');
     detailTd.colSpan = 6;
     detailTr.appendChild(detailTd);
 
     let filled = false;
-    toggle.addEventListener('click', () => {
-        if (!filled) {
+    function show(open) {
+        if (open && !filled) {
             if (entry.detail === null || entry.detail === undefined) {
                 detailTd.appendChild(el('p', 'stat-card__meta', t('audit.no_detail')));
             } else {
@@ -136,8 +141,16 @@ function appendEntry(entry) {
             }
             filled = true;
         }
-        detailTr.hidden = !detailTr.hidden;
-        toggle.textContent = detailTr.hidden ? t('audit.details') : t('audit.hide');
+        detailTr.hidden = !open;
+        toggle.textContent = open ? t('audit.hide') : t('audit.details');
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    show(expanded.has(entry.id));
+    toggle.addEventListener('click', () => {
+        const open = detailTr.hidden;
+        if (open) expanded.add(entry.id);
+        else expanded.delete(entry.id);
+        show(open);
     });
 
     tbody.appendChild(tr);
@@ -255,9 +268,18 @@ clearBtn.addEventListener('click', () => {
 
 loadActors();
 load(false);
-// Every mutation writes an audit row, so any change notice may be a new line here.
-window.FleetLive.watch('*', reload, {
+// A selection inside the table is somebody copying a payload out of it; a rebuild would
+// drop the selection under their mouse.
+function selectingInTable() {
+    const selection = document.getSelection();
+    return !!selection && !selection.isCollapsed && auditHost.contains(selection.anchorNode);
+}
+
+// Re-read when a line was written, not on every notice. Security rows have a topic of their
+// own so that only the operators who may read them learn WHEN one was written (changes.py,
+// TOPIC_CAPABILITIES); an operator without that capability is simply never told.
+window.FleetLive.watch(['audit', 'audit_security'], reload, {
     minInterval: 5000,
-    busy: () => pagedPastFirst
+    busy: () => pagedPastFirst || selectingInTable()
         || document.activeElement === searchInput || document.activeElement === actorInput,
 });

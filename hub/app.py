@@ -171,7 +171,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.171.0"
+HUB_VERSION = "1.171.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -3168,6 +3168,11 @@ def mark_changed(topic, machine=None):
         change_notifier.mark(topic, machine)
     except Exception as e:
         print(f"[changes] Could not mark {topic}: {e}")
+
+
+# Every audit row, whoever writes it, is a notice for the open Audit Log pages -- on the
+# topic its level allows (changes.audit_topic says why there are two).
+fleet.set_audit_listener(lambda level: mark_changed(changes.audit_topic(level)))
 
 
 @socketio.on("connect")
