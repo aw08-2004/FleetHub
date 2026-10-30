@@ -208,8 +208,11 @@ push to `beta` that touches `hub/` after this merges.
   private, and `compose.yaml` on `main` will point at it. Package settings → Danger Zone →
   Change visibility → Public (one-way). Then `docker pull ghcr.io/aw08-2004/fleethub:beta-latest`
   works with no `docker login`.
-- [ ] **Retire the mirror** once every Docker hub host's `compose.yaml` says `fleethub`: drop
-  `temp_monitor-hub` from `repos` in `.github/workflows/hub-image.yml` (to `main` and `beta`).
+- [ ] **Mirror retired before every host moved -- check the hosts.** The owner dropped
+  `temp_monitor-hub` from `repos` on `beta` on 2026-10-29 (`797a78d`), and it reaches `main`
+  with the channel-tags workflow PR (#196). Before that merges, confirm every Docker hub
+  host's `compose.yaml` says `fleethub`: one still on `temp_monitor-hub` gets no new tag and
+  shows no error. The first-publish and re-run checks above now see one name, not two.
 
 **Hub 1.165.0 — provided TURN relays, reached `main` unconfirmed** (#172)
 The owner sent it to `main` with the rest on 2026-10-22 without a beta pass, so these checks

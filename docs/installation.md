@@ -317,10 +317,9 @@ like the repository it is built from, so the hub host needs no `docker login`. I
 Docker Engine (Linux) or Docker Desktop (Windows). Agents need no change as long as the
 public `HUB_URL` stays the same: they know only that URL and pin no certificate.
 
-Until 2026-10-27 the image was `ghcr.io/aw08-2004/temp_monitor-hub`. Every tag is still
-pushed under that name too, so a host on an older `compose.yaml` keeps updating, but change
-its `image:` line to `fleethub` the next time you touch it — the old name is a mirror that
-will be retired.
+Until 2026-10-27 the image was `ghcr.io/aw08-2004/temp_monitor-hub`. That name was kept as
+a mirror until 2026-10-29 and gets no new tags since: a host whose `compose.yaml` still names
+it stays on its last image without any error. Change its `image:` line to `fleethub`.
 
 Start from the template beside the compose file, fill in the required values, then start:
 

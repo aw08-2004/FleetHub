@@ -31,15 +31,21 @@ name: "Hub image"
 # review). It never moves latest to a lower number than it holds, and an unreadable latest or
 # channel tag -- including an image with no version label -- leaves it where it is.
 #
-# **Every tag is also pushed to the old name, ghcr.io/<owner>/temp_monitor-hub.** The package
-# was published under the pre-rename name from 1.143.0 to 1.168.0 (renamed 2026-10-27), and
-# every host started from the compose file of that time pulls it. Publishing only to the new
-# name would leave those hosts reading "no new tag" forever -- the same silent nothing-happens
-# as a reused HUB_VERSION. GHCR cannot rename or redirect a package, so the mirror stays until
-# ROADMAP.MD says every Docker host has moved to the new image line in compose.yaml. The
-# "already published" check covers both names, so the two can never carry different images
-# under one tag; re-running a push that failed between the names copies the image it already
-# published rather than rebuilding (see that step).
+# **The old name, ghcr.io/<owner>/temp_monitor-hub, gets no new tags (owner's decision,
+# 2026-10-29).** The package was published under the pre-rename name from 1.143.0 to 1.168.0
+# (renamed 2026-10-27), and from then until 2026-10-29 every tag was mirrored there too. A
+# host whose compose.yaml still names temp_monitor-hub now reads "no new tag" forever -- the
+# same silent nothing-happens as a reused HUB_VERSION -- so it must change its image line to
+# fleethub; ROADMAP.MD carries that as a check owed before this reaches main. Keeping the
+# mirror until ROADMAP.MD said every host had moved was the rejected alternative: the owner
+# retired it on beta first. GHCR cannot rename or redirect a package, so the old tags stay
+# pullable but frozen.
+#
+# `repos` stays a list, and every step below still walks it, so a second name can come back
+# by adding it there. The "already published" check covers every name in it, so two names can
+# never carry different images under one tag; re-running a push that failed between the names
+# copies the image it already published rather than rebuilding (see that step). With one name
+# that path still finishes a push that failed on a moving tag.
 #
 # Beta gets its own prefix rather than sharing X.Y.Z, because promoting beta to main carries
 # the same HUB_VERSION across -- a shared tag would make main's build collide with beta's.
@@ -224,7 +230,7 @@ jobs:
         run: |
           # The source label is what links the package to this repository on GHCR, so the
           # repository's GITHUB_TOKEN can keep pushing to it after the first publish. One build,
-          # tagged under every name, so the old name mirrors the same image by digest.
+          # tagged under every name in `repos`, so any second name carries the same digest.
           tags=()
           for REPO in $REPOS; do
             tags+=(--tag "ghcr.io/${REPO}:${VERSION_TAG}" --tag "ghcr.io/${REPO}:${MOVING_TAG}")
@@ -252,7 +258,7 @@ jobs:
           REF: ${{ github.ref_name }}
         run: |
           printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
-          # **Every version tag before any moving tag, across both names.** If a push fails,
+          # **Every version tag before any moving tag, across every name.** If a push fails,
           # `stable-latest` or `beta-latest` still names the previous release rather than one
           # whose own tag never landed under some name -- and the version tags are what the check step can
           # see, so a re-run knows there is something to finish.

@@ -140,8 +140,7 @@ skipping the numbers it never ran is fine; the rule above is only that none repe
 The same number is the hub's **container image tag**. `.github/workflows/hub-image.yml`
 publishes `ghcr.io/<owner>/fleethub:X.Y.Z` (and the moving `stable-latest`) from `main`,
 and `beta-X.Y.Z` (and `beta-latest`) from `beta`; `latest` moves to whichever of the two has
-the higher number, and mirrors every tag to the pre-rename `temp_monitor-hub` for hosts still on the
-old compose file. It **fails** if `HUB_VERSION` is not three numeric components, or if that tag already
+the higher number. The pre-rename `temp_monitor-hub` gets no new tags since 2026-10-29. It **fails** if `HUB_VERSION` is not three numeric components, or if that tag already
 exists. A reused number never overwrites an image: the push fails, and a container hub
 cannot install a release that has no new tag.
 
