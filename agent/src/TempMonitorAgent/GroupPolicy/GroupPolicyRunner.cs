@@ -160,63 +160,81 @@ public sealed class GroupPolicyRunner(ILogger<GroupPolicyRunner> log, AgentState
             var marker = ReadMarker();
             var settled = _clock.GetUtcNow() - _refreshedAt >= TimeSpan.FromSeconds(SettleSeconds);
             var pass = new Pass(file, settled);
-            var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var changed = false;
-
-            foreach (var value in _document.Values)
-            {
-                var entry = Entry(value.Path, value.Name);
-                wanted.Add(entry);
-                var refusal = PolicyAllowList.Refusal(value);
-                if (refusal is not null)
-                {
-                    GroupPolicyReporter.Record(value.Id, Refused, refusal);
-                    continue;
-                }
-                try
-                {
-                    changed |= Reconcile(value, entry, marker, pass);
-                }
-                catch (Exception e) when (e is UnauthorizedAccessException or IOException
-                                               or System.Security.SecurityException
-                                               or ArgumentException)
-                {
-                    GroupPolicyReporter.Record(value.Id, Error, e.Message);
-                }
-            }
-
-            var released = new List<string>();
-            foreach (var entry in marker)
-            {
-                if (wanted.Contains(entry)) continue;
-                try
-                {
-                    ReleaseEntry(entry, file);
-                    released.Add(entry);
-                }
-                catch (Exception e) when (e is UnauthorizedAccessException or IOException
-                                               or System.Security.SecurityException)
-                {
-                    _log.LogWarning(e, "Could not remove policy value {Entry}", entry);
-                }
-            }
-
-            if (Save(pass))
-            {
-                foreach (var entry in released)
-                {
-                    marker.Remove(entry);       // value first, marker second -- see the class remarks
-                    _written.Remove(entry);
-                }
-                if (released.Count > 0)
-                {
-                    WriteMarker(marker);
-                    changed = true;
-                }
-            }
+            var changed = ReconcileAll(marker, pass, out var wanted);
+            var released = ReleaseUnwanted(marker, wanted, file);
+            // Value first, marker second -- see the class remarks: an entry leaves the marker
+            // only once the file without it has been written.
+            if (Save(pass)) changed |= Unmark(marker, released);
             if (pass.Missing) Repair();
             if (changed) Persist();
         }
+    }
+
+    /// <summary>Reconcile every value in the document. Returns true when the marker or the
+    /// written-value record changed; <paramref name="wanted"/> is every entry the document
+    /// names, refused ones included, so none of them is released.</summary>
+    private bool ReconcileAll(HashSet<string> marker, Pass pass, out HashSet<string> wanted)
+    {
+        wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var changed = false;
+        foreach (var value in _document.Values)
+        {
+            var entry = Entry(value.Path, value.Name);
+            wanted.Add(entry);
+            var refusal = PolicyAllowList.Refusal(value);
+            if (refusal is not null)
+            {
+                GroupPolicyReporter.Record(value.Id, Refused, refusal);
+                continue;
+            }
+            try
+            {
+                changed |= Reconcile(value, entry, marker, pass);
+            }
+            catch (Exception e) when (e is UnauthorizedAccessException or IOException
+                                           or System.Security.SecurityException
+                                           or ArgumentException)
+            {
+                GroupPolicyReporter.Record(value.Id, Error, e.Message);
+            }
+        }
+        return changed;
+    }
+
+    /// <summary>Take every marked entry the document no longer names out of the file. Returns
+    /// the entries handled, which stay on the marker until the file is saved.</summary>
+    private List<string> ReleaseUnwanted(HashSet<string> marker, HashSet<string> wanted,
+                                         RegistryPolFile file)
+    {
+        var released = new List<string>();
+        foreach (var entry in marker.Where(e => !wanted.Contains(e)))
+        {
+            try
+            {
+                ReleaseEntry(entry, file);
+                released.Add(entry);
+            }
+            catch (Exception e) when (e is UnauthorizedAccessException or IOException
+                                           or System.Security.SecurityException)
+            {
+                _log.LogWarning(e, "Could not remove policy value {Entry}", entry);
+            }
+        }
+        return released;
+    }
+
+    /// <summary>Drop released entries from the marker and the written-value record. Returns
+    /// true when there were any.</summary>
+    private bool Unmark(HashSet<string> marker, List<string> released)
+    {
+        if (released.Count == 0) return false;
+        foreach (var entry in released)
+        {
+            marker.Remove(entry);
+            _written.Remove(entry);
+        }
+        WriteMarker(marker);
+        return true;
     }
 
     /// <summary>Remove every value this agent set, then the marker -- before an uninstall, so
@@ -273,29 +291,7 @@ public sealed class GroupPolicyRunner(ILogger<GroupPolicyRunner> log, AgentState
         var desired = value.Canonical;
         _written.TryGetValue(entry, out var last);
 
-        if (!marker.Contains(entry))
-        {
-            if (held is not null)
-            {
-                GroupPolicyReporter.Record(value.Id, ManagedElsewhere,
-                    held == desired
-                        ? "already set to this value in the PC's local Group Policy by someone other than FleetHub"
-                        : "set in the PC's local Group Policy by someone other than FleetHub, which is left alone");
-                return false;
-            }
-            var current = _store.Get(value.Path, value.Name);
-            if (current is not null)
-            {
-                GroupPolicyReporter.Record(value.Id, ManagedElsewhere,
-                    current == desired
-                        ? "already set to this value by something other than FleetHub"
-                        : "set by something other than FleetHub, which is left alone");
-                return false;
-            }
-            marker.Add(entry);
-            WriteMarker(marker);          // marker first -- see the class remarks
-            return Write(value, entry, pass);
-        }
+        if (!marker.Contains(entry)) return Adopt(value, entry, marker, pass, held);
 
         if (held == desired)
         {
@@ -305,13 +301,7 @@ public sealed class GroupPolicyRunner(ILogger<GroupPolicyRunner> log, AgentState
             return changed;
         }
 
-        // Somebody changed a value we set: it is theirs now. In the file, that is gpedit.
-        // Missing from the file but changed in the registry, it is an older agent's direct
-        // write that a domain GPO (or anyone) took over before this agent arrived.
-        var theirs = held is not null
-            ? last is not null && held != last
-            : last is not null && _store.Get(value.Path, value.Name) is { } inForce && inForce != last;
-        if (theirs)
+        if (ChangedBySomebodyElse(value, held, last))
         {
             marker.Remove(entry);
             WriteMarker(marker);
@@ -325,6 +315,46 @@ public sealed class GroupPolicyRunner(ILogger<GroupPolicyRunner> log, AgentState
         // older agent's direct write being moved into the file, or ours with no record of what
         // was written (state file lost): write the wanted value.
         return Write(value, entry, pass);
+    }
+
+    /// <summary>A wanted value not on the marker: take it on only when nobody else has said
+    /// anything about it, in the file or in the registry.</summary>
+    private bool Adopt(PolicyValue value, string entry, HashSet<string> marker, Pass pass,
+                       string? held)
+    {
+        var desired = value.Canonical;
+        if (held is not null)
+        {
+            GroupPolicyReporter.Record(value.Id, ManagedElsewhere,
+                held == desired
+                    ? "already set to this value in the PC's local Group Policy by someone other than FleetHub"
+                    : "set in the PC's local Group Policy by someone other than FleetHub, which is left alone");
+            return false;
+        }
+        var current = _store.Get(value.Path, value.Name);
+        if (current is not null)
+        {
+            GroupPolicyReporter.Record(value.Id, ManagedElsewhere,
+                current == desired
+                    ? "already set to this value by something other than FleetHub"
+                    : "set by something other than FleetHub, which is left alone");
+            return false;
+        }
+        marker.Add(entry);
+        WriteMarker(marker);          // marker first -- see the class remarks
+        return Write(value, entry, pass);
+    }
+
+    /// <summary>Whether somebody changed a value we set, making it theirs. In the file, that is
+    /// gpedit. Missing from the file but changed in the registry, it is an older agent's direct
+    /// write that a domain GPO (or anyone) took over before this agent arrived. With no record of
+    /// what was written (state file lost), nothing can be told apart, and the marker's word
+    /// stands.</summary>
+    private bool ChangedBySomebodyElse(PolicyValue value, string? held, string? last)
+    {
+        if (last is null) return false;
+        if (held is not null) return held != last;
+        return _store.Get(value.Path, value.Name) is { } inForce && inForce != last;
     }
 
     private bool Write(PolicyValue value, string entry, Pass pass)
