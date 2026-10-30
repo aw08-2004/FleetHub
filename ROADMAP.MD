@@ -186,8 +186,12 @@ operators asked for. Nothing is published until the next push touching `hub/` on
   beta is ahead of `main`, `latest`, all sharing one digest. The *Push* log says so.
 - [ ] **Stable publish.** The `beta` → `main` release pushes `X.Y.Z` and `stable-latest`, and
   moves `latest` to the stable build (same number as beta: a tie goes to `main`).
-- [ ] **No step back.** A later beta re-run, or a `main` release with a lower number than
-  `latest`, logs *is not newer, so it stays there* and leaves `latest` alone.
+- [ ] **The `latest` job.** Each publish is followed by a separate *latest* job, which logs the
+  three versions it read and *Moving latest to ...* or *latest already names ...*. It runs in
+  its own group, so a beta push cannot cancel a pending `main` release (PR review on #196).
+- [ ] **No step back.** A `latest` holding a higher number than both channels logs *leaving it
+  there*; an unreadable tag or an image with no version label fails the job red and moves
+  nothing.
 
 **Hub image renamed to `ghcr.io/aw08-2004/fleethub`** (#28; workflow on `main` and `beta`)
 The workflow now publishes `fleethub` first and mirrors every tag to `temp_monitor-hub`, the
