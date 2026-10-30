@@ -128,7 +128,7 @@ DIAGNOSTICS = {
     "has_sensors": True, "cpu_load_pct": 12.5, "memory_load_pct": 61.0,
     "mem_used_gb": 9.8, "mem_total_gb": 16.0, "gpu_temp": None, "gpu_load_pct": None,
     "disk_load_pct": 3.0, "fan_rpm": 1200.0, "net_rx_bps": 1000, "net_tx_bps": 500,
-    "cpu_power_w": 35.0, "gpu_power_w": None,
+    "cpu_power_w": 35.0, "gpu_power_w": None, "battery_pct": 65.0,
     "disks": [
         {"name": "C: (Windows)", "used_gb": 400.0, "total_gb": 500.0, "used_pct": 80.0},
         {"name": "D: (Data)", "used_gb": 100.0, "total_gb": 1000.0, "used_pct": 10.0},
@@ -207,6 +207,7 @@ check("hw.manufacturer", vars1["hw.manufacturer"].value == "Dell Inc.")
 check("metric.cpu_temp from last_temp", vars1["metric.cpu_temp"].value == 55.0)
 check("metric.memory_load_pct from diagnostics", vars1["metric.memory_load_pct"].value == 61.0)
 check("absent gpu reads UNKNOWN", vars1["metric.gpu_temp"].value is UNKNOWN)
+check("metric.battery_pct from diagnostics", vars1["metric.battery_pct"].value == 65.0)
 
 check("disk.c.used_pct", vars1["disk.c.used_pct"].value == 80.0)
 check("disk.c.free_gb is computed", vars1["disk.c.free_gb"].value == 100.0)
@@ -421,6 +422,21 @@ def ev(text, variables):
     err, ast = parse(text)
     assert err is None, err
     return rules.evaluate(ast, variables)
+
+
+# A battery alert must fire below the line, stay quiet above it, and never fire on a desktop:
+# a desktop has no battery, so the variable is UNKNOWN there, and UNKNOWN never fires.
+print("\n-- battery threshold --")
+check("battery 65 < 70 fires", ev("metric.battery_pct < 70", vars1) is True)
+_desk = rules.resolve_machine_vars(DB, "PC1", now=NOW,
+                                   diagnostics={**DIAGNOSTICS, "battery_pct": None},
+                                   online_window=120, enrolled=True)
+check("a desktop's battery reads UNKNOWN", _desk["metric.battery_pct"].value is UNKNOWN)
+check("...and the rule does not fire there", ev("metric.battery_pct < 70", _desk) is not True)
+_full = rules.resolve_machine_vars(DB, "PC1", now=NOW,
+                                   diagnostics={**DIAGNOSTICS, "battery_pct": 80.0},
+                                   online_window=120, enrolled=True)
+check("battery 80 < 70 does not fire", ev("metric.battery_pct < 70", _full) is False)
 
 
 check("true", ev("sys.uptime_days > 7", vars_of(sys__uptime_days=9)) is True)

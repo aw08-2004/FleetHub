@@ -173,7 +173,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.174.1"
+HUB_VERSION = "1.175.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -943,6 +943,41 @@ def _package_power(sensors, hardware_substr, preferred_name_substrs):
     return max(value for _, value in candidates)
 
 
+# Both spellings of a battery's charge reading. LHM on Windows reports "Charge Level" as
+# SensorType.Level; the Android agent reports the same reading as "Load"
+# (AndroidSensorReader.ReadBattery), because its Models.cs mirrors the types the hub already
+# charted. Matching only "Level" would leave every phone and tablet UNKNOWN in rules.
+_BATTERY_CHARGE_TYPES = ("Level", "Load")
+
+
+def _battery_charge_pct(sensors):
+    """State of charge, in percent, of the machine's battery -- None on a machine without one.
+
+    **Name-exact, with no fallback**, unlike _find_sensor_value. LHM reports "Degradation
+    Level" as a Level sensor on the same battery hardware, so a "first candidate" fallback
+    would chart wear as charge: a new battery reads ~0% "charge" and a battery rule fires on a
+    laptop sitting at 100%. A battery that reports no "Charge Level" is UNKNOWN in rules, which
+    never fires -- the safe way round for an alert.
+
+    The first match in block order, on the rare machine with two batteries. Rejected: the
+    minimum, because a hot-swap bay holding a flat spare would alert forever on a laptop that
+    is fine; and the mean, because two packs of different capacity do not average by percent,
+    so it would be a number Windows never shows the user either.
+    """
+    for s in sensors:
+        if s.get("type") not in _BATTERY_CHARGE_TYPES:
+            continue
+        haystack = f"{s.get('hardware_id') or ''} {s.get('hardware') or ''}".lower()
+        if "battery" not in haystack:
+            continue
+        if "charge level" not in str(s.get("name") or "").lower():
+            continue
+        value = s.get("value")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
 def sensor_preferences():
     """The operator's four hub-side sensor preference lists, as one dict (roadmap #3).
 
@@ -987,6 +1022,7 @@ def extract_diagnostics(sensors, prefs=None):
             "disk_read_bps": None, "disk_write_bps": None, "disks": [],
             "fan_rpm": None, "fans": [],
             "cpu_power_w": None, "gpu_power_w": None,
+            "battery_pct": None,
         }
     # Resolved after the empty-block return above, not before it: a machine the hub has
     # never had sensors from is a common case on the fleet page, and it needs no preferences.
@@ -1035,6 +1071,9 @@ def extract_diagnostics(sensors, prefs=None):
         "cpu_power_w": _package_power(sensors, "cpu", ["cpu package", "package", "cpu ppt"]),
         "gpu_power_w": _package_power(sensors, "gpu",
                                       ["gpu package", "gpu power", "board power", "gpu ppt"]),
+        # Battery charge, for laptops and Android devices. None on a desktop, so a battery
+        # rule reads UNKNOWN there and never fires -- see _battery_charge_pct.
+        "battery_pct": _battery_charge_pct(sensors),
     }
 
 
@@ -1050,6 +1089,7 @@ READING_METRIC_COLUMNS = (
     "disk_load_pct", "net_rx_bps", "net_tx_bps",
     "disk_read_bps", "disk_write_bps",
     "fan_rpm", "cpu_power_w", "gpu_power_w",
+    "battery_pct",
 )
 
 # Which collection toggle (settings.py `metrics.*`) gates each column at ingest. When a
@@ -1073,6 +1113,7 @@ METRIC_COLUMN_TOGGLE = {
     # chips, and an operator who doesn't care about watts doesn't care about either.
     "cpu_power_w": "metrics.collect_power",
     "gpu_power_w": "metrics.collect_power",
+    "battery_pct": "metrics.collect_battery",
 }
 
 # ...and which per-metric retention window (settings.py `metrics.retention_days_*`) governs
@@ -1096,6 +1137,7 @@ METRIC_COLUMN_RETENTION = {
     "fan_rpm": "metrics.retention_days_fans",
     "cpu_power_w": "metrics.retention_days_power",
     "gpu_power_w": "metrics.retention_days_power",
+    "battery_pct": "metrics.retention_days_battery",
 }
 
 # Friendly metric keys used by the per-machine history endpoint's `metrics` param, mapped
@@ -1115,6 +1157,7 @@ HISTORY_METRIC_COLUMNS = {
     "fan_rpm": "fan_rpm",
     "cpu_power": "cpu_power_w",
     "gpu_power": "gpu_power_w",
+    "battery": "battery_pct",
 }
 _ALLOWED_HISTORY_COLUMNS = frozenset(HISTORY_METRIC_COLUMNS.values())
 

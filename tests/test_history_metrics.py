@@ -83,12 +83,18 @@ BLOCK = [
     s("CPU Package", 65.5, "Power", "/amdcpu/0", "Ryzen 7"),
     s("CPU Cores", 48.0, "Power", "/amdcpu/0", "Ryzen 7"),
     s("GPU Package", 120.0, "Power", "/gpu-nvidia/0", "RTX 3060"),
+    # A laptop battery as LHM reports it. "Degradation Level" is listed FIRST on purpose: it
+    # is a Level sensor on the same hardware, and a first-candidate pick would chart wear
+    # (12%) as charge and fire every "battery below N%" rule on a full battery.
+    s("Degradation Level", 12.0, "Level", "/battery/0", "DELL 1VX1H"),
+    s("Charge Level", 87.0, "Level", "/battery/0", "DELL 1VX1H"),
+    s("Remaining Time (Estimated)", 9000.0, "TimeSpan", "/battery/0", "DELL 1VX1H"),
 ]
 
 METRIC_COLUMNS = ("cpu_load_pct", "memory_load_pct", "gpu_temp", "gpu_load_pct",
                   "disk_load_pct", "net_rx_bps", "net_tx_bps",
                   "disk_read_bps", "disk_write_bps",
-                  "fan_rpm", "cpu_power_w", "gpu_power_w")
+                  "fan_rpm", "cpu_power_w", "gpu_power_w", "battery_pct")
 
 
 # --------------------------------------------------------------------------- diagnostics
@@ -107,6 +113,7 @@ def test_diagnostics_extracts_all_metrics():
     check("fastest fan", d["fan_rpm"] == 1720.0)
     check("cpu package power", d["cpu_power_w"] == 65.5)
     check("gpu package power", d["gpu_power_w"] == 120.0)
+    check("battery charge", d["battery_pct"] == 87.0)
     check("memory used GB", d["mem_used_gb"] == 6.6)
     # total = used (6.6) + available (9.4) = 16.0; virtual-memory sensors must NOT leak in.
     check("memory total GB (used + available, not virtual)", d["mem_total_gb"] == 16.0)
@@ -337,6 +344,33 @@ def test_package_power_prefers_the_package():
     check("no GPU at all => None", powerless["gpu_power_w"] is None)
 
 
+def test_battery_charge_is_the_charge_level_only():
+    """The silent failure this guards: a battery rule that fires on a full laptop, or never
+    fires on a phone. LHM puts "Degradation Level" beside "Charge Level" as the same sensor
+    type, and the Android agent reports charge as "Load" rather than "Level"."""
+    print("\n-- battery_pct is the charge level, on Windows and Android, and None without one --")
+    check("LHM: Charge Level wins over Degradation Level",
+          app.extract_diagnostics(BLOCK)["battery_pct"] == 87.0)
+
+    android = [s("Battery", 31.0, "Temperature", "/battery/0", "Battery"),
+               s("Charge Level", 64.0, "Load", "/battery/0", "Battery"),
+               s("Voltage", 3.9, "Voltage", "/battery/0", "Battery")]
+    check("Android: a Load-typed Charge Level is read",
+          app.extract_diagnostics(android)["battery_pct"] == 64.0)
+
+    worn_only = [s("Degradation Level", 12.0, "Level", "/battery/0", "DELL 1VX1H")]
+    check("no Charge Level => None, never the degradation figure",
+          app.extract_diagnostics(worn_only)["battery_pct"] is None)
+
+    desktop = [s("CPU Total", 5.0, "Load", "/amdcpu/0", "Ryzen 7"),
+               s("Memory", 41.0, "Load", "/ram", "Generic Memory")]
+    check("a desktop has no battery => None", app.extract_diagnostics(desktop)["battery_pct"] is None)
+
+    unread = [s("Charge Level", None, "Level", "/battery/0", "DELL 1VX1H")]
+    check("an unread (NaN -> null) charge => None",
+          app.extract_diagnostics(unread)["battery_pct"] is None)
+
+
 def test_diagnostics_empty_has_all_keys():
     print("\n-- an empty/None block returns every key as None --")
     for block in (None, []):
@@ -388,7 +422,7 @@ def test_ingest_stores_metric_columns():
     print("\n-- /api/report promotes the sensor block into typed columns --")
     for key in ("metrics.collect_cpu_load", "metrics.collect_memory", "metrics.collect_gpu",
                 "metrics.collect_disk", "metrics.collect_disk_io", "metrics.collect_network",
-                "metrics.collect_fans", "metrics.collect_power"):
+                "metrics.collect_fans", "metrics.collect_power", "metrics.collect_battery"):
         settings.reset(app.DB_PATH, [key])
     client = _client()
     _report(client, "METRICS-ALL", 70.0, BLOCK)
@@ -406,6 +440,7 @@ def test_ingest_stores_metric_columns():
     check("fan_rpm column", m["fan_rpm"] == 1720.0)
     check("cpu_power_w column", m["cpu_power_w"] == 65.5)
     check("gpu_power_w column", m["gpu_power_w"] == 120.0)
+    check("battery_pct column", m["battery_pct"] == 87.0)
 
 
 def test_sensor_blob_is_throttled_but_metrics_are_not():
@@ -448,7 +483,8 @@ def test_ingest_respects_collection_toggles():
     settings.set_many(app.DB_PATH, {"metrics.collect_network": False,
                                     "metrics.collect_disk_io": False,
                                     "metrics.collect_fans": False,
-                                    "metrics.collect_power": False})
+                                    "metrics.collect_power": False,
+                                    "metrics.collect_battery": False})
     _report(client, "METRICS-GATED", 66.0, BLOCK)
     m = _stored_metrics("METRICS-GATED")
     check("network off => net_rx NULL", m["net_rx_bps"] is None)
@@ -459,6 +495,7 @@ def test_ingest_respects_collection_toggles():
     # One toggle covers both chips, so neither may survive it.
     check("power off => cpu_power NULL", m["cpu_power_w"] is None)
     check("power off => gpu_power NULL", m["gpu_power_w"] is None)
+    check("battery off => battery_pct NULL", m["battery_pct"] is None)
     # collect_disk and collect_disk_io are deliberately separate knobs: turning off the
     # noisy per-second rates must not also stop recording "is C: filling up".
     check("disk usage is unaffected by the disk I/O toggle", m["disk_load_pct"] == 63.0)
@@ -468,7 +505,7 @@ def test_ingest_respects_collection_toggles():
     check("an unaffected metric is still recorded", m["cpu_load_pct"] == 12.0)
     settings.reset(app.DB_PATH, ["metrics.collect_network", "metrics.collect_disk",
                                  "metrics.collect_disk_io", "metrics.collect_fans",
-                                 "metrics.collect_power"])
+                                 "metrics.collect_power", "metrics.collect_battery"])
 
 
 def test_sensorless_report_stores_null_metrics():
@@ -492,8 +529,9 @@ def test_all_sensors_endpoint():
     body = client.get("/api/machines/SENSORS-ALL/sensors/all").get_json()
     check("count matches the reported block", body["count"] == len(BLOCK))
     hardware = {hw["name"]: hw for hw in body["hardware"]}
-    # CPU, RAM, GPU, SSD, NIC, the synthetic volume, and the SuperIO chip the fans hang off.
-    check("one entry per distinct hardware", len(body["hardware"]) == 7)
+    # CPU, RAM, GPU, SSD, NIC, the synthetic volume, the SuperIO chip the fans hang off, and
+    # the laptop battery.
+    check("one entry per distinct hardware", len(body["hardware"]) == 8)
     check("hardware appears in report order",
           [hw["name"] for hw in body["hardware"]][0] == "Ryzen 7")
 
@@ -519,7 +557,7 @@ def test_machine_history_endpoint():
     client = _client()
     for key in ("metrics.collect_cpu_load", "metrics.collect_memory", "metrics.collect_gpu",
                 "metrics.collect_disk", "metrics.collect_disk_io", "metrics.collect_network",
-                "metrics.collect_fans", "metrics.collect_power"):
+                "metrics.collect_fans", "metrics.collect_power", "metrics.collect_battery"):
         settings.reset(app.DB_PATH, [key])
     _report(client, "HIST-1", 71.5, BLOCK)
     today = app.today_str()
@@ -594,6 +632,7 @@ if __name__ == "__main__":
     test_volume_sensors_do_not_displace_disk_load_pct()
     test_fans()
     test_package_power_prefers_the_package()
+    test_battery_charge_is_the_charge_level_only()
     test_diagnostics_empty_has_all_keys()
     test_ingest_stores_metric_columns()
     test_sensor_blob_is_throttled_but_metrics_are_not()

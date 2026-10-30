@@ -1135,6 +1135,10 @@
         "label": "CPU- und GPU-Leistung aufzeichnen",
         "help": "Zeichnet die Leistungsaufnahme des Package in Watt auf. Ohne Wirkung auf Computern, deren Chips keinen Leistungssensor melden."
       },
+      "metrics.collect_battery": {
+        "label": "Akkuladestand aufzeichnen",
+        "help": "Zeichnet den Ladestand von Laptop- und Android-Akkus auf. Ohne Wirkung auf Computern ohne Akku."
+      },
       "metrics.report_interval_seconds": {
         "label": "Messwerte melden alle",
         "help": "Wie oft ein Computer einen Messwert sendet. Langsamer heißt gröbere Diagramme, nicht ein Computer, der offline erscheint – die Erreichbarkeit hängt am separaten Heartbeat. Ohne Wirkung, solange jemand die Seite eines Computers geöffnet hat. Agenten, die älter als diese Einstellung sind, melden weiterhin alle 5 Sekunden."
@@ -1173,6 +1177,10 @@
       },
       "metrics.retention_days_power": {
         "label": "CPU-/GPU-Leistungs-Verlauf aufbewahren für",
+        "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
+      },
+      "metrics.retention_days_battery": {
+        "label": "Akku-Verlauf aufbewahren für",
         "help": "0 folgt dem flottenweiten Zeitraum unter Daten & Aufbewahrung. Ein kürzerer Zeitraum LÖSCHT den älteren Verlauf dieser Messgröße DAUERHAFT, behält aber den Rest jedes Messwerts. Länger als der flottenweite Zeitraum wird ignoriert – dort wird der gesamte Messwert gelöscht."
       },
       "fleet.dashboard_online_window_seconds": {
@@ -2978,6 +2986,7 @@
       "fan_rpm": "Schnellster Lüfter",
       "cpu_power": "CPU-Leistung",
       "gpu_power": "GPU-Leistung",
+      "battery": "Akku",
       "temp": "Temperatur"
     },
     "memory_with_total": "Arbeitsspeicher ({total} GB)",
@@ -3788,6 +3797,9 @@
       },
       "metric.net_tx_bps": {
         "label": "Netzwerk gesendet"
+      },
+      "metric.battery_pct": {
+        "label": "Akkuladestand"
       },
       "disk.count": {
         "label": "Anzahl Laufwerke"

@@ -318,6 +318,9 @@ REGISTRY = (
     # are unaffected by collect_fans -- the toggle governs what goes into HISTORY.
     _s("metrics.collect_fans", "metrics", "bool", True),
     _s("metrics.collect_power", "metrics", "bool", True),
+    # Battery charge. Recorded only where a battery reports one (laptops, Android devices);
+    # a desktop stores NULL either way, so the toggle costs nothing on a fleet without them.
+    _s("metrics.collect_battery", "metrics", "bool", True),
 
     # ---------------- How often a machine samples and reports (roadmap #3) ----------------
     # The two telemetry cadences, previously compiled into the agent as AgentConfig
@@ -377,6 +380,8 @@ REGISTRY = (
     _s("metrics.retention_days_fans", "metrics", "int", 0, minimum=0, maximum=3650,
        unit="days"),
     _s("metrics.retention_days_power", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
+    _s("metrics.retention_days_battery", "metrics", "int", 0, minimum=0, maximum=3650,
        unit="days"),
 
     # ---------------- Fleet: liveness and command timings ----------------

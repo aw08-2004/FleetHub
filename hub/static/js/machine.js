@@ -181,6 +181,7 @@ const METRICS = [
     { key: 'fan_rpm',    label: () => t('machine.metric.fan_rpm'),    unit: 'RPM', color: '#38bdf8', decimals: 0, diag: 'fan_rpm' },
     { key: 'cpu_power',  label: () => t('machine.metric.cpu_power'),  unit: 'W',   color: '#eab308', diag: 'cpu_power_w' },
     { key: 'gpu_power',  label: () => t('machine.metric.gpu_power'),  unit: 'W',   color: '#c084fc', diag: 'gpu_power_w' },
+    { key: 'battery',    label: () => t('machine.metric.battery'),    unit: '%',   color: '#84cc16', max: 100, diag: 'battery_pct' },
     { key: 'temp',       label: () => t('machine.metric.temp'),       unit: '°C',  color: '#f97316' },
 ];
 
