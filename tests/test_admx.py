@@ -14,6 +14,8 @@ The silent failures this file exists to catch:
   * **A later policy's "Disabled" leaving the earlier "Enabled" options behind** -- Windows
     replaces a setting whole, and the merge must too.
   * **The whole fleet uploading the same set at once**, instead of the one PC holding the claim.
+  * **An upload nobody asked for being stored**, which would let one agent fill the hub's disk
+    with sets of its own making; and the stored sets growing without bound.
 """
 import io
 import os
@@ -238,10 +240,14 @@ def test_upload(db):
     digest = admx.set_hash(FILES)
     check("the set hash ignores the case of a path",
           admx.set_hash({k.upper(): v for k, v in FILES.items()}) == digest)
+    check("an upload no heartbeat asked for is refused before it is read",
+          "not asked" in (refused(lambda: upload(db, "PC-1", digest, FILES)) or ""))
+    admx.note_machine(db, "PC-1", "0" * 64)
     check("an upload under another set's hash is refused",
           "does not match" in (refused(lambda: upload(db, "PC-1", "0" * 64, FILES)) or ""))
     bad = dict(FILES)
     bad["../evil.admx"] = b"x"
+    admx.note_machine(db, "PC-1", admx.set_hash(bad))
     check("an entry that is not a template name is refused",
           "not a template" in (refused(lambda: upload(db, "PC-1", admx.set_hash(bad), bad)) or ""))
     check("no Content-Length is refused",
@@ -254,6 +260,8 @@ def test_upload(db):
     check("the first PC on a build is asked for it", admx.note_machine(db, "PC-1", digest))
     check("a second PC is not, while the first holds the claim",
           not admx.note_machine(db, "PC-2", digest))
+    check("...and its upload is refused even though the set is wanted",
+          "not asked" in (refused(lambda: upload(db, "PC-2", digest, FILES)) or ""))
     check("the claiming PC keeps being asked", admx.note_machine(db, "PC-1", digest))
     check("a good upload is stored", upload(db, "PC-1", digest, FILES) == "stored")
     check("...and a repeat is a duplicate, not a second copy",
@@ -273,6 +281,34 @@ def test_upload(db):
     check("a setting's detail survives a restart", detail and detail["elements"][0]["items"]
           == ["Open a new tab", "Open a list of URLs"])
     return digest
+
+
+def test_cap(db, digest):
+    print("\n-- the stored sets are bounded --")
+    old_cap = admx.MAX_SETS
+    admx.MAX_SETS = 3
+    try:
+        made = []
+        for n in range(3):
+            files = {**FILES, f"extra{n}.admx": FILES["msedge.admx"]}
+            files[f"en-US/extra{n}.adml"] = FILES["en-US/msedge.adml"]
+            other = admx.set_hash(files)
+            admx.note_machine(db, "PC-9", other)
+            made.append((other, upload(db, "PC-9", other, files)))
+        held = {s["hash"] for s in admx.list_sets(db)}
+        check("past the cap, the oldest set no PC reports makes room",
+              made[2][1] == "stored" and made[0][0] not in held and admx.catalog(made[0][0]) is None)
+        check("...and a set a PC still reports is kept", digest in held)
+        with sqlite3.connect(db) as conn:
+            conn.execute("INSERT INTO machine_admx (machine, hash, seen_at) VALUES ('PC-8', ?, 0)",
+                         (made[1][0],))
+        files = {**FILES, "extra9.admx": FILES["msedge.admx"],
+                 "en-US/extra9.adml": FILES["en-US/msedge.adml"]}
+        admx.note_machine(db, "PC-7", admx.set_hash(files))
+        check("when every set is still in use, a new one is refused",
+              "all in use" in (refused(lambda: upload(db, "PC-7", admx.set_hash(files), files)) or ""))
+    finally:
+        admx.MAX_SETS = old_cap
 
 
 def save(db, name, entries, registry=None):
@@ -356,6 +392,7 @@ def main():
         test_compile()
         digest = test_upload(db)
         test_policies(db, digest)
+        test_cap(db, digest)
     finally:
         try:
             os.remove(db)

@@ -37,8 +37,9 @@ public sealed class PolicyDefinitionsReader(string root)
     /// <summary>The file names the hub accepts (admx._ADMX_NAME / _ADML_NAME). The hub refuses a
     /// whole upload carrying any other name, so one odd vendor file is left out here instead of
     /// costing the PC its whole set.</summary>
-    private static readonly Regex Name = new(@"^[A-Za-z0-9._ -]{1,128}\.(admx|adml)$",
-                                             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex Name = new(@"^[a-z0-9._ -]{1,128}\.(admx|adml)$",
+                                             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                                             TimeSpan.FromSeconds(1));
 
     private readonly Lock _gate = new();
     private string? _hash;
@@ -131,16 +132,14 @@ public sealed class PolicyDefinitionsReader(string root)
     {
         var found = new List<(string Relative, string Full)>();
         if (!Directory.Exists(root)) return found;
-        foreach (var file in Directory.EnumerateFiles(root, "*.admx"))
-            if (Acceptable(file))
-                found.Add((Path.GetFileName(file), file));
+        found.AddRange(Directory.EnumerateFiles(root, "*.admx").Where(Acceptable)
+                                .Select(file => (Path.GetFileName(file), file)));
         foreach (var language in Languages)
         {
             var folder = Path.Combine(root, language);
             if (!Directory.Exists(folder)) continue;
-            foreach (var file in Directory.EnumerateFiles(folder, "*.adml"))
-                if (Acceptable(file))
-                    found.Add(($"{language}/{Path.GetFileName(file)}", file));
+            found.AddRange(Directory.EnumerateFiles(folder, "*.adml").Where(Acceptable)
+                                    .Select(file => ($"{language}/{Path.GetFileName(file)}", file)));
         }
         return found;
     }

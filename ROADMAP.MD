@@ -1134,9 +1134,11 @@ Phase 1 is built:
 - **Templates come from the PCs** (`admx.py` / `admx_web.py`). The agent sends the hash of its
   `PolicyDefinitions` (`.admx` + `en-US`/`de-DE`/`es-ES` `.adml`) as `admx_hash` on every
   heartbeat; the hub answers `admx_wanted` to ONE PC per unknown hash (a 15-minute claim), and
-  that PC uploads the zip from its policy loop. The hub recomputes the hash from the bytes and
+  that PC uploads the zip from its policy loop; an upload from any PC not holding that claim is
+  refused unread (review on #191). The hub recomputes the hash from the bytes and
   refuses a mismatch, refuses any entry that is not a bare template name, caps sizes, and refuses
-  XML with a DTD. One parsed catalogue per Windows build, gzip JSON under `LOG_DIR/admx`.
+  XML with a DTD. One parsed catalogue per Windows build, gzip JSON under `LOG_DIR/admx`, at
+  most 32: the oldest set no PC reports makes room, and the picker lists only reported sets.
 - **A template setting compiles to raw values at save time** (`admx.compile_policy`), validated
   by the same allow-list as typed values and stored beside the setting. The heartbeat and the
   agent never see a template: no agent change was needed to APPLY them, only to send them.

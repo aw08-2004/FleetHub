@@ -1616,7 +1616,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// </summary>
     public async Task<bool> UploadPolicyDefinitionsAsync(string path, string hash, CancellationToken ct)
     {
-        var url = $"{AgentConfig.HubBase}/api/agent/gpo/templates?hash={Uri.EscapeDataString(hash)}";
+        var url = $"{AgentConfig.HubBase}/api/agent/gpo/templates/{Uri.EscapeDataString(hash)}";
         try
         {
             var length = new FileInfo(path).Length;

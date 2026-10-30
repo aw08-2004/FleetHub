@@ -798,37 +798,42 @@
         return found;
     }
 
+    function selectAdmx(half, category) {
+        admxHalf = half;
+        admxCategory = category;
+        renderAdmxTree();
+        renderAdmxList();
+    }
+
+    // The categories beneath `parent` that hold something of the open half, depth-first.
+    function appendAdmxCategories(nav2, parent, depth, memo) {
+        admxChildren(parent).filter((c) => categoryHasPolicies(c.ref, memo)).forEach((c) => {
+            const item = button(c.name, 'gpo-admx-node', () => selectAdmx(admxHalf, c.ref));
+            item.style.paddingLeft = `calc(var(--space-3) * ${depth + 1})`;
+            if (admxCategory === c.ref) item.classList.add('is-selected');
+            nav2.appendChild(item);
+            appendAdmxCategories(nav2, c.ref, depth + 1, memo);
+        });
+    }
+
     function renderAdmxTree() {
         const nav2 = document.getElementById('gpo-admx-tree');
         nav2.replaceChildren();
         if (!admxTree) return;
         const memo = new Map();
         ['machine', 'user'].forEach((half) => {
-            const head = button(half === 'machine' ? t('gpo.admx.computer') : t('gpo.admx.user'),
-                'gpo-admx-node gpo-admx-node--half', () => {
-                    admxHalf = half;
-                    admxCategory = null;
-                    renderAdmxTree();
-                    renderAdmxList();
-                });
+            const label = half === 'machine' ? t('gpo.admx.computer') : t('gpo.admx.user');
+            const head = button(label, 'gpo-admx-node gpo-admx-node--half', () => selectAdmx(half, null));
             if (admxHalf === half) head.classList.add('is-selected');
             nav2.appendChild(head);
-            if (admxHalf !== half) return;
-            const walk = (parent, depth) => {
-                admxChildren(parent).filter((c) => categoryHasPolicies(c.ref, memo)).forEach((c) => {
-                    const item = button(c.name, 'gpo-admx-node', () => {
-                        admxCategory = c.ref;
-                        renderAdmxTree();
-                        renderAdmxList();
-                    });
-                    item.style.paddingLeft = `calc(var(--space-3) * ${depth + 1})`;
-                    if (admxCategory === c.ref) item.classList.add('is-selected');
-                    nav2.appendChild(item);
-                    walk(c.ref, depth + 1);
-                });
-            };
-            walk(null, 1);
+            if (admxHalf === half) appendAdmxCategories(nav2, null, 1, memo);
         });
+    }
+
+    function admxRowState(policy) {
+        if (policy.unsupported) return t(`gpo.admx.unsupported.${policy.unsupported}`);
+        const configured = draft.admx.find((d) => d.ref === policy.ref);
+        return configured ? admxSummary(configured) : t('gpo.admx.state_not_configured');
     }
 
     function renderAdmxList() {
@@ -844,13 +849,10 @@
             return;
         }
         shown.slice(0, 500).forEach((p) => {
-            const configured = draft.admx.find((d) => d.ref === p.ref);
             const row = el('div', 'gpo-admx-policy');
             const name = button(p.name, 'gpo-admx-policy__name', () => openAdmxSetting(admxSet, p.ref));
             row.appendChild(name);
-            row.appendChild(el('span', 'stat-card__meta',
-                p.unsupported ? t(`gpo.admx.unsupported.${p.unsupported}`)
-                    : (configured ? admxSummary(configured) : t('gpo.admx.state_not_configured'))));
+            row.appendChild(el('span', 'stat-card__meta', admxRowState(p)));
             if (p.unsupported || admxHalf === 'user') row.classList.add('is-unavailable');
             host.appendChild(row);
         });
@@ -978,18 +980,20 @@
         if (!admxDialog.open) admxDialog.showModal();
         const existing = draft.admx.find((d) => d.ref === ref);
         const entry = existing
-            ? { ...existing, options: JSON.parse(JSON.stringify(existing.options || {})) }
+            ? { ...existing, options: structuredClone(existing.options || {}) }
             : { set: digest, ref, name: detail.name, state: '', options: {} };
         admxEditing = { detail, entry };
         document.getElementById('gpo-admx-browse').hidden = true;
         document.getElementById('gpo-admx-setting').hidden = false;
         document.getElementById('gpo-admx-setting-title').textContent = detail.name;
         document.getElementById('gpo-admx-explain').textContent = detail.explain;
-        const blocked = detail.unsupported || detail.class === 'user';
+        let why = '';
+        if (detail.unsupported) why = t(`gpo.admx.unsupported.${detail.unsupported}`);
+        else if (detail.class === 'user') why = t('gpo.admx.user_later');
+        const blocked = why !== '';
         const reason = document.getElementById('gpo-admx-reason');
         reason.hidden = !blocked;
-        reason.textContent = blocked
-            ? (detail.unsupported ? t(`gpo.admx.unsupported.${detail.unsupported}`) : t('gpo.admx.user_later')) : '';
+        reason.textContent = why;
         document.querySelectorAll('input[name="gpo-admx-state"]').forEach((radio) => {
             radio.checked = radio.value === (entry.state || 'not_configured');
             radio.disabled = !!blocked;
@@ -1039,7 +1043,7 @@
             agent_settings: { ...(s.agent_settings || {}) },
             registry: JSON.parse(JSON.stringify(s.registry || [])),
             admx: (s.admx || []).map((a) => ({ set: a.set, ref: a.ref, name: a.name, state: a.state,
-                options: JSON.parse(JSON.stringify(a.options || {})) })),
+                options: structuredClone(a.options || {}) })),
             scripts: JSON.parse(JSON.stringify(s.scripts || [])),
         };
         document.getElementById('gpo-dialog-title').textContent = policy

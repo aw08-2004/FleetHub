@@ -78,6 +78,11 @@ CACHED_SETS = 2
 #: enough for a slow link to finish, short enough that a PC switched off mid-upload does not
 #: stall the set for a day.
 UPLOAD_CLAIM_SECONDS = 15 * 60
+#: Template sets the hub keeps. A fleet runs a handful of Windows builds at once; past this,
+#: the oldest sets no PC reports any more make room, and when every set is still reported the
+#: upload is refused. Without it, an agent cycling through made-up sets -- each one a valid
+#: upload under its own hash -- would fill the hub's disk (raised in review on #191).
+MAX_SETS = 32
 
 CLASS_MACHINE = "machine"
 CLASS_USER = "user"
@@ -93,8 +98,8 @@ UNSUPPORTED_QWORD = "qword"
 
 POLICY_ROOT = "software\\policies\\"
 _HASH = re.compile(r"^[0-9a-f]{64}$")
-_ADMX_NAME = re.compile(r"^[A-Za-z0-9._ -]{1,128}\.admx$", re.IGNORECASE)
-_ADML_NAME = re.compile(r"^(en-US|de-DE|es-ES)/([A-Za-z0-9._ -]{1,128}\.adml)$", re.IGNORECASE)
+_ADMX_NAME = re.compile(r"^[a-z0-9._ -]{1,128}\.admx$", re.IGNORECASE)
+_ADML_NAME = re.compile(r"^(en-us|de-de|es-es)/([a-z0-9._ -]{1,128}\.adml)$", re.IGNORECASE)
 _XML_DECL = re.compile(r"^\s*<\?xml[^>]*\?>", re.IGNORECASE)
 _STRING_REF = re.compile(r"^\$\((string|presentation)\.([^)]+)\)$")
 
@@ -110,6 +115,11 @@ _reported = {}
 class AdmxRejected(ValueError):
     """A template upload or a setting's options the hub refuses. The message is an
     operator-facing English sentence; callers render it through refusals.message."""
+
+
+class AdmxHostile(AdmxRejected):
+    """Not a broken template but an attempt -- a DTD. Fails the whole set rather than skipping
+    the one file, see parse_set."""
 
 
 def configure(root):
@@ -194,7 +204,7 @@ def _xml(raw, name):
     except UnicodeDecodeError:
         raise AdmxRejected(f"{name} is not UTF-8 or UTF-16 text")
     if "<!DOCTYPE" in text or "<!ENTITY" in text:
-        raise AdmxRejected(f"{name} declares a DTD, which a template never needs")
+        raise AdmxHostile(f"{name} declares a DTD, which a template never needs")
     try:
         return ET.fromstring(_XML_DECL.sub("", text, count=1))
     except ET.ParseError:
@@ -243,34 +253,46 @@ def _string_table(root):
             if s.get("id")}
 
 
+def _child_text(node, name):
+    found = _child(node, name)
+    return (found.text or "") if found is not None else ""
+
+
+def _text_box(node, default_tag):
+    """A textBox or comboBox: its label and default live in child elements, not its text."""
+    item = {"kind": "textbox", "ref": node.get("refId"), "label": _child_text(node, "label"),
+            "default": _child_text(node, default_tag)}
+    if default_tag == "default":
+        item["suggestions"] = [(s.text or "") for s in _children(node, "suggestion")]
+    return item
+
+
+# Presentation elements whose label is their own text: ADML tag -> (editor kind, how to read
+# the default). gpedit's own defaults: a decimal box starts at 1, a dropdown at its first item.
+_SIMPLE_PRESENTATION = {
+    "checkBox": ("checkbox", lambda n: _bool(n, "defaultChecked")),
+    "decimalTextBox": ("decimal", lambda n: _int(n, "defaultValue", 1)),
+    "longDecimalTextBox": ("decimal", lambda n: _int(n, "defaultValue", 1)),
+    "dropdownList": ("dropdown", lambda n: _int(n, "defaultItem", 0)),
+    "listBox": ("listbox", None),
+    "multiTextBox": ("multitext", None),
+}
+
+
 def _presentation_item(node):
     kind = _local(node)
-    ref = node.get("refId")
     if kind == "text":
         return {"kind": "text", "label": (node.text or "").strip()}
     if kind == "textBox":
-        label = _child(node, "label")
-        default = _child(node, "defaultValue")
-        return {"kind": "textbox", "ref": ref, "label": (label.text or "") if label is not None else "",
-                "default": (default.text or "") if default is not None else ""}
+        return _text_box(node, "defaultValue")
     if kind == "comboBox":
-        label = _child(node, "label")
-        default = _child(node, "default")
-        suggestions = [(s.text or "") for s in _children(node, "suggestion")]
-        return {"kind": "textbox", "ref": ref, "label": (label.text or "") if label is not None else "",
-                "default": (default.text or "") if default is not None else "",
-                "suggestions": suggestions}
-    simple = {"checkBox": "checkbox", "decimalTextBox": "decimal", "longDecimalTextBox": "decimal",
-              "dropdownList": "dropdown", "listBox": "listbox", "multiTextBox": "multitext"}
-    if kind not in simple:
+        return _text_box(node, "default")
+    if kind not in _SIMPLE_PRESENTATION:
         return None
-    item = {"kind": simple[kind], "ref": ref, "label": (node.text or "").strip()}
-    if kind == "checkBox":
-        item["default"] = _bool(node, "defaultChecked")
-    elif kind in ("decimalTextBox", "longDecimalTextBox"):
-        item["default"] = _int(node, "defaultValue", 1)
-    elif kind == "dropdownList":
-        item["default"] = _int(node, "defaultItem", 0)
+    editor_kind, read_default = _SIMPLE_PRESENTATION[kind]
+    item = {"kind": editor_kind, "ref": node.get("refId"), "label": (node.text or "").strip()}
+    if read_default is not None:
+        item["default"] = read_default(node)
     return item
 
 
@@ -472,36 +494,55 @@ def parse_set(files):
     one vendor's broken template should not hide Windows' own. A DTD anywhere fails the set --
     that is not a broken file, it is an attempt."""
     admx = {k: v for k, v in files.items() if k.lower().endswith(".admx")}
-    adml = {}
+    adml = _adml_index(files)
+    categories, policies, skipped = {}, {}, []
+    for name in sorted(admx):
+        found = _parse_file(name, admx[name], adml)
+        if found is None:
+            skipped.append(name)
+            continue
+        categories.update(found[0])
+        policies.update(found[1])
+    _drop_dangling(categories, policies)
+    return {"categories": categories, "policies": policies, "skipped": skipped}
+
+
+def _adml_index(files):
+    """{(ui language, lower-cased file name): (path, bytes)} for every .adml in the set."""
+    codes = {code.lower(): ui for code, ui in LANGUAGES.items()}
+    index = {}
     for path, raw in files.items():
         match = _ADML_NAME.match(path)
         if match:
-            lang = LANGUAGES[next(l for l in LANGUAGES if l.lower() == match.group(1).lower())]
-            adml[(lang, match.group(2).lower())] = (path, raw)
-    categories, policies, skipped = {}, {}, []
-    for name in sorted(admx):
-        stem = name.rsplit(".", 1)[0].lower() + ".adml"
-        try:
-            languages = {lang: _xml(adml[(lang, stem)][1], adml[(lang, stem)][0])
-                         for lang in LANGUAGES.values() if (lang, stem) in adml}
-            if FALLBACK_LANGUAGE not in languages:
-                skipped.append(name)
-                continue
-            found_categories, found_policies = _definitions(name, admx[name], languages)
-        except AdmxRejected as e:
-            if "DTD" in str(e):
-                raise
-            skipped.append(name)
-            continue
-        categories.update(found_categories)
-        policies.update(found_policies)
+            index[(codes[match.group(1).lower()], match.group(2).lower())] = (path, raw)
+    return index
+
+
+def _parse_file(name, raw, adml):
+    """One .admx with its .adml -> (categories, policies), or None when it is skipped: no
+    English strings, or not well-formed. An AdmxHostile is raised through, never skipped."""
+    stem = name.rsplit(".", 1)[0].lower() + ".adml"
+    try:
+        languages = {lang: _xml(adml[(lang, stem)][1], adml[(lang, stem)][0])
+                     for lang in LANGUAGES.values() if (lang, stem) in adml}
+        if FALLBACK_LANGUAGE not in languages:
+            return None
+        return _definitions(name, raw, languages)
+    except AdmxHostile:
+        raise
+    except AdmxRejected:
+        return None
+
+
+def _drop_dangling(categories, policies):
+    """A parent or category from a file not in the set -- usually Windows' own, referenced by a
+    vendor template -- puts the node at the top rather than losing it."""
     for category in categories.values():
         if category["parent"] not in categories:
             category["parent"] = None
     for policy in policies.values():
         if policy["category"] not in categories:
             policy["category"] = None
-    return {"categories": categories, "policies": policies, "skipped": skipped}
 
 
 # ================================================================ upload and storage
@@ -586,6 +627,13 @@ def ingest(db_path, machine, claimed, stream, length, now=None):
         raise AdmxRejected("that upload is larger than this hub accepts")
     if has_set(db_path, digest):
         return "duplicate"
+    now = int(now or time.time())
+    if not holds_claim(digest, machine, now):
+        # The heartbeat asks ONE PC per unknown set (note_machine); an upload nobody asked
+        # for is refused before a byte is spooled. Without this, any enrolled agent -- or a
+        # stolen agent token -- could store set after set under hashes of its own making
+        # (raised in review on #191).
+        raise AdmxRejected("this PC was not asked for that template set")
     path = _spool(stream, length)
     try:
         files = _read_zip(path)
@@ -594,15 +642,44 @@ def ingest(db_path, machine, claimed, stream, length, now=None):
     if set_hash(files) != digest:
         raise AdmxRejected("the upload does not match the hash it was sent under")
     catalog = parse_set(files)
+    _make_room(db_path)
     _write_catalog(digest, catalog)
     with get_conn(db_path) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO admx_sets (hash, files, policies, uploaded_at, machine)"
             " VALUES (?, ?, ?, ?, ?)",
-            (digest, len(files), len(catalog["policies"]), int(now or time.time()), machine))
+            (digest, len(files), len(catalog["policies"]), now, machine))
     with _claims_lock:
         _claims.pop(digest, None)
     return "stored"
+
+
+def holds_claim(digest, machine, now=None):
+    """Whether `machine` is the PC currently asked to upload `digest` (note_machine)."""
+    now = int(now or time.time())
+    with _claims_lock:
+        holder, until = _claims.get(digest, (None, 0))
+    return holder == machine and until > now
+
+
+def _make_room(db_path):
+    """Keep at most MAX_SETS - 1 sets before one more is stored: drop the oldest sets no PC
+    reports any more, and refuse when every set is still in use. A dropped set's policies keep
+    working -- they store compiled values -- and a PC that reports it again re-uploads it."""
+    with get_conn(db_path) as conn:
+        held = conn.execute("SELECT COUNT(*) FROM admx_sets").fetchone()[0]
+        if held < MAX_SETS:
+            return
+        unused = [r["hash"] for r in conn.execute(
+            "SELECT hash FROM admx_sets WHERE hash NOT IN (SELECT hash FROM machine_admx)"
+            " ORDER BY uploaded_at LIMIT ?", (held - MAX_SETS + 1,)).fetchall()]
+        if held - len(unused) >= MAX_SETS:
+            raise AdmxRejected("the hub holds as many template sets as it keeps, all in use")
+        conn.executemany("DELETE FROM admx_sets WHERE hash = ?", [(h,) for h in unused])
+    for digest in unused:
+        _remove(_catalog_path(digest))
+        with _cache_lock:
+            _cache.pop(digest, None)
 
 
 def _write_catalog(digest, catalog):
@@ -677,9 +754,11 @@ def forget_machine(db_path, machine):
 
 
 def list_sets(db_path, in_scope=None):
-    """The sets the hub holds, most-reported first: [{hash, files, policies, uploaded_at,
-    machines, os}]. `machines` counts only PCs `in_scope` accepts, so the picker never says how
-    many PCs outside the caller's scope run a build; `os` is a label from one of those PCs."""
+    """The sets the hub holds that a PC the caller can see reports, most-reported first:
+    [{hash, files, policies, uploaded_at, machines, os}]. `machines` counts only PCs `in_scope`
+    accepts, so the picker never says how many PCs outside the caller's scope run a build, and
+    a set none of them reports -- a build since upgraded away, or one outside their scope -- is
+    left out; `os` is a label from one of those PCs."""
     with get_conn(db_path) as conn:
         sets = [dict(r) for r in conn.execute("SELECT * FROM admx_sets").fetchall()]
         reported = conn.execute(
@@ -692,6 +771,8 @@ def list_sets(db_path, in_scope=None):
     result = []
     for entry in sets:
         rows = by_hash.get(entry["hash"], [])
+        if not rows:
+            continue
         label = next((" ".join(filter(None, [r["os_caption"], r["os_build"]])) for r in rows
                       if r["os_caption"] or r["os_build"]), "")
         result.append({"hash": entry["hash"], "files": entry["files"],
