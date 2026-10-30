@@ -575,7 +575,7 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 print(f"[gpo] Could not record policy state for {machine}: {e}")
         if "gpo_version" in data:
             try:
-                # Written when it is new or its features changed -- an agent updated to 3.50
+                # Written when it is new or its features changed -- an agent updated to 3.49
                 # starts sending "lgpo" -- not on every heartbeat.
                 features = gpo.clean_features(data.get("gpo_features"))
                 if gpo.agent_features(db_path, machine) != features:

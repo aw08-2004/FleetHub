@@ -20,18 +20,20 @@ The page has the tree on the left:
 |---|---|---|
 | **Agent settings** | Overrides hub settings marked as agent settings (report interval, sensor interval, network collection, the ticket tray and its submitters, the sensor preference) on the PCs the policy applies to | any agent version |
 | **Administrative Templates** | The settings `gpedit.msc` shows -- Enabled, Disabled or Not configured, with their options -- saved as the registry values they write | an agent that supports Group Policy; the templates come from your PCs (see below) |
-| **Registry values** | Writes DWORD, string, expandable-string and multi-string values under `HKLM\SOFTWARE\Policies` | an agent that supports Group Policy (see below) |
+| **Registry values** | Writes DWORD, string, expandable-string and multi-string values under `SOFTWARE\Policies`, in HKLM (Computer Configuration) or HKCU (User Configuration) | an agent that supports Group Policy; HKCU needs agent 3.49 (see below) |
 | **Scripts** | Runs a library script once on each PC the policy applies to, and again only when the script itself changes | the *Issue commands* capability as well |
 
-**Registry values are limited to `HKLM\SOFTWARE\Policies`**, the tree Windows reserves for
-policy and the one every ADMX template writes. `SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`
+**Registry values are limited to `SOFTWARE\Policies`**, the tree Windows reserves for
+policy and the one every ADMX template writes, in either hive: pick **HKLM** (Computer
+Configuration) or **HKCU** (User Configuration) at the start of each row, or paste a path that
+starts with `HKCU\`. `SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`
 (owned by [patch management](managing-machines.md)) and `SOFTWARE\Policies\FleetHub` are refused.
 The agent checks the same list itself, so a policy can never write anywhere else even if the
 hub were wrong. To find the value an ADMX setting writes, look it up in the template's
 documentation (Edge, Chrome, Office and Windows all publish them) and enter the key path,
 value name, type and value.
 
-**The values go into the PC's local Group Policy.** Since agent 3.50 the agent writes them
+**The values go into the PC's local Group Policy.** Since agent 3.49 the agent writes them
 into the PC's own local GPO (`C:\Windows\System32\GroupPolicy\Machine\Registry.pol`) and
 asks Windows to apply it, exactly as `gpedit.msc` does when you click OK. So `gpedit.msc` on
 the PC shows FleetHub's settings as configured, `gpresult` lists them under Local Group Policy,
@@ -77,10 +79,12 @@ values typed in by hand, and those values are what the PCs receive. So:
 
 - **Settings that write outside `HKLM\SOFTWARE\Policies`**, and settings that use a QWORD
   value, are listed greyed out with the reason and cannot be set.
-- **User Configuration** settings are shown but cannot be set yet.
+- **User Configuration** works like Computer Configuration. A setting gpedit lists in both
+  halves can be set in each, separately, as in gpedit; the half is shown beside every setting in
+  the policy and in the resultant set.
 - **Some settings delete a value when Disabled.** FleetHub deletes it too, the way gpedit
   does: the local GPO says "delete this value", and the resultant set shows it as **Deleted**.
-  This needs agent 3.50; an older agent is not sent deletes, and the resultant set says so.
+  This needs agent 3.49; an older agent is not sent deletes, and the resultant set says so.
 - **A policy sets each registry value once.** A template setting and a typed value, or two
   template settings, that write the same value are refused when the policy is saved.
 
@@ -135,6 +139,23 @@ lists the policies in processing order and names the winner of every setting.
 
 Every change is in the audit log at security level.
 
+## User Configuration
+
+User Configuration values (HKCU, typed or from a template) go into the PC's local GPO too, in
+its User half (`C:\Windows\System32\GroupPolicy\User\Registry.pol`), and Windows applies
+them to **every user who signs in to that PC, administrators included** -- the way the local
+Group Policy Editor's User Configuration works. Windows applies them at each user's next sign-in,
+or within about 90 minutes for someone already signed in; FleetHub cannot make that happen
+sooner. *Applied* in the resultant set means the value is in the PC's local Group Policy, not
+that a particular user has it yet. Per-user and per-group local policies are not offered.
+
+The same rules hold as for Computer Configuration -- a value somebody set in `gpedit.msc` is
+left alone, one changed there is let go, one removed is put back -- except that FleetHub cannot
+look inside each user's registry, so it cannot report a domain policy overriding a user value.
+
+User Configuration needs **agent 3.49**. An older agent is not sent User Configuration values at
+all (rather than writing them into HKLM), and the resultant set shows *Needs agent 3.49 or newer*.
+
 ## Agent support
 
 Agent settings and scripts work with every agent already in the field. Registry values need an
@@ -143,8 +164,8 @@ set says when a PC's agent has not, instead of showing the values as pending for
 agent applies its document on its own one-minute loop and keeps it across restarts, so a PC
 that boots without network keeps its policy.
 
-Agent 3.50 and newer write the local GPO; the resultant set says so for each PC. The first
-time agent 3.50 runs on a PC, it moves the values an older agent wrote directly into the local
+Agent 3.49 and newer write the local GPO; the resultant set says so for each PC. The first
+time agent 3.49 runs on a PC, it moves the values an older agent wrote directly into the local
 GPO with the same data, so nothing a user sees changes. If Windows does not apply a value that
 is in the local GPO (local policy processing turned off by a domain policy, for example), the
 PC reports an error for it after a few minutes, and the agent forces one policy refresh an hour
@@ -157,7 +178,8 @@ GPO back unchanged, and leaves a local GPO it cannot read exactly as it is.
 
 ## Not supported
 
-- **User settings (HKCU)** are not supported yet, typed or from a template.
+- **Per-user and per-group local policies** (MLGPO): User Configuration applies to everyone
+  who signs in to the PC.
 - FleetHub does not create or edit **real Windows GPOs** in your domain, and does not touch
   SYSVOL. It edits only each PC's own local GPO.
 - Leaving `gpedit.msc` open on a PC while FleetHub changes that PC's policy, and then clicking

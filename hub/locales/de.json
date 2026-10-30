@@ -240,10 +240,12 @@
       "none": "Für diesen PC gilt keine Richtlinie.",
       "agent_too_old": "Der Agent dieses PCs hat noch keine Unterstützung für Gruppenrichtlinien gemeldet, daher werden die Registrierungswerte unten nicht angewendet. Agent-Einstellungen und Skripte schon.",
       "local_gpo": "Der Agent dieses PCs schreibt die Registrierungswerte unten in die lokale Gruppenrichtlinie des PCs, daher zeigen gpedit.msc und gpresult sie auf dem PC an. Eine Domänenrichtlinie, die denselben Wert setzt, hat weiterhin Vorrang.",
-      "direct_registry": "Der Agent dieses PCs schreibt die Registrierungswerte unten direkt in die Registrierung, daher zeigt gpedit.msc auf dem PC sie nicht an. Ab Agent 3.50 werden sie stattdessen in die lokale Gruppenrichtlinie geschrieben.",
+      "direct_registry": "Der Agent dieses PCs schreibt die Registrierungswerte unten direkt in die Registrierung, daher zeigt gpedit.msc auf dem PC sie nicht an. Ab Agent 3.49 werden sie stattdessen in die lokale Gruppenrichtlinie geschrieben.",
       "pending": "Wartet auf den PC",
       "deleted": "Gelöscht",
-      "delete_needs_agent": "Erfordert Agent 3.50 oder neuer",
+      "delete_needs_agent": "Erfordert Agent 3.49 oder neuer",
+      "user_note": "Werte der Benutzerkonfiguration gelten für jeden Benutzer, der sich an diesem PC anmeldet, Administratoren eingeschlossen, bei der nächsten Anmeldung oder innerhalb von etwa 90 Minuten während einer Sitzung. „Angewendet“ bedeutet, dass sie in der lokalen Gruppenrichtlinie des PCs stehen.",
+      "user_needs_agent": "Erfordert Agent 3.49 oder neuer",
       "col": {
         "node": "Verknüpft bei",
         "setting": "Einstellung",
@@ -264,7 +266,8 @@
       "agent_help": "Überschreibt den hubweiten Wert dieser Einstellungen auf den PCs, für die diese Richtlinie gilt. Funktioniert mit jeder Agent-Version.",
       "add_setting": "Einstellung hinzufügen…",
       "registry": "Registrierungswerte",
-      "registry_help": "Wird nur unter HKLM\\SOFTWARE\\Policies geschrieben, von Agents, die das unterstützen, und zwar in die lokale Gruppenrichtlinie des PCs, daher zeigt gpedit.msc auf dem PC sie an. Ein bereits vorhandener Wert, den FleetHub nicht gesetzt hat, bleibt unverändert und wird als anderweitig verwaltet gemeldet.",
+      "hive": "Struktur",
+      "registry_help": "Wird nur unter SOFTWARE\\Policies geschrieben, in HKLM (Computerkonfiguration) oder HKCU (Benutzerkonfiguration, für jeden Benutzer, der sich anmeldet), von Agents, die das unterstützen, und zwar in die lokale Gruppenrichtlinie des PCs, daher zeigt gpedit.msc auf dem PC sie an. Ein bereits vorhandener Wert, den FleetHub nicht gesetzt hat, bleibt unverändert und wird als anderweitig verwaltet gemeldet.",
       "add_value": "Wert hinzufügen",
       "path": "Schlüsselpfad",
       "path_placeholder": "SOFTWARE\\Policies\\Microsoft\\Edge",
@@ -311,7 +314,6 @@
       "tree_label": "Vorlagenkategorien",
       "computer": "Computerkonfiguration",
       "user": "Benutzerkonfiguration",
-      "user_later": "Einstellungen der Benutzerkonfiguration können noch nicht angewendet werden. Sie benötigen einen Agenten, der die lokale Gruppenrichtlinie schreibt.",
       "no_match": "Keine Einstellung passt.",
       "pick_category": "Wählen Sie links eine Kategorie aus oder suchen Sie.",
       "state_enabled": "Aktiviert",
@@ -323,9 +325,9 @@
       "back": "Zurück zur Liste",
       "apply": "OK",
       "list_explicit_help": "Eine pro Zeile: Name=Wert",
-      "deletes_old_agent": "Windows löscht einige Werte, wenn diese Einstellung deaktiviert wird. Der Agent dieses PCs ist älter als 3.50 und löscht sie nicht; er entfernt nur Werte, die er selbst geschrieben hat.",
+      "deletes_old_agent": "Windows löscht einige Werte, wenn diese Einstellung deaktiviert wird. Der Agent dieses PCs ist älter als 3.49 und löscht sie nicht; er entfernt nur Werte, die er selbst geschrieben hat.",
       "unsupported": {
-        "outside_policy_tree": "Schreibt außerhalb von HKLM\\SOFTWARE\\Policies und kann daher hier nicht per Richtlinie gesetzt werden",
+        "outside_policy_tree": "Schreibt außerhalb von SOFTWARE\\Policies und kann daher hier nicht per Richtlinie gesetzt werden",
         "qword": "Verwendet einen QWORD-Wert, den eine Richtlinie noch nicht setzen kann"
       }
     }
@@ -969,7 +971,7 @@
       },
       "manage_group_policy": {
         "label": "Gruppenrichtlinien verwalten",
-        "description": "Gruppenrichtlinienobjekte anlegen, bearbeiten und löschen, mit dem PC-Baum verknüpfen und an einem Knoten die Vererbung deaktivieren. Sicherheitskritisch: Eine Richtlinie kann auf den PCs, die sie erreicht, jeden Wert unter HKLM\\SOFTWARE\\Policies schreiben, auch Richtlinien für Windows Defender und die Firewall. Damit lässt sich der Schutz eines PCs ohne „Befehle ausführen“ schwächen – vergeben Sie diese Berechtigung entsprechend vorsichtig. Eine Richtlinie kann außerdem Hub-Einstellungen ihrer PCs ändern; eine, die ein Skript ausführt, braucht zusätzlich „Befehle ausführen“. Jeder PC, den eine Änderung erreichen kann, muss im eigenen Bereich liegen. Zum Lesen von Richtlinien und des Ergebnissatzes eines PCs genügt „Ansehen“."
+        "description": "Gruppenrichtlinienobjekte anlegen, bearbeiten und löschen, mit dem PC-Baum verknüpfen und an einem Knoten die Vererbung deaktivieren. Sicherheitskritisch: Eine Richtlinie kann auf den PCs, die sie erreicht, jeden Wert unter SOFTWARE\\Policies schreiben, in HKLM und, für jeden Benutzer, der sich anmeldet, in HKCU, auch Richtlinien für Windows Defender und die Firewall. Damit lässt sich der Schutz eines PCs ohne „Befehle ausführen“ schwächen – vergeben Sie diese Berechtigung entsprechend vorsichtig. Eine Richtlinie kann außerdem Hub-Einstellungen ihrer PCs ändern; eine, die ein Skript ausführt, braucht zusätzlich „Befehle ausführen“. Jeder PC, den eine Änderung erreichen kann, muss im eigenen Bereich liegen. Zum Lesen von Richtlinien und des Ergebnissatzes eines PCs genügt „Ansehen“."
       },
       "locate_device": {
         "label": "Gerät orten",

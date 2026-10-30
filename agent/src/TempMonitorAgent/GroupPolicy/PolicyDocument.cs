@@ -44,6 +44,10 @@ public sealed record PolicyDocument
 public sealed record PolicyValue
 {
     public string Id { get; init; } = "";
+    /// <summary><see cref="PolicyAllowList.Machine"/> or <see cref="PolicyAllowList.User"/>.
+    /// Absent on the wire (every row an older hub sends) and in a state file from 3.48, both of
+    /// which mean machine.</summary>
+    public string Class { get; init; } = PolicyAllowList.Machine;
     public string Path { get; init; } = "";
     public string Name { get; init; } = "";
     public string Type { get; init; } = "";
@@ -70,12 +74,17 @@ public sealed record PolicyValue
             var path = obj["path"]?.GetValue<string>() ?? "";
             var name = obj["name"]?.GetValue<string>() ?? "";
             var type = obj["type"]?.GetValue<string>() ?? "";
+            // A class this agent does not know is dropped, not read as machine: a row meant
+            // for some other half written into HKLM is exactly the write nobody asked for.
+            var cls = obj["class"]?.GetValue<string>() ?? PolicyAllowList.Machine;
+            if (cls is not (PolicyAllowList.Machine or PolicyAllowList.User)) return null;
             var value = new PolicyValue
             {
                 // Recomputed here rather than trusted from the wire: the id is what the marker
                 // and the hub's state rows are keyed on, and it has to be the same function of
                 // path and name at both ends.
-                Id = PolicyAllowList.IdFor(path, name),
+                Id = PolicyAllowList.IdFor(path, name, cls),
+                Class = cls,
                 Path = path,
                 Name = name,
                 Type = type,

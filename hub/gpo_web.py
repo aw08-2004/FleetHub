@@ -151,8 +151,10 @@ class GpoApi:
         features = gpo.agent_features(self.db_path, machine)
         result["agent_supports_registry"] = features is not None
         # Where the values end up: the local GPO (gpedit.msc shows them) or, from an agent
-        # before 3.50, straight into the registry (it does not).
+        # before 3.49, straight into the registry (it does not).
         result["agent_writes_local_gpo"] = "lgpo" in (features or [])
+        # And whether it applies User Configuration at all (3.49 and newer, phase 3).
+        result["agent_applies_user"] = "user" in (features or [])
         result["script_runs"] = gpo.script_runs(self.db_path, machine)
         lang = i18n.current()
         result["state_labels"] = {s: i18n.translate(f"{gpo.STATE_TEXT_KEY}.{s}", lang)

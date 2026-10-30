@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.173.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.174.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -393,7 +393,7 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
   security audit*, keep the Audit Log open while somebody else signs in or opens a Remote
   session. The list does not refresh. An operator holding both sees the security line arrive.
 
-**Hub 1.172.0 + Windows agent (next MINOR, 3.49.0): Administrative Templates in the policy
+**Hub 1.172.0 + Windows agent 3.49.0 (one release for phases 1-3): Administrative Templates in the policy
 editor** (#32, gpedit-style editor phase 1)
 - [ ] **A PC sends its templates once.** On a beta PC with the 3.49.0 beta agent, within a
   couple of minutes the agent log reads *Uploaded this PC's Administrative Templates*, and a
@@ -411,14 +411,14 @@ editor** (#32, gpedit-style editor phase 1)
   hub folder holding the PC: the resultant set shows *Disabled* from that policy and the app
   list value is removed from the PC.
 
-**Hub 1.173.0 + Windows agent (next MINOR, 3.50.0): values go into the PC's local Group
+**Hub 1.173.0 + Windows agent 3.49.0 (the same release): values go into the PC's local Group
 Policy** (#32, gpedit-style editor phase 2)
-- [ ] **gpedit.msc shows it.** On a beta PC with the 3.50.0 beta agent, the setting from the
+- [ ] **gpedit.msc shows it.** On a beta PC with the 3.49.0 beta agent, the setting from the
   1.172.0 boxes above reads *Enabled* in `gpedit.msc` (Computer Configuration → Administrative
   Templates → Windows Components → App Privacy), `gpresult /h` lists it under Local Group
   Policy, and the resultant set says the agent writes the local Group Policy.
-- [ ] **The upgrade moves, it does not flicker.** On a PC that ran 3.48/3.49 with a FleetHub
-  value applied, update to 3.50.0: the value is in `gpedit.msc` afterwards, `reg query` shows the
+- [ ] **The upgrade moves, it does not flicker.** On a PC that ran 3.48 with a FleetHub
+  value applied, update to 3.49.0: the value is in `gpedit.msc` afterwards, `reg query` shows the
   same data throughout, and the resultant set stays *Applied*.
 - [ ] **gpedit is somebody else.** In `gpedit.msc` on the PC, change the FleetHub setting and
   click OK: within two minutes the resultant set shows *Managed elsewhere*, and FleetHub does
@@ -430,6 +430,25 @@ Policy** (#32, gpedit-style editor phase 2)
   *Not configured* in `gpedit.msc` and the value is gone. Uninstall with
   `agent-install.ps1 -Uninstall` on a PC with a FleetHub value and one set in gpedit by hand:
   only FleetHub's is gone.
+
+**Hub 1.174.0 + Windows agent 3.49.0 (the same release): User Configuration** (#32, gpedit-style
+editor phase 3)
+- [ ] **A user setting applies at sign-in.** On a beta PC with the 3.49.0 beta agent, set a
+  User Configuration template (System → *Prevent access to the command prompt*, Enabled) in a
+  policy linked to it. The resultant set shows `HKCU\SOFTWARE\Policies\Microsoft\Windows\System`
+  `DisableCMD` *Applied*; `gpedit.msc` on the PC shows it under User Configuration; after signing
+  out and in as a standard user, `cmd` says the command prompt has been disabled, and
+  `gpresult /r /scope user` lists Local Group Policy. (Control Panel's own setting is no good
+  for this: it writes outside `SOFTWARE\Policies` and is greyed.)
+- [ ] **Both halves of one template are two settings.** Set a template gpedit lists in both
+  halves Enabled under Computer and Disabled under User in the same policy: the resultant set
+  shows both, and `reg query` shows the HKLM value while the signed-in user's HKCU lacks it.
+- [ ] **An older agent is not sent it.** On a PC still on 3.48, the same policy's User row
+  reads *Needs agent 3.49 or newer*, and nothing appears under HKLM for it.
+- [ ] **Unlink and uninstall clean up.** Unlink the policy: the setting is *Not configured* in
+  `gpedit.msc` under User Configuration, and `cmd` opens again at the next sign-in.
+  `agent-install.ps1 -Uninstall` on a PC with FleetHub values in both halves and one set in
+  gpedit by hand in User Configuration: only FleetHub's go.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -531,23 +550,21 @@ it); then on one beta PC, elevated:
 - uninstall from the hub and confirm the values are gone afterwards.
 Scripts and agent settings need no agent release; check one run-once script on an online PC.
 
-**4d. Administrative Templates (#32 editor, phase 1), hub 1.172.0 then agent 3.49.0 -- agent
-not released.** `PolicyDefinitionsReader` hashes and zips `C:\Windows\PolicyDefinitions`; its
-hash is pinned to the hub's by a test vector, and the hub's parser was run on this machine's
-real set (3,557 settings, 1.8 MB zipped, parsed in 0.6 s). Neither has met the other over
-HTTP on a real PC. Owed: cut the agent as a beta with
-`.\release.ps1 -Version 3.49.0 -Channel beta -NotesFile .\release-notes\3.49.0.md` (write the
-notes first) after the beta hub runs 1.172.0, then the four boxes under *Hub 1.172.0* above.
-
-**4e. The local GPO (#32 editor, phase 2), hub 1.173.0 then agent 3.50.0 -- agent not
-released.** `RegistryPolFile` round-trips this machine's real gpedit-written `Registry.pol`
-byte for byte, and the runner is tested against a fake Windows that applies the file; but
-neither `RefreshPolicyEx` nor the uninstall script's `Registry.pol` editor has run on a PC.
-Owed: cut `.\release.ps1 -Version 3.50.0 -Channel beta -NotesFile .\release-notes\3.50.0.md`
-after the beta hub runs 1.173.0, then the five boxes under *Hub 1.173.0* above. If 3.49.0 has not
-been cut by the time this reaches `beta`, cut 3.50.0 alone: it carries phase 1's agent half too,
-and the 1.172.0 boxes are checked against it. **Every agent release in this plan is a MINOR**
-(owner, 2026-10-30), a fix-up included.
+**4d. The Group Policy editor's agent half (#32 editor, phases 1-3) ships as ONE release,
+Windows agent 3.49.0 -- not released.** The owner chose on 2026-10-30 to release the three
+phases' agent halves together rather than as 3.49.0, 3.50.0 and 3.51.0; the per-phase numbers
+that appeared in earlier drafts are gone. 3.49.0 also carries the version pins (item 17) and the
+VM telemetry fix (item 18), and its notes (`agent/release-notes/3.49.0.md`) cover all of it. What
+has been checked: `PolicyDefinitionsReader`'s hash is pinned to the hub's by a test vector, and
+the hub's parser ran on this machine's real template set (3,557 settings, 1.8 MB zipped, parsed
+in 0.6 s); `RegistryPolFile` round-trips this machine's real gpedit-written `Machine\Registry.pol`
+and `User\Registry.pol` byte for byte; `GptIni` leaves its real `gpt.ini`'s extension lines as
+gpedit wrote them; the uninstall script's `Registry.pol` editor ran on copies under PowerShell 5.1
+and 7. What has not: anything over HTTP or `RefreshPolicyEx` on a real PC. Owed: once the beta
+hub runs 1.174.0, cut `.\release.ps1 -Version 3.49.0 -Channel beta -NotesFile
+.\release-notes\3.49.0.md` (set the date in the notes' heading to the day it is cut), then the
+boxes under *Hub 1.172.0*, *Hub 1.173.0* and *Hub 1.174.0* above. A fix-up to it is the next
+MINOR, 3.50.0 -- never 3.49.1 (owner, 2026-10-30).
 
 **4b. Disk usage (#27), hub 1.138.0 then agent 3.40.0 -- released 2026-10-05**, tag
 `agent-v3.40.0` on `541c120`, manifest in `5767724`. What remains is the first-contact list
@@ -1189,7 +1206,7 @@ parsing in the browser (two implementations of "what does Enabled write" would d
 values resolved at heartbeat time (a deleted catalogue would change PCs); letting a template
 value win silently over a typed one in the same policy (no answer an operator could predict).
 
-### Built · hub 1.173.0 + agent (unreleased, 3.50.0) -- the local GPO (gpedit's editor, phase 2)
+### Built · hub 1.173.0 + agent (unreleased, 3.49.0) -- the local GPO (gpedit's editor, phase 2)
 
 **Reverses one rejection above, on purpose.** "Authoring real Windows GPOs" was rejected because
 SYSVOL is not ours and the agent is not assumed domain-joined. The local GPO is neither: it is
@@ -1234,6 +1251,49 @@ synchronous mode; the settle window is honest about that); a forced refresh afte
 (it re-runs every extension of every GPO -- the version bump is enough for a plain one);
 `**delvals.` for list settings (it deletes every value in the key, including ones FleetHub does
 not own).
+
+### Built · hub 1.174.0 + agent (unreleased, 3.49.0) -- User Configuration (gpedit's editor, phase 3)
+
+**Reverses the HKCU rejection above, on purpose**, and phase 2 is why it can: per-user hives are
+loaded only while somebody is signed in, which is what made "applies when Ana next logs on" a
+promise the agent could not keep. It no longer has to. The agent writes the local GPO's
+`User\Registry.pol`, and Windows applies it to every user at sign-in -- no hive is ever loaded.
+
+- **A row's `class`** (`machine` | `user`, `gpo.CLASS_*`). Absent means machine, so every stored
+  row, every machine id (`setting_id` hashes `user|path|name` for user rows only) and every
+  document an older agent is sent are byte-for-byte what they were. Typed rows pick HKLM/HKCU
+  (or say it with a `HKCU\` prefix, which may not contradict the picker); a template's class
+  decides, and one gpedit lists in both halves is set per half -- two settings, merged
+  last-wins per (half, setting).
+- **Sent only to agents reporting `user`** in `gpo_features` (`resolve_for`). Agent 3.48 parses a
+  row with an unknown field as machine, so a user row it were sent would land in HKLM; the
+  resultant set says *Needs agent 3.49* instead of *Waiting*. The agent itself drops a row whose
+  class it does not know.
+- **Agent: two halves, one rulebook** (`GroupPolicyRunner` scopes). Its own file, marker value
+  (`WrittenUser`, so a 3.48 agent never reads a user entry as one of its own and drops it) and
+  written-record keys (`user:` prefix; machine keys unchanged so 3.48's state file still reads).
+  User rows are persisted in their own `UserValues` list too: 3.48 reads `Values` with no notion
+  of class and applies it on its first pass after a start, so a pin lowered back to 3.48 would
+  otherwise turn every User Configuration value into Computer policy until the hub resent the
+  document (found by the phase 3 review).
+  A PC that sets no User Configuration never reads `User\Registry.pol` at all.
+- **No registry judgement for the User half**: a user value is in force in whichever hive is
+  loaded, not anywhere a service can read. So no "set by something else" check against the
+  registry, no domain-override report and no repair; the file is taken at its word. No refresh
+  either -- `RefreshPolicyEx` for a user half refreshes the calling user, which is SYSTEM.
+- **gpt.ini**: the user half bumps the high word and lists
+  `[{35378EAC-...}{D02B1F73-...}]` in `gPCUserExtensionNames`. Reading this machine's real
+  gpedit-written `gpt.ini` showed phase 2's computer pair used `{0F6B957E-...}`, a user-side tool
+  GUID; corrected to `{D02B1F72-...}` before 3.49 shipped (Windows runs the extension by its
+  first GUID, so it would have applied, but gpresult and GPMC read the tool GUID).
+- The uninstall script cleans both halves; gpt.ini is bumped before each file, as the agent does.
+
+**Rejected:** MLGPO (per-user and per-group local GPOs, `GroupPolicyUsers\<SID>`) -- a second
+targeting model beside the PC tree, for a need nobody has stated; loading each profile's
+`NTUSER.DAT` to write HKCU directly (a hive in use cannot be loaded, and it is exactly the
+tattooing the policy tree exists to avoid); a `user:` prefix inside the existing marker value (3.48
+would drop every such entry as not its own); sending user rows to every agent and letting old
+ones ignore them (3.48 ignores the `class` field, not the row).
 
 ---
 

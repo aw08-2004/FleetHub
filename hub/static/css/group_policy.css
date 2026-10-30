@@ -24,6 +24,7 @@
 
 .gpo-row .input { min-width: 0; }
 
+.gpo-row__class { flex: 0 0 90px; }
 .gpo-row__path { flex: 3 1 260px; }
 .gpo-row__name { flex: 2 1 140px; }
 .gpo-row__type { flex: 1 1 140px; }

@@ -218,6 +218,15 @@ def test_heartbeat(policy):
     result = root.get("/api/gpo/rsop/FIL-1").get_json()
     check("the resultant set says this PC's values go into its local GPO",
           result["agent_supports_registry"] and result["agent_writes_local_gpo"])
+    check("...and not that it applies User Configuration, which it did not say",
+          result["agent_applies_user"] is False)
+    agent.post("/api/agent/heartbeat",
+               json={"gpo_version": reply["gpo_version"], "gpo_features": ["user", "lgpo"]},
+               headers=headers)
+    result = root.get("/api/gpo/rsop/FIL-1").get_json()
+    check("an agent 3.49 that applies User Configuration is noticed (phase 3)",
+          gpo.agent_features(app.DB_PATH, "FIL-1") == ["lgpo", "user"]
+          and result["agent_applies_user"])
     agent.post("/api/agent/heartbeat", json={"gpo_version": reply["gpo_version"]}, headers=headers)
     check("...and notices a downgrade too", gpo.agent_features(app.DB_PATH, "FIL-1") == [])
 

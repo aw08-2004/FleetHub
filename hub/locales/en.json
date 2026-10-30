@@ -270,10 +270,12 @@
       "none": "No policy applies to this PC.",
       "agent_too_old": "This PC's agent has not reported Group Policy support yet, so the registry values below are not applied to it. Agent settings and scripts still are.",
       "local_gpo": "This PC's agent writes the registry values below into the PC's local Group Policy, so gpedit.msc and gpresult on the PC show them. A domain policy that sets the same value still wins.",
-      "direct_registry": "This PC's agent writes the registry values below straight into the registry, so gpedit.msc on the PC does not show them. Agent 3.50 and newer write them into the local Group Policy instead.",
+      "direct_registry": "This PC's agent writes the registry values below straight into the registry, so gpedit.msc on the PC does not show them. Agent 3.49 and newer write them into the local Group Policy instead.",
       "pending": "Waiting for the PC",
       "deleted": "Deleted",
-      "delete_needs_agent": "Needs agent 3.50 or newer",
+      "delete_needs_agent": "Needs agent 3.49 or newer",
+      "user_note": "User Configuration values apply to every user who signs in to this PC, administrators included, at their next sign-in or within about 90 minutes while signed in. \"Applied\" means they are in the PC's local Group Policy.",
+      "user_needs_agent": "Needs agent 3.49 or newer",
       "col": {
         "node": "Linked at",
         "setting": "Setting",
@@ -294,7 +296,8 @@
       "agent_help": "Overrides the hub-wide value of these settings on the PCs this policy applies to. Works with every agent version.",
       "add_setting": "Add a setting…",
       "registry": "Registry values",
-      "registry_help": "Written under HKLM\\SOFTWARE\\Policies only, by agents that support it, into the PC's local Group Policy, so gpedit.msc on the PC shows them. A value that already exists and was not set by FleetHub is left alone and reported as managed elsewhere.",
+      "hive": "Hive",
+      "registry_help": "Written under SOFTWARE\\Policies only, in HKLM (Computer Configuration) or HKCU (User Configuration, for every user who signs in), by agents that support it, into the PC's local Group Policy, so gpedit.msc on the PC shows them. A value that already exists and was not set by FleetHub is left alone and reported as managed elsewhere.",
       "add_value": "Add a value",
       "path": "Key path",
       "path_placeholder": "SOFTWARE\\Policies\\Microsoft\\Edge",
@@ -341,7 +344,6 @@
       "tree_label": "Template categories",
       "computer": "Computer Configuration",
       "user": "User Configuration",
-      "user_later": "User Configuration settings cannot be applied yet. They need an agent that writes the local Group Policy.",
       "no_match": "No setting matches.",
       "pick_category": "Select a category on the left, or search.",
       "state_enabled": "Enabled",
@@ -353,9 +355,9 @@
       "back": "Back to the list",
       "apply": "OK",
       "list_explicit_help": "One per line: name=value",
-      "deletes_old_agent": "Windows deletes some values when this setting is disabled. This PC's agent is older than 3.50 and does not delete them; it only removes values it wrote itself.",
+      "deletes_old_agent": "Windows deletes some values when this setting is disabled. This PC's agent is older than 3.49 and does not delete them; it only removes values it wrote itself.",
       "unsupported": {
-        "outside_policy_tree": "Writes outside HKLM\\SOFTWARE\\Policies, so it cannot be set by policy here",
+        "outside_policy_tree": "Writes outside SOFTWARE\\Policies, so it cannot be set by policy here",
         "qword": "Uses a QWORD value, which policy cannot set yet"
       }
     }
@@ -1033,7 +1035,7 @@
       },
       "manage_group_policy": {
         "label": "Manage Group Policy",
-        "description": "Create, edit and delete Group Policy objects, link them to the PC tree, and block inheritance on a node. Security-sensitive: a policy can write any value under HKLM\\SOFTWARE\\Policies on the PCs it reaches, and that includes Windows Defender and firewall policy, so this can weaken a PC's protection without 'Issue commands'. Grant it as carefully as that. A policy can also change hub settings on its PCs, and one that runs a script also needs 'Issue commands'. Every PC a change can reach must be in the operator's own scope. Reading policies and a PC's resultant set only needs 'View'."
+        "description": "Create, edit and delete Group Policy objects, link them to the PC tree, and block inheritance on a node. Security-sensitive: a policy can write any value under SOFTWARE\\Policies on the PCs it reaches, in HKLM and, for every user who signs in, in HKCU, and that includes Windows Defender and firewall policy, so this can weaken a PC's protection without 'Issue commands'. Grant it as carefully as that. A policy can also change hub settings on its PCs, and one that runs a script also needs 'Issue commands'. Every PC a change can reach must be in the operator's own scope. Reading policies and a PC's resultant set only needs 'View'."
       },
       "locate_device": {
         "label": "Locate a device",
