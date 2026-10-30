@@ -32,6 +32,7 @@ import functools
 
 from flask import Blueprint, jsonify, request, session
 
+import admx
 import apps
 import auth_helpers
 import backups
@@ -582,6 +583,15 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                     payload["gpo_version"] = document["version"]
             except Exception as e:
                 print(f"[gpo] Could not resolve policy for {machine}: {e}")
+        # Administrative Templates (roadmap #32): the agent reports the hash of its PC's
+        # PolicyDefinitions, and the hub asks for the files only when it lacks that set and this
+        # PC holds the claim on uploading it -- one PC per Windows build, not the fleet.
+        if "admx_hash" in data:
+            try:
+                if admx.note_machine(db_path, machine, data.get("admx_hash")):
+                    payload["admx_wanted"] = True
+            except Exception as e:
+                print(f"[admx] Could not record the template set for {machine}: {e}")
         # Whether anything the people at this PC can see of their tickets has changed
         # (roadmap #31 phase D). Same presence rule as `watchdog_version` directly above: only
         # an agent that sends `tickets_marker` runs a tray, and only that agent is answered --

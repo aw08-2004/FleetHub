@@ -118,7 +118,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-29
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-30
 
 **How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
 `beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.171.1**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.172.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -393,6 +393,24 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
   security audit*, keep the Audit Log open while somebody else signs in or opens a Remote
   session. The list does not refresh. An operator holding both sees the security line arrive.
 
+**Hub 1.172.0 + Windows agent (next MINOR, 3.49.0): Administrative Templates in the policy
+editor** (#32, gpedit-style editor phase 1)
+- [ ] **A PC sends its templates once.** On a beta PC with the 3.49.0 beta agent, within a
+  couple of minutes the agent log reads *Uploaded this PC's Administrative Templates*, and a
+  second PC on the same Windows build never uploads (hub log has no second `/api/agent/gpo/templates`).
+- [ ] **The browser.** Group Policy → New policy → **Browse templates…** shows Computer
+  Configuration with Windows' categories in the console language (English, German, Spanish),
+  search finds *Turn off Microsoft Defender Antivirus*, and a setting opens with its options
+  and help text. A setting under *User Configuration* is greyed with the reason.
+- [ ] **What it writes.** Enable *Let Windows apps access account information* with
+  *User is in control* and one app, save, link to the test OU. On the PC,
+  `reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy` shows
+  `LetAppsAccessAccountInfo = 0` and the app under `..._UserInControlOfTheseApps`, and the
+  resultant set names the template setting beside both values.
+- [ ] **Nearer Disabled replaces it whole.** Disable the same setting in a policy linked to a
+  hub folder holding the PC: the resultant set shows *Disabled* from that policy and the app
+  list value is removed from the PC.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
 **Read this first when working on the machine that holds the signing key.** Everything below
@@ -492,6 +510,14 @@ it); then on one beta PC, elevated:
   fight `gpupdate /force`;
 - uninstall from the hub and confirm the values are gone afterwards.
 Scripts and agent settings need no agent release; check one run-once script on an online PC.
+
+**4d. Administrative Templates (#32 editor, phase 1), hub 1.172.0 then agent 3.49.0 -- agent
+not released.** `PolicyDefinitionsReader` hashes and zips `C:\Windows\PolicyDefinitions`; its
+hash is pinned to the hub's by a test vector, and the hub's parser was run on this machine's
+real set (3,557 settings, 1.8 MB zipped, parsed in 0.6 s). Neither has met the other over
+HTTP on a real PC. Owed: cut the agent as a beta with
+`.\release.ps1 -Version 3.49.0 -Channel beta -NotesFile .\release-notes\3.49.0.md` (write the
+notes first) after the beta hub runs 1.172.0, then the four boxes under *Hub 1.172.0* above.
 
 **4b. Disk usage (#27), hub 1.138.0 then agent 3.40.0 -- released 2026-10-05**, tag
 `agent-v3.40.0` on `541c120`, manifest in `5767724`. What remains is the first-contact list
@@ -1091,6 +1117,46 @@ precedence rule, not two).
 
 **Owed:** the agent half needs the next agent MINOR (release.ps1), deployed after the hub, and a
 first contact on a real Windows PC -- see *Owed locally*.
+
+### Built · hub 1.172.0 + agent (unreleased) -- Administrative Templates (gpedit's editor, phase 1)
+
+Asked for by the owner on 2026-10-29: "the Local Group Policy Editor integrated in the FleetHub,
+and manage the policies from there". Planned as four phases, each its own PR into `beta`, in
+this order because each makes the next cheap: (1) the ADMX editor; (2) the agent writes the
+PC's **local GPO** (`Machine\Registry.pol` + `gpt.ini`) instead of the registry, so `gpedit.msc`
+on the PC shows FleetHub's settings and a domain GPO still wins over it; (3) **User
+Configuration**, through `User\Registry.pol`, which Windows applies to every user at sign-in --
+the hive-loading problem that rejected HKCU above disappears; (4) **Security settings**
+(password and lockout policy, user rights, audit policy) through `secedit`/`auditpol`, under a
+new `manage_security_policy` capability, restoring each setting's prior value on unlink.
+Phase 1 is built:
+
+- **Templates come from the PCs** (`admx.py` / `admx_web.py`). The agent sends the hash of its
+  `PolicyDefinitions` (`.admx` + `en-US`/`de-DE`/`es-ES` `.adml`) as `admx_hash` on every
+  heartbeat; the hub answers `admx_wanted` to ONE PC per unknown hash (a 15-minute claim), and
+  that PC uploads the zip from its policy loop; an upload from any PC not holding that claim is
+  refused unread (review on #191). The hub recomputes the hash from the bytes and
+  refuses a mismatch, refuses any entry that is not a bare template name, caps sizes, and refuses
+  XML with a DTD. One parsed catalogue per Windows build, gzip JSON under `LOG_DIR/admx`, at
+  most 32: the oldest set no PC reports makes room, and the picker lists only reported sets.
+- **A template setting compiles to raw values at save time** (`admx.compile_policy`), validated
+  by the same allow-list as typed values and stored beside the setting. The heartbeat and the
+  agent never see a template: no agent change was needed to APPLY them, only to send them.
+- **Last-wins per setting, replacing it whole** (`gpo._merge_admx`): a nearer policy's Disabled
+  drops the farther Enabled's option values instead of leaving them behind.
+- One registry value set twice in one policy -- typed and by a template, or by two templates --
+  is refused at save.
+
+**Not yet, and why:** settings writing outside `SOFTWARE\Policies` (385 of 3,557 on Windows 11)
+and QWORD settings are listed greyed; User Configuration is greyed until phase 3; a Disabled
+setting's `delete` values are left out until phase 2 gives the agent Registry.pol's `**del.`.
+
+**Rejected:** templates bundled in `hub/` (stale on release day, megabytes in every
+self-update); operator uploads of `PolicyDefinitions` (the owner chose the PCs' own set,
+2026-10-29 -- and a PC's own templates are by definition the ones that match what it reads);
+parsing in the browser (two implementations of "what does Enabled write" would drift); `admx`
+values resolved at heartbeat time (a deleted catalogue would change PCs); letting a template
+value win silently over a typed one in the same policy (no answer an operator could predict).
 
 ---
 

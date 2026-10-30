@@ -212,6 +212,8 @@ try
     builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.IRegistryValueStore,
                                   TempMonitorAgent.GroupPolicy.RegistryValueStore>();
     builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.GroupPolicyRunner>();
+    // And this PC's Administrative Templates, hashed on the same loop and uploaded when asked.
+    builder.Services.AddSingleton(_ => new TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader());
 
     // Self-update
     builder.Services.AddSingleton<SelfUpdater>();
@@ -242,6 +244,8 @@ try
     // Group Policy (roadmap #32), handed over the same way and for the same reason.
     host.Services.GetRequiredService<FleetClient>().GroupPolicy =
         host.Services.GetRequiredService<TempMonitorAgent.GroupPolicy.GroupPolicyRunner>();
+    host.Services.GetRequiredService<FleetClient>().PolicyDefinitions =
+        host.Services.GetRequiredService<TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader>();
     // The self-uninstall (roadmap #30), handed over the same way and for the same reason.
     host.Services.GetRequiredService<FleetClient>().Uninstaller =
         host.Services.GetRequiredService<TempMonitorAgent.Update.SelfUninstaller>();

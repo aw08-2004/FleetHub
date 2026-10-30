@@ -204,6 +204,10 @@
       "scripts": {
         "one": "{count} script",
         "other": "{count} scripts"
+      },
+      "admx": {
+        "one": "{count} configuración de plantilla",
+        "other": "{count} configuraciones de plantilla"
       }
     },
     "confirm_delete_title": "Eliminar directiva",
@@ -290,6 +294,36 @@
       "failed": "Falló",
       "skipped": "Omitido",
       "retry": "Reintentando"
+    },
+    "admx": {
+      "heading": "Plantillas administrativas",
+      "help": "Las configuraciones que muestra el Editor de directivas de grupo local de Windows, leídas de las plantillas que informan sus PC. Cada una se guarda como los valores del registro que escribe, con las mismas reglas que los valores de abajo.",
+      "browse": "Examinar plantillas…",
+      "edit": "Editar",
+      "set": "Conjunto de plantillas",
+      "set_label": "{os} · PC: {count}",
+      "search": "Buscar configuraciones",
+      "no_sets": "Ningún PC ha enviado sus plantillas todavía. Un agente de Windows compatible con las plantillas administrativas las envía por sí solo, una vez por compilación de Windows.",
+      "tree_label": "Categorías de plantillas",
+      "computer": "Configuración del equipo",
+      "user": "Configuración de usuario",
+      "user_later": "Las configuraciones de usuario aún no se pueden aplicar. Necesitan un agente que escriba la directiva de grupo local.",
+      "no_match": "Ninguna configuración coincide.",
+      "pick_category": "Seleccione una categoría a la izquierda o busque.",
+      "state_enabled": "Habilitada",
+      "state_disabled": "Deshabilitada",
+      "state_not_configured": "No configurada",
+      "col_state": "Estado",
+      "options": "Opciones",
+      "explain": "Ayuda",
+      "back": "Volver a la lista",
+      "apply": "Aceptar",
+      "list_explicit_help": "Uno por línea: nombre=valor",
+      "deletes_later": "Windows elimina algunos valores cuando se deshabilita esta configuración. FleetHub todavía no elimina valores; solo quita los valores que escribió él mismo.",
+      "unsupported": {
+        "outside_policy_tree": "Escribe fuera de HKLM\\SOFTWARE\\Policies, por lo que aquí no se puede establecer por directiva",
+        "qword": "Usa un valor QWORD, que la directiva todavía no puede establecer"
+      }
     }
   },
   "toast": {

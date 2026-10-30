@@ -16,7 +16,7 @@ already knows, so the precedence rules below are Windows' rules, not new ones:
     two enforced links, the one HIGHER in the tree wins -- again Windows' rule, and the only
     one under which "enforced" means something to the people above.
 
-A policy object carries three kinds of setting, each delivered its own way:
+A policy object carries four kinds of setting, each delivered its own way:
 
   * **Agent settings** -- the `agent=True` hub settings (report interval, network collection,
     the tray...). Resolved per machine and merged into the heartbeat `config` block, so they
@@ -29,6 +29,12 @@ A policy object carries three kinds of setting, each delivered its own way:
     value already there belongs to a domain GPO or a person, and is reported back as
     `managed_elsewhere` instead. Fighting real Group Policy every 90 minutes would be worse
     than not applying the setting.
+  * **Administrative Templates** -- gpedit's Enabled / Disabled settings, read from the
+    ADMX templates the PCs themselves report (admx.py). Each one is COMPILED at save time into
+    registry values of the kind above, validated by the same allow-list and stored beside the
+    setting, so resolution and the heartbeat never need a template. Last-wins per setting, as
+    in Windows: a later policy's "Disabled" replaces an earlier one's "Enabled" whole, option
+    values included, rather than leaving the earlier options behind.
   * **Scripts** from the library, run ONCE per PC per version of the script body, through the
     ordinary `run_script` command. Writing one needs `issue_commands` as well, exactly as a
     rule that runs one does.
@@ -38,11 +44,12 @@ idea): a link made by an operator scoped to the Cajas PCs applies to those PCs o
 after another PC is filed beneath the node. Without that, filing a PC (manage_pc_tree) would
 silently hand it to a link somebody else wrote.
 
-Rejected: an ADMX parser (large, and the allow-listed raw value is what every template
-resolves to); authoring real Windows GPOs (the agent is not assumed to be domain-joined, and
+Rejected: authoring real Windows GPOs (the agent is not assumed to be domain-joined, and
 SYSVOL is not ours to write); arbitrary registry paths (HKLM is the machine's trust root);
 HKCU (per-user hives are only loaded while somebody is signed in, and "applies when Ana next
-logs on" is a promise this agent cannot keep yet).
+logs on" is a promise this agent cannot keep yet). An ADMX parser was rejected here too at
+first, as large; the owner asked for gpedit's editor on 2026-10-29, and admx.py is it -- the
+compile-to-raw-values design is what kept it from touching anything below this module.
 
 Authorization lives upstream in gpo_web.py. Kept free of Flask so it can be unit-tested in
 isolation, like every other model module here.
@@ -53,6 +60,7 @@ import re
 import sqlite3
 import time
 
+import admx
 import directory
 import fleet
 import pc_tree
@@ -65,6 +73,10 @@ NAME_MAX = 80
 DESCRIPTION_MAX = 500
 MAX_REGISTRY_VALUES = 200
 MAX_SCRIPTS = 20
+MAX_ADMX_SETTINGS = 200
+#: The option values one template setting may carry, serialised. A list box of URLs is the
+#: largest real one; this is far past it.
+MAX_ADMX_OPTIONS_CHARS = 32 * 1024
 MAX_LINKS_PER_NODE = 50
 
 NODE_ROOT = "root"
@@ -386,6 +398,58 @@ def _registry(raw):
     return clean
 
 
+def _admx_name(template):
+    # English on purpose: this is what the audit log and a later reader of the stored policy
+    # see, and the stored policy has no language.
+    return (template.get("display") or {}).get("en") or template["ref"]
+
+
+def _admx_entry(raw):
+    """One Administrative Template setting -> its stored form, compiled values included."""
+    if not isinstance(raw, dict):
+        raise PolicyRejected("a template setting must be an object")
+    digest, ref = admx.clean_hash(raw.get("set")), str(raw.get("ref") or "")
+    template = admx.find_policy(digest, ref) if digest else None
+    if template is None:
+        raise PolicyRejected(f"{ref or 'a template setting'} is not in the template set it names")
+    if template["class"] == admx.CLASS_USER:
+        raise PolicyRejected(f"{_admx_name(template)} is a User Configuration setting, which the"
+                             " agent cannot apply yet")
+    options = raw.get("options") or {}
+    if not isinstance(options, dict) or len(json.dumps(options)) > MAX_ADMX_OPTIONS_CHARS:
+        raise PolicyRejected(f"the options of {_admx_name(template)} are not valid")
+    state = str(raw.get("state") or "")
+    try:
+        compiled = admx.compile_policy(template, state, options)
+    except admx.AdmxRejected as e:
+        raise PolicyRejected(f"{_admx_name(template)}: {e}")
+    values = [_registry_value(row) for row in compiled["rows"]]
+    return {"set": digest, "ref": ref, "name": _admx_name(template), "state": state,
+            "options": options, "values": values, "deletes": compiled["deletes"]}
+
+
+def _admx(raw, registry):
+    """Every template setting, checked against each other and against the raw values: one
+    registry value set twice in one policy is refused whichever way it was set, because "which
+    one wins" inside a single policy has no answer an operator could predict."""
+    clean, seen_refs = [], set()
+    owners = {entry["id"]: f"{entry['path']}\\{entry['name']}" for entry in registry}
+    for entry in _bounded_list(raw, "template settings", MAX_ADMX_SETTINGS):
+        entry = _admx_entry(entry)
+        if entry["ref"] in seen_refs:
+            raise PolicyRejected(f"{entry['name']} is set twice in this policy")
+        seen_refs.add(entry["ref"])
+        for value in entry["values"]:
+            if value["id"] in owners:
+                raise PolicyRejected(f"{entry['name']} writes {value['path']}\\{value['name']},"
+                                     f" which {owners[value['id']]} also sets in this policy")
+            owners[value["id"]] = entry["name"]
+        clean.append(entry)
+    if len(owners) > MAX_REGISTRY_VALUES:
+        raise PolicyRejected(f"this policy writes more than {MAX_REGISTRY_VALUES} registry values")
+    return clean
+
+
 def _script_entry(raw, script_specs):
     entry = raw if isinstance(raw, dict) else {"name": raw}
     script_name = str(entry.get("name") or "").strip().lower()
@@ -434,12 +498,14 @@ def validate(payload, script_specs=None):
         raw_settings = payload.get("settings") or {}
         if not isinstance(raw_settings, dict):
             raise PolicyRejected("settings must be an object")
+        registry = _registry(raw_settings.get("registry"))
         return None, {
             "name": _text(payload, "name", "name", NAME_MAX, required=True),
             "description": _text(payload, "description", "description", DESCRIPTION_MAX),
             "enabled": bool(payload.get("enabled", True)),
             "settings": {"agent_settings": _agent_settings(raw_settings.get("agent_settings")),
-                         "registry": _registry(raw_settings.get("registry")),
+                         "registry": registry,
+                         "admx": _admx(raw_settings.get("admx"), registry),
                          "scripts": _scripts(raw_settings.get("scripts"), script_specs)},
         }
     except ValueError as e:
@@ -458,7 +524,7 @@ def _decode(row):
     except (TypeError, ValueError):
         # A corrupt row fails CLOSED: a policy that sets nothing, never one that sets
         # something nobody wrote.
-        policy["settings"] = {"agent_settings": {}, "registry": [], "scripts": []}
+        policy["settings"] = {"agent_settings": {}, "registry": [], "admx": [], "scripts": []}
     policy["enabled"] = bool(policy["enabled"])
     return policy
 
@@ -873,11 +939,27 @@ def applied_links(db_path, machine, *, nodes=None, links=None, options=None, pol
             for link, depth, label in plain + enforced if _usable(link, policies, machine)]
 
 
+def _merge_admx(registry, templates, entries, winner):
+    """Apply one policy's template settings over what earlier policies left. A setting this
+    policy names REPLACES that setting's earlier values whole: the values an earlier policy's
+    template wrote are dropped first (unless something else has since taken them over), so an
+    option the later state does not write does not linger from the earlier one."""
+    for entry in entries:
+        ref = entry["ref"]
+        for sid in [sid for sid, value in registry.items() if value.get("admx_ref") == ref]:
+            del registry[sid]
+        templates[ref] = {"ref": ref, "name": entry["name"], "state": entry["state"],
+                          "options": entry["options"], "deletes": entry.get("deletes") or [],
+                          **winner}
+        registry.update({value["id"]: {**value, "admx_ref": ref, "admx_name": entry["name"],
+                                       **winner} for value in entry["values"]})
+
+
 def _merge(applied):
-    """Fold the applied links' settings in apply order. Agent settings and registry values are
-    last-wins; scripts are additive -- two policies each asking for a different script both
-    mean it, and the same script from two policies runs once."""
-    agent_settings, registry, script_entries = {}, {}, {}
+    """Fold the applied links' settings in apply order. Agent settings, registry values and
+    template settings are last-wins; scripts are additive -- two policies each asking for a
+    different script both mean it, and the same script from two policies runs once."""
+    agent_settings, registry, templates, script_entries = {}, {}, {}, {}
     for item in applied:
         policy = item["policy"]
         winner = {"gpo_id": policy["id"], "gpo": policy["name"]}
@@ -885,9 +967,10 @@ def _merge(applied):
         agent_settings.update({key: {"value": value, **winner}
                                for key, value in (body.get("agent_settings") or {}).items()})
         registry.update({entry["id"]: {**entry, **winner} for entry in body.get("registry") or []})
+        _merge_admx(registry, templates, body.get("admx") or [], winner)
         for entry in body.get("scripts") or []:
             script_entries.setdefault(entry["name"], {**entry, **winner})
-    return agent_settings, registry, script_entries
+    return agent_settings, registry, templates, script_entries
 
 
 def _public_applied(item):
@@ -901,12 +984,13 @@ def rsop(db_path, machine, **cached):
     """The Resultant Set of Policy for one PC: what every setting ends up as and which policy
     won it, plus the links considered. The console's "why is this PC like this?" answer."""
     applied = applied_links(db_path, machine, **cached)
-    agent_settings, registry, script_entries = _merge(applied)
+    agent_settings, registry, templates, script_entries = _merge(applied)
     return {
         "machine": machine,
         "links": [_public_applied(item) for item in applied],
         "agent_settings": agent_settings,
         "registry": sorted(registry.values(), key=lambda e: (e["path"].lower(), e["name"].lower())),
+        "admx": sorted(templates.values(), key=lambda e: e["name"].lower()),
         "scripts": sorted(script_entries.values(), key=lambda e: e["name"]),
     }
 

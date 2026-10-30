@@ -234,6 +234,10 @@
       "scripts": {
         "one": "{count} script",
         "other": "{count} scripts"
+      },
+      "admx": {
+        "one": "{count} template setting",
+        "other": "{count} template settings"
       }
     },
     "confirm_delete_title": "Delete policy",
@@ -320,6 +324,36 @@
       "failed": "Failed",
       "skipped": "Skipped",
       "retry": "Retrying"
+    },
+    "admx": {
+      "heading": "Administrative Templates",
+      "help": "The settings Windows' Local Group Policy Editor shows, read from the templates your PCs report. Each one is saved as the registry values it writes, under the same rules as the values below.",
+      "browse": "Browse templates…",
+      "edit": "Edit",
+      "set": "Template set",
+      "set_label": "{os} · PCs: {count}",
+      "search": "Search settings",
+      "no_sets": "No PC has sent its templates yet. A Windows agent that supports Administrative Templates sends them on its own, once per Windows build.",
+      "tree_label": "Template categories",
+      "computer": "Computer Configuration",
+      "user": "User Configuration",
+      "user_later": "User Configuration settings cannot be applied yet. They need an agent that writes the local Group Policy.",
+      "no_match": "No setting matches.",
+      "pick_category": "Select a category on the left, or search.",
+      "state_enabled": "Enabled",
+      "state_disabled": "Disabled",
+      "state_not_configured": "Not configured",
+      "col_state": "State",
+      "options": "Options",
+      "explain": "Help",
+      "back": "Back to the list",
+      "apply": "OK",
+      "list_explicit_help": "One per line: name=value",
+      "deletes_later": "Windows deletes some values when this setting is disabled. FleetHub does not delete values yet; it only removes values it wrote itself.",
+      "unsupported": {
+        "outside_policy_tree": "Writes outside HKLM\\SOFTWARE\\Policies, so it cannot be set by policy here",
+        "qword": "Uses a QWORD value, which policy cannot set yet"
+      }
     }
   },
   "toast": {

@@ -204,6 +204,10 @@
       "scripts": {
         "one": "{count} Skript",
         "other": "{count} Skripte"
+      },
+      "admx": {
+        "one": "{count} Vorlageneinstellung",
+        "other": "{count} Vorlageneinstellungen"
       }
     },
     "confirm_delete_title": "Richtlinie löschen",
@@ -290,6 +294,36 @@
       "failed": "Fehlgeschlagen",
       "skipped": "Übersprungen",
       "retry": "Wird wiederholt"
+    },
+    "admx": {
+      "heading": "Administrative Vorlagen",
+      "help": "Die Einstellungen, die der Editor für lokale Gruppenrichtlinien von Windows zeigt, gelesen aus den Vorlagen, die Ihre PCs melden. Jede wird als die Registrierungswerte gespeichert, die sie schreibt, nach denselben Regeln wie die Werte unten.",
+      "browse": "Vorlagen durchsuchen…",
+      "edit": "Bearbeiten",
+      "set": "Vorlagensatz",
+      "set_label": "{os} · PCs: {count}",
+      "search": "Einstellungen suchen",
+      "no_sets": "Noch kein PC hat seine Vorlagen gesendet. Ein Windows-Agent, der Administrative Vorlagen unterstützt, sendet sie von selbst, einmal pro Windows-Build.",
+      "tree_label": "Vorlagenkategorien",
+      "computer": "Computerkonfiguration",
+      "user": "Benutzerkonfiguration",
+      "user_later": "Einstellungen der Benutzerkonfiguration können noch nicht angewendet werden. Sie benötigen einen Agenten, der die lokale Gruppenrichtlinie schreibt.",
+      "no_match": "Keine Einstellung passt.",
+      "pick_category": "Wählen Sie links eine Kategorie aus oder suchen Sie.",
+      "state_enabled": "Aktiviert",
+      "state_disabled": "Deaktiviert",
+      "state_not_configured": "Nicht konfiguriert",
+      "col_state": "Status",
+      "options": "Optionen",
+      "explain": "Hilfe",
+      "back": "Zurück zur Liste",
+      "apply": "OK",
+      "list_explicit_help": "Eine pro Zeile: Name=Wert",
+      "deletes_later": "Windows löscht einige Werte, wenn diese Einstellung deaktiviert wird. FleetHub löscht noch keine Werte; es entfernt nur Werte, die es selbst geschrieben hat.",
+      "unsupported": {
+        "outside_policy_tree": "Schreibt außerhalb von HKLM\\SOFTWARE\\Policies und kann daher hier nicht per Richtlinie gesetzt werden",
+        "qword": "Verwendet einen QWORD-Wert, den eine Richtlinie noch nicht setzen kann"
+      }
     }
   },
   "toast": {

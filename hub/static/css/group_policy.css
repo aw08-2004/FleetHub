@@ -67,3 +67,113 @@
     gap: var(--space-1);
     justify-content: flex-end;
 }
+
+/* The Administrative Templates browser: gpedit's two panes, the category tree beside the
+   settings of the selected category, inside a dialog opened over the policy editor. */
+.gpo-admx-modal {
+    width: min(1100px, calc(100vw - 32px));
+    max-width: min(1100px, calc(100vw - 32px));
+}
+
+.gpo-admx-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+.gpo-admx-toolbar .input { flex: 1 1 240px; min-width: 0; }
+
+.gpo-admx-layout {
+    display: grid;
+    grid-template-columns: minmax(200px, 1fr) 2fr;
+    gap: var(--space-3);
+    height: min(60vh, 560px);
+}
+
+.gpo-admx-tree,
+.gpo-admx-list {
+    overflow: auto;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm, 4px);
+    padding: var(--space-2);
+}
+
+.gpo-admx-node {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--text);
+    cursor: pointer;
+    border-radius: var(--radius-sm, 4px);
+}
+
+.gpo-admx-node--half { font-weight: 600; }
+.gpo-admx-node:hover { background: var(--surface); }
+.gpo-admx-node.is-selected { background: var(--accent-soft); }
+
+.gpo-admx-policy {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.gpo-admx-policy__name {
+    background: none;
+    border: 0;
+    padding: 0;
+    text-align: left;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: var(--text-sm);
+}
+
+.gpo-admx-policy.is-unavailable .gpo-admx-policy__name { color: var(--muted); }
+
+.gpo-admx-setting {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-4);
+}
+
+.gpo-admx-states {
+    border: 0;
+    padding: 0;
+    margin: 0 0 var(--space-3);
+}
+
+.gpo-admx-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin-bottom: var(--space-2);
+}
+
+.gpo-admx-field.checkbox { flex-direction: row; align-items: center; }
+.gpo-admx-field textarea.input { min-height: 5em; resize: vertical; }
+
+.gpo-admx-explain {
+    white-space: pre-wrap;
+    font-size: var(--text-sm);
+    max-height: 50vh;
+    overflow: auto;
+}
+
+.gpo-admx-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+}
+
+@media (max-width: 720px) {
+    .gpo-admx-layout,
+    .gpo-admx-setting { grid-template-columns: 1fr; height: auto; }
+    .gpo-admx-tree { max-height: 30vh; }
+}
