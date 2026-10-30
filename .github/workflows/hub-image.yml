@@ -340,13 +340,13 @@ jobs:
           # not date, even with a lower number (PR review). Could not look is not absent: the
           # same rule as the image job's check step, and red so someone re-runs it.
           read_version() {
-            local tag="$1" code v
+            local tag="$1" var="$2" code v
             code=$(curl -sS -o /dev/null -w '%{http_code}' -I \
               -H "Authorization: Bearer ${reg_token}" \
               -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
               "https://ghcr.io/v2/${first}/manifests/${tag}")
             case "$code" in
-              404) printf -v "$2" '%s' absent; return 0 ;;
+              404) printf -v "$var" '%s' absent; return 0 ;;
               200) ;;
               *) echo "::error::GHCR answered HTTP ${code} for ghcr.io/${first}:${tag}; leaving :latest where it is. Re-run once the registry answers."
                  return 1 ;;
@@ -357,22 +357,28 @@ jobs:
               echo "::error::ghcr.io/${first}:${tag} has no usable org.opencontainers.image.version label ('${v}'); leaving :latest where it is rather than guess its age."
               return 1
             fi
-            printf -v "$2" '%s' "$v"
+            printf -v "$var" '%s' "$v"
           }
           read_version stable-latest stable || exit 1
           read_version beta-latest beta || exit 1
           read_version latest current || exit 1
           echo "stable-latest=${stable} beta-latest=${beta} latest=${current}"
 
+          # **No stable-latest, no move.** Until main publishes once under this workflow,
+          # latest still names main's last build from when it meant main, and every Docker host
+          # on the old default pulls it. Pointing it at beta then would move those hosts to beta
+          # before stable-latest exists for them to move to -- a host switched early gets
+          # "manifest unknown" instead (PR review). So latest only starts following the newer
+          # channel from the first main publish that creates stable-latest.
+          if [[ "$stable" == absent ]]; then
+            echo "stable-latest is not published yet; latest keeps naming main's last build until it is."
+            exit 0
+          fi
+
           # sort -V puts the higher version last. A tie goes to stable: promotion carries
           # beta's number to main, and at that point stable is the confirmed build of it.
-          if [[ "$stable" == absent && "$beta" == absent ]]; then
-            echo "Neither channel tag is published yet; nothing for latest to name."
-            exit 0
-          elif [[ "$beta" == absent ]]; then
+          if [[ "$beta" == absent ]]; then
             pick=stable-latest; want="$stable"
-          elif [[ "$stable" == absent ]]; then
-            pick=beta-latest; want="$beta"
           elif [[ "$(printf '%s\n%s\n' "$stable" "$beta" | sort -V | tail -n1)" == "$stable" ]]; then
             pick=stable-latest; want="$stable"
           else

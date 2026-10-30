@@ -341,10 +341,12 @@ docker compose -f deploy/docker/compose.yaml up -d
 
 Set `HUB_TAG` (for example `HUB_TAG=1.143.0`) to choose when a release goes in.
 
-**`latest` changed meaning on 2026-10-30.** It used to follow `main`; it now follows whichever
-channel is newer, which is usually `beta`. A host whose `.env` still says `HUB_TAG=latest`
-from the old template starts pulling beta builds, so set it to `stable-latest`. The old `beta`
-tag no longer moves; a host on it stays on its last image until it is set to `beta-latest`.
+**`latest` changes meaning with the first `main` release after 2026-10-30.** It used to
+follow `main`; once `stable-latest` exists it follows whichever channel is newer, which is
+usually `beta`. A host whose `.env` still says `HUB_TAG=latest` from the old template would
+then start pulling beta builds, so set it to `stable-latest` as soon as that tag exists (it
+does not before that release, and pulling it then fails with *manifest unknown*). The old
+`beta` tag no longer moves; set a host on it to `beta-latest` once that tag exists.
 
 **Updating is pull and recreate.** The image sets `HUB_UPDATE_MODE=image`, which switches off
 every in-place update path: the watcher, **Update now**, and the boot-time self-heal. They

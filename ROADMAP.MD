@@ -178,14 +178,20 @@ A compose host now picks its line by `HUB_TAG` alone: `stable-latest` follows `m
 `HUB_VERSION` (on a tie, the `main` build). `beta` no longer moves. `compose.yaml` and
 `example.env` default to `stable-latest`. Rejected: keeping `latest` as a second name for
 `main` -- two tags for one line, and none for "the newest hub there is", which is what the
-operators asked for. Nothing is published until the next push touching `hub/` on each branch.
-- [ ] **Move the Docker hosts first.** Before the workflow reaches `main`, set every Docker
-  hub host's `.env` from `HUB_TAG=latest` to `stable-latest` (and `beta` to `beta-latest`). A
-  host left on `latest` pulls the next beta build; one left on `beta` stays where it is.
-- [ ] **Beta publish.** The next beta hub release pushes `beta-X.Y.Z`, `beta-latest` and, since
-  beta is ahead of `main`, `latest`, all sharing one digest. The *Push* log says so.
+operators asked for. Nothing is published until the next push touching `hub/` on each branch
+(merging the workflow alone runs nothing), and `latest` does not move at all until `main` has
+published `stable-latest` once, so it keeps naming `main`'s last build until then.
+- [ ] **Beta publish.** The next beta hub release pushes `beta-X.Y.Z` and `beta-latest`. The
+  *latest* job logs *stable-latest is not published yet* and leaves `latest` on `main`'s build.
+  Move any host on `HUB_TAG=beta` to `beta-latest` now; `beta` no longer moves.
 - [ ] **Stable publish.** The `beta` → `main` release pushes `X.Y.Z` and `stable-latest`, and
-  moves `latest` to the stable build (same number as beta: a tie goes to `main`).
+  the *latest* job moves `latest` to that stable build (same number as beta: a tie goes to
+  `main`).
+- [ ] **Move the stable hosts in that window.** After the stable publish and **before the next
+  beta hub push**, set every Docker hub host's `HUB_TAG=latest` to `stable-latest`. The next
+  beta publish moves `latest` to beta, and a host still on it follows. Switching earlier fails:
+  `stable-latest` does not exist before the stable publish, and `docker compose pull` answers
+  *manifest unknown*.
 - [ ] **The `latest` job.** Each publish is followed by a separate *latest* job, which logs the
   three versions it read and *Moving latest to ...* or *latest already names ...*. It runs in
   its own group, so a beta push cannot cancel a pending `main` release (PR review on #196).
