@@ -139,7 +139,7 @@
     // closed, then (hub 1.171.1) not opened. Its `hidden` is the page's open/closed state, so
     // this file never writes it; it follows its owner through .data-table__filtered-out.
     function isDetailRow(tr) {
-        return tr.hasAttribute('data-table-detail');
+        return 'tableDetail' in tr.dataset;
     }
 
     function dataRows(state) {

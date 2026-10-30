@@ -131,6 +131,10 @@ function renderRunsInPlace() {
 // element is replaced; nothing in the DOM says the list is open, so focus stands in for it.
 // The re-read runs once focus leaves (fleet-live.js retries every 2 s). Checkboxes and
 // buttons do not count: they open nothing, and focus parks on them after a click.
+// Deliberately WITHOUT fleet-live's 30 s recency limit: the number fields here save on
+// change, i.e. on blur, so a focused one may hold a value not yet saved, and render() would
+// put the stored number back over it. The runs list does not wait on this -- the poll
+// redraws it in place either way -- so what waits is only destinations and the key banner.
 function operatorEditing() {
     const active = document.activeElement;
     if (!active || !backupPanel.contains(active)) return false;
