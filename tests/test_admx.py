@@ -16,6 +16,8 @@ The silent failures this file exists to catch:
   * **The whole fleet uploading the same set at once**, instead of the one PC holding the claim.
   * **An upload nobody asked for being stored**, which would let one agent fill the hub's disk
     with sets of its own making; and the stored sets growing without bound.
+  * **A Disabled setting's deletes lost** (phase 2) -- or sent to an agent too old to write the
+    local GPO, whose document would then move over rows it can never apply.
 """
 import io
 import os
@@ -355,18 +357,38 @@ def test_policies(db, digest):
     pc_tree.file_machines(db, ["CAJA-1"], folder["id"], actor="t")
     gpo.create_link(db, disabled["id"], gpo.NODE_FOLDER, folder["id"])
     gpo.invalidate()
-    near = {v["name"] for v in gpo.rsop(db, "CAJA-1")["registry"]}
+    near_rows = gpo.rsop(db, "CAJA-1")["registry"]
+    near = {v["name"] for v in near_rows if v["type"] != gpo.REG_DELETE}
     far = {v["name"] for v in gpo.rsop(db, "OFI-1")["registry"]}
     check("far from the folder, Enabled's values all apply",
           {"RestoreOnStartup", "1", "AskBeforeClose"} <= far)
-    check("under it, the nearer Disabled replaces the setting whole -- no option lingers",
+    check("under it, the nearer Disabled replaces the setting whole -- no option value lingers",
           near == set())
+    check("...and its deletes are rows of their own, winning by id over Enabled's values",
+          {"RestoreOnStartup", "StartupDelay"}
+          <= {v["name"] for v in near_rows if v["type"] == gpo.REG_DELETE})
     rsop = gpo.rsop(db, "CAJA-1")
     check("the resultant set names the template setting and its winner",
           rsop["admx"][0]["state"] == "disabled" and rsop["admx"][0]["gpo"] == "Startup off")
     document = gpo.resolve_for(db, "OFI-1")
     check("the agent's document carries plain values, nothing template-shaped",
           all(set(v) == {"id", "path", "name", "type", "value"} for v in document["values"]))
+
+    old = gpo.resolve_for(db, "CAJA-1")
+    lgpo = gpo.resolve_for(db, "CAJA-1", ["lgpo"])
+    check("an agent that cannot write the local GPO is sent no deletes",
+          all(v["type"] != gpo.REG_DELETE for v in old["values"]))
+    check("...one that can is sent them, as plain rows, under a different version",
+          any(v["type"] == gpo.REG_DELETE and v["name"] == "StartupDelay"
+              and set(v) == {"id", "path", "name", "type", "value"} for v in lgpo["values"])
+          and lgpo["version"] != old["version"])
+    registry, templates = {}, {}
+    gpo._merge_admx(registry, templates, [
+        {"ref": "r", "name": "n", "state": "disabled", "options": {}, "values": [],
+         "deletes": [{"path": "SOFTWARE\\Policies\\X", "name": "A"}]}], {"gpo_id": 1, "gpo": "p"})
+    check("a delete stored by hub 1.172.0 as {path, name} still becomes a delete row",
+          [(v["id"], v["type"]) for v in registry.values()]
+          == [(gpo.setting_id("SOFTWARE\\Policies\\X", "A"), gpo.REG_DELETE)])
 
 
 def main():

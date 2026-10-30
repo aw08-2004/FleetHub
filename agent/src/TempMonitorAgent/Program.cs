@@ -211,6 +211,10 @@ try
     // heartbeat delivers, reconciled on its own loop in Worker.
     builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.IRegistryValueStore,
                                   TempMonitorAgent.GroupPolicy.RegistryValueStore>();
+    // Since 3.50 the values go into the PC's local GPO, which Windows applies (phase 2).
+    builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.ILocalGroupPolicy>(
+        _ => new TempMonitorAgent.GroupPolicy.LocalGroupPolicy());
+    builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.GroupPolicyRunner>();
     // And this PC's Administrative Templates, hashed on the same loop and uploaded when asked.
     builder.Services.AddSingleton(_ => new TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader());

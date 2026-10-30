@@ -239,7 +239,11 @@
       "links": "Directivas que se aplican, en orden de procesamiento (la última gana en caso de conflicto)",
       "none": "No se aplica ninguna directiva a este PC.",
       "agent_too_old": "El agente de este PC todavía no ha informado de que admite directivas de grupo, así que los valores del registro de abajo no se le aplican. Los ajustes del agente y los scripts sí.",
+      "local_gpo": "El agente de este PC escribe los valores del registro de abajo en la directiva de grupo local del PC, así que gpedit.msc y gpresult los muestran en el PC. Una directiva de dominio que establezca el mismo valor sigue teniendo prioridad.",
+      "direct_registry": "El agente de este PC escribe los valores del registro de abajo directamente en el registro, así que gpedit.msc no los muestra en el PC. A partir del agente 3.50 se escriben en la directiva de grupo local.",
       "pending": "Esperando al PC",
+      "deleted": "Eliminado",
+      "delete_needs_agent": "Requiere el agente 3.50 o posterior",
       "col": {
         "node": "Vinculada en",
         "setting": "Ajuste",
@@ -260,7 +264,7 @@
       "agent_help": "Sustituye el valor general del hub de estos ajustes en los PC a los que se aplica esta directiva. Funciona con cualquier versión del agente.",
       "add_setting": "Añadir un ajuste…",
       "registry": "Valores del registro",
-      "registry_help": "Se escriben solo bajo HKLM\\SOFTWARE\\Policies, en los agentes que lo admiten. Un valor que ya existe y que FleetHub no escribió se deja tal cual y se informa como gestionado por otro.",
+      "registry_help": "Se escriben solo bajo HKLM\\SOFTWARE\\Policies, en los agentes que lo admiten, dentro de la directiva de grupo local del PC, así que gpedit.msc los muestra en el PC. Un valor que ya existe y que FleetHub no estableció se deja tal cual y se informa como gestionado por otro.",
       "add_value": "Añadir un valor",
       "path": "Ruta de la clave",
       "path_placeholder": "SOFTWARE\\Policies\\Microsoft\\Edge",
@@ -319,7 +323,7 @@
       "back": "Volver a la lista",
       "apply": "Aceptar",
       "list_explicit_help": "Uno por línea: nombre=valor",
-      "deletes_later": "Windows elimina algunos valores cuando se deshabilita esta configuración. FleetHub todavía no elimina valores; solo quita los valores que escribió él mismo.",
+      "deletes_old_agent": "Windows elimina algunos valores cuando se deshabilita esta configuración. El agente de este PC es anterior a la 3.50 y no los elimina; solo quita los valores que escribió él mismo.",
       "unsupported": {
         "outside_policy_tree": "Escribe fuera de HKLM\\SOFTWARE\\Policies, por lo que aquí no se puede establecer por directiva",
         "qword": "Usa un valor QWORD, que la directiva todavía no puede establecer"

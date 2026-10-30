@@ -148,7 +148,11 @@ class GpoApi:
         result = gpo.rsop(self.db_path, machine)
         states = gpo.registry_states(self.db_path, machine)
         result["registry"] = [_with_state(entry, states) for entry in result["registry"]]
-        result["agent_supports_registry"] = gpo.agent_supports(self.db_path, machine)
+        features = gpo.agent_features(self.db_path, machine)
+        result["agent_supports_registry"] = features is not None
+        # Where the values end up: the local GPO (gpedit.msc shows them) or, from an agent
+        # before 3.50, straight into the registry (it does not).
+        result["agent_writes_local_gpo"] = "lgpo" in (features or [])
         result["script_runs"] = gpo.script_runs(self.db_path, machine)
         lang = i18n.current()
         result["state_labels"] = {s: i18n.translate(f"{gpo.STATE_TEXT_KEY}.{s}", lang)

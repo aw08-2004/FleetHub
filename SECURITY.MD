@@ -61,6 +61,11 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
    treats them as hostile input: one PC per unknown set is asked, the upload is size-capped,
    every zip entry must be a bare `.admx`/`.adml` name (nothing is extracted to disk), the set's
    hash is recomputed and must match the one claimed, and XML with a DTD is refused outright.
+   Since agent 3.50 the values go into the PC's local GPO (`Machine\Registry.pol`) and Windows
+   writes them, which widens nothing: the agent's allow-list is checked before anything goes
+   into the file, a Disabled template's delete is the one new kind of row and is held to the
+   same paths, and every entry the agent did not write is copied back byte for byte. A
+   `Registry.pol` the agent cannot parse is refused, never rewritten.
 7. **Signed Updates:** Binary replacements verified before execution. **Version pins widen
    what a compromised hub can choose** (roadmap #21): the hub sends a version string, the agent
    builds the manifest url from a compiled-in base on `main` and installs only what the offline

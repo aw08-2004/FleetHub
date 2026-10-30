@@ -29,10 +29,10 @@ What it refuses, on purpose:
     listed greyed rather than half-applied.
   * **User Configuration** until the agent can write the per-user local GPO (roadmap #32,
     phase 3). The tree shows the User half so the shape is gpedit's, greyed.
-  * **`delete` values** (most "Disabled" states delete a value rather than write one). Until
-    the agent writes the local GPO's Registry.pol, which can say "delete", such a value is
-    left out -- the agent then removes it only if it wrote it. compile() reports them so the
-    editor can say so.
+  * Nothing about **`delete` values** any more (most "Disabled" states delete a value rather
+    than write one): compile() reports them, gpo stores them as `delete` rows, and since phase 2
+    the agent writes them into the local GPO's Registry.pol as `**del.` entries. An agent too
+    old to write the local GPO is not sent them (gpo.resolve_for).
 
 Why parse on the hub at all, rather than send the PC's catalogue straight to the browser: the
 browser would need the same rules to build values, and two implementations of "what does
