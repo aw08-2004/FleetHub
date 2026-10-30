@@ -172,6 +172,23 @@ hub that day, except the two items still open below.
   command has to answer before the wipe fires, so a refusal can only reach the hub as a
   later heartbeat field, which needs hub work.
 
+**Hub image channel tags: `stable-latest`, `beta-latest`, `latest`** (#28; workflow on `main` and `beta`)
+A compose host now picks its line by `HUB_TAG` alone: `stable-latest` follows `main`,
+`beta-latest` follows `beta`, and `latest` moves to whichever channel published the higher
+`HUB_VERSION` (on a tie, the `main` build). `beta` no longer moves. `compose.yaml` and
+`example.env` default to `stable-latest`. Rejected: keeping `latest` as a second name for
+`main` -- two tags for one line, and none for "the newest hub there is", which is what the
+operators asked for. Nothing is published until the next push touching `hub/` on each branch.
+- [ ] **Move the Docker hosts first.** Before the workflow reaches `main`, set every Docker
+  hub host's `.env` from `HUB_TAG=latest` to `stable-latest` (and `beta` to `beta-latest`). A
+  host left on `latest` pulls the next beta build; one left on `beta` stays where it is.
+- [ ] **Beta publish.** The next beta hub release pushes `beta-X.Y.Z`, `beta-latest` and, since
+  beta is ahead of `main`, `latest`, all sharing one digest. The *Push* log says so.
+- [ ] **Stable publish.** The `beta` → `main` release pushes `X.Y.Z` and `stable-latest`, and
+  moves `latest` to the stable build (same number as beta: a tie goes to `main`).
+- [ ] **No step back.** A later beta re-run, or a `main` release with a lower number than
+  `latest`, logs *is not newer, so it stays there* and leaves `latest` alone.
+
 **Hub image renamed to `ghcr.io/aw08-2004/fleethub`** (#28; workflow on `main` and `beta`)
 The workflow now publishes `fleethub` first and mirrors every tag to `temp_monitor-hub`, the
 pre-rename name every existing Docker host pulls. `fleethub` does not exist until the first
@@ -180,12 +197,12 @@ push to `beta` that touches `hub/` after this merges.
   `temp_monitor-hub:beta-X.Y.Z`, and both share one digest.
 - [ ] **Re-run it once, on purpose.** *Re-run all jobs* on that same run. It should skip the
   build, warn that the tag is already there, pull both copies, pass the revision check, and
-  re-push `:beta` under both names with nothing else changed. That is the only way to see the
+  re-push `:beta-latest` under both names with nothing else changed. That is the only way to see the
   half-failed-push recovery run (its `git fetch` and branch-head `HUB_VERSION` read) before a
   real failure needs it.
 - [ ] **Make `fleethub` public**, by hand and before the `beta` → `main` PR: GitHub creates it
   private, and `compose.yaml` on `main` will point at it. Package settings → Danger Zone →
-  Change visibility → Public (one-way). Then `docker pull ghcr.io/aw08-2004/fleethub:beta`
+  Change visibility → Public (one-way). Then `docker pull ghcr.io/aw08-2004/fleethub:beta-latest`
   works with no `docker login`.
 - [ ] **Retire the mirror** once every Docker hub host's `compose.yaml` says `fleethub`: drop
   `temp_monitor-hub` from `repos` in `.github/workflows/hub-image.yml` (to `main` and `beta`).
@@ -6822,8 +6839,9 @@ longer has to be the Windows box. The cutover itself is owed locally, item 7.
 - **The image:** `python:3.13-slim`, non-root uid 10001, `HUB_STATE_DIR=/state` as a single
   volume, and the same `waitress-serve --threads=128` the service runs. The health check is
   the installer's GET of `/`.
-- **Publishing:** GHCR, with tag `X.Y.Z` and `latest` from `main`, and `beta-X.Y.Z` and
-  `beta` from `beta`. The package is **public**, the same as the repository it is built from,
+- **Publishing:** GHCR, with tag `X.Y.Z` and `stable-latest` from `main`, `beta-X.Y.Z` and
+  `beta-latest` from `beta`, and `latest` on whichever of the two is newer (since 2026-10-30;
+  `latest` followed `main` and `beta` followed `beta` before that). The package is **public**, the same as the repository it is built from,
   so a hub host pulls it without credentials. It refuses a malformed `HUB_VERSION` or a tag that already exists. Pull
   requests build without pushing.
 

@@ -8,16 +8,17 @@
 #   docker compose -f deploy/docker/compose.yaml pull
 #   docker compose -f deploy/docker/compose.yaml up -d
 #
-# Pin HUB_TAG to a version (HUB_TAG=1.143.0) to choose when a release goes in; "latest"
-# follows main, "beta" follows the beta branch. Deploy order is unchanged: hub first, agent
-# releases after.
+# Pin HUB_TAG to a version (HUB_TAG=1.143.0) to choose when a release goes in;
+# "stable-latest" follows main, "beta-latest" follows the beta branch, and "latest" is the
+# newest of the two -- which is usually beta, so it is not the default. Deploy order is
+# unchanged: hub first, agent releases after.
 name: fleethub
 
 services:
   hub:
     # Was ghcr.io/aw08-2004/temp_monitor-hub until 2026-10-27. The workflow still mirrors
     # every tag there, so a host on the old line keeps updating, but it should move to this one.
-    image: ghcr.io/aw08-2004/fleethub:${HUB_TAG:-latest}
+    image: ghcr.io/aw08-2004/fleethub:${HUB_TAG:-stable-latest}
     container_name: fleethub-hub
     # Exactly one replica, ever: the schedulers, db_writer and Socket.IO state are in-process.
     restart: unless-stopped
