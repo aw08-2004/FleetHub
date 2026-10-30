@@ -23,6 +23,7 @@ import sqlite3
 import sys
 import tempfile
 import zipfile
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import admx
@@ -292,9 +293,8 @@ def test_upload(db):
 
 def test_cap(db, digest):
     print("\n-- the stored sets are bounded --")
-    old_cap = admx.MAX_SETS
-    admx.MAX_SETS = 3
-    try:
+    # Patched rather than assigned, so the real cap comes back however this block exits.
+    with mock.patch.object(admx, "MAX_SETS", 3):
         made = []
         for n in range(3):
             files = {**FILES, f"extra{n}.admx": FILES["msedge.admx"]}
@@ -314,8 +314,6 @@ def test_cap(db, digest):
         admx.note_machine(db, "PC-7", admx.set_hash(files))
         check("when every set is still in use, a new one is refused",
               "all in use" in (refused(lambda: upload(db, "PC-7", admx.set_hash(files), files)) or ""))
-    finally:
-        admx.MAX_SETS = old_cap
 
 
 def save(db, name, entries, registry=None):
