@@ -488,7 +488,12 @@ if ($Uninstall) {
                         throw "unexpected byte at $at"
                     }
                     $at += 2
-                    if ($typed -and $ours.Contains("$key|$name")) { $removed++; continue }
+                    # A Disabled template's delete is ours too: the marker says "key|Name", the
+                    # file "**del.Name" (RegistryPolFile.Delete strips both). Left in, Windows
+                    # would go on deleting that value, and gpedit showing it Disabled, after
+                    # FleetHub is gone.
+                    $leaf = if ($name.StartsWith("**del.", [StringComparison]::OrdinalIgnoreCase)) { $name.Substring(6) } else { $name }
+                    if ($typed -and $ours.Contains("$key|$leaf")) { $removed++; continue }
                     $kept.Write($bytes, $start, $at - $start)
                 }
                 if ($removed -gt 0) {

@@ -98,9 +98,16 @@ public sealed class LocalGroupPolicy(string root, Action<bool> refresh) : ILocal
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // Not left in GroupPolicy\Machine, where an administrator would find a stray file
-            // next to Registry.pol and wonder what wrote it. The caller reports the failure.
-            try { File.Delete(temp); }
-            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+            // next to Registry.pol and wonder what wrote it. The caller reports the failure --
+            // the original one, which is why a failed cleanup is folded into it, not thrown.
+            try
+            {
+                File.Delete(temp);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                throw new IOException($"{e.Message} (and {temp} could not be removed: {cleanup.Message})", e);
+            }
             throw;
         }
     }
