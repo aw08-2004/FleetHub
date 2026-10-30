@@ -109,7 +109,7 @@ public sealed class GroupPolicyRunner(ILogger<GroupPolicyRunner> log, AgentState
     /// <summary>One half of the local GPO: its class, its marker value, and how its entries are
     /// keyed in the written-value record -- a machine entry exactly as before 3.49, so the
     /// record a 3.48 agent persisted still reads.</summary>
-    private sealed record Scope(string Class, string MarkerValue)
+    private sealed record Scope(string Class, string MarkerName)
     {
         public bool IsMachine => Class == PolicyAllowList.Machine;
         public string WrittenKey(string entry) => IsMachine ? entry : $"{PolicyAllowList.User}:{entry}";
@@ -315,7 +315,7 @@ public sealed class GroupPolicyRunner(ILogger<GroupPolicyRunner> log, AgentState
         }
         if (!done)
             throw new IOException("the local Group Policy kept changing while FleetHub removed its values");
-        _store.Delete(MarkerKey, scope.MarkerValue);
+        _store.Delete(MarkerKey, scope.MarkerName);
     }
 
     /// <summary><see cref="Release"/> against the real PC, for SelfUninstaller, which runs
@@ -543,12 +543,12 @@ public sealed class GroupPolicyRunner(ILogger<GroupPolicyRunner> log, AgentState
     }
 
     private HashSet<string> ReadMarker(Scope scope) =>
-        new(_store.GetMultiString(MarkerKey, scope.MarkerValue) ?? [], StringComparer.OrdinalIgnoreCase);
+        new(_store.GetMultiString(MarkerKey, scope.MarkerName) ?? [], StringComparer.OrdinalIgnoreCase);
 
     private void WriteMarker(Scope scope, HashSet<string> marker)
     {
-        if (marker.Count == 0) _store.Delete(MarkerKey, scope.MarkerValue);
-        else _store.SetMultiString(MarkerKey, scope.MarkerValue,
+        if (marker.Count == 0) _store.Delete(MarkerKey, scope.MarkerName);
+        else _store.SetMultiString(MarkerKey, scope.MarkerName,
                                    [.. marker.Order(StringComparer.OrdinalIgnoreCase)]);
     }
 

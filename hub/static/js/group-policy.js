@@ -813,7 +813,7 @@
     // The half a pasted path's hive prefix names, or null -- the same prefixes the server
     // strips (gpo._HIVE_PREFIXES).
     function pastedHive(text) {
-        const upper = text.trim().replace(/\//g, '\\').toUpperCase();
+        const upper = text.trim().replaceAll('/', '\\').toUpperCase();
         if (/^(HKEY_CURRENT_USER|HKCU:?)\\/.test(upper)) return 'user';
         if (/^(HKEY_LOCAL_MACHINE|HKLM:?)\\/.test(upper)) return 'machine';
         return null;
