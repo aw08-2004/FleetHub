@@ -17,7 +17,7 @@ not on Linux or Android devices.
 - **Machine page** (`/machine/<name>`) -- one device's workspace, with Overview, Terminal,
   Backup, Firmware, Network, Files and Report tabs. Overview shows live status, the
   Storage and Cooling cards, history charts (CPU, memory, disk, network, GPU, fans, power,
-  temperature) and an **All sensors** section with the full LibreHardwareMonitor tree.
+  battery, temperature) and an **All sensors** section with the full LibreHardwareMonitor tree.
   Cards for hardware a machine does not have are hidden.
 - **Alerts** (`/alerts`) -- machines running hot, duplicate machines, and other
   conditions that want attention (see below).
@@ -126,13 +126,27 @@ time.
 **How long each metric is kept** -- *History Metrics*. `data.retention_days` (30) still bounds
 the whole readings table, and each metric now has its own window beside its collection toggle:
 `metrics.retention_days_network`, `..._disk_io`, `..._gpu` and so on. **0 means "follow the
-fleet-wide window"**, which is the default for all eight, so an untouched hub prunes exactly as
+fleet-wide window"**, which is the default for all nine, so an untouched hub prunes exactly as
 it always did. A shorter window blanks that metric's columns on older readings while the
 reading itself -- and its temperature -- stays; a metric aged out is indistinguishable from one
 whose collection toggle is off, which is the point, because in both cases the honest answer is
 "not recorded". A window **longer** than `data.retention_days` is ignored: the whole row is
 deleted there, so there is nothing to keep. Like `data.retention_days` this deletes permanently
 and is audited.
+
+### Battery charge
+
+Laptops and Android devices report their battery's charge level, and the hub exposes it as
+`metric.battery_pct` (0–100). The machine page charts it, and a rule can test it -- for
+example `metric.battery_pct < 70` for a laptop that should stay plugged in. Nothing needs an
+agent update: the Windows agent already sends LibreHardwareMonitor's battery sensors, and the
+Android agent already sends the charge level.
+
+On a machine **without a battery** the variable is *unknown*, so a battery rule never fires on
+a desktop. Only the sensor named *Charge Level* counts. The battery's *Degradation Level*,
+which LibreHardwareMonitor reports beside it as the same kind of reading, is never used as the
+charge. If a laptop shows no Battery chart, look in its **All sensors** section: no battery
+hardware there means the agent's sensor library did not find the battery on that model.
 
 ### Temperature alerts
 

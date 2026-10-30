@@ -64,7 +64,7 @@ check("GET /api/rules/variables 200", resp.status_code == 200)
 catalog = resp.get_json()
 names = {v["name"] for v in catalog["variables"]}
 check("catalog carries the core variables",
-      {"sys.uptime_days", "metric.cpu_temp", "disk.max_used_pct"} <= names)
+      {"sys.uptime_days", "metric.cpu_temp", "disk.max_used_pct", "metric.battery_pct"} <= names)
 check("every entry offers the operators for its kind",
       all(v["operators"] for v in catalog["variables"]))
 check("catalog does NOT carry per-volume entries (they are per machine)",

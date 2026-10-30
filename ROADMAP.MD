@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.174.1**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.175.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -140,6 +140,20 @@ hub that day, except the two items still open below.
   not `-Channel beta`), so it skipped the beta pass and reaches every stable PC. Nothing
   changes on a PC until a policy with registry values is linked above it, so the on-PC checks
   in item 4c are now owed on one test OU of production PCs before linking anything wider.
+
+**Hub 1.175.0 — battery charge for rules and history** (`metric.battery_pct`)
+- [ ] **A Latitude charts its battery.** On the beta hub, open OPENCLAW's or DOCKERSTATION's
+  machine page (both Dell Latitude 3520) and check that a **Battery** chart appears with the
+  charge Windows shows. Then create a rule `metric.battery_pct < 70` for the two and check that
+  `/api/rules/variables/<machine>` resolves it to a number, not *unknown*.
+  The hub reads LibreHardwareMonitor's `Charge Level` from the sensor block the agent already
+  sends, so no agent release is part of this. **If the chart stays absent**, look for a
+  `/battery/...` block in **All sensors**. If there is none, LHM does not see the battery on
+  that model. The follow-up would then be an agent-side `Win32_Battery` reader reusing
+  `FirmwareFlasher.ReadPower()`, cut as an agent beta. It was rejected for now because the
+  hub-only change may already be enough.
+- [ ] **A desktop shows no Battery chart**, and the same rule reads *unknown* there and does
+  not fire.
 
 **Agent 3.48.1 — terminal teardown ends the shell itself** (#175, SonarCloud S3869)
 - [ ] **Closing a terminal ends its shell.** On a beta PC, open a terminal from the console,

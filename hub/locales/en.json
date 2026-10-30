@@ -1212,6 +1212,10 @@
         "label": "Record CPU & GPU power",
         "help": "Chart package power draw in watts. No effect on machines whose chips report no power sensor."
       },
+      "metrics.collect_battery": {
+        "label": "Record battery charge",
+        "help": "Chart the charge level of laptop and Android batteries. No effect on machines without a battery."
+      },
       "metrics.report_interval_seconds": {
         "label": "Report readings every",
         "help": "How often each machine sends a reading. Slower means a coarser chart, not a machine that reads offline -- liveness is a separate heartbeat. No effect while an operator has a machine's page open. Agents that predate this setting keep reporting every 5 seconds."
@@ -1250,6 +1254,10 @@
       },
       "metrics.retention_days_power": {
         "label": "Keep CPU & GPU power history for",
+        "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
+      },
+      "metrics.retention_days_battery": {
+        "label": "Keep battery history for",
         "help": "0 follows the fleet-wide window in Data & Retention. A shorter window PERMANENTLY DELETES this metric's older history while keeping the rest of each reading. Longer than the fleet-wide window is ignored -- the whole reading is deleted at that point."
       },
       "fleet.dashboard_online_window_seconds": {
@@ -3096,6 +3104,7 @@
       "fan_rpm": "Fastest Fan",
       "cpu_power": "CPU Power",
       "gpu_power": "GPU Power",
+      "battery": "Battery",
       "temp": "Temperature"
     },
     "memory_with_total": "Memory ({total} GB)",
@@ -3911,6 +3920,9 @@
       },
       "metric.net_tx_bps": {
         "label": "Network sent"
+      },
+      "metric.battery_pct": {
+        "label": "Battery charge"
       },
       "disk.count": {
         "label": "Number of drives"
