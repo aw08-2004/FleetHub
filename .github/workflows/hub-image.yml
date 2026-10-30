@@ -5,8 +5,24 @@ name: "Hub image"
 # for every hub that runs under Docker: a push to main that bumps HUB_VERSION becomes a tag an
 # operator can `docker compose pull`.
 #
-#   main -> ghcr.io/<owner>/fleethub:X.Y.Z  and :latest
-#   beta -> ghcr.io/<owner>/fleethub:beta-X.Y.Z  and :beta
+#   main -> ghcr.io/<owner>/fleethub:X.Y.Z  and :stable-latest
+#   beta -> ghcr.io/<owner>/fleethub:beta-X.Y.Z  and :beta-latest
+#   either -> :latest, whichever channel published the higher HUB_VERSION
+#
+# **`latest` spans both channels on purpose (2026-10-30).** A compose host picks its line by
+# HUB_TAG alone, and the operators asked for three self-describing choices: stable-latest,
+# beta-latest, and latest for "the newest hub there is". Keeping latest as an alias of
+# stable-latest was the rejected alternative -- it would have made two names for one thing
+# and left no tag for a host that wants whatever is newest. The cost is that `latest` no
+# longer means main: a host still on HUB_TAG=latest from the old example.env now receives beta
+# builds, which is why compose.yaml and example.env default to stable-latest. The old moving
+# tags stop moving: `beta` was replaced by beta-latest, and a host left on it stays on its last
+# image rather than following beta under a second name.
+#
+# At equal versions latest goes to the stable build: promoting beta to main carries beta's
+# HUB_VERSION across, so main's build moves latest on >=, beta's only on a strictly higher
+# number. Neither ever moves it to a lower number, so a re-run of an old run cannot drag it
+# back.
 #
 # **Every tag is also pushed to the old name, ghcr.io/<owner>/temp_monitor-hub.** The package
 # was published under the pre-rename name from 1.143.0 to 1.168.0 (renamed 2026-10-27), and
@@ -58,8 +74,11 @@ on:
       - "tools/lock_hub_requirements.py"
       - ".github/workflows/hub-image.yml"
 
+# Publishing runs share one group across main and beta: both may move `latest`, and two runs
+# reading and moving it at once could leave it on the lower version. Pull requests only build,
+# so they keep a group per ref.
 concurrency:
-  group: hub-image-${{ github.ref }}
+  group: hub-image-${{ github.event_name == 'push' && 'publish' || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -89,17 +108,18 @@ jobs:
           # The new name first: Push walks this list in order, so the name operators are told
           # to use is never the one left behind by a half-failed push.
           owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
-          repos="${owner}/fleethub ${owner}/temp_monitor-hub"
+          repos="${owner}/fleethub"
           if [[ "$REF" == "beta" ]]; then
-            version_tag="beta-${v}"; moving_tag="beta"
+            version_tag="beta-${v}"; moving_tag="beta-latest"; channel="beta"
           else
-            version_tag="${v}"; moving_tag="latest"
+            version_tag="${v}"; moving_tag="stable-latest"; channel="stable"
           fi
           {
             echo "version=$v"
             echo "repos=$repos"
             echo "version_tag=$version_tag"
             echo "moving_tag=$moving_tag"
+            echo "channel=$channel"
           } >> "$GITHUB_OUTPUT"
 
       - name: Refuse a version that was already published
@@ -223,10 +243,11 @@ jobs:
           REVISION: ${{ github.sha }}
           VERSION: ${{ steps.version.outputs.version }}
           REF: ${{ github.ref_name }}
+          CHANNEL: ${{ steps.version.outputs.channel }}
         run: |
           printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           # **Every version tag before any moving tag, across both names.** If a push fails,
-          # `latest` or `beta` still names the previous release rather than one whose own tag
+          # `stable-latest`, `beta-latest` and `latest` still name the previous release rather than one whose own tag
           # never landed under some name -- and the version tags are what the check step can
           # see, so a re-run knows there is something to finish.
           if [[ "$MODE" == "mirror" ]]; then
@@ -247,14 +268,15 @@ jobs:
               docker push "ghcr.io/${REPO}:${VERSION_TAG}"
             done
             # **Moving tags only if this is still the branch's release.** A re-run of an old
-            # failed run, after a newer HUB_VERSION has shipped, would otherwise drag `latest`
-            # or `beta` back to the older image (PR review). The label check above only proves
-            # this commit built it, not that it is still the newest. Read from the branch head
-            # with the same pattern as the version step.
+            # failed run, after a newer HUB_VERSION has shipped, would otherwise drag
+            # `stable-latest` or `beta-latest` back to the older image (PR review). The label
+            # check above only proves this commit built it, not that it is still the newest.
+            # Read from the branch head with the same pattern as the version step. Leaving here
+            # also leaves `latest` alone, which the comparison below would do anyway.
             git fetch --quiet --depth 1 origin "$REF"
             head=$(git show FETCH_HEAD:hub/app.py | grep -oP '^HUB_VERSION\s*=\s*["\x27]\K[\d.]+(?=["\x27])' | head -n1)
             if [[ "$head" != "$VERSION" ]]; then
-              echo "::warning::${REF} is now at HUB_VERSION ${head}, not ${VERSION}; leaving :${MOVING_TAG} where it is."
+              echo "::warning::${REF} is now at HUB_VERSION ${head}, not ${VERSION}; leaving :${MOVING_TAG} and :latest where they are."
               docker logout ghcr.io
               exit 0
             fi
@@ -262,6 +284,7 @@ jobs:
               docker tag "$src" "ghcr.io/${REPO}:${MOVING_TAG}"
             done
           else
+            src="ghcr.io/${REPOS%% *}:${VERSION_TAG}"
             for REPO in $REPOS; do
               docker push "ghcr.io/${REPO}:${VERSION_TAG}"
             done
@@ -269,4 +292,38 @@ jobs:
           for REPO in $REPOS; do
             docker push "ghcr.io/${REPO}:${MOVING_TAG}"
           done
+
+          # **`latest` last, and only forward.** Whatever it names now is read back from the
+          # registry rather than assumed, because the other channel may have moved it since
+          # this branch last published. The first name decides for all of them, as everywhere
+          # in this file. "Could not look" leaves it alone -- the same rule as the check step:
+          # a guess here could put a stable host on an older or a beta image.
+          first="${REPOS%% *}"
+          reg_token=$(curl -fsS -u "${ACTOR}:${TOKEN}" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${first}:pull" | jq -er .token)
+          echo "::add-mask::${reg_token}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -I \
+            -H "Authorization: Bearer ${reg_token}" \
+            -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/${first}/manifests/latest")
+          case "$code" in
+            404) current="" ;;
+            200)
+              docker pull "ghcr.io/${first}:latest"
+              current=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "ghcr.io/${first}:latest") ;;
+            *)
+              echo "::warning::GHCR answered HTTP ${code} for ghcr.io/${first}:latest; leaving :latest where it is. Re-run once the registry answers."
+              docker logout ghcr.io
+              exit 0 ;;
+          esac
+          # sort -V puts the higher version last. Main moves latest on >=, beta only on >.
+          higher=$(printf '%s\n%s\n' "${current:-0.0.0}" "$VERSION" | sort -V | tail -n1)
+          if [[ -z "$current" ]] || { [[ "$higher" == "$VERSION" ]] && { [[ "$CHANNEL" == "stable" ]] || [[ "$current" != "$VERSION" ]]; }; }; then
+            for REPO in $REPOS; do
+              docker tag "$src" "ghcr.io/${REPO}:latest"
+              docker push "ghcr.io/${REPO}:latest"
+            done
+          else
+            echo "latest is at ${current}; ${CHANNEL} ${VERSION} is not newer, so it stays there."
+          fi
           docker logout ghcr.io
