@@ -127,6 +127,9 @@ function appendEntry(entry) {
 
     const detailTr = document.createElement('tr');
     detailTr.className = 'audit-detail';
+    // Tells table-tools.js this row is ours to open and close. Without it the helper took
+    // the one-cell row for a "Loading..." notice and forced it visible on every mutation.
+    detailTr.dataset.tableDetail = '';
     const detailTd = document.createElement('td');
     detailTd.colSpan = 6;
     detailTr.appendChild(detailTd);
@@ -146,8 +149,10 @@ function appendEntry(entry) {
         toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
     show(expanded.has(entry.id));
+    // The set is the truth, not detailTr.hidden: reading the row back is what broke when
+    // something else wrote it (1.171.1 -- every click read "open" and closed it again).
     toggle.addEventListener('click', () => {
-        const open = detailTr.hidden;
+        const open = !expanded.has(entry.id);
         if (open) expanded.add(entry.id);
         else expanded.delete(entry.id);
         show(open);

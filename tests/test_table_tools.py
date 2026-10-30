@@ -66,6 +66,20 @@ def test_the_helper():
           and "table.tHead.appendChild(state.filterTr)" in code)
     check("a one-cell notice row is never hidden by a filter",
           "if (isNoticeRow(tr)) { tr.hidden = false; continue; }" in code)
+    # An audit entry's Details row is one cell across the table too. Taken for a notice row,
+    # it was forced visible on every mutation -- and its own toggle is a mutation -- so in
+    # hub 1.171.1 Details could not be opened at all.
+    detail_at = code.find("if (isDetailRow(tr))")
+    check("a detail row is recognised BEFORE the notice-row rule can force it visible",
+          0 <= detail_at < code.find("if (isNoticeRow(tr))"))
+    check("...and the filter never writes its hidden (the page's open/closed state)",
+          "tr.classList.toggle('data-table__filtered-out', !ownerShown); continue; }" in code)
+    check("...it follows the row it belongs to", "ownerShown = ok;" in code)
+    audit = code_only(read("hub", "static", "js", "audit.js"))
+    check("audit.js marks its Details rows as detail rows",
+          "detailTr.dataset.tableDetail = '';" in audit)
+    check("...and keeps open/closed in its own set, never read back off the row",
+          "const open = !expanded.has(entry.id);" in audit and "= detailTr.hidden;" not in audit)
     check("onChange mode hides nothing itself", "if (state.onChange) return;" in code)
     check("'off' and 'manual' tables are skipped by the auto scan",
           "table.dataset.tableTools === 'off'" in code and "table.dataset.tableTools === 'manual'" in code)
@@ -116,6 +130,9 @@ def test_css():
           re.search(r"@media \(max-width: 640px\) \{\s*\.data-table--cards", css) is not None)
     check("Devices' stack rule no longer hides the thead the filter row lives in",
           ".data-table--stack:not(.data-table--cards) thead" in css)
+    check("a detail row whose owner is filtered out is hidden, by a class that outranks cards",
+          re.search(r"\.data-table tr\.data-table__filtered-out\s*\{\s*display:\s*none", css)
+          is not None)
 
 
 def test_devices_filters_its_data():

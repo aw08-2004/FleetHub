@@ -2101,6 +2101,13 @@ label.checkbox input {
     font-size: var(--text-sm);
 }
 
+/* A detail row (tr[data-table-detail]) whose owner row the filter hid. A class, not [hidden]:
+   the page owns that row's hidden as its open/closed state (table-tools.js). Two classes plus
+   an element, so it also outranks the card layout's display: block below. */
+.data-table tr.data-table__filtered-out {
+    display: none;
+}
+
 /* ============ Card tables (phones) ============
    Below 640px every enhanced table (.data-table--cards, added by table-tools.js) is a stack of
    cards of "label  value" lines: the header row goes, each row is a card, each cell is a line
