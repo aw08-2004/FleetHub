@@ -3180,6 +3180,11 @@ def mark_changed(topic, machine=None):
         print(f"[changes] Could not mark {topic}: {e}")
 
 
+# Every audit row, whoever writes it, is a notice for the open Audit Log pages -- on the
+# topic its level allows (changes.audit_topic says why there are two).
+fleet.set_audit_listener(lambda level: mark_changed(changes.audit_topic(level)))
+
+
 @socketio.on("connect")
 def handle_socket_connect():
     if not session.get("user"):

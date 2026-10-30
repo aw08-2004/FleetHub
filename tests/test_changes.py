@@ -114,7 +114,9 @@ def test_request_classification():
           == ["bitlocker", "software"])
     check("an EMPTY app list is still a report",
           changes.heartbeat_topics({"apps": {"apps": []}}) == ["apps"])
-    known_topics = set(changes.BLUEPRINT_TOPICS.values()) | set(changes.HEARTBEAT_TOPICS.values())
+    # audit_security is marked by fleet.audit, not by a blueprint or the heartbeat.
+    known_topics = (set(changes.BLUEPRINT_TOPICS.values()) | set(changes.HEARTBEAT_TOPICS.values())
+                    | {changes.AUDIT_SECURITY})
     stray = set(changes.TOPIC_CAPABILITIES) - known_topics
     check(f"every gated topic is one something actually marks (stray: {sorted(stray)})",
           not stray)
@@ -272,6 +274,72 @@ def test_rooms_and_scope():
           r.status_code == 200 and not again.is_connected())
 
 
+def test_audit_rows_notify():
+    print("\n-- a new audit line is a notice, and a security line only for security readers --")
+    # Two silent failures. The Audit Log watched every notice and rebuilt itself every few
+    # seconds, closing every row the reader had open; now it watches only these topics, so
+    # an audit row that marks nothing would leave it stale with nothing saying why. And a
+    # security row announced to everybody with the tab tells them when somebody signed in.
+    import fleet
+    check("an info row marks `audit`", changes.audit_topic(fleet.LEVEL_INFO) == changes.AUDIT)
+    check("a notice row marks `audit`",
+          changes.audit_topic(fleet.LEVEL_NOTICE) == changes.AUDIT)
+    check("a security row marks `audit_security`",
+          changes.audit_topic(fleet.LEVEL_SECURITY) == changes.AUDIT_SECURITY)
+    check("every level is one audit_topic knows, so none falls through to the wrong room",
+          {changes.audit_topic(level) for level in fleet.AUDIT_LEVELS}
+          == {changes.AUDIT, changes.AUDIT_SECURITY})
+    check("an unknown level fails closed", changes.audit_topic("bogus") == changes.AUDIT_SECURITY)
+
+    app.change_notifier.drain()
+    fleet.audit(app.DB_PATH, "sched", "backup_run", level=fleet.LEVEL_INFO)
+    check("a row written outside any request still marks `audit`",
+          app.change_notifier.drain() == [{"topic": "audit", "machine": None}])
+    fleet.audit(app.DB_PATH, "someone", "no_such_action_ever")
+    check("an unmapped action is security, and marks `audit_security`",
+          app.change_notifier.drain() == [{"topic": "audit_security", "machine": None}])
+
+    permissions.create_group(
+        app.DB_PATH, "Auditors", capabilities=[permissions.VIEW, permissions.VIEW_AUDIT_LOG],
+        members=["auditor@example.com"])
+    settings.invalidate()
+    super_http = app.app.test_client()
+    console_session.sign_in(super_http, "super@example.com")
+    auditor_http = app.app.test_client()
+    console_session.sign_in(auditor_http, "auditor@example.com")
+    super_sock = app.socketio.test_client(app.app, flask_test_client=super_http)
+    auditor_sock = app.socketio.test_client(app.app, flask_test_client=auditor_http)
+    check("both operators connect", super_sock.is_connected() and auditor_sock.is_connected())
+    app.change_notifier.flush()
+    received_changes(super_sock)
+    received_changes(auditor_sock)
+
+    fleet.audit(app.DB_PATH, "someone", "sign_in", level=fleet.LEVEL_SECURITY)
+    app.change_notifier.flush()
+    check("an auditor without the security modifier is not told a security row was written",
+          received_changes(auditor_sock) == [])
+    check("...the operator holding it is",
+          received_changes(super_sock) == [{"topic": "audit_security", "machine": None}])
+    fleet.audit(app.DB_PATH, "someone", "device_group_edit", level=fleet.LEVEL_NOTICE)
+    app.change_notifier.flush()
+    check("a notice row reaches the auditor",
+          received_changes(auditor_sock) == [{"topic": "audit", "machine": None}])
+    super_sock.disconnect()
+    auditor_sock.disconnect()
+
+    def broken(level):
+        raise RuntimeError("socket gone")
+    fleet.set_audit_listener(broken)
+    try:
+        fleet.audit(app.DB_PATH, "someone", "device_group_edit", level=fleet.LEVEL_NOTICE)
+        survived = True
+    except Exception:
+        survived = False
+    finally:
+        fleet.set_audit_listener(lambda level: app.mark_changed(changes.audit_topic(level)))
+    check("a failing notice never fails the action being audited", survived)
+
+
 def test_offline_transition_is_pushed():
     print("\n-- a machine going dark is a notice, not something to wait for a poll to notice --")
     now = app.to_timestamp_str(app.datetime.now())
@@ -326,6 +394,7 @@ def main():
     test_status_tracker()
     test_request_classification()
     test_every_writing_blueprint_has_a_topic()
+    test_audit_rows_notify()
     test_rooms_and_scope()
     test_offline_transition_is_pushed()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
