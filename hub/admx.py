@@ -637,10 +637,12 @@ def ingest(db_path, machine, claimed, stream, length, now=None):
         return "duplicate"
     now = int(now or time.time())
     if not holds_claim(digest, machine, now):
-        # The heartbeat asks ONE PC per unknown set (note_machine); an upload nobody asked
-        # for is refused before a byte is spooled. Without this, any enrolled agent -- or a
-        # stolen agent token -- could store set after set under hashes of its own making
-        # (raised in review on #191).
+        # The heartbeat asks ONE PC per unknown set (note_machine); an upload it did not ask
+        # for is refused before a byte is spooled, so a second PC on the same build never
+        # sends the set again. What this does NOT stop is an agent that reports a hash of its
+        # own crafted set and is then asked for it -- the hash is the PC's word. That case is
+        # bounded, not prevented: MAX_SETS caps what is kept, a PC holds one claim at a time,
+        # and the picker lists only sets PCs report (all raised in review on #191).
         raise AdmxRejected("this PC was not asked for that template set")
     path = _spool(stream, length)
     try:
@@ -751,6 +753,12 @@ def note_machine(db_path, machine, claimed, now=None):
         holder, until = _claims.get(digest, (None, 0))
         if holder not in (None, machine) and until > now:
             return False
+        # One claim per PC, and none past its expiry: an agent reporting a fresh made-up hash
+        # on every heartbeat must not grow this dict without bound (review on #191). With
+        # this it holds at most one entry per PC that reported an unknown set.
+        for stale in [k for k, (who, expires) in _claims.items()
+                      if expires <= now or (who == machine and k != digest)]:
+            del _claims[stale]
         _claims[digest] = (machine, now + UPLOAD_CLAIM_SECONDS)
     return True
 

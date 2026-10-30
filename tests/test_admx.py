@@ -263,6 +263,13 @@ def test_upload(db):
     check("...and its upload is refused even though the set is wanted",
           "not asked" in (refused(lambda: upload(db, "PC-2", digest, FILES)) or ""))
     check("the claiming PC keeps being asked", admx.note_machine(db, "PC-1", digest))
+    for n in range(50):
+        admx.note_machine(db, "PC-6", f"{n:064x}")
+    check("a PC reporting a new made-up hash every heartbeat holds one claim, not fifty",
+          sum(1 for who, _ in admx._claims.values() if who == "PC-6") == 1)
+    admx.note_machine(db, "PC-5", "e" * 64, now=1)
+    admx.note_machine(db, "PC-4", "d" * 64)
+    check("an expired claim is dropped", "e" * 64 not in admx._claims)
     check("a good upload is stored", upload(db, "PC-1", digest, FILES) == "stored")
     check("...and a repeat is a duplicate, not a second copy",
           upload(db, "PC-1", digest, FILES) == "duplicate")
