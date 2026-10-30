@@ -444,15 +444,23 @@ if ($Uninstall) {
     # by hand: it removes only values listed in the marker, only under SOFTWARE\Policies, and
     # never the FleetHub or Windows Update keys. A domain GPO's values are never on the marker.
     $gpoMarkerKey = "HKLM:\SOFTWARE\FleetHub\GroupPolicy"
-    $gpoMarked = (Get-ItemProperty -LiteralPath $gpoMarkerKey -Name Written -ErrorAction SilentlyContinue).Written
-    if ($gpoMarked) {
-        # Since agent 3.50 the values live in the PC's local GPO (Machine\Registry.pol), and
-        # Windows writes them into the registry from there -- so deleting them from the
-        # registry alone would see them put back at the next policy refresh. The marked
-        # entries come out of the file first: every other entry is copied byte for byte (it is
-        # whoever ran gpedit.msc's), and a file this cannot read is left exactly as it is.
-        $gpRoot = Join-Path $env:SystemRoot "System32\GroupPolicy"
-        $pol = Join-Path $gpRoot "Machine\Registry.pol"
+    # Since agent 3.49 the values live in the PC's local GPO, and Windows writes them into the
+    # registry from there -- so deleting them from the registry alone would see them put back
+    # at the next policy refresh. The marked entries come out of the file first: every other
+    # entry is copied byte for byte (it is whoever ran gpedit.msc's), and a file this cannot
+    # read is left exactly as it is. Two halves since 3.49, as in gpedit: Computer
+    # Configuration (Machine\Registry.pol, marker value Written, gpt.ini's low version word)
+    # and User Configuration (User\Registry.pol, WrittenUser, the high word), which Windows
+    # applies to every user at sign-in and so drops at each user's next sign-in.
+    $gpRoot = Join-Path $env:SystemRoot "System32\GroupPolicy"
+    $halves = @(
+        @{ Marker = "Written";     Folder = "Machine"; User = $false },
+        @{ Marker = "WrittenUser"; Folder = "User";    User = $true }
+    )
+    foreach ($half in $halves) {
+        $gpoMarked = (Get-ItemProperty -LiteralPath $gpoMarkerKey -Name $half.Marker -ErrorAction SilentlyContinue).($half.Marker)
+        if (-not $gpoMarked) { continue }
+        $pol = Join-Path $gpRoot "$($half.Folder)\Registry.pol"
         if (Test-Path -LiteralPath $pol) {
             try {
                 $ours = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -497,9 +505,10 @@ if ($Uninstall) {
                     $kept.Write($bytes, $start, $at - $start)
                 }
                 if ($removed -gt 0) {
-                    [IO.File]::WriteAllBytes($pol, $kept.ToArray())
-                    # The Group Policy service skips a GPO whose version did not move: bump the
-                    # computer half (low word), as GptIni.Bump does in the agent.
+                    # gpt.ini first, as LocalGroupPolicy.Save does: the Group Policy service skips
+                    # a GPO whose version did not move, and a version bumped for a file that then
+                    # failed to write costs one harmless extra pass, where the other order could
+                    # strand the change.
                     $ini = Join-Path $gpRoot "gpt.ini"
                     if (Test-Path -LiteralPath $ini) {
                         $lines = [IO.File]::ReadAllLines($ini, [Text.Encoding]::GetEncoding(28591))
@@ -507,20 +516,25 @@ if ($Uninstall) {
                             if ($lines[$i] -match '^\s*Version\s*=\s*(\d+)\s*$') {
                                 # Arithmetic, not -band: PowerShell reads 0xFFFF0000 as a negative int.
                                 $version = [int64]$Matches[1]
-                                $machine = $version % 65536 + 1
-                                if ($machine -gt 65535) { $machine = 1 }
-                                $lines[$i] = "Version=$($version - $version % 65536 + $machine)"
+                                $low = $version % 65536
+                                $high = ($version - $low) / 65536
+                                if ($half.User) { $high = if ($high -ge 65535) { 1 } else { $high + 1 } }
+                                else { $low = if ($low -ge 65535) { 1 } else { $low + 1 } }
+                                $lines[$i] = "Version=$($high * 65536 + $low)"
                             }
                         }
                         [IO.File]::WriteAllLines($ini, $lines, [Text.Encoding]::GetEncoding(28591))
                     }
-                    & gpupdate.exe /target:computer /wait:0 | Out-Null
-                    Ok "Removed $removed FleetHub value(s) from the local Group Policy"
+                    [IO.File]::WriteAllBytes($pol, $kept.ToArray())
+                    if (-not $half.User) { & gpupdate.exe /target:computer /wait:0 | Out-Null }
+                    Ok "Removed $removed FleetHub value(s) from the local Group Policy ($($half.Folder))"
                 }
             } catch {
-                Warn "Left the local Group Policy as it is ($($_.Exception.Message)); its FleetHub values stay until removed in gpedit.msc"
+                Warn "Left the local Group Policy ($($half.Folder)) as it is ($($_.Exception.Message)); its FleetHub values stay until removed in gpedit.msc"
             }
         }
+        # An agent before 3.49 wrote Computer values straight into HKLM; no agent ever wrote HKCU.
+        if ($half.User) { continue }
         foreach ($entry in @($gpoMarked)) {
             $at = $entry.IndexOf('|')
             if ($at -le 0) { continue }

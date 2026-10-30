@@ -19,6 +19,7 @@ namespace TempMonitorAgent.Tests;
 public class LocalGroupPolicyTests
 {
     private const string Edge = @"SOFTWARE\Policies\Microsoft\Edge";
+    private const string M = PolicyAllowList.Machine;
 
     /// <summary>One entry encoded by hand, independently of RegistryPolFile, exactly as the
     /// format describes it -- so the round trip is checked against the format, not against
@@ -191,7 +192,7 @@ public class LocalGroupPolicyTests
     [Fact]
     public void A_missing_gpt_ini_is_written_as_gpedit_would_for_one_setting()
     {
-        Assert.Equal("[General]\r\ngPCMachineExtensionNames=" + LocalGroupPolicy.RegistryExtension
+        Assert.Equal("[General]\r\ngPCMachineExtensionNames=" + LocalGroupPolicy.MachineRegistryExtension
                      + "\r\nVersion=1\r\n", GptIni.Bump(null));
     }
 
@@ -209,7 +210,7 @@ public class LocalGroupPolicyTests
             "[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]";
         var ini = "[General]\r\ngPCMachineExtensionNames=" + security + "\r\nVersion=131075\r\n"
                   + "gPCUserExtensionNames=[{A}]\r\n[Other]\r\nVersion=7\r\n";
-        Assert.Equal("[General]\r\ngPCMachineExtensionNames=" + LocalGroupPolicy.RegistryExtension + security
+        Assert.Equal("[General]\r\ngPCMachineExtensionNames=" + LocalGroupPolicy.MachineRegistryExtension + security
                      + "\r\nVersion=131076\r\ngPCUserExtensionNames=[{A}]\r\n[Other]\r\nVersion=7\r\n",
                      GptIni.Bump(ini));
     }
@@ -217,8 +218,32 @@ public class LocalGroupPolicyTests
     [Fact]
     public void A_listed_registry_extension_is_left_exactly_as_written()
     {
-        var listed = LocalGroupPolicy.RegistryExtension.ToLowerInvariant();
+        var listed = LocalGroupPolicy.MachineRegistryExtension.ToLowerInvariant();
         Assert.Equal(listed, GptIni.WithRegistryExtension(listed));
+    }
+
+    [Fact]
+    public void The_user_half_bumps_the_high_word_and_lists_its_own_pair()
+    {
+        Assert.Equal("[General]\r\ngPCUserExtensionNames=" + LocalGroupPolicy.UserRegistryExtension
+                     + "\r\nVersion=65536\r\n", GptIni.Bump(null, PolicyAllowList.User));
+        Assert.Equal(0x0002_0005u, GptIni.NextUserVersion(0x0001_0005));
+        Assert.Equal(0x0001_0003u, GptIni.NextUserVersion(0xFFFF_0003));
+    }
+
+    [Fact]
+    public void A_gpt_ini_gpedit_wrote_keeps_both_extension_lines_as_written()
+    {
+        // As gpedit.msc left it on a real PC with settings in both halves (plus a third tool on
+        // the computer line). Only Version may change.
+        const string machine = "gPCMachineExtensionNames=[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}"
+            + "{3D271CFC-2BC6-4AC2-B633-3BDFF5BDAB2A}{D02B1F72-3407-48AE-BA88-E8213C6761F1}]";
+        const string user = "gPCUserExtensionNames=[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}"
+            + "{0F6B957E-509E-11D1-A7CC-0000F87571E3}{D02B1F73-3407-48AE-BA88-E8213C6761F1}]";
+        var ini = $"[General]\r\n{machine}\r\nVersion=131081\r\n{user}\r\n";
+        Assert.Equal($"[General]\r\n{machine}\r\nVersion=131082\r\n{user}\r\n", GptIni.Bump(ini));
+        Assert.Equal($"[General]\r\n{machine}\r\nVersion=196617\r\n{user}\r\n",
+                     GptIni.Bump(ini, PolicyAllowList.User));
     }
 
     // --- the store ----------------------------------------------------------
@@ -231,24 +256,33 @@ public class LocalGroupPolicyTests
         {
             var refreshes = new List<bool>();
             var local = new LocalGroupPolicy(root, refreshes.Add);
-            var file = local.Load();
+            var file = local.Load(M);
             file.Set(Dword(Edge, "A", 1));
-            Assert.True(local.Save(file));
-            Assert.Equal("dword:1", local.Load().Get(Edge, "A"));
+            Assert.True(local.Save(M, file));
+            Assert.Equal("dword:1", local.Load(M).Get(Edge, "A"));
             Assert.Contains("Version=1", System.IO.File.ReadAllText(local.IniPath));
 
-            var stale = local.Load();
-            var gpedit = local.Load();
+            var stale = local.Load(M);
+            var gpedit = local.Load(M);
             gpedit.Set(Dword(Edge, "B", 1));
-            Assert.True(local.Save(gpedit));
+            Assert.True(local.Save(M, gpedit));
             stale.Set(Dword(Edge, "C", 1));
-            Assert.False(local.Save(stale));
-            Assert.Equal("dword:1", local.Load().Get(Edge, "B"));
-            Assert.Null(local.Load().Get(Edge, "C"));
+            Assert.False(local.Save(M, stale));
+            Assert.Equal("dword:1", local.Load(M).Get(Edge, "B"));
+            Assert.Null(local.Load(M).Get(Edge, "C"));
             Assert.Contains("Version=2", System.IO.File.ReadAllText(local.IniPath));
 
             local.Refresh(true);
             Assert.Equal([true], refreshes);
+
+            // The user half is its own file under User\\, and leaves the machine one alone.
+            var user = local.Load(PolicyAllowList.User);
+            user.Set(Dword(Edge, "U", 1));
+            Assert.True(local.Save(PolicyAllowList.User, user));
+            Assert.True(System.IO.File.Exists(Path.Combine(root, "User", "Registry.pol")));
+            Assert.Null(local.Load(M).Get(Edge, "U"));
+            Assert.Contains("gPCUserExtensionNames=" + LocalGroupPolicy.UserRegistryExtension,
+                            System.IO.File.ReadAllText(local.IniPath));
         }
         finally
         {
@@ -266,17 +300,17 @@ public class LocalGroupPolicyTests
         {
             var local = new LocalGroupPolicy(root, _ => { });
             Directory.CreateDirectory(local.IniPath);
-            var file = local.Load();
+            var file = local.Load(M);
             file.Set(Dword(Edge, "A", 1));
-            Assert.ThrowsAny<Exception>(() => local.Save(file));
-            Assert.False(System.IO.File.Exists(local.PolicyPath));
+            Assert.ThrowsAny<Exception>(() => local.Save(M, file));
+            Assert.False(System.IO.File.Exists(local.PolicyPath(M)));
 
             Directory.Delete(local.IniPath);
-            var retry = local.Load();
+            var retry = local.Load(M);
             retry.Set(Dword(Edge, "A", 1));
             Assert.True(retry.Changed);
-            Assert.True(local.Save(retry));
-            Assert.Equal("dword:1", local.Load().Get(Edge, "A"));
+            Assert.True(local.Save(M, retry));
+            Assert.Equal("dword:1", local.Load(M).Get(Edge, "A"));
         }
         finally
         {

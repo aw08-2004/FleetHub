@@ -491,6 +491,12 @@
             host.appendChild(el('p', 'setting__help', result.agent_writes_local_gpo
                 ? t('gpo.rsop.local_gpo') : t('gpo.rsop.direct_registry')));
         }
+        // User Configuration (phase 3) is the local GPO's User half: Windows applies it to
+        // everyone who signs in, at sign-in, so "Applied" here never means "the signed-in user
+        // has it right now".
+        if (result.registry.some((entry) => entry.class === 'user')) {
+            host.appendChild(el('p', 'setting__help', t('gpo.rsop.user_note')));
+        }
 
         if (result.links.length) {
             const section = el('div', 'gpo-section');
@@ -534,7 +540,9 @@
                 t('gpo.rsop.col.from')]);
             result.admx.forEach((entry) => {
                 const tr = el('tr');
-                tr.appendChild(el('td', null, entry.name));
+                const name = el('td', null, entry.name);
+                name.appendChild(el('div', 'stat-card__meta', halfLabel(entry.class)));
+                tr.appendChild(name);
                 const state = el('td', null, admxSummary(entry));
                 if ((entry.deletes || []).length && !result.agent_writes_local_gpo) {
                     state.title = t('gpo.admx.deletes_old_agent');
@@ -554,7 +562,7 @@
                 t('gpo.rsop.col.from'), t('gpo.rsop.col.state')]);
             result.registry.forEach((entry) => {
                 const tr = el('tr');
-                const setting = el('td', 'gpo-mono', `${entry.path}\\${entry.name}`);
+                const setting = el('td', 'gpo-mono', `${hive(entry.class)}\\${entry.path}\\${entry.name}`);
                 if (entry.admx_name) setting.appendChild(el('div', 'stat-card__meta', entry.admx_name));
                 tr.appendChild(setting);
                 const deleted = entry.type === 'delete';
@@ -562,8 +570,10 @@
                 tr.appendChild(el('td', 'stat-card__meta', entry.gpo));
                 // A delete never reaches an agent that cannot write the local GPO, so it would
                 // otherwise sit at "Waiting for the PC" for ever.
-                const pending = deleted && !result.agent_writes_local_gpo
-                    ? t('gpo.rsop.delete_needs_agent') : t('gpo.rsop.pending');
+                // A user row likewise never reaches an agent before 3.49.
+                let pending = t('gpo.rsop.pending');
+                if (entry.class === 'user' && !result.agent_applies_user) pending = t('gpo.rsop.user_needs_agent');
+                else if (deleted && !result.agent_writes_local_gpo) pending = t('gpo.rsop.delete_needs_agent');
                 const state = el('td', entry.state ? `gpo-state--${entry.state}` : 'stat-card__meta',
                     entry.state ? (result.state_labels[entry.state] || entry.state) : pending);
                 if (entry.state_detail) state.title = entry.state_detail;
@@ -677,11 +687,27 @@
         host.replaceChildren();
         draft.registry.forEach((entry, index) => {
             const row = el('div', 'gpo-row');
+            // HKLM is Computer Configuration, HKCU User Configuration (phase 3) -- the same
+            // SOFTWARE\Policies tree under either, as the server and the agent both insist.
+            const half = el('select', 'input gpo-row__class');
+            half.setAttribute('aria-label', t('gpo.editor.hive'));
+            half.append(option('machine', hive('machine')), option('user', hive('user')));
+            half.value = entry.class === 'user' ? 'user' : 'machine';
+            half.addEventListener('change', () => { entry.class = half.value; });
             const path = el('input', 'input gpo-row__path');
             path.placeholder = t('gpo.editor.path_placeholder');
             path.setAttribute('aria-label', t('gpo.editor.path'));
             path.value = entry.path || '';
-            path.addEventListener('input', () => { entry.path = path.value; });
+            path.addEventListener('input', () => {
+                entry.path = path.value;
+                // A path pasted out of regedit names its hive; let it move the picker rather
+                // than be refused at save as contradicting it (gpo._registry_target).
+                const named = pastedHive(path.value);
+                if (named && named !== entry.class) {
+                    entry.class = named;
+                    half.value = named;
+                }
+            });
             const name = el('input', 'input gpo-row__name');
             name.placeholder = t('gpo.editor.value_name');
             name.setAttribute('aria-label', t('gpo.editor.value_name'));
@@ -713,7 +739,7 @@
                 value.addEventListener('input', () => { entry.value = value.value; });
             }
             value.setAttribute('aria-label', t('gpo.editor.value'));
-            row.append(path, name, type, value, button(t('gpo.editor.remove'), 'btn btn--ghost', () => {
+            row.append(half, path, name, type, value, button(t('gpo.editor.remove'), 'btn btn--ghost', () => {
                 draft.registry.splice(index, 1);
                 renderRegistryRows();
             }));
@@ -776,14 +802,42 @@
         return entry.state === 'enabled' ? t('gpo.admx.state_enabled') : t('gpo.admx.state_disabled');
     }
 
+    function halfLabel(cls) {
+        return cls === 'user' ? t('gpo.admx.user') : t('gpo.admx.computer');
+    }
+
+    function hive(cls) {
+        return cls === 'user' ? 'HKCU' : 'HKLM';
+    }
+
+    // The half a pasted path's hive prefix names, or null -- the same prefixes the server
+    // strips (gpo._HIVE_PREFIXES).
+    function pastedHive(text) {
+        const upper = text.trim().replace(/\//g, '\\').toUpperCase();
+        if (/^(HKEY_CURRENT_USER|HKCU:?)\\/.test(upper)) return 'user';
+        if (/^(HKEY_LOCAL_MACHINE|HKLM:?)\\/.test(upper)) return 'machine';
+        return null;
+    }
+
+    // The half a template is set in: its own when it lives in one, the half being browsed
+    // when gpedit lists it under both -- there it is two settings, one per half.
+    function halfFor(policy) {
+        return policy.class === 'both' ? admxHalf : policy.class;
+    }
+
+    function sameSetting(entry, ref, cls) {
+        return entry.ref === ref && (entry.class || 'machine') === cls;
+    }
+
     function renderAdmxRows() {
         const host = document.getElementById('gpo-admx-rows');
         host.replaceChildren();
         draft.admx.forEach((entry, index) => {
             const row = el('div', 'gpo-row');
             row.appendChild(el('span', 'gpo-row__label', entry.name || entry.ref));
-            row.appendChild(el('span', 'stat-card__meta', admxSummary(entry)));
-            row.appendChild(button(t('gpo.admx.edit'), 'btn btn--ghost', () => openAdmxSetting(entry.set, entry.ref)));
+            row.appendChild(el('span', 'stat-card__meta', `${halfLabel(entry.class)} · ${admxSummary(entry)}`));
+            row.appendChild(button(t('gpo.admx.edit'), 'btn btn--ghost',
+                () => openAdmxSetting(entry.set, entry.ref, entry.class || 'machine')));
             row.appendChild(button(t('gpo.editor.remove'), 'btn btn--ghost', () => {
                 draft.admx.splice(index, 1);
                 renderAdmxRows();
@@ -845,7 +899,7 @@
 
     function admxRowState(policy) {
         if (policy.unsupported) return t(`gpo.admx.unsupported.${policy.unsupported}`);
-        const configured = draft.admx.find((d) => d.ref === policy.ref);
+        const configured = draft.admx.find((d) => sameSetting(d, policy.ref, halfFor(policy)));
         return configured ? admxSummary(configured) : t('gpo.admx.state_not_configured');
     }
 
@@ -853,7 +907,6 @@
         const host = document.getElementById('gpo-admx-list');
         host.replaceChildren();
         if (!admxTree) return;
-        if (admxHalf === 'user') host.appendChild(el('p', 'setting__help', t('gpo.admx.user_later')));
         const query = document.getElementById('gpo-admx-search').value.trim().toLowerCase();
         const shown = admxTree.policies.filter((p) => inHalf(p)
             && (query ? p.name.toLowerCase().includes(query) : p.category === admxCategory));
@@ -863,10 +916,10 @@
         }
         shown.slice(0, 500).forEach((p) => {
             const row = el('div', 'gpo-admx-policy');
-            const name = button(p.name, 'gpo-admx-policy__name', () => openAdmxSetting(admxSet, p.ref));
+            const name = button(p.name, 'gpo-admx-policy__name', () => openAdmxSetting(admxSet, p.ref, halfFor(p)));
             row.appendChild(name);
             row.appendChild(el('span', 'stat-card__meta', admxRowState(p)));
-            if (p.unsupported || admxHalf === 'user') row.classList.add('is-unavailable');
+            if (p.unsupported) row.classList.add('is-unavailable');
             host.appendChild(row);
         });
     }
@@ -982,7 +1035,7 @@
         });
     }
 
-    async function openAdmxSetting(digest, ref) {
+    async function openAdmxSetting(digest, ref, cls) {
         let detail;
         try {
             detail = await api(`/api/gpo/admx/${encodeURIComponent(digest)}/policy?ref=${encodeURIComponent(ref)}`);
@@ -991,18 +1044,17 @@
             return;
         }
         if (!admxDialog.open) admxDialog.showModal();
-        const existing = draft.admx.find((d) => d.ref === ref);
+        const existing = draft.admx.find((d) => sameSetting(d, ref, cls));
         const entry = existing
             ? { ...existing, options: structuredClone(existing.options || {}) }
-            : { set: digest, ref, name: detail.name, state: '', options: {} };
+            : { set: digest, ref, class: cls, name: detail.name, state: '', options: {} };
         admxEditing = { detail, entry };
         document.getElementById('gpo-admx-browse').hidden = true;
         document.getElementById('gpo-admx-setting').hidden = false;
-        document.getElementById('gpo-admx-setting-title').textContent = detail.name;
+        document.getElementById('gpo-admx-setting-title').textContent = `${detail.name} (${halfLabel(cls)})`;
         document.getElementById('gpo-admx-explain').textContent = detail.explain;
         let why = '';
         if (detail.unsupported) why = t(`gpo.admx.unsupported.${detail.unsupported}`);
-        else if (detail.class === 'user') why = t('gpo.admx.user_later');
         const blocked = why !== '';
         const reason = document.getElementById('gpo-admx-reason');
         reason.hidden = !blocked;
@@ -1032,11 +1084,12 @@
         if (!admxEditing) return;
         const { entry } = admxEditing;
         const state = admxState();
-        const index = draft.admx.findIndex((d) => d.ref === entry.ref);
+        const cls = entry.class || 'machine';
+        const index = draft.admx.findIndex((d) => sameSetting(d, entry.ref, cls));
         if (index >= 0) draft.admx.splice(index, 1);
         // Not configured is the absence of the setting, as in gpedit -- never a stored state.
         if (state !== 'not_configured') {
-            draft.admx.push({ set: entry.set, ref: entry.ref, name: entry.name, state,
+            draft.admx.push({ set: entry.set, ref: entry.ref, class: cls, name: entry.name, state,
                 options: state === 'enabled' ? entry.options : {} });
         }
         renderAdmxRows();
@@ -1055,8 +1108,8 @@
         draft = {
             agent_settings: { ...(s.agent_settings || {}) },
             registry: JSON.parse(JSON.stringify(s.registry || [])),
-            admx: (s.admx || []).map((a) => ({ set: a.set, ref: a.ref, name: a.name, state: a.state,
-                options: structuredClone(a.options || {}) })),
+            admx: (s.admx || []).map((a) => ({ set: a.set, ref: a.ref, class: a.class || 'machine',
+                name: a.name, state: a.state, options: structuredClone(a.options || {}) })),
             scripts: JSON.parse(JSON.stringify(s.scripts || [])),
         };
         document.getElementById('gpo-dialog-title').textContent = policy
@@ -1080,9 +1133,11 @@
             enabled: document.getElementById('gpo-enabled').checked,
             settings: {
                 agent_settings: draft.agent_settings,
-                registry: draft.registry.map((e) => ({ path: e.path, name: e.name, type: e.type || 'dword',
+                registry: draft.registry.map((e) => ({ class: e.class === 'user' ? 'user' : 'machine',
+                    path: e.path, name: e.name, type: e.type || 'dword',
                     value: e.type === 'multi_string' ? (e.value || []).filter((v) => v !== '') : e.value })),
-                admx: draft.admx.map((a) => ({ set: a.set, ref: a.ref, state: a.state, options: a.options })),
+                admx: draft.admx.map((a) => ({ set: a.set, ref: a.ref, class: a.class || 'machine',
+                    state: a.state, options: a.options })),
                 scripts: draft.scripts,
             },
         };
@@ -1139,7 +1194,7 @@
             radio.addEventListener('change', syncAdmxOptions);
         });
         document.getElementById('gpo-registry-add').addEventListener('click', () => {
-            draft.registry.push({ path: 'SOFTWARE\\Policies\\', name: '', type: 'dword', value: '' });
+            draft.registry.push({ class: 'machine', path: 'SOFTWARE\\Policies\\', name: '', type: 'dword', value: '' });
             renderRegistryRows();
         });
         document.getElementById('gpo-agent-add').addEventListener('change', (e) => {

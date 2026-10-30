@@ -18,6 +18,9 @@ The silent failures this file exists to catch:
     with sets of its own making; and the stored sets growing without bound.
   * **A Disabled setting's deletes lost** (phase 2) -- or sent to an agent too old to write the
     local GPO, whose document would then move over rows it can never apply.
+  * **A User Configuration value landing in HKLM** (phase 3): sent without its class, sent to an
+    agent that would read it as a machine row, or merged with the machine half of the same
+    template -- and any machine id moving because User Configuration now exists.
 """
 import io
 import os
@@ -337,10 +340,6 @@ def test_policies(db, digest):
     check("...stored with the values it compiled to",
           {v["name"] for v in enabled["settings"]["admx"][0]["values"]}
           == {"RestoreOnStartup", "RestoreOnStartupUserURLsEnabled", "1", "AskBeforeClose"})
-    error, _ = save(db, "Proxy", [{"set": digest, "ref": "Microsoft.Policies.Edge:ProxyPreference",
-                                   "state": "enabled"}])
-    check("a User Configuration setting is refused until the agent can apply it",
-          error and "User Configuration" in error)
     error, _ = save(db, "Twice", [{"set": digest, "ref": "Microsoft.Policies.Edge:HideFirstRunExperience",
                                    "state": "enabled"}],
                     registry=[{"path": "SOFTWARE\\Policies\\Microsoft\\Edge",
@@ -391,6 +390,81 @@ def test_policies(db, digest):
           == [(gpo.setting_id("SOFTWARE\\Policies\\X", "A"), gpo.REG_DELETE)])
 
 
+def test_user_configuration(db, digest):
+    print("\n-- User Configuration (phase 3) --")
+    edge = "SOFTWARE\\Policies\\Microsoft\\Edge"
+    proxy = "Microsoft.Policies.Edge:ProxyPreference"
+    restore = "Microsoft.Policies.Edge:RestoreOnStartup"
+    check("a machine value's id has not moved, and the same path in HKCU is another value",
+          gpo.setting_id(edge, "HomepageLocation") == "332aecccfafb5f3d"
+          and gpo.setting_id(edge, "HomepageLocation", gpo.CLASS_USER) == "8271643f7b465887")
+
+    error, user_only = save(db, "Proxy", [{"set": digest, "ref": proxy, "state": "enabled"}])
+    rows = (user_only or {}).get("settings", {}).get("admx", [{}])[0].get("values", [])
+    check("a User-only template saves, as User Configuration rows",
+          error is None and rows and all(r.get("class") == gpo.CLASS_USER for r in rows)
+          and rows[0]["id"] == gpo.setting_id(edge, "ProxyMode", gpo.CLASS_USER))
+    error, _ = save(db, "Proxy as machine", [{"set": digest, "ref": proxy, "class": "machine",
+                                              "state": "enabled"}])
+    check("...and cannot be set in Computer Configuration", error and "Computer" in error)
+    error, _ = save(db, "Hide as user", [{"set": digest, "ref": "Microsoft.Policies.Edge:HideFirstRunExperience",
+                                          "class": "user", "state": "enabled"}])
+    check("a Computer-only template cannot be set in User Configuration", error and "User" in error)
+
+    both = {"RestoreOnStartup": 0}
+    error, halves = save(db, "Both halves", [
+        {"set": digest, "ref": restore, "class": "machine", "state": "enabled", "options": both},
+        {"set": digest, "ref": restore, "class": "user", "state": "disabled"}])
+    check("a template in both halves is two settings in one policy", error is None)
+    error, _ = save(db, "Twice in User", [
+        {"set": digest, "ref": restore, "class": "user", "state": "enabled", "options": both},
+        {"set": digest, "ref": restore, "class": "user", "state": "disabled"}])
+    check("...but one half twice is refused", error and "twice" in error)
+
+    error, typed = save(db, "Typed", [], registry=[
+        {"path": f"HKCU\\{edge}", "name": "X", "type": "dword", "value": 1},
+        {"path": edge, "name": "X", "type": "dword", "value": 2}])
+    stored = (typed or {}).get("settings", {}).get("registry", [])
+    check("a typed HKCU path is a user row, and HKLM and HKCU at one path are two values",
+          error is None and [r.get("class") for r in stored] == ["user", None])
+    error, _ = save(db, "Contradiction", [], registry=[
+        {"class": "user", "path": f"HKLM\\{edge}", "name": "X", "type": "dword", "value": 1}])
+    check("a path naming HKLM on a User Configuration row is refused", error and "HKLM" in error)
+    error, _ = save(db, "Other class", [], registry=[
+        {"class": "group", "path": edge, "name": "X", "type": "dword", "value": 1}])
+    check("a class that is neither half is refused", error is not None)
+
+    # Machine Enabled from every PC's link; User Enabled too; then a folder that disables only
+    # the User half of the same template for its PCs.
+    error, user_on = save(db, "Restore for users", [
+        {"set": digest, "ref": restore, "class": "user", "state": "enabled", "options": both}])
+    error2, user_off = save(db, "No restore for users", [
+        {"set": digest, "ref": restore, "class": "user", "state": "disabled"}])
+    gpo.create_link(db, user_on["id"], gpo.NODE_ROOT, "")
+    kiosk = pc_tree.create_folder(db, name="Kiosk", actor="t")
+    pc_tree.file_machines(db, ["PC-1"], kiosk["id"], actor="t")
+    gpo.create_link(db, user_off["id"], gpo.NODE_FOLDER, kiosk["id"])
+    gpo.invalidate()
+    result = gpo.rsop(db, "PC-1")
+    machine_rows = [r for r in result["registry"] if gpo.row_class(r) == gpo.CLASS_MACHINE]
+    user_rows = [r for r in result["registry"] if gpo.row_class(r) == gpo.CLASS_USER]
+    check("a nearer User Disabled replaces the User half only; the Computer half keeps Enabled",
+          error is None and error2 is None
+          and any(r["name"] == "RestoreOnStartup" and r["type"] == "dword" for r in machine_rows)
+          and user_rows and all(r["type"] == gpo.REG_DELETE for r in user_rows))
+    check("...and the resultant set names both halves of the template",
+          sorted(e["class"] for e in result["admx"] if e["ref"] == restore) == ["machine", "user"])
+
+    old = gpo.resolve_for(db, "PC-1", ["lgpo"])
+    new = gpo.resolve_for(db, "PC-1", ["lgpo", "user"])
+    check("an agent before 3.49 is sent no User Configuration row",
+          all("class" not in v for v in old["values"]))
+    check("...one that applies it is sent them, marked, and the machine rows stay unmarked",
+          any(v.get("class") == "user" for v in new["values"])
+          and [v for v in new["values"] if "class" not in v] == old["values"]
+          and new["version"] != old["version"])
+
+
 def main():
     fd, db = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -419,6 +493,7 @@ def main():
         test_compile()
         digest = test_upload(db)
         test_policies(db, digest)
+        test_user_configuration(db, digest)
         test_cap(db, digest)
     finally:
         try:

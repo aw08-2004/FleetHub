@@ -294,7 +294,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             if (GroupPolicy is { } policy)
             {
                 body["gpo_version"] = policy.Version;
-                // How it applies them -- "lgpo" since 3.50: into the local GPO, so gpedit.msc
+                // How it applies them -- "lgpo" since 3.49: into the local GPO, so gpedit.msc
                 // shows them. Present or absent like the version, never a minor to compare.
                 body["gpo_features"] = new JsonArray(
                     [.. TempMonitorAgent.GroupPolicy.GroupPolicyRunner.Features.Select(f => (JsonNode)f)]);

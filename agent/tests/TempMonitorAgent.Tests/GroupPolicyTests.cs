@@ -8,7 +8,7 @@ using Xunit;
 namespace TempMonitorAgent.Tests;
 
 /// <summary>
-/// Roadmap #32: Group Policy registry values, written into the PC's local GPO since agent 3.50.
+/// Roadmap #32: Group Policy registry values, written into the PC's local GPO since agent 3.49.
 ///
 /// The silent failures this file exists to catch:
 ///   * the agent overwriting, or later deleting, a policy value it did not set -- one somebody
@@ -25,7 +25,10 @@ namespace TempMonitorAgent.Tests;
 ///   * an older agent's direct registry writes stranded by the move to the local GPO;
 ///   * a value written outside HKLM\SOFTWARE\Policies because the hub said so;
 ///   * a lost heartbeat swallowing the report that a value was refused;
-///   * a reboot with a lost state file stripping every value before the hub resends.
+///   * a reboot with a lost state file stripping every value before the hub resends;
+///   * a User Configuration row written into HKLM's file, or onto the machine marker, or judged
+///     against HKLM -- where a machine value at the same path would read as somebody else's;
+///   * the User half's file read or rewritten on a PC that sets no User Configuration at all.
 /// Everything runs against memory: a dictionary for HKLM, a byte array for Registry.pol, and a
 /// fake Windows that applies the file to the dictionary when asked to refresh.
 /// </summary>
@@ -76,9 +79,13 @@ public class GroupPolicyTests
     private sealed class FakeLocal(FakeStore registry) : ILocalGroupPolicy
     {
         public byte[]? Bytes;
+        /// <summary>User\Registry.pol. Windows applies it to signed-in users' hives, which
+        /// this fake does not model -- nor does the runner judge them.</summary>
+        public byte[]? UserBytes;
         public int Saves;
         public int Refreshes;
         public int Forced;
+        public int UserLoads;
         /// <summary>False: local policy processing is off, and a refresh changes nothing.</summary>
         public bool WindowsApplies = true;
         /// <summary>Somebody saves in gpedit between the next Load and its Save.</summary>
@@ -86,18 +93,28 @@ public class GroupPolicyTests
         public readonly Dictionary<string, string> Domain = new(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _applied = new(StringComparer.OrdinalIgnoreCase);
 
-        public RegistryPolFile Load() => Bytes is null ? RegistryPolFile.Empty() : RegistryPolFile.Parse(Bytes);
+        public RegistryPolFile Load() => Load(PolicyAllowList.Machine);
 
-        public bool Save(RegistryPolFile file)
+        public RegistryPolFile Load(string cls)
+        {
+            if (cls == PolicyAllowList.User) UserLoads++;
+            var bytes = cls == PolicyAllowList.User ? UserBytes : Bytes;
+            return bytes is null ? RegistryPolFile.Empty() : RegistryPolFile.Parse(bytes);
+        }
+
+        public bool Save(string cls, RegistryPolFile file)
         {
             if (Interfere)
             {
                 Interfere = false;
                 return false;
             }
-            var onDisk = Bytes is null ? null : Convert.ToHexStringLower(SHA256.HashData(Bytes));
+            var user = cls == PolicyAllowList.User;
+            var bytes = user ? UserBytes : Bytes;
+            var onDisk = bytes is null ? null : Convert.ToHexStringLower(SHA256.HashData(bytes));
             if (onDisk != file.LoadedHash) return false;
-            Bytes = file.ToBytes();
+            if (user) UserBytes = file.ToBytes();
+            else Bytes = file.ToBytes();
             Saves++;
             return true;
         }
@@ -124,6 +141,7 @@ public class GroupPolicyTests
         }
 
         public string? Held(string path, string name) => Load().Get(path, name);
+        public string? HeldUser(string path, string name) => Load(PolicyAllowList.User).Get(path, name);
     }
 
     private sealed class FakeClock : TimeProvider
@@ -157,6 +175,15 @@ public class GroupPolicyTests
         Id = PolicyAllowList.IdFor(path, name), Path = path, Name = name,
         Type = PolicyAllowList.String, Text = value,
     };
+
+    private static PolicyValue User(PolicyValue value) => value with
+    {
+        Class = PolicyAllowList.User,
+        Id = PolicyAllowList.IdFor(value.Path, value.Name, PolicyAllowList.User),
+    };
+
+    private string[] UserMarker(FakeStore store) =>
+        store.GetMultiString(GroupPolicyRunner.MarkerKey, GroupPolicyRunner.UserMarkerValue) ?? [];
 
     private static PolicyValue Del(string path, string name) => new()
     {
@@ -624,6 +651,153 @@ public class GroupPolicyTests
         // It still knows it wrote 1, so 9 is somebody else's and is let go rather than fought.
         Assert.Equal("dword:9", rig.Local.Held(Edge, "A"));
         Assert.Empty(rig.Store.Marker);
+    }
+
+    // --- User Configuration (phase 3) ---------------------------------------
+
+    [Fact]
+    public void A_user_row_parses_with_the_hubs_id_and_an_unknown_class_is_dropped()
+    {
+        var doc = PolicyDocument.Parse(JsonNode.Parse("""
+            {"values": [
+              {"path": "SOFTWARE\\Policies\\Microsoft\\Edge", "name": "HomepageLocation", "type": "string", "value": "x", "class": "user"},
+              {"path": "SOFTWARE\\Policies\\Microsoft\\Edge", "name": "HomepageLocation", "type": "string", "value": "x"},
+              {"path": "SOFTWARE\\Policies\\Microsoft\\Edge", "name": "Other", "type": "dword", "value": 1, "class": "group"}
+            ]}
+            """), "v");
+        Assert.Equal(2, doc!.Values.Count);
+        // gpo.setting_id(path, "HomepageLocation", "user") on the hub.
+        Assert.Equal(("user", "8271643f7b465887"), (doc.Values[0].Class, doc.Values[0].Id));
+        // And the machine id has not moved.
+        Assert.Equal(("machine", "332aecccfafb5f3d"), (doc.Values[1].Class, doc.Values[1].Id));
+    }
+
+    [Fact]
+    public void A_user_value_goes_into_User_Registry_pol_with_its_own_marker_and_no_refresh()
+    {
+        var rig = NewRig();
+        var value = User(Dword(Edge, "A", 1));
+        rig.Runner.Apply(Doc(value));
+        rig.Runner.Tick();
+        Assert.Equal("dword:1", rig.Local.HeldUser(Edge, "A"));
+        Assert.Null(rig.Local.Bytes);
+        Assert.Empty(rig.Store.Marker);
+        Assert.Equal([$"{Edge}|A"], UserMarker(rig.Store));
+        // Windows applies it at sign-in; there is nothing for a service to refresh.
+        Assert.Equal(0, rig.Local.Refreshes);
+        Assert.Equal(GroupPolicyRunner.Applied, Reported()[value.Id].Status);
+    }
+
+    [Fact]
+    public void A_machine_and_a_user_value_at_one_path_are_two_values()
+    {
+        var rig = NewRig();
+        var user = User(Dword(Edge, "A", 2));
+        rig.Runner.Apply(Doc(Dword(Edge, "A", 1), user));
+        rig.Runner.Tick();
+        Assert.Equal("dword:1", rig.Local.Held(Edge, "A"));
+        Assert.Equal("dword:2", rig.Local.HeldUser(Edge, "A"));
+        rig.SettledTick();
+        var reported = Reported();
+        Assert.Equal(GroupPolicyRunner.Applied, reported[PolicyAllowList.IdFor(Edge, "A")].Status);
+        // The machine value in HKLM is not "somebody else's" to the user row.
+        Assert.Equal(GroupPolicyRunner.Applied, reported[user.Id].Status);
+        // Dropping the user row leaves the machine one where it is.
+        rig.Runner.Apply(Doc(Dword(Edge, "A", 1)));
+        rig.Runner.Tick();
+        Assert.Null(rig.Local.HeldUser(Edge, "A"));
+        Assert.Equal("dword:1", rig.Local.Held(Edge, "A"));
+        Assert.Empty(UserMarker(rig.Store));
+    }
+
+    [Fact]
+    public void A_user_value_somebody_set_in_gpedit_is_left_alone_and_one_changed_is_let_go()
+    {
+        var rig = NewRig();
+        rig.Local.UserBytes = GpeditFile(Text(Edge, "Theirs", "gpedit"));
+        var theirs = User(Text(Edge, "Theirs", "fleethub"));
+        var ours = User(Dword(Edge, "Ours", 1));
+        rig.Runner.Apply(Doc(theirs, ours));
+        rig.Runner.Tick();
+        Assert.Equal("string:gpedit", rig.Local.HeldUser(Edge, "Theirs"));
+        Assert.Equal(GroupPolicyRunner.ManagedElsewhere, Reported()[theirs.Id].Status);
+        var edited = rig.Local.Load(PolicyAllowList.User);
+        edited.Set(User(Dword(Edge, "Ours", 0)));
+        rig.Local.UserBytes = edited.ToBytes();
+        rig.Runner.Tick();
+        Assert.Equal("dword:0", rig.Local.HeldUser(Edge, "Ours"));
+        Assert.Empty(UserMarker(rig.Store));
+    }
+
+    [Fact]
+    public void A_PC_with_no_User_Configuration_never_reads_the_user_file()
+    {
+        var rig = NewRig();
+        rig.Local.UserBytes = [0xBA, 0xD0];          // unreadable, and none of FleetHub's business
+        rig.Runner.Apply(Doc(Dword(Edge, "A", 1)));
+        rig.Runner.Tick();
+        rig.SettledTick();
+        Assert.Equal(0, rig.Local.UserLoads);
+        Assert.Equal(GroupPolicyRunner.Applied, Reported()[PolicyAllowList.IdFor(Edge, "A")].Status);
+    }
+
+    [Fact]
+    public void An_unreadable_user_file_costs_only_the_user_half()
+    {
+        var rig = NewRig();
+        rig.Local.UserBytes = [0xBA, 0xD0];
+        var user = User(Dword(Edge, "U", 1));
+        rig.Runner.Apply(Doc(Dword(Edge, "A", 1), user));
+        rig.Runner.Tick();
+        var reported = Reported();
+        Assert.Equal(GroupPolicyRunner.Error, reported[user.Id].Status);
+        Assert.Equal(GroupPolicyRunner.Applied, reported[PolicyAllowList.IdFor(Edge, "A")].Status);
+        Assert.Equal([0xBA, 0xD0], rig.Local.UserBytes);
+    }
+
+    [Fact]
+    public void Release_takes_both_halves_out_and_drops_both_markers()
+    {
+        var rig = NewRig();
+        rig.Runner.Apply(Doc(Dword(Edge, "A", 1), User(Dword(Edge, "U", 1))));
+        rig.Runner.Tick();
+        rig.Runner.Release();
+        Assert.Null(rig.Local.Held(Edge, "A"));
+        Assert.Null(rig.Local.HeldUser(Edge, "U"));
+        Assert.Empty(rig.Store.Marker);
+        Assert.Empty(UserMarker(rig.Store));
+    }
+
+    [Fact]
+    public void User_rows_are_persisted_where_an_older_agent_never_reads_them()
+    {
+        var rig = NewRig();
+        rig.Runner.Apply(Doc(Dword(Edge, "A", 1), User(Dword(Edge, "U", 2))));
+        // What an agent before 3.49 reads of the state file: Values, with no notion of class.
+        var stored = new AgentState().LoadGroupPolicyState()!;
+        Assert.Equal(["A"], stored.Values!.Select(v => v.Name));
+        Assert.Equal(["U"], stored.UserValues!.Select(v => v.Name));
+        // And this agent reads both back, each with its own class and id.
+        var restarted = rig.Restart();
+        restarted.Tick();
+        Assert.Equal("dword:1", rig.Local.Held(Edge, "A"));
+        Assert.Equal("dword:2", rig.Local.HeldUser(Edge, "U"));
+    }
+
+    [Fact]
+    public void A_user_value_survives_a_restart_on_its_own_written_record()
+    {
+        var rig = NewRig();
+        rig.Runner.Apply(Doc(User(Dword(Edge, "A", 1))));
+        rig.Runner.Tick();
+        var restarted = rig.Restart();
+        var edited = rig.Local.Load(PolicyAllowList.User);
+        edited.Set(User(Dword(Edge, "A", 9)));
+        rig.Local.UserBytes = edited.ToBytes();
+        restarted.Tick();
+        // It still knows it wrote 1 to the user file, so 9 is somebody else's.
+        Assert.Equal("dword:9", rig.Local.HeldUser(Edge, "A"));
+        Assert.Empty(UserMarker(rig.Store));
     }
 
     // --- the reporter -------------------------------------------------------

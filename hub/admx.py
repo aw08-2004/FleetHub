@@ -27,8 +27,9 @@ What it refuses, on purpose:
     root exactly as for raw values.
   * **QWORD values** (`longDecimal`) -- the pipeline has no QWORD type, so a setting using one is
     listed greyed rather than half-applied.
-  * **User Configuration** until the agent can write the per-user local GPO (roadmap #32,
-    phase 3). The tree shows the User half so the shape is gpedit's, greyed.
+  * Nothing about **User Configuration** any more: since phase 3 the User half is set like the
+    Computer half, and the agent writes it to the local GPO's User\\Registry.pol. A template
+    listed in both halves is set in either, as two settings (gpo._template_class).
   * Nothing about **`delete` values** any more (most "Disabled" states delete a value rather
     than write one): compile() reports them, gpo stores them as `delete` rows, and since phase 2
     the agent writes them into the local GPO's Registry.pol as `**del.` entries. An agent too
