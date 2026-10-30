@@ -133,6 +133,15 @@
         return tr.cells.length === 1 && tr.cells[0].colSpan > 1;
     }
 
+    // A row the PAGE opens and closes under the row above it -- an audit entry's Details. It is
+    // one cell across the table, so it used to pass for a notice row and be forced visible on
+    // every mutation, and the toggle that writes its text is a mutation: Details could not be
+    // closed, then (hub 1.171.1) not opened. Its `hidden` is the page's open/closed state, so
+    // this file never writes it; it follows its owner through .data-table__filtered-out.
+    function isDetailRow(tr) {
+        return tr.hasAttribute('data-table-detail');
+    }
+
     function dataRows(state) {
         return Array.from(state.table.tBodies).flatMap((tb) => Array.from(tb.rows))
             .filter((tr) => !tr.classList.contains('data-table__no-match'));
@@ -141,6 +150,7 @@
     function labelCells(state) {
         const labels = state.cols.map((c) => c.label);
         for (const tr of dataRows(state)) {
+            if (isDetailRow(tr)) continue;     // one free-form cell, not a column's value
             cellsByColumn(tr).forEach((td, i) => {
                 if (td && labels[i] && !td.dataset.label) td.dataset.label = labels[i];
             });
@@ -160,7 +170,9 @@
             .filter((f) => f.value);
         let rows = 0;
         let shown = 0;
+        let ownerShown = true;
         for (const tr of dataRows(state)) {
+            if (isDetailRow(tr)) { tr.classList.toggle('data-table__filtered-out', !ownerShown); continue; }
             if (isNoticeRow(tr)) { tr.hidden = false; continue; }
             rows++;
             const cells = cellsByColumn(tr);
@@ -168,6 +180,7 @@
             const ok = (!q || cells.some((td) => text(td).includes(q)))
                 && colFilters.every((f) => text(cells[f.index]).includes(f.value));
             tr.hidden = !ok;
+            ownerShown = ok;
             if (ok) shown++;
         }
         showNoMatch(state, rows > 0 && shown === 0 && active(state));

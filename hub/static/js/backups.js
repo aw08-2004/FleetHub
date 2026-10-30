@@ -109,10 +109,33 @@ function schedulePoll() {
             const fresh = await api('/api/backups/runs');
             state.runs = fresh.runs;
             state.schedule = fresh.schedule;
-            render();
+            renderRunsInPlace();
         } catch (e) { /* transient — the next user action will resync */ }
         schedulePoll();
     }, 4000);
+}
+
+// What the poll fetched is the runs and the schedule's due time, so that is all it redraws.
+// It used to call render(), which rebuilt every card -- the schedule picker, the destination
+// and mode dropdowns -- every 4 s for as long as `running` held, closing whichever native
+// dropdown the operator had open (1.174.1, from a screen recording of exactly that).
+function renderRunsInPlace() {
+    const old = hubPane.querySelector('[data-runs-card]');
+    if (old) old.replaceWith(renderRunsCard());
+    const due = document.getElementById('schedule-due');
+    if (due) due.textContent = scheduleDueText(state.schedule);
+}
+
+// True while the operator has a field on this tab in hand. A live re-read runs render(), and
+// a native dropdown -- a <select>'s list, the time picker's clock -- closes the moment its
+// element is replaced; nothing in the DOM says the list is open, so focus stands in for it.
+// The re-read runs once focus leaves (fleet-live.js retries every 2 s). Checkboxes and
+// buttons do not count: they open nothing, and focus parks on them after a click.
+function operatorEditing() {
+    const active = document.activeElement;
+    if (!active || !backupPanel.contains(active)) return false;
+    return active.matches('select, textarea, input:not([type="checkbox"]):not([type="radio"])')
+        || !!active.closest('.schedule-picker');
 }
 
 function render() {
@@ -489,6 +512,7 @@ function numberField(id, label, value, min, max, onCommit) {
 
 function renderRunsCard() {
     const card = el('div', 'card');
+    card.dataset.runsCard = '';       // found by renderRunsInPlace()
     card.style.marginTop = 'var(--space-5)';
     card.appendChild(el('h2', 'section-title', t('backups.runs.title')));
 
@@ -1370,7 +1394,7 @@ function boot() {
     if (!boot.watching) {
         boot.watching = true;
         window.FleetLive.watch(['backups'], () => load().catch(onLoadFailed),
-            { minInterval: 3000 });
+            { minInterval: 3000, busy: operatorEditing });
     }
     // Whichever folds are open on arrival still need their contents; the toggle listeners
     // above only fire on a change.

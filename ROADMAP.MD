@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.174.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.174.1**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -386,6 +386,10 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
 - [ ] **Open stays open.** On a beta hub with agents reporting, open the Audit Log, press
   **Details** on two rows and wait a minute. Both stay open (before: they closed every ~5 s,
   because the page re-read on every fleet notice, `status` included).
+  **Failed 2026-10-30:** Details could not be opened at all. table-tools.js took the one-cell
+  detail row for a "Loading..." notice and forced it visible on every mutation, and 1.171.1's
+  toggle read the row's `hidden` back, so every click saw "open" and closed it. Fixed in
+  1.174.1 below; re-check this box on that build.
 - [ ] **New lines still arrive.** With those rows open, change something that audits (save a
   setting, edit a device group) in another tab. The new line appears at the top within a few
   seconds, and the two rows are still open below it.
@@ -449,6 +453,19 @@ editor phase 3)
   `gpedit.msc` under User Configuration, and `cmd` opens again at the next sign-in.
   `agent-install.ps1 -Uninstall` on a PC with FleetHub values in both halves and one set in
   gpedit by hand in User Configuration: only FleetHub's go.
+
+**Hub 1.174.1: Details opens again, and dropdowns stay open under a live update**
+- [ ] **Details.** On the Audit Log, **Details** opens a row on the first click and *Hide*
+  closes it; then the *Open stays open* check under 1.171.1 above.
+- [ ] **Details under a filter.** Open a row, filter the Actor column to someone else: the row
+  and its Details go together. Clear the filter: it is back, still open.
+- [ ] **Backup dropdowns.** On Fleet tasks → Backup, while a hub backup runs (or `running` is
+  shown), open the time picker under *At set times* and leave it open 15 s; then the *When to
+  back up* and *Destination* lists. None closes by itself (before: every ~4 s, from the run
+  poll's full redraw -- caught on a screen recording). The *Recent backups* list still updates.
+- [ ] **Any page.** Open a dropdown on a page with live data (Inventory's filters, a machine's
+  primary sensor) while machines report: it stays open. Leave the field and the page catches
+  up within about 2 s.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -1340,7 +1357,12 @@ framed pages subscribe through `window.parent.FleetLive`, unsubscribing on `page
 `FleetLive.watch(topics, refresh, opts)` throttles each refresh (leading + trailing, never
 concurrent) and pauses it while the tab is hidden. It also defers the refresh while a
 `<dialog>` is open or the page's `busy()` says an edit is in progress (Settings' `dirty` map,
-the rule and policy editors, staged firmware edits, the wipe panel). Every watcher re-runs on
+the rule and policy editors, staged firmware edits, the wipe panel). Since hub 1.174.1 it also
+defers while a `<select>` or date/time input has focus and was used in the last 30 s: a native
+list closes when its element is replaced, and the DOM has no "open" state to ask. Rejected:
+any focused field, which would stall every page whose search box keeps the cursor. Pages with
+a poll of their own must redraw only what the poll fetched (Backups redrew its whole tab
+every 4 s while a run was in progress, closing every dropdown on it). Every watcher re-runs on
 reconnect, and a 30 s fallback tick stands in while the socket is down. The ticker re-renders
 `[data-ago-at]` elements every 10 s, so relative times keep counting. On a `permissions` or
 `settings` notice the shell re-reads its own nav and swaps it in if the links differ.
