@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.175.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.175.1**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -528,7 +528,15 @@ editor phase 3)
   **Failed 2026-10-30 on 1.174.1:** Inventory's row **⋯** menu closes within about 5 s, with
   focus still on its *Open* item. `inventory.js` watches `status` with no `busy()`, and
   `render()` calls `closeMenu()` on every refresh. The *Filters* panel and the device-group
-  list stayed open.
+  list stayed open. Fixed in 1.175.1 below; re-check this box on that build.
+
+**Hub 1.175.1: the Devices row menu stays open under a live update**
+Inventory's live refresh now waits while a row's **⋯** menu is open. Rejected: re-pointing the
+open menu at the re-rendered row's button, which would keep items built from the old row (Wake
+for a PC that has since come online).
+- [ ] **Row menu.** On Devices, with machines reporting, open a row's **⋯** menu and leave it
+  15 s: it stays open. Click elsewhere: it closes, and the list catches up within a few
+  seconds (a status dot or *Last seen* changes). Then the *Any page* check under 1.174.1.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
