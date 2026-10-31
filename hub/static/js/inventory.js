@@ -799,5 +799,11 @@ function onLiveReading(msg) {
 loadGroups();
 loadInventory();
 window.FleetLive.onTemp(onLiveReading);
+// Never while a row's menu is open. render() closes it, and `status` arrives every few seconds
+// with agents reporting, so the menu used to vanish about five seconds after it opened --
+// failed on the beta hub 2026-10-30 (ROADMAP.MD, hub 1.174.1 *Any page*). The menu closes on
+// any click elsewhere, Escape, Tab, scroll or resize, so the held refresh runs moments later.
+// Rejected: re-rendering and re-pointing the open menu at the new row's button, which would
+// keep showing items built from the old row -- Wake for a PC that has since come online.
 window.FleetLive.watch(['machines', 'status', 'device_groups'], loadInventory,
-    { minInterval: 3000 });
+    { minInterval: 3000, busy: () => menuOwner !== null });

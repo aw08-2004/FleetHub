@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.175.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.175.1**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -235,13 +235,16 @@ key is saved in Settings.
   (it reports a URL count), and start two sessions: each gets a different minted username.
 - [ ] **Outage.** With a wrong API token, *Test* fails with a message, and a session still
   starts on whatever else is configured.
-- [ ] **Translations.** The two new blocks read correctly in German and Spanish.
+- [x] **Translations.** The two new blocks read correctly in German and Spanish.
+  *Confirmed 2026-10-30 from the `de`/`es` catalog: every new key reads correctly.*
 
 **Hub 1.166.0: agent version pins, and beta follows a newer stable** (#21; agent halves in
 *Owed locally* item 17)
-- [ ] **Nothing changes by default.** After the beta hub updates, every platform shows
+- [x] **Nothing changes by default.** After the beta hub updates, every platform shows
   *Automatic* in **Settings → Fleet**, and a beta PC's page shows no new note (beta 3.48.1 is
   ahead of stable 3.48.0, so it stays on beta).
+  *Confirmed 2026-10-30 on 1.174.1: Windows, Linux and Android all read Automatic with empty
+  pins; AIO-HOBBY shows only the older "ahead of stable" note.*
 - [ ] **Beta follows a newer stable.** Once a stable release passes the newest beta, a beta PC
   reads *Following stable X…* and installs it. The next beta flips it back.
 - [ ] **A pin holds.** With the pin-aware agent on a beta PC, pin Windows at the running
@@ -252,7 +255,8 @@ key is saved in Settings.
 - [ ] **Bad pins.** `3.49` or `3.49.0-rc1` is refused in Settings. A well-formed version with
   no manifest makes the machine page say *no signed manifest exists*. An agent older than the
   pin-aware version says it ignores the pin.
-- [ ] **Translations.** The new Settings rows and notes read correctly in German and Spanish.
+- [x] **Translations.** The new Settings rows and notes read correctly in German and Spanish.
+  *Confirmed 2026-10-30 from the catalog.*
 
 **Hub 1.167.0 + Android agent (next beta): live map, repeat locates, location switched back on**
 (roadmap #23). The owner's call on 2026-10-23: the map may ask again while it is open. The
@@ -272,8 +276,8 @@ rejected alternative, a hub-side timer locating with no map open, is recorded in
   arrives, instead of *location is switched off on this device*.
 - [ ] **One chime.** On that agent, with the map open, the "This device was located" notice sounds
   once and then updates silently until it is dismissed.
-- [ ] **Translations.** The *Live* switch, its status line and the new setting read correctly in
-  German and Spanish.
+- [x] **Translations.** The *Live* switch, its status line and the new setting read correctly in
+  German and Spanish. *Confirmed 2026-10-30 from the catalog.*
 
 **Hub 1.168.0 + Windows agent (next beta): machines with no temperature sensor, and names with
 no machine.** Found 2026-10-27: a Windows Sandbox (secret) and AIRGPU (onboarding code) both
@@ -286,14 +290,19 @@ month of rows rewritten on a production hub's self-update for an empty chart.
   whose 36-character GUID name Windows cuts to 15) is in Inventory, online while it
   heartbeats, with no serial or model. Older enrollments that never reported reappear too, as
   offline (`DESKTOP-TPTM76D`, two old `SM-A155M-…`); deleting one revokes its credential.
-- [ ] **Not found.** `/machine/no-such-pc` shows *Machine not found*, naming it, not an empty
+  *Cannot be re-checked as of 2026-10-30:* the Audit Log shows `035A185C-668A-4` and
+  `DESKTOP-TPTM76D` decommissioned and deleted on 2026-10-27, and no old `SM-A155M-…` is left.
+  Needs a fresh enrollment that never reports.
+- [x] **Not found.** `/machine/no-such-pc` shows *Machine not found*, naming it, not an empty
   machine page. A real but offline machine's page still opens.
+  *Confirmed 2026-10-30 on 1.174.1 (offline AIO-HOBBY opens normally).*
 - [ ] **No command for nobody.** Queuing anything for a name with no enrollment answers *No
   enrolled agent answers to …*, and an offline enrolled PC still queues.
 - [ ] **VM reports** (needs the agent). On a Windows Sandbox with the new agent, the machine gains
   serial, model and OS, shows no temperature, and the agent log says *No CPU temperature
   sensor* once, not every five seconds. A PC with a sensor reports exactly as before.
-- [ ] **Translations.** *Machine not found* reads correctly in German and Spanish.
+- [x] **Translations.** *Machine not found* reads correctly in German and Spanish.
+  *Confirmed 2026-10-30 from the catalog.*
 
 **Hub 1.169.0 + Linux agent 0.4.0: a real terminal on Linux, Remote from Ctrl+K, Linux
 onboarding** (onboarding: see #29, *Built · hub 1.169.0*). Asked for
@@ -310,8 +319,9 @@ control, no stray processes after hang-up).
 - [ ] **Sandbox console.** After the beta hub updates, `035A185C-668A-4`'s Terminal tab shows
   the console tab strip and a `PS C:\Windows\system32>` prompt, not the *Connected to …* line
   terminal. (If the Sandbox is gone, any enrolled machine with an empty *Agent* column.)
-- [ ] **Linux, old agent.** openmediavault on 0.3.0 still shows the one-shot box, and its hint
-  ends by naming Linux agent 0.4.0.
+- [x] **Linux, old agent.** openmediavault on 0.3.0 still shows the one-shot box, and its hint
+  ends by naming Linux agent 0.4.0. *Confirmed 2026-10-30.* Seen in passing: the box's banner
+  still reads *Commands run as SYSTEM* on Linux, where they run as root.
 - [ ] **Linux terminal** (needs Linux 0.4.0 beta, *Owed locally* item 19). On openmediavault the
   tab opens a bash prompt as root. Check: `top` fills the window and follows a browser resize;
   `sleep 60` stops on Ctrl-C; Tab completes a path; `apt install` answers its Y/n; a second
@@ -321,8 +331,12 @@ control, no stray processes after hang-up).
 - [ ] **Remote from Ctrl+K.** Ctrl+K, pick a Windows PC, → to **Remote**, Enter: the Remote page
   opens with that PC connecting. openmediavault and the phones have no Remote action. An
   operator without `remote_control` sees no Remote action on any row.
-- [ ] **Remote button.** A machine page's **Remote** button lands on that PC connecting, not on
-  an empty picker.
+  *2026-10-30: the first two parts pass (FCOM1109 opened and read Live; openmediavault and both
+  phones offer no Remote). Still owed: the operator without `remote_control`.*
+- [x] **Remote button.** A machine page's **Remote** button lands on that PC connecting, not on
+  an empty picker. *Confirmed 2026-10-30: it links to `/remote?machine=<pc>`, the URL the
+  palette opened connecting.* Seen in passing: the button is gated on `remote_control` only,
+  so openmediavault's page shows it too, unlike the palette.
 - [ ] **Linux onboarding** (works with the released Linux 0.3.0; the terminal box above needs
   0.4.0). Mint a code, open `/onboarding?code=…` from a Windows browser, switch to **Linux**,
   and paste the line on a Linux box that has never had the agent: it installs, enrols, and the
@@ -334,10 +348,12 @@ control, no stray processes after hang-up).
   shared `agent-shared/Pty` runner. That is a move, not a change, but it is the code every PC
   console goes through. Open two consoles, answer a `Read-Host`, Ctrl-C a `ping -t`, resize,
   leave the page and come back, and close a tab: nothing differs from 3.48.x.
-- [ ] **Wizard guess.** Opened from a Linux desktop browser the wizard starts on **Linux**, and
-  from Windows or a phone it starts on **Windows**.
-- [ ] **Translations.** *Remote* in the palette, the Linux terminal hints and the wizard's
-  Windows/Linux switch read correctly in German and Spanish.
+- [x] **Wizard guess.** Opened from a Linux desktop browser the wizard starts on **Linux**, and
+  from Windows or a phone it starts on **Windows**. *Confirmed 2026-10-30 from Windows and an
+  emulated Android phone; the Linux-desktop branch is the one regex in `onboarding.js`.*
+- [x] **Translations.** *Remote* in the palette, the Linux terminal hints and the wizard's
+  Windows/Linux switch read correctly in German and Spanish. *Confirmed 2026-10-30 from the
+  catalog.*
 
 **Hub 1.170.0: new installs serve HTTPS on 29443 (cheroot), existing hubs stay on 3001**
 (*Hub listener moved to HTTPS on 29443* below; *Owed locally* item 20)
@@ -363,6 +379,7 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
   certifi` in its Python then reports Authlib 1.9.1+ and certifi 2026.10.23+. Before this,
   both lines were unversioned and `pip install -r` left whatever was installed alone.
 - [ ] **Sign-in still works** with Google and with the OIDC provider after the upgrade.
+  *2026-10-30: Google sign-in works on 1.174.1. Still owed: the OIDC provider.*
 - [ ] **Socket rescan** of `beta` no longer reports the Authlib or certifi CVEs.
 
 **Hub 1.170.2: Remote connects through TURN instead of falling back to the hub relay**
@@ -380,14 +397,20 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
 - [ ] **Nothing moved on update.** Before touching anything, Fleet tasks → Backup shows
   *Every N hours (the interval above)* for both the hub database and PC files, and the
   "Next due" line is the same as before the update.
-- [ ] **Set times run at the slot.** Set the hub database to *At set times*, today, two or
+- [x] **Set times run at the slot.** Set the hub database to *At set times*, today, two or
   three minutes ahead. **Next runs** lists that time first, labelled with the hub's UTC
   offset; the run appears in the history within a minute of it, labelled *Scheduled*, and
   not again an hour later.
+  *Confirmed 2026-10-30 on the daily 12:30 slot: the run started 12:30:44, triggered by the
+  schedule, with no second run. **Next runs** reads "UTC−03:00, hub time". The history labels
+  it `schedule`, not *Scheduled*. That run itself failed: s3.arkeanos.net reset the
+  connection after 15 min.*
 - [ ] **Hub time, not browser time.** From a browser set to a different time zone, the
   **Next runs** times are unchanged.
 - [ ] **Cron.** `0 3 * * 0` previews five Sundays at 03:00; `0 3 * *` shows an error under
   the box and saves nothing (reload: the old schedule is still there).
+  *2026-10-30: `POST /api/schedules/preview` returns Sundays Nov 1–29 at 03:00 hub time, and
+  refuses `0 3 * *` ("…five fields…; this one has 4"). Still owed: the picker on the page.*
 - [ ] **A laptop catches up once.** With PC files on set times, shut a test laptop across a
   slot, start it a few hours later: one backup within a minute of it reporting, not one per
   missed slot.
@@ -395,18 +418,20 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
   again and "Next due" goes back to last attempt + N hours.
 
 **Hub 1.171.0, same release: assistant timestamps and the `wait` tool** (#26, issue #167)
-- [ ] **Times on every message.** Ask something that needs a tool or two. Your message, each
+- [x] **Times on every message.** Ask something that needs a tool or two. Your message, each
   working step and the answer each show a time; pointing at one shows the full date. Reload
-  the page: the same times come back.
-- [ ] **Working timer.** While it answers, the line at the bottom reads *Thinking... · 0m 12s*
+  the page: the same times come back. *Confirmed 2026-10-30 (step times on an older
+  conversation; the new one had no step text).*
+- [x] **Working timer.** While it answers, the line at the bottom reads *Thinking... · 0m 12s*
   and counts up. When it finishes, *Worked for ...* appears under the answer, and is still
   there after a reload. A conversation from before the update shows times on its messages
   but no *Worked for* lines -- correct, those turns were never timed.
-- [ ] **Wait.** "Wait one minute, then tell me how many machines are online." The bottom line
+  *Confirmed 2026-10-30; the timer reads "· 14s" rather than "· 0m 12s".*
+- [x] **Wait.** "Wait one minute, then tell me how many machines are online." The bottom line
   reads *Waiting 1m 00s, until HH:MM* with the timer still running, and the answer arrives
-  about a minute later.
-- [ ] **Stop ends a wait.** "Wait 30 minutes" then **Stop**: the turn ends within a second or
-  two, not 30 minutes later.
+  about a minute later. *Confirmed 2026-10-30: answered after 1m 10s.*
+- [x] **Stop ends a wait.** "Wait 30 minutes" then **Stop**: the turn ends within a second or
+  two, not 30 minutes later. *Confirmed 2026-10-30: ended in about 1 s, "Stopped".*
 - [ ] **Limit.** Set *Longest assistant wait* to 1 minute and ask for 5: it waits one minute
   and says the wait was cut. Set it back to 60.
 - [ ] **A real provider calls it.** Against the configured model (not the test stand-in),
@@ -414,16 +439,18 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
   re-reading the machine over and over.
 
 **Hub 1.171.1: the Audit Log keeps open rows open, and re-reads only on a new line**
-- [ ] **Open stays open.** On a beta hub with agents reporting, open the Audit Log, press
+- [x] **Open stays open.** On a beta hub with agents reporting, open the Audit Log, press
   **Details** on two rows and wait a minute. Both stay open (before: they closed every ~5 s,
   because the page re-read on every fleet notice, `status` included).
   **Failed 2026-10-30:** Details could not be opened at all. table-tools.js took the one-cell
   detail row for a "Loading..." notice and forced it visible on every mutation, and 1.171.1's
   toggle read the row's `hidden` back, so every click saw "open" and closed it. Fixed in
   1.174.1 below; re-check this box on that build.
-- [ ] **New lines still arrive.** With those rows open, change something that audits (save a
+  **Confirmed 2026-10-30 on 1.174.1:** two rows stayed open for over 90 s.
+- [x] **New lines still arrive.** With those rows open, change something that audits (save a
   setting, edit a device group) in another tab. The new line appears at the top within a few
-  seconds, and the two rows are still open below it.
+  seconds, and the two rows are still open below it. *Confirmed 2026-10-30 with a Remote
+  session in another tab: five lines arrived above the two open rows.*
 - [ ] **Security timing stays private.** As an operator with *View audit log* but not *View
   security audit*, keep the Audit Log open while somebody else signs in or opens a Remote
   session. The list does not refresh. An operator holding both sees the security line arrive.
@@ -486,10 +513,11 @@ editor phase 3)
   gpedit by hand in User Configuration: only FleetHub's go.
 
 **Hub 1.174.1: Details opens again, and dropdowns stay open under a live update**
-- [ ] **Details.** On the Audit Log, **Details** opens a row on the first click and *Hide*
-  closes it; then the *Open stays open* check under 1.171.1 above.
-- [ ] **Details under a filter.** Open a row, filter the Actor column to someone else: the row
+- [x] **Details.** On the Audit Log, **Details** opens a row on the first click and *Hide*
+  closes it; then the *Open stays open* check under 1.171.1 above. *Confirmed 2026-10-30.*
+- [x] **Details under a filter.** Open a row, filter the Actor column to someone else: the row
   and its Details go together. Clear the filter: it is back, still open.
+  *Confirmed 2026-10-30.*
 - [ ] **Backup dropdowns.** On Fleet tasks → Backup, while a hub backup runs (or `running` is
   shown), open the time picker under *At set times* and leave it open 15 s; then the *When to
   back up* and *Destination* lists. None closes by itself (before: every ~4 s, from the run
@@ -497,6 +525,18 @@ editor phase 3)
 - [ ] **Any page.** Open a dropdown on a page with live data (Inventory's filters, a machine's
   primary sensor) while machines report: it stays open. Leave the field and the page catches
   up within about 2 s.
+  **Failed 2026-10-30 on 1.174.1:** Inventory's row **⋯** menu closes within about 5 s, with
+  focus still on its *Open* item. `inventory.js` watches `status` with no `busy()`, and
+  `render()` calls `closeMenu()` on every refresh. The *Filters* panel and the device-group
+  list stayed open. Fixed in 1.175.1 below; re-check this box on that build.
+
+**Hub 1.175.1: the Devices row menu stays open under a live update**
+Inventory's live refresh now waits while a row's **⋯** menu is open. Rejected: re-pointing the
+open menu at the re-rendered row's button, which would keep items built from the old row (Wake
+for a PC that has since come online).
+- [ ] **Row menu.** On Devices, with machines reporting, open a row's **⋯** menu and leave it
+  15 s: it stays open. Click elsewhere: it closes, and the list catches up within a few
+  seconds (a status dot or *Last seen* changes). Then the *Any page* check under 1.174.1.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
