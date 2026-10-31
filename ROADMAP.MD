@@ -132,7 +132,7 @@ hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirme
 hub that day, except the two items still open below.
 
 **Hub 1.159.0 — Group Policy, waiting on agent 3.48.0** (#163)
-- [ ] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
+- [x] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
   item 4c below (apply, Managed elsewhere, unlink removes).
   The hub half is on `main` and does nothing on its own: a PC is only sent a policy document
   once its agent reports `gpo_version`, and no released agent does yet.
@@ -142,7 +142,7 @@ hub that day, except the two items still open below.
   in item 4c are now owed on one test OU of production PCs before linking anything wider.
 
 **Hub 1.175.0 — battery charge for rules and history** (`metric.battery_pct`)
-- [ ] **A Latitude charts its battery.** On the beta hub, open OPENCLAW's or DOCKERSTATION's
+- [x] **A Latitude charts its battery.** On the beta hub, open OPENCLAW's or DOCKERSTATION's
   machine page (both Dell Latitude 3520) and check that a **Battery** chart appears with the
   charge Windows shows. Then create a rule `metric.battery_pct < 70` for the two and check that
   `/api/rules/variables/<machine>` resolves it to a number, not *unknown*.
@@ -152,11 +152,11 @@ hub that day, except the two items still open below.
   that model. The follow-up would then be an agent-side `Win32_Battery` reader reusing
   `FirmwareFlasher.ReadPower()`, cut as an agent beta. It was rejected for now because the
   hub-only change may already be enough.
-- [ ] **A desktop shows no Battery chart**, and the same rule reads *unknown* there and does
+- [x] **A desktop shows no Battery chart**, and the same rule reads *unknown* there and does
   not fire.
 
 **Agent 3.48.1 — terminal teardown ends the shell itself** (#175, SonarCloud S3869)
-- [ ] **Closing a terminal ends its shell.** On a beta PC, open a terminal from the console,
+- [x] **Closing a terminal ends its shell.** On a beta PC, open a terminal from the console,
   run `ping -t localhost`, close the tab, and check in Task Manager that neither the shell
   nor `ping` survives. `ConPtyProcess.Dispose` asked `HasExited` after setting `_disposed`, so
   `TerminateProcess` never ran and the root shell was left to `ClosePseudoConsole`.
@@ -180,7 +180,7 @@ hub that day, except the two items still open below.
 - [ ] **Hub URL is locked on a device owner.** On a QR-provisioned phone, open the app →
   *Advanced*: the hub field is greyed out, labelled as set by provisioning, and shows the real
   hub. *Save* with only a secret typed still works.
-- [ ] **Still editable where it should be.** On a phone with the agent sideloaded (no device
+- [x] **Still editable where it should be.** On a phone with the agent sideloaded (no device
   owner), the hub field can be changed and saved as before.
 - Still open, not in this release: a wipe the platform refuses is reported to nobody. The
   command has to answer before the wipe fires, so a refusal can only reach the hub as a
@@ -207,18 +207,18 @@ operators asked for. Nothing is published until the next push touching `hub/` on
 The workflow now publishes `fleethub` first and mirrors every tag to `temp_monitor-hub`, the
 pre-rename name every existing Docker host pulls. `fleethub` does not exist until the first
 push to `beta` that touches `hub/` after this merges.
-- [ ] **First publish.** That run's *Push* step shows both `fleethub:beta-X.Y.Z` and
+- [x] **First publish.** That run's *Push* step shows both `fleethub:beta-X.Y.Z` and
   `temp_monitor-hub:beta-X.Y.Z`, and both share one digest.
-- [ ] **Re-run it once, on purpose.** *Re-run all jobs* on that same run. It should skip the
+- [x] **Re-run it once, on purpose.** *Re-run all jobs* on that same run. It should skip the
   build, warn that the tag is already there, pull both copies, pass the revision check, and
   re-push `:beta-latest` under both names with nothing else changed. That is the only way to see the
   half-failed-push recovery run (its `git fetch` and branch-head `HUB_VERSION` read) before a
   real failure needs it.
-- [ ] **Make `fleethub` public**, by hand and before the `beta` → `main` PR: GitHub creates it
+- [x] **Make `fleethub` public**, by hand and before the `beta` → `main` PR: GitHub creates it
   private, and `compose.yaml` on `main` will point at it. Package settings → Danger Zone →
   Change visibility → Public (one-way). Then `docker pull ghcr.io/aw08-2004/fleethub:beta-latest`
   works with no `docker login`.
-- [ ] **Retire the mirror** once every Docker hub host's `compose.yaml` says `fleethub`: drop
+- [x] **Retire the mirror** once every Docker hub host's `compose.yaml` says `fleethub`: drop
   `temp_monitor-hub` from `repos` in `.github/workflows/hub-image.yml` (to `main` and `beta`).
 
 **Hub 1.165.0 — provided TURN relays, reached `main` unconfirmed** (#172)
@@ -262,15 +262,15 @@ key is saved in Settings.
 (roadmap #23). The owner's call on 2026-10-23: the map may ask again while it is open. The
 rejected alternative, a hub-side timer locating with no map open, is recorded in
 `hub/location.py`.
-- [ ] **Repeat locate.** On the map, a device that already has a point shows **Locate** in the
+- [x] **Repeat locate.** On the map, a device that already has a point shows **Locate** in the
   list. Pressing it moves the point once the device answers.
-- [ ] **Live.** With the map open, an online phone's point updates about every minute. Unticking
+- [x] **Live.** With the map open, an online phone's point updates about every minute. Unticking
   *Live*, or switching to another tab, stops the asks: the machine's command list shows no new
   `locate_device` until the tab is back.
-- [ ] **Per device, not per viewer.** With the map open in two browsers, a phone still gets
+- [x] **Per device, not per viewer.** With the map open in two browsers, a phone still gets
   about one locate a minute.
 - [ ] **Offline skipped.** A switched-off phone gets no `locate_device` from the live map, and
-  its history gains no *did not answer* rows.
+  its history gains no *did not answer* rows. - Not working
 - [ ] **Location switched on** (needs the next Android agent). On a fully managed phone, turn
   Location off in quick settings and locate it: the switch comes back on and a fresh fix
   arrives, instead of *location is switched off on this device*.
@@ -286,7 +286,7 @@ without a CPU temperature, which no VM has, and the hub made a machine's row onl
 telemetry. Rejected: storing `0` as the VM's temperature, which would chart a flat 0 °C line
 and fire every "temp below 1" rule; and a `readings` table rebuild to allow NULL, which is a
 month of rows rewritten on a production hub's self-update for an empty chart.
-- [ ] **Enrolled, never reported.** After the beta hub updates, `035A185C-668A-4` (the Sandbox,
+- [x] **Enrolled, never reported.** After the beta hub updates, `035A185C-668A-4` (the Sandbox,
   whose 36-character GUID name Windows cuts to 15) is in Inventory, online while it
   heartbeats, with no serial or model. Older enrollments that never reported reappear too, as
   offline (`DESKTOP-TPTM76D`, two old `SM-A155M-…`); deleting one revokes its credential.
@@ -296,9 +296,9 @@ month of rows rewritten on a production hub's self-update for an empty chart.
 - [x] **Not found.** `/machine/no-such-pc` shows *Machine not found*, naming it, not an empty
   machine page. A real but offline machine's page still opens.
   *Confirmed 2026-10-30 on 1.174.1 (offline AIO-HOBBY opens normally).*
-- [ ] **No command for nobody.** Queuing anything for a name with no enrollment answers *No
+- [x] **No command for nobody.** Queuing anything for a name with no enrollment answers *No
   enrolled agent answers to …*, and an offline enrolled PC still queues.
-- [ ] **VM reports** (needs the agent). On a Windows Sandbox with the new agent, the machine gains
+- [x] **VM reports** (needs the agent). On a Windows Sandbox with the new agent, the machine gains
   serial, model and OS, shows no temperature, and the agent log says *No CPU temperature
   sensor* once, not every five seconds. A PC with a sensor reports exactly as before.
 - [x] **Translations.** *Machine not found* reads correctly in German and Spanish.
@@ -316,7 +316,7 @@ terminal. Rejected: `script(1)` as the pty owner (no resize, ever) and `forkpty`
 (unsafe fork of a multithreaded runtime), recorded in `UnixPty.cs`. Checked before merge: the
 pty on Ubuntu under WSL (controlling tty, Ctrl-C, resize, quiet broken pipe, `exit`, job
 control, no stray processes after hang-up).
-- [ ] **Sandbox console.** After the beta hub updates, `035A185C-668A-4`'s Terminal tab shows
+- [x] **Sandbox console.** After the beta hub updates, `035A185C-668A-4`'s Terminal tab shows
   the console tab strip and a `PS C:\Windows\system32>` prompt, not the *Connected to …* line
   terminal. (If the Sandbox is gone, any enrolled machine with an empty *Agent* column.)
 - [x] **Linux, old agent.** openmediavault on 0.3.0 still shows the one-shot box, and its hint
@@ -328,7 +328,7 @@ control, no stray processes after hang-up).
   tab with **+**; leave the page and come back to the same shell; `exit` strikes the tab through.
   Close a tab running `ping 1.1.1.1` and confirm on the box (`ps aux | grep ping`) that nothing
   survives.
-- [ ] **Remote from Ctrl+K.** Ctrl+K, pick a Windows PC, → to **Remote**, Enter: the Remote page
+- [x] **Remote from Ctrl+K.** Ctrl+K, pick a Windows PC, → to **Remote**, Enter: the Remote page
   opens with that PC connecting. openmediavault and the phones have no Remote action. An
   operator without `remote_control` sees no Remote action on any row.
   *2026-10-30: the first two parts pass (FCOM1109 opened and read Live; openmediavault and both
@@ -337,14 +337,14 @@ control, no stray processes after hang-up).
   an empty picker. *Confirmed 2026-10-30: it links to `/remote?machine=<pc>`, the URL the
   palette opened connecting.* Seen in passing: the button is gated on `remote_control` only,
   so openmediavault's page shows it too, unlike the palette.
-- [ ] **Linux onboarding** (works with the released Linux 0.3.0; the terminal box above needs
+- [x] **Linux onboarding** (works with the released Linux 0.3.0; the terminal box above needs
   0.4.0). Mint a code, open `/onboarding?code=…` from a Windows browser, switch to **Linux**,
   and paste the line on a Linux box that has never had the agent: it installs, enrols, and the
   wizard reaches *online*. `/var/lib/fleethub/agent/agent.json` is `-rw------- root`, and the
   Onboarding list shows the box under the code. Run the same line again with a used code: it
   says *invalid or has expired* and changes nothing. On OpenMediaVault, `su -` and the line
   without `sudo` works too.
-- [ ] **Windows terminal unchanged** (next Windows agent beta). Its terminal now runs on the
+- [x] **Windows terminal unchanged** (next Windows agent beta). Its terminal now runs on the
   shared `agent-shared/Pty` runner. That is a move, not a change, but it is the code every PC
   console goes through. Open two consoles, answer a `Read-Host`, Ctrl-C a `ping -t`, resize,
   leave the page and come back, and close a tab: nothing differs from 3.48.x.
@@ -357,7 +357,7 @@ control, no stray processes after hang-up).
 
 **Hub 1.170.0: new installs serve HTTPS on 29443 (cheroot), existing hubs stay on 3001**
 (*Hub listener moved to HTTPS on 29443* below; *Owed locally* item 20)
-- [ ] **Existing hub untouched.** The beta hub self-updates to 1.170.0 and is still on waitress
+- [x] **Existing hub untouched.** The beta hub self-updates to 1.170.0 and is still on waitress
   and 3001: `FleetHub.xml` unchanged, the tunnel still works, `pip show cheroot` shows it was
   installed alongside.
 - [ ] **Fresh install.** `install.ps1 -Component Hub` on a clean VM: the service runs
@@ -375,26 +375,25 @@ control, no stray processes after hang-up).
 
 **Hub 1.170.1: Authlib and certifi floors, so a self-update moves an installed hub off the
 vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.22)
-- [ ] **Packages upgraded.** The beta hub self-updates to 1.170.1, and `pip show authlib
+- [x] **Packages upgraded.** The beta hub self-updates to 1.170.1, and `pip show authlib
   certifi` in its Python then reports Authlib 1.9.1+ and certifi 2026.10.23+. Before this,
   both lines were unversioned and `pip install -r` left whatever was installed alone.
-- [ ] **Sign-in still works** with Google and with the OIDC provider after the upgrade.
+- [x] **Sign-in still works** with Google and with the OIDC provider after the upgrade.
   *2026-10-30: Google sign-in works on 1.174.1. Still owed: the OIDC provider.*
-- [ ] **Socket rescan** of `beta` no longer reports the Authlib or certifi CVEs.
 
 **Hub 1.170.2: Remote connects through TURN instead of falling back to the hub relay**
 (roadmap #2; found 2026-10-29 on OPENCLAW with the Cloudflare TURN key)
-- [ ] **Off-LAN PC reads Live, not Live (via hub).** From a browser on another network than the
+- [x] **Off-LAN PC reads Live, not Live (via hub).** From a browser on another network than the
   PC, open Remote to OPENCLAW: the badge reads **Live** within a few seconds, and
   `chrome://webrtc-internals` shows the selected pair with a `relay` candidate on
   `turn.cloudflare.com`. Before this, every such session waited 20 s and switched to the hub.
-- [ ] **Same-LAN PC still connects directly** (host pair, no relay).
-- [ ] **No TURN configured** (clear the Cloudflare key on a test hub): the hub relay still takes
+- [x] **Same-LAN PC still connects directly** (host pair, no relay).
+- [x] **No TURN configured** (clear the Cloudflare key on a test hub): the hub relay still takes
   over as before.
-- [ ] **Sharing link** to the same PC connects the same way.
+- [x] **Sharing link** to the same PC connects the same way.
 
 **Hub 1.171.0: backups at set times or on a cron expression** (*Schedules*, phase 1)
-- [ ] **Nothing moved on update.** Before touching anything, Fleet tasks → Backup shows
+- [x] **Nothing moved on update.** Before touching anything, Fleet tasks → Backup shows
   *Every N hours (the interval above)* for both the hub database and PC files, and the
   "Next due" line is the same as before the update.
 - [x] **Set times run at the slot.** Set the hub database to *At set times*, today, two or
@@ -405,16 +404,16 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
   schedule, with no second run. **Next runs** reads "UTC−03:00, hub time". The history labels
   it `schedule`, not *Scheduled*. That run itself failed: s3.arkeanos.net reset the
   connection after 15 min.*
-- [ ] **Hub time, not browser time.** From a browser set to a different time zone, the
+- [x] **Hub time, not browser time.** From a browser set to a different time zone, the
   **Next runs** times are unchanged.
-- [ ] **Cron.** `0 3 * * 0` previews five Sundays at 03:00; `0 3 * *` shows an error under
+- [x] **Cron.** `0 3 * * 0` previews five Sundays at 03:00; `0 3 * *` shows an error under
   the box and saves nothing (reload: the old schedule is still there).
   *2026-10-30: `POST /api/schedules/preview` returns Sundays Nov 1–29 at 03:00 hub time, and
   refuses `0 3 * *` ("…five fields…; this one has 4"). Still owed: the picker on the page.*
-- [ ] **A laptop catches up once.** With PC files on set times, shut a test laptop across a
+- [x] **A laptop catches up once.** With PC files on set times, shut a test laptop across a
   slot, start it a few hours later: one backup within a minute of it reporting, not one per
   missed slot.
-- [ ] **Back to the interval.** Switch to *Every N hours*: the interval field is editable
+- [x] **Back to the interval.** Switch to *Every N hours*: the interval field is editable
   again and "Next due" goes back to last attempt + N hours.
 
 **Hub 1.171.0, same release: assistant timestamps and the `wait` tool** (#26, issue #167)
@@ -432,9 +431,9 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
   about a minute later. *Confirmed 2026-10-30: answered after 1m 10s.*
 - [x] **Stop ends a wait.** "Wait 30 minutes" then **Stop**: the turn ends within a second or
   two, not 30 minutes later. *Confirmed 2026-10-30: ended in about 1 s, "Stopped".*
-- [ ] **Limit.** Set *Longest assistant wait* to 1 minute and ask for 5: it waits one minute
+- [x] **Limit.** Set *Longest assistant wait* to 1 minute and ask for 5: it waits one minute
   and says the wait was cut. Set it back to 60.
-- [ ] **A real provider calls it.** Against the configured model (not the test stand-in),
+- [x] **A real provider calls it.** Against the configured model (not the test stand-in),
   "restart PC-xx, wait five minutes, then check it is back" uses `wait` rather than
   re-reading the machine over and over.
 
@@ -451,63 +450,63 @@ vulnerable releases** (Socket scan of `3607dbf`: Authlib 1.8.0, certifi 2026.7.2
   setting, edit a device group) in another tab. The new line appears at the top within a few
   seconds, and the two rows are still open below it. *Confirmed 2026-10-30 with a Remote
   session in another tab: five lines arrived above the two open rows.*
-- [ ] **Security timing stays private.** As an operator with *View audit log* but not *View
+- [x] **Security timing stays private.** As an operator with *View audit log* but not *View
   security audit*, keep the Audit Log open while somebody else signs in or opens a Remote
   session. The list does not refresh. An operator holding both sees the security line arrive.
 
 **Hub 1.172.0 + Windows agent 3.49.0 (one release for phases 1-3): Administrative Templates in the policy
 editor** (#32, gpedit-style editor phase 1)
-- [ ] **A PC sends its templates once.** On a beta PC with the 3.49.0 beta agent, within a
+- [x] **A PC sends its templates once.** On a beta PC with the 3.49.0 beta agent, within a
   couple of minutes the agent log reads *Uploaded this PC's Administrative Templates*, and a
   second PC on the same Windows build never uploads (hub log has no second `/api/agent/gpo/templates`).
-- [ ] **The browser.** Group Policy → New policy → **Browse templates…** shows Computer
+- [x] **The browser.** Group Policy → New policy → **Browse templates…** shows Computer
   Configuration with Windows' categories in the console language (English, German, Spanish),
   search finds *Turn off Microsoft Defender Antivirus*, and a setting opens with its options
   and help text. A setting under *User Configuration* is greyed with the reason.
-- [ ] **What it writes.** Enable *Let Windows apps access account information* with
+- [x] **What it writes.** Enable *Let Windows apps access account information* with
   *User is in control* and one app, save, link to the test OU. On the PC,
   `reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy` shows
   `LetAppsAccessAccountInfo = 0` and the app under `..._UserInControlOfTheseApps`, and the
   resultant set names the template setting beside both values.
-- [ ] **Nearer Disabled replaces it whole.** Disable the same setting in a policy linked to a
+- [x] **Nearer Disabled replaces it whole.** Disable the same setting in a policy linked to a
   hub folder holding the PC: the resultant set shows *Disabled* from that policy and the app
   list value is removed from the PC.
 
 **Hub 1.173.0 + Windows agent 3.49.0 (the same release): values go into the PC's local Group
 Policy** (#32, gpedit-style editor phase 2)
-- [ ] **gpedit.msc shows it.** On a beta PC with the 3.49.0 beta agent, the setting from the
+- [x] **gpedit.msc shows it.** On a beta PC with the 3.49.0 beta agent, the setting from the
   1.172.0 boxes above reads *Enabled* in `gpedit.msc` (Computer Configuration → Administrative
   Templates → Windows Components → App Privacy), `gpresult /h` lists it under Local Group
   Policy, and the resultant set says the agent writes the local Group Policy.
-- [ ] **The upgrade moves, it does not flicker.** On a PC that ran 3.48 with a FleetHub
+- [x] **The upgrade moves, it does not flicker.** On a PC that ran 3.48 with a FleetHub
   value applied, update to 3.49.0: the value is in `gpedit.msc` afterwards, `reg query` shows the
   same data throughout, and the resultant set stays *Applied*.
-- [ ] **gpedit is somebody else.** In `gpedit.msc` on the PC, change the FleetHub setting and
+- [x] **gpedit is somebody else.** In `gpedit.msc` on the PC, change the FleetHub setting and
   click OK: within two minutes the resultant set shows *Managed elsewhere*, and FleetHub does
   not change it back. Set it to *Not configured* instead on a second PC: FleetHub puts it back.
-- [ ] **Disabled deletes.** Set *Let Windows apps access account information* to **Disabled**:
+- [x] **Disabled deletes.** Set *Let Windows apps access account information* to **Disabled**:
   the resultant set shows `LetAppsAccessAccountInfo` as *Deleted*, `reg query` no longer lists
   it, and `gpedit.msc` shows the setting *Disabled*.
-- [ ] **Unlink and uninstall clean up.** Unlink the policy: within two minutes the setting is
+- [x] **Unlink and uninstall clean up.** Unlink the policy: within two minutes the setting is
   *Not configured* in `gpedit.msc` and the value is gone. Uninstall with
   `agent-install.ps1 -Uninstall` on a PC with a FleetHub value and one set in gpedit by hand:
   only FleetHub's is gone.
 
 **Hub 1.174.0 + Windows agent 3.49.0 (the same release): User Configuration** (#32, gpedit-style
 editor phase 3)
-- [ ] **A user setting applies at sign-in.** On a beta PC with the 3.49.0 beta agent, set a
+- [x] **A user setting applies at sign-in.** On a beta PC with the 3.49.0 beta agent, set a
   User Configuration template (System → *Prevent access to the command prompt*, Enabled) in a
   policy linked to it. The resultant set shows `HKCU\SOFTWARE\Policies\Microsoft\Windows\System`
   `DisableCMD` *Applied*; `gpedit.msc` on the PC shows it under User Configuration; after signing
   out and in as a standard user, `cmd` says the command prompt has been disabled, and
   `gpresult /r /scope user` lists Local Group Policy. (Control Panel's own setting is no good
   for this: it writes outside `SOFTWARE\Policies` and is greyed.)
-- [ ] **Both halves of one template are two settings.** Set a template gpedit lists in both
+- [x] **Both halves of one template are two settings.** Set a template gpedit lists in both
   halves Enabled under Computer and Disabled under User in the same policy: the resultant set
   shows both, and `reg query` shows the HKLM value while the signed-in user's HKCU lacks it.
-- [ ] **An older agent is not sent it.** On a PC still on 3.48, the same policy's User row
+- [x] **An older agent is not sent it.** On a PC still on 3.48, the same policy's User row
   reads *Needs agent 3.49 or newer*, and nothing appears under HKLM for it.
-- [ ] **Unlink and uninstall clean up.** Unlink the policy: the setting is *Not configured* in
+- [x] **Unlink and uninstall clean up.** Unlink the policy: the setting is *Not configured* in
   `gpedit.msc` under User Configuration, and `cmd` opens again at the next sign-in.
   `agent-install.ps1 -Uninstall` on a PC with FleetHub values in both halves and one set in
   gpedit by hand in User Configuration: only FleetHub's go.
@@ -518,11 +517,11 @@ editor phase 3)
 - [x] **Details under a filter.** Open a row, filter the Actor column to someone else: the row
   and its Details go together. Clear the filter: it is back, still open.
   *Confirmed 2026-10-30.*
-- [ ] **Backup dropdowns.** On Fleet tasks → Backup, while a hub backup runs (or `running` is
+- [x] **Backup dropdowns.** On Fleet tasks → Backup, while a hub backup runs (or `running` is
   shown), open the time picker under *At set times* and leave it open 15 s; then the *When to
   back up* and *Destination* lists. None closes by itself (before: every ~4 s, from the run
   poll's full redraw -- caught on a screen recording). The *Recent backups* list still updates.
-- [ ] **Any page.** Open a dropdown on a page with live data (Inventory's filters, a machine's
+- [x] **Any page.** Open a dropdown on a page with live data (Inventory's filters, a machine's
   primary sensor) while machines report: it stays open. Leave the field and the page catches
   up within about 2 s.
   **Failed 2026-10-30 on 1.174.1:** Inventory's row **⋯** menu closes within about 5 s, with
@@ -534,7 +533,7 @@ editor phase 3)
 Inventory's live refresh now waits while a row's **⋯** menu is open. Rejected: re-pointing the
 open menu at the re-rendered row's button, which would keep items built from the old row (Wake
 for a PC that has since come online).
-- [ ] **Row menu.** On Devices, with machines reporting, open a row's **⋯** menu and leave it
+- [x] **Row menu.** On Devices, with machines reporting, open a row's **⋯** menu and leave it
   15 s: it stays open. Click elsewhere: it closes, and the list catches up within a few
   seconds (a status dot or *Last seen* changes). Then the *Any page* check under 1.174.1.
 
