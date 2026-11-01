@@ -112,11 +112,34 @@ def test_other_names_unaffected():
 
 def test_delete_ignores_case():
     print("\n-- a delete removes the agent row and record whatever their case --")
+    unsigned_report("mixed-case-pc")
     fleet.issue_agent_identity(app.DB_PATH, "mixed-case-pc", actor="test")
+    check("the record was stored under the lower-case name", has_record("mixed-case-pc"))
     client.delete("/api/machines/MIXED-CASE-PC", headers=HEADERS)
     with fleet.get_conn(app.DB_PATH) as conn:
         check("the agent row under another case is gone",
               not fleet.live_agent_holds(conn, "MIXED-CASE-PC"))
+    check("...and so is the record", not has_record("mixed-case-pc"))
+
+
+def test_failed_delete_releases_hold():
+    print("\n-- a delete that fails holds nothing: the record it left keeps reporting --")
+    name = "FAILED-DELETE-PC"
+    unsigned_report(name)
+    real = fleet.delete_machine
+
+    def boom(*a, **kw):
+        raise RuntimeError("test")
+    fleet.delete_machine = boom
+    try:
+        client.delete(f"/api/machines/{name}", headers=HEADERS)
+    except RuntimeError:
+        pass
+    finally:
+        fleet.delete_machine = real
+    check("the name is not held", not app._deleted_name_held(name))
+    check("...so its unsigned reports are still accepted",
+          unsigned_report(name).status_code == 200)
 
 
 def main():
@@ -124,6 +147,7 @@ def main():
     test_hold_expires()
     test_other_names_unaffected()
     test_delete_ignores_case()
+    test_failed_delete_releases_hold()
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
 

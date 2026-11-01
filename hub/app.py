@@ -5680,6 +5680,11 @@ def _hold_deleted_name(machine):
             _deleted_name_holds.pop(name, None)
 
 
+def _release_deleted_name(machine):
+    with _deleted_name_holds_lock:
+        _deleted_name_holds.pop(str(machine or "").strip().lower(), None)
+
+
 def _deleted_name_held(machine):
     with _deleted_name_holds_lock:
         ts = _deleted_name_holds.get(str(machine or "").strip().lower())
@@ -6793,20 +6798,28 @@ def delete_machine(machine):
     # month of readings made the DELETE below slow enough to queue one. See _ingest_gate.
     # The hold goes on before the gate is taken, so no unsigned report that queues behind the
     # delete can rebuild the record either. See _deleted_name_holds.
+    # A delete that raises before the record is gone releases the hold again: the record is
+    # still there, so holding the name would only drop an hour of a live PC's readings for a
+    # delete that never happened (review on PR #200).
     _hold_deleted_name(machine_name)
-    with _ingest_gate(machine_name):
-        decommissioned = fleet.delete_machine(
-            DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
-        # Under the gate, so every reading a finished report left queued is behind the mark.
-        drop_queued_readings(machine_name)
-    with get_db_conn() as conn:
-        conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
-        # NOCASE, because onboarding asks _machine_record with NOCASE: a record stored as
-        # `desktop-x` would survive a delete of `DESKTOP-X` and keep refusing every code.
-        # Not on readings above -- idx_readings_machine_ts is BINARY, and a NOCASE match
-        # there is a full scan of the biggest table, under the delete the gate comment warns
-        # is already slow. A leftover reading is history, not identity.
-        conn.execute("DELETE FROM machine_info WHERE machine = ? COLLATE NOCASE", (machine_name,))
+    try:
+        with _ingest_gate(machine_name):
+            decommissioned = fleet.delete_machine(
+                DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
+            # Under the gate, so every reading a finished report left queued is behind the mark.
+            drop_queued_readings(machine_name)
+        with get_db_conn() as conn:
+            conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
+            # NOCASE, because onboarding asks _machine_record with NOCASE: a record stored as
+            # `desktop-x` would survive a delete of `DESKTOP-X` and keep refusing every code.
+            # Not on readings above -- idx_readings_machine_ts is BINARY, and a NOCASE match
+            # there is a full scan of the biggest table, under the delete the gate comment
+            # warns is already slow. A leftover reading is history, not identity.
+            conn.execute("DELETE FROM machine_info WHERE machine = ? COLLATE NOCASE",
+                         (machine_name,))
+    except BaseException:
+        _release_deleted_name(machine_name)
+        raise
     # Drop the hostname from every permission group's scope too. If the name is later
     # reused by a different physical box, it must not silently inherit this one's
     # access grants -- a stale grant is invisible until it's abused.
