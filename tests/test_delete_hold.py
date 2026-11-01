@@ -14,6 +14,7 @@ Imports app the way test_decommission.py does (env + cwd set before import).
 import os
 import sys
 import tempfile
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 
@@ -126,17 +127,11 @@ def test_failed_delete_releases_hold():
     print("\n-- a delete that fails holds nothing: the record it left keeps reporting --")
     name = "FAILED-DELETE-PC"
     unsigned_report(name)
-    real = fleet.delete_machine
-
-    def boom(*a, **kw):
-        raise RuntimeError("test")
-    fleet.delete_machine = boom
-    try:
-        client.delete(f"/api/machines/{name}", headers=HEADERS)
-    except RuntimeError:
-        pass
-    finally:
-        fleet.delete_machine = real
+    with mock.patch.object(fleet, "delete_machine", side_effect=RuntimeError("test")):
+        try:
+            client.delete(f"/api/machines/{name}", headers=HEADERS)
+        except RuntimeError:
+            pass
     check("the name is not held", not app._deleted_name_held(name))
     check("...so its unsigned reports are still accepted",
           unsigned_report(name).status_code == 200)

@@ -6798,9 +6798,15 @@ def delete_machine(machine):
     # month of readings made the DELETE below slow enough to queue one. See _ingest_gate.
     # The hold goes on before the gate is taken, so no unsigned report that queues behind the
     # delete can rebuild the record either. See _deleted_name_holds.
-    # A delete that raises before the record is gone releases the hold again: the record is
-    # still there, so holding the name would only drop an hour of a live PC's readings for a
-    # delete that never happened (review on PR #200).
+    # A delete that raises releases the hold again (review on PR #200). Usually it raised
+    # before anything went, and holding the name would drop an hour of a live PC's readings
+    # for a delete that never happened. If it raised after fleet.delete_machine committed, the
+    # agent rows are gone but the record may not be, and an unsigned agent can rebuild it --
+    # the old race, which is the better failure than refusing a PC the operator still has.
+    #
+    # The hold is set whether or not the name had a record, deliberately. Knowing that first
+    # needs a read outside the gate, and a name nothing reports under loses nothing by being
+    # held: every name that reports has a record, so a typo holds a name no PC uses.
     _hold_deleted_name(machine_name)
     try:
         with _ingest_gate(machine_name):
