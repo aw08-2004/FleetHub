@@ -1383,7 +1383,7 @@ def _decommission_rows(conn, machine, actor, now):
     machine with the box ticked means the operator wants it gone as well.
     """
     rows = conn.execute(
-        "SELECT agent_id, token_hash FROM agents WHERE machine = ?", (machine,)
+        "SELECT agent_id, token_hash FROM agents WHERE machine = ? COLLATE NOCASE", (machine,)
     ).fetchall()
     for row in rows:
         conn.execute(
@@ -1721,7 +1721,9 @@ def delete_machine(db_path, machine, uninstall_actor=None):
                 f"DELETE FROM command_output_chunks WHERE command_id IN ({placeholders})", cmd_ids
             )
         conn.execute("DELETE FROM commands WHERE machine = ?", (machine,))
-        conn.execute("DELETE FROM agents WHERE machine = ?", (machine,))
+        # NOCASE to match live_agent_holds, which onboarding asks: an agent row stored as
+        # `desktop-x` survived a delete of `DESKTOP-X` and kept answering "already enrolled".
+        conn.execute("DELETE FROM agents WHERE machine = ? COLLATE NOCASE", (machine,))
     if told:
         audit(db_path, actor=uninstall_actor, action="agent.decommission", level=LEVEL_SECURITY,
               target=machine, detail={"agent_ids": told})
