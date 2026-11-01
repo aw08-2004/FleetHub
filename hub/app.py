@@ -5665,7 +5665,8 @@ UNSIGNED_REPORTER_WINDOW_SECONDS = 86400
 # held: an agent that enrolls (by code or by secret) reports at once.
 #
 # In memory, like _unsigned_reporters: a restart inside the hour drops the hold, and the
-# worst that costs is the old race, once.
+# worst that costs is the old race, once. One dict is enough because the hub is one process
+# -- serve.py runs threads, never workers -- so every report sees the delete's hold.
 _deleted_name_holds = {}
 _deleted_name_holds_lock = threading.Lock()
 DELETED_NAME_HOLD_SECONDS = 3600
