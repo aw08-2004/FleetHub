@@ -173,7 +173,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.175.1"
+HUB_VERSION = "1.175.2"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -5642,6 +5642,50 @@ _unsigned_reporters_lock = threading.Lock()
 UNSIGNED_REPORTER_WINDOW_SECONDS = 86400
 
 
+# Names an operator deleted recently: lower-cased name -> epoch of the delete. While a name is
+# here, an UNSIGNED report under it is refused, so the record cannot come back before an
+# onboarding code claims the name.
+#
+# **Without this, a PC whose BIOS serial is a placeholder could not be re-onboarded at all.**
+# onboarding._check_known_machine refuses a name with history unless the PC presents the
+# serial that history reported, and a placeholder ("System Serial Number", "Default string")
+# binds nothing, so for those PCs the only way in is a name with no record. The operator
+# deletes the record, and the onboarding script then installs and STARTS the agent before it
+# spends the code -- it has to, a failed install must not burn a one-time code -- and that
+# agent's first unsigned report rebuilds the record a few seconds before the redeem asks. The
+# operator saw "could not be matched" after every delete, with nothing on the page saying why
+# (DESKTOP-DEQ7B5D, 2026-10-31).
+#
+# Rejected: a -NoStart switch for agent-install.ps1. The script fetches the installer from
+# main, so a hub on beta could not rely on the switch existing, and an unknown parameter
+# fails the install outright. Also rejected: letting onboarding take an unsigned-only record
+# that has no usable serial -- that is the takeover route PR #119's review closed, in a
+# narrower coat. The hold only stops unauthenticated writes for a while after an operator
+# said "this record is gone", which is what the delete meant anyway. Signed reports are not
+# held: an agent that enrolls (by code or by secret) reports at once.
+#
+# In memory, like _unsigned_reporters: a restart inside the hour drops the hold, and the
+# worst that costs is the old race, once.
+_deleted_name_holds = {}
+_deleted_name_holds_lock = threading.Lock()
+DELETED_NAME_HOLD_SECONDS = 3600
+
+
+def _hold_deleted_name(machine):
+    now = int(time.time())
+    with _deleted_name_holds_lock:
+        _deleted_name_holds[str(machine).strip().lower()] = now
+        for name in [m for m, ts in _deleted_name_holds.items()
+                     if ts < now - DELETED_NAME_HOLD_SECONDS]:
+            _deleted_name_holds.pop(name, None)
+
+
+def _deleted_name_held(machine):
+    with _deleted_name_holds_lock:
+        ts = _deleted_name_holds.get(str(machine or "").strip().lower())
+    return ts is not None and ts >= int(time.time()) - DELETED_NAME_HOLD_SECONDS
+
+
 def _note_unsigned_reporter(machine):
     now = int(time.time())
     with _unsigned_reporters_lock:
@@ -5723,6 +5767,12 @@ def _report_refusal(outcome, reason, machine):
                             "reason": "unsigned"}), 401
         if settings.get_bool(DB_PATH, "security.require_enrolled_telemetry"):
             return jsonify({"error": "only enrolled agents may report telemetry",
+                            "reason": "unsigned"}), 401
+        # Same answer as the switch above, so an agent treats it exactly as it already
+        # treats that one -- see _deleted_name_holds for why the name is held.
+        if _deleted_name_held(machine):
+            return jsonify({"error": "this machine was just deleted; only an enrolled agent "
+                                     "may report under its name for now",
                             "reason": "unsigned"}), 401
     return None
 
@@ -6741,6 +6791,9 @@ def delete_machine(machine):
     # other order a report that authenticated before the agents went wrote machine_info back
     # after it was deleted, and the PC reappeared as "Online, not enrolled" -- every time a
     # month of readings made the DELETE below slow enough to queue one. See _ingest_gate.
+    # The hold goes on before the gate is taken, so no unsigned report that queues behind the
+    # delete can rebuild the record either. See _deleted_name_holds.
+    _hold_deleted_name(machine_name)
     with _ingest_gate(machine_name):
         decommissioned = fleet.delete_machine(
             DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
@@ -6748,7 +6801,12 @@ def delete_machine(machine):
         drop_queued_readings(machine_name)
     with get_db_conn() as conn:
         conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
-        conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
+        # NOCASE, because onboarding asks _machine_record with NOCASE: a record stored as
+        # `desktop-x` would survive a delete of `DESKTOP-X` and keep refusing every code.
+        # Not on readings above -- idx_readings_machine_ts is BINARY, and a NOCASE match
+        # there is a full scan of the biggest table, under the delete the gate comment warns
+        # is already slow. A leftover reading is history, not identity.
+        conn.execute("DELETE FROM machine_info WHERE machine = ? COLLATE NOCASE", (machine_name,))
     # Drop the hostname from every permission group's scope too. If the name is later
     # reused by a different physical box, it must not silently inherit this one's
     # access grants -- a stale grant is invisible until it's abused.

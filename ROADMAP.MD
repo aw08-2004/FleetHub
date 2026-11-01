@@ -118,7 +118,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-30
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-31
 
 **How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
 `beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.175.1**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.175.2**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -536,6 +536,24 @@ for a PC that has since come online).
 - [x] **Row menu.** On Devices, with machines reporting, open a row's **⋯** menu and leave it
   15 s: it stays open. Click elsewhere: it closes, and the list catches up within a few
   seconds (a status dot or *Last seen* changes). Then the *Any page* check under 1.174.1.
+
+**Hub 1.175.2: a deleted machine's name is held for an hour, so its onboarding code works** (#29)
+A PC whose BIOS serial is a placeholder (*System Serial Number*, *Default string*) could not
+be re-onboarded. Onboarding refuses a name with history unless the PC presents that history's
+serial, and a placeholder binds nothing. The onboarding script starts the agent before it
+spends the code, so that agent's first unsigned report rebuilt the record seconds after every
+delete (DESKTOP-DEQ7B5D, 2026-10-31). For an hour after an operator deletes a machine, the hub
+now refuses unsigned reports under that name. Signed reports are not affected. The delete
+also matches the agent row and the record case-insensitively, as onboarding's checks always
+did. Rejected: a `-NoStart` switch for `agent-install.ps1` (the script fetches it from
+`main`, so a beta hub could not rely on it), and letting a code take an unsigned-only record
+with no usable serial (the takeover PR #119's review closed).
+- [ ] **Re-onboard a placeholder-serial PC.** With *Only accept telemetry from enrolled
+  agents* OFF, delete an unenrolled placeholder-serial PC whose agent is still running, and
+  run its onboarding script straight away. It enrolls; it does not end in *could not be
+  matched*. The PC is back in Devices as enrolled within a minute.
+- [ ] **The hold ends.** Delete an unenrolled PC that keeps its agent running, and do not
+  onboard it. It stays gone for about an hour, then reappears as *Online, not enrolled*.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
