@@ -138,25 +138,45 @@ def test_failed_delete_releases_hold():
 
 
 def test_placeholder_serial_matches_on_uuid_without_a_delete():
-    print("\n-- a placeholder-serial PC that reported its SMBIOS UUID needs no delete at all --")
+    print("\n-- a re-imaged placeholder-serial PC re-onboards on its SMBIOS UUID, no delete --")
     name = "UUID-WHITEBOX"
     uuid = "4C4C4544-0042-3510-8048-B3C04F4E3532"
-    client.post("/api/report", json={"machine": name, "temp": 40.0,
-                                     "serial_number": PLACEHOLDER, "smbios_uuid": uuid})
-    check("the report stored the UUID beside the record",
-          app._machine_record(name).get("smbios_uuid") == uuid.lower())
+    planted = "4C4C4544-0042-3510-8048-B3C04F4E3599"
+    r = client.post("/api/report", json={"machine": name, "temp": 40.0,
+                                         "serial_number": PLACEHOLDER, "smbios_uuid": planted})
+    check("an unsigned report is accepted...", r.status_code == 200 and has_record(name))
+    check("...but stores no UUID: unsigned is anybody, and first writer would win",
+          app._machine_record(name).get("smbios_uuid") is None)
     _, code = onboarding.create_code(app.DB_PATH, "test", actor="test")
+    r = client.post("/api/onboarding/redeem", json={
+        "code": code, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": planted})
+    check("so the planted UUID admits nobody: refused 409 as before", r.status_code == 409)
+
+    client.delete(f"/api/machines/{name}", headers=HEADERS)
+    with app._deleted_name_holds_lock:
+        app._deleted_name_holds.pop(name.lower(), None)
+    first = client.post("/api/onboarding/redeem", json={
+        "code": code, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": uuid}).get_json()
+    signed = client.post("/api/report", json={"machine": name, "temp": 40.0,
+                                              "serial_number": PLACEHOLDER, "smbios_uuid": uuid},
+                         headers={"Authorization": f"Bearer {first['agent_id']}:{first['token']}"})
+    check("enrolled, and its signed report keeps the record",
+          signed.status_code == 200 and app._machine_record(name).get("smbios_uuid")
+          == uuid.lower())
+
+    fleet.revoke_agent(app.DB_PATH, first["agent_id"], actor="test")   # re-imaged
+    _, again = onboarding.create_code(app.DB_PATH, "test", actor="test")
     other = client.post("/api/onboarding/redeem", json={
-        "code": code, "machine": name, "serial": PLACEHOLDER,
-        "smbios_uuid": "4C4C4544-0042-3510-8048-B3C04F4E3599"})
-    check("a different board under the name is still refused 409", other.status_code == 409)
+        "code": again, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": planted})
+    check("a different board under the name is refused 409", other.status_code == 409)
     same = client.post("/api/onboarding/redeem", json={
-        "code": code, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": uuid})
-    check("the PC that reported that UUID enrolls with the same code",
+        "code": again, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": uuid})
+    check("the same board re-onboards with its record still there",
           same.status_code == 200 and same.get_json().get("token"))
     client.delete(f"/api/machines/{name}", headers=HEADERS)
-    check("a delete forgets the UUID with the record", app._machine_record(name) is None
-          and not app.identity.lookup(app.get_db_conn(), name))
+    with app.get_db_conn() as conn:
+        check("a delete forgets the UUID with the record", app._machine_record(name) is None
+              and app.identity.lookup(conn, name) is None)
 
 
 def main():

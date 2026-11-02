@@ -295,6 +295,23 @@ def test_redeem_onto_enrolled_name(db):
                               ).fetchone()
     check("a redeem records the identity it was admitted on", stored and stored[0] == uuid)
 
+    print("\n-- an identity row with no record behind it is not evidence --")
+    other_uuid = "4c4c4544-0042-3510-8048-b3c04f4e3599"
+    _, lab1 = onboarding.create_code(db, "Lab 1")
+    onboarding.redeem_code(db, lab1, "LAB-7", smbios_uuid=uuid, machine_record=lookup)
+    # LAB-7's install failed after the redeem: no machine_info record, agent revoked.
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE agents SET revoked = 1 WHERE machine = 'LAB-7'")
+    _, lab2 = onboarding.create_code(db, "Lab 2")
+    check("another PC can take the name",
+          bool(onboarding.redeem_code(db, lab2, "LAB-7", smbios_uuid=other_uuid,
+                                      machine_record=lookup)[0]))
+    with sqlite3.connect(db) as conn:
+        stored = conn.execute("SELECT smbios_uuid FROM machine_identity WHERE machine = 'LAB-7'"
+                              ).fetchone()
+    check("...and the name now answers to that PC's UUID, not the failed install's",
+          stored and stored[0] == other_uuid)
+
 
 def main():
     db = fresh_db()

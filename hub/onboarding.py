@@ -252,6 +252,7 @@ def create_code(db_path, label, ttl_seconds=DEFAULT_TTL_SECONDS, actor="unknown"
 
 def _check_known_machine(machine, presented, machine_record):
     """Raise NameEnrolled unless this PC may take a name the hub already has records for.
+    Returns whether the name had a record at all.
 
     `machine_record(machine)` is app.py's view of machine_info: None for a name the hub has
     never seen, else {serial, machine_guid, smbios_uuid} as it stored them. `presented` is
@@ -270,22 +271,24 @@ def _check_known_machine(machine, presented, machine_record):
     until an operator deleted the old record.
 
     **The serial is now one of three identifiers** (2026-11-02): the SMBIOS UUID and the
-    Windows MachineGuid let a placeholder-serial whitebox prove it is the PC that reported
-    under the name, and identity.compare decides -- hardware first, the GUID only when the
+    Windows MachineGuid let a placeholder-serial PC prove it is the one that was enrolled
+    under the name before (they are stored from signed reports and redeems only -- see
+    hub/identity.py), and identity.compare decides -- hardware first, the GUID only when the
     hardware has nothing to say. Only SAME admits. DIFFERENT is a second PC that happens to
     share the name, and UNKNOWN is a record with nothing to compare against; both are still
     refused here, because until machines are keyed on something other than their hostname
     (hub/identity.py) admitting a second PC would hand it the first one's record.
     """
     if machine_record is None:
-        return
+        return False
     record = machine_record(machine)
     if record is None:
-        return
+        return False
     known = identity.evidence(record.get("serial"), record.get("machine_guid"),
                               record.get("smbios_uuid"))
     if identity.compare(known, presented) != identity.SAME:
         raise NameEnrolled(NAME_KNOWN_MESSAGE)
+    return True
 
 
 def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_record=None,
@@ -325,7 +328,7 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
         if fleet.live_agent_holds(conn, machine):
             raise NameEnrolled(NAME_ENROLLED_MESSAGE)
         presented = identity.evidence(serial, machine_guid, smbios_uuid)
-        _check_known_machine(machine, presented, machine_record)
+        had_record = _check_known_machine(machine, presented, machine_record)
         claimed = conn.execute(
             "UPDATE onboarding_codes SET redeemed_at = ?, redeemed_machine = ?, redeemed_ip = ? "
             "WHERE code_id = ? AND redeemed_at IS NULL AND revoked_at IS NULL "
@@ -339,8 +342,12 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
                      (agent_id, row["code_id"]))
         # This PC spent a code and passed the identity check, so what it presented is now
         # the name's identity -- including a re-imaged PC's NEW MachineGuid, which a report
-        # could never overwrite (identity.remember is write-once without replace_guid).
-        identity.remember(conn, machine, machine_guid, smbios_uuid, replace_guid=True,
+        # could never overwrite (identity.remember is write-once unless authoritative). A
+        # name with no record starts clean: an identity row with nothing beside it is left by
+        # an earlier redeem whose install never reported, and is not evidence of anything.
+        if machine_record is not None and not had_record:
+            conn.execute("DELETE FROM machine_identity WHERE machine = ?", (machine,))
+        identity.remember(conn, machine, machine_guid, smbios_uuid, authoritative=True,
                           now=now)
 
     fleet.audit_enroll(db_path, machine, agent_id, actor=f"onboarding:{row['label']}",

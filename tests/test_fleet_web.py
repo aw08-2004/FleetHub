@@ -526,6 +526,11 @@ def main():
                   if cmd["id"] == rsid]
         check("the agent still receives the credential it needs",
               pulled and pulled[0]["params"]["ice_servers"][1].get("credential") == "c-secret")
+        with sqlite3.connect(db_path) as conn:
+            trail = conn.execute("SELECT detail_json FROM audit_log WHERE action = 'issue_command' "
+                                 "AND detail_json LIKE ?", (f"%{rsid}%",)).fetchone()
+        check("...and the issue_command audit row carries neither",
+              trail is not None and "u-secret" not in trail[0] and "c-secret" not in trail[0])
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)

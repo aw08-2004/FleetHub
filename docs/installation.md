@@ -27,6 +27,16 @@ from which IP. **Revoke** on a used code also revokes that machine's agent.
 
 `HUB_URL` must be the hub's public `https://` address; the script refuses anything else.
 
+**A name the fleet already has** is admitted only for the same PC. The script sends the PC's
+BIOS serial, SMBIOS UUID and MachineGuid, and the hub compares them with what it recorded
+for that name. The hardware ids are compared first; the MachineGuid counts only when the
+hardware has nothing usable. So a re-imaged PC (revoke its old agent first) re-onboards
+without deleting its record, even when its serial is a placeholder like *To Be Filled By
+O.E.M.*. A different PC with the same name, or a record with nothing to compare against, ends
+in *could not be matched*, and the code is not used. Delete the old record, then run the
+script again. The UUID and MachineGuid are recorded from enrolled agents' signed reports
+(hub 1.176.0 and the next agent) and from each successful onboarding.
+
 **A Linux machine onboards the same way** (hub 1.169.0). After step 2, pick **Linux** on the
 install step (the page guesses from the browser, but a headless server is usually set up from
 another computer). Paste the one-line command it shows into a terminal on the machine:

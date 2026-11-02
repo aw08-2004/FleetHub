@@ -1862,10 +1862,14 @@ def create_command(db_path, machine, command_type, params, issued_by,
     # system is created here -- the deploy scheduler, the wake relay and the terminal all
     # come through this function -- so this one call is what makes the doorbell complete.
     notify_commands(machine)
+    # The trail gets the operator's view of the params, never the agent's: the Audit Log is
+    # readable with view_audit_log alone, and a start_remote_session's params carry a working
+    # TURN credential (issue #199, found in review after the command route was closed).
+    audit_params = json.dumps(operator_view({"params": params})["params"], sort_keys=True)
     audit(db_path, actor=issued_by, action="issue_command",
           level=LEVEL_SECURITY, target=machine,
           detail={"command_id": command_id, "type": command_type,
-                  "params": params_json[:AUDIT_PARAMS_MAX_CHARS]})
+                  "params": audit_params[:AUDIT_PARAMS_MAX_CHARS]})
     return command_id
 
 
@@ -2330,8 +2334,9 @@ def operator_view(command):
     is right for a command's status and output, and returned params verbatim -- so an operator
     holding only `view` and `view_audit_log` could read a remote session's command id off the Audit
     Log and fetch a working relay credential with it, one capability short of `remote_control`.
-    Redacted here rather than at create_command because the agent fetches the same row and
-    does need the credential. Rejected: refusing the whole command to non-`remote_control`
+    Applied on the way out (this route, and create_command's `issue_command` audit row, which
+    carried the same params and is readable with `view_audit_log` alone) rather than to the
+    stored row, because the agent fetches that row and does need the credential. Rejected: refusing the whole command to non-`remote_control`
     callers -- its status and result are what the machine page's command list shows everyone
     with `view`, and only these two fields were ever the problem.
     """

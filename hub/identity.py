@@ -30,12 +30,16 @@ the UUID `03000200-0400-0500-0006-000700080009`, and some VMs report all zeros. 
 those as real would merge unrelated PCs, which is the failure app.is_valid_serial already
 exists to prevent; the same rule is applied to the UUID and GUID here.
 
-**Written once, like machine_info.serial_number, and for the same reason.** /api/report
-still accepts unsigned reports on a hub with enrolled-only telemetry off, so whoever can
-reach the hub can claim any identifiers. A blank is filled; an established value is not
-overwritten by a report. The one exception is `remember(..., replace_guid=True)`, used by a
-successful onboarding redeem: that caller has spent a code and passed `compare`, and a
-re-imaged PC has a new GUID that should replace the old one.
+**Only two writers, and neither is an unsigned report.** These ids decide who may enrol
+under a name, so whoever writes them first would decide it; /api/report still accepts
+unsigned reports on a hub with enrolled-only telemetry off, which is anybody who can reach
+the hub. So app records them from **signed** reports only, write-once (a blank is filled, an
+established value is not overwritten), and a successful onboarding redeem writes them with
+`authoritative=True`: that caller has spent a code and passed `compare`, a re-imaged PC has a
+new GUID that should replace the old one, and a name with no record must not keep a row left
+by a PC whose install failed after its redeem (both found in review). The cost: an
+unenrolled PC that has only ever reported unsigned has nothing stored, and is refused as
+before until it has been onboarded once.
 
 Kept free of Flask so it can be unit-tested in isolation.
 """
@@ -175,23 +179,25 @@ def lookup(conn, machine):
     return {"machine_guid": row["machine_guid"], "smbios_uuid": row["smbios_uuid"]}
 
 
-def remember(conn, machine, machine_guid=None, smbios_uuid=None, replace_guid=False, now=None):
-    """Store what `machine` reported. Write-once per field unless `replace_guid` -- see the
-    module docstring for why. Values that do not clean to a usable identifier are dropped."""
+def remember(conn, machine, machine_guid=None, smbios_uuid=None, authoritative=False, now=None):
+    """Store what `machine` presented. Write-once per field unless `authoritative`, when a
+    presented value replaces the stored one -- see the module docstring for who may pass it.
+    Values that do not clean to a usable identifier are dropped, never stored over a value."""
     guid = clean_uuid(machine_guid)
     uuid = clean_uuid(smbios_uuid)
     if guid is None and uuid is None:
         return
     now = int(now if now is not None else time.time())
-    guid_rule = ("COALESCE(excluded.machine_guid, machine_identity.machine_guid)"
-                 if replace_guid else
-                 "COALESCE(machine_identity.machine_guid, excluded.machine_guid)")
+    if authoritative:
+        first, second = "excluded", "machine_identity"
+    else:
+        first, second = "machine_identity", "excluded"
     conn.execute(
         "INSERT INTO machine_identity(machine, machine_guid, smbios_uuid, updated_at) "
         "VALUES (?, ?, ?, ?) "
         "ON CONFLICT(machine) DO UPDATE SET "
-        f"  machine_guid = {guid_rule}, "
-        "  smbios_uuid = COALESCE(machine_identity.smbios_uuid, excluded.smbios_uuid), "
+        f"  machine_guid = COALESCE({first}.machine_guid, {second}.machine_guid), "
+        f"  smbios_uuid = COALESCE({first}.smbios_uuid, {second}.smbios_uuid), "
         "  updated_at = excluded.updated_at",
         (machine, guid, uuid, now))
 

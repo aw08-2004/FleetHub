@@ -174,7 +174,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.175.2"
+HUB_VERSION = "1.176.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -5865,9 +5865,16 @@ def _authorize_and_store_report(machine, data, temp_value):
         os_build=data.get('os_build'),
         os_arch=data.get('os_arch'),
     )
-    # MachineGuid and SMBIOS UUID, write-once like the serial above -- the evidence onboarding
-    # weighs when a PC enrols under a name the hub already knows. See hub/identity.py.
-    identity.record(DB_PATH, machine, data.get('machine_guid'), data.get('smbios_uuid'))
+    # MachineGuid and SMBIOS UUID, write-once -- the evidence onboarding weighs when a PC
+    # enrols under a name the hub already knows. See hub/identity.py.
+    #
+    # **Signed reports only, unlike the serial above.** These ids are what let a code onto a
+    # placeholder-serial name that used to be unclaimable, so whoever writes them first
+    # decides who may enrol there. An unsigned report is anybody who can reach the hub, and
+    # write-once would make a planted UUID permanent and lock the real PC out (found in
+    # review). An unenrolled PC gets its ids recorded by its first onboarding instead.
+    if outcome == fleet.REPORT_SIGNED:
+        identity.record(DB_PATH, machine, data.get('machine_guid'), data.get('smbios_uuid'))
     return None
 
 

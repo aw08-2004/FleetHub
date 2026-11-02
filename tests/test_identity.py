@@ -103,9 +103,9 @@ def test_storage():
               stored == {"machine_guid": identity.clean_uuid(GUID_A),
                          "smbios_uuid": identity.clean_uuid(UUID_A)})
         with identity.get_conn(db) as conn:
-            identity.remember(conn, "PC-1", GUID_B, UUID_B, replace_guid=True)
+            identity.remember(conn, "PC-1", GUID_B, None, authoritative=True)
             stored = identity.lookup(conn, "pc-1")
-        check("a redeem replaces the GUID (a re-image) but never the UUID",
+        check("a redeem replaces the GUID (a re-image), and a value it did not send is kept",
               stored == {"machine_guid": identity.clean_uuid(GUID_B),
                          "smbios_uuid": identity.clean_uuid(UUID_A)})
         identity.record(db, "PC-2", AMI_UUID, AMI_UUID)

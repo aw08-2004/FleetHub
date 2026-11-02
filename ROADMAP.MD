@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.175.2**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.176.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -274,6 +274,11 @@ rejected alternative, a hub-side timer locating with no map open, is recorded in
 - [ ] **Location switched on** (needs the next Android agent). On a fully managed phone, turn
   Location off in quick settings and locate it: the switch comes back on and a fresh fix
   arrives, instead of *location is switched off on this device*. - Not working
+  **Why, found 2026-11-02:** no Android agent released so far contains the fix. The newest,
+  0.3.2-beta, was cut at 11:30 on 2026-10-23, before the commit that added
+  `DeviceOwner.EnableLocation` (541b635, the same day), and SM-A566E answered *location is
+  switched off* nine times on 2026-10-31. Re-check this box on the next Android beta, which
+  is owed locally (Android SDK and signing key).
 - [x] **One chime.** On that agent, with the map open, the "This device was located" notice sounds
   once and then updates silently until it is dismissed.
 - [x] **Translations.** The *Live* switch, its status line and the new setting read correctly in
@@ -554,6 +559,35 @@ with no usable serial (the takeover PR #119's review closed).
   matched*. The PC is back in Devices as enrolled within a minute.
 - [ ] **The hold ends.** Delete an unenrolled PC that keeps its agent running, and do not
   onboard it. It stays gone for about an hour, then reappears as *Online, not enrolled*.
+
+**Hub 1.176.0 + next Windows/Linux agent: placeholder-serial PCs match on their SMBIOS UUID
+and MachineGuid, and the console no longer shows TURN credentials** (#29, #199)
+The owner's call (2026-11-02): PCs with the same name may enrol, and serial, SMBIOS UUID and
+MachineGuid decide whether they are one machine (merge) or two. This is the first half. The
+agents report the UUID and the install id (MachineGuid, `/etc/machine-id`), the hub stores them
+in `machine_identity` (`hub/identity.py`) from **signed** reports (write-once) and from a
+successful redeem (authoritative), and onboarding admits a name with history when
+`identity.compare` says SAME. Never from an unsigned report: on a hub that accepts those,
+whoever wrote a UUID first would decide who may enrol there, and write-once would lock the
+real PC out (found in review). So a PC that has only ever reported unsigned is refused as
+before until its first onboarding. Hardware ids come first and the install id only when the
+hardware has nothing usable, so a re-imaged PC still matches and a cloned image on other
+hardware does not. Rejected: requiring all three to be equal (every re-image would be a
+stranger), and GUID first (one un-sysprepped image would collapse a fleet into one machine).
+**Still open, and the larger half:** a DIFFERENT verdict still refuses. Every table is keyed on
+the hostname, so two machines under one name need a hub-minted `machine_id` across agents,
+machine_info, readings, machine_nics and every module's `rename_machine`/`forget_machine`.
+Planned as the next change; until it lands, a second PC with a taken name stays out.
+- [ ] **UUID reported** (needs the next Windows agent beta). On a beta PC, the hub's
+  `machine_identity` table holds a row for it with `smbios_uuid` and `machine_guid` filled.
+- [ ] **Placeholder serial, no delete.** Onboard a placeholder-serial PC, revoke its agent (as
+  for a re-image), and run a fresh onboarding script without deleting the record. It enrolls.
+- [ ] **Another PC is still refused.** Run the same script on a different PC renamed to that
+  name: it ends in *could not be matched*, and the code is not used.
+- [ ] **No TURN credential in the console** (#199). As an operator with *View*, *View audit log*
+  and *View security audit* only, open `/api/fleet/commands/<id>` for a new Remote session's
+  command, and its *issue_command* line in the Audit Log. Both list relay URLs with no
+  `username` or `credential`, and a Remote session still connects.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
