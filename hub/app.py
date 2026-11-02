@@ -39,6 +39,7 @@ import users
 import invites
 import invites_web
 import onboarding
+import identity
 import packages
 import backups
 import remote
@@ -4054,6 +4055,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # The state rows collide by design when both names reported on one watchdog, and the
     # survivor's own agent overwrites whichever won within a heartbeat.
     watchdogs.rename_machine(DB_PATH, dropped, survivor)
+    # The merged-away name's MachineGuid / SMBIOS UUID fill any blank on the survivor: the
+    # merge has already decided they are one PC, so its identifiers are the survivor's too.
+    identity.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
@@ -5472,6 +5476,7 @@ def start_directory_sync_scheduler():
 
 init_db()
 fleet.init_fleet_db(DB_PATH)
+identity.init_identity_db(DB_PATH)
 alerts.init_alerts_db(DB_PATH)
 correlate.init_correlate_db(DB_PATH)
 settings.init_settings_db(DB_PATH)
@@ -5737,18 +5742,20 @@ def _machine_has_history(machine):
 
 
 def _machine_record(machine):
-    """None if the hub holds no record under `machine` (any case), else {"serial": its BIOS
-    serial when that is distinct enough to key identity on, or None}. What onboarding asks
-    before letting a code take a name with history -- see onboarding._check_known_machine.
-    Same is_valid_serial rule as the duplicate merge, so a placeholder serial binds nothing."""
+    """None if the hub holds no record under `machine` (any case), else identity.evidence()
+    for it: {serial, machine_guid, smbios_uuid}, each None unless distinct enough to key
+    identity on. What onboarding asks before letting a code take a name with history -- see
+    onboarding._check_known_machine. Placeholders bind nothing, the same rule as the
+    duplicate merge's is_valid_serial."""
     with get_db_conn() as conn:
         row = conn.execute(
             "SELECT serial_number FROM machine_info WHERE machine = ? COLLATE NOCASE LIMIT 1",
             (machine,)).fetchone()
-    if row is None:
-        return None
-    serial = row["serial_number"]
-    return {"serial": serial if is_valid_serial(serial) else None}
+        if row is None:
+            return None
+        stored = identity.lookup(conn, machine) or {}
+    return identity.evidence(row["serial_number"], stored.get("machine_guid"),
+                             stored.get("smbios_uuid"))
 
 
 def unsigned_reporters():
@@ -5858,6 +5865,9 @@ def _authorize_and_store_report(machine, data, temp_value):
         os_build=data.get('os_build'),
         os_arch=data.get('os_arch'),
     )
+    # MachineGuid and SMBIOS UUID, write-once like the serial above -- the evidence onboarding
+    # weighs when a PC enrols under a name the hub already knows. See hub/identity.py.
+    identity.record(DB_PATH, machine, data.get('machine_guid'), data.get('smbios_uuid'))
     return None
 
 
@@ -6925,6 +6935,9 @@ def delete_machine(machine):
     files.forget_machine(DB_PATH, machine_name, spool_dir=FILE_SPOOL_DIR)
     # ...and any live-chart watch on it, for the same reason.
     live.forget_machine(DB_PATH, machine_name)
+    # And its MachineGuid / SMBIOS UUID, or the next PC onboarded under the name would be
+    # measured against a deleted machine's hardware (hub/identity.py).
+    identity.forget_machine(DB_PATH, machine_name)
     # And every share of it (roadmap #15). Unlike the merge above there is no survivor to
     # follow, so the shares are revoked: if the hostname is later reused by a different
     # physical box, another hub must not silently inherit a window onto it -- the same

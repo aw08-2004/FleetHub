@@ -51,6 +51,7 @@ import secrets
 import time
 
 import fleet
+import identity
 import permissions
 
 #: The code alphabet. Upper-case letters and digits **without 0, O, 1, I and L**: a code is
@@ -107,6 +108,9 @@ NAME_KNOWN_MESSAGE = ("The fleet already has a machine with this PC's name, and 
 def init_onboarding_db(db_path):
     with permissions.get_conn(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
+        # redeem_code writes a re-imaged PC's new MachineGuid inside its own transaction, so
+        # the table must exist whether or not app has run identity.init_identity_db yet.
+        identity.ensure_table(conn)
         # One row per code. The redemption columns live on the same row rather than in a
         # side table, unlike invites: a code admits exactly one machine, so there is
         # exactly one redemption to record and a second table would only be a join.
@@ -246,11 +250,12 @@ def create_code(db_path, label, ttl_seconds=DEFAULT_TTL_SECONDS, actor="unknown"
     return code_id, code
 
 
-def _check_known_machine(machine, serial, machine_record):
+def _check_known_machine(machine, presented, machine_record):
     """Raise NameEnrolled unless this PC may take a name the hub already has records for.
 
     `machine_record(machine)` is app.py's view of machine_info: None for a name the hub has
-    never seen, else {"serial": the stored BIOS serial if it is usable for identity, or None}.
+    never seen, else {serial, machine_guid, smbios_uuid} as it stored them. `presented` is
+    identity.evidence() for what the redeeming PC sent.
 
     **A name with history is the commonest legitimate case and also a takeover route**, which
     is why this is not a plain refusal (review on PR #119). The Onboarding page tells an
@@ -261,22 +266,34 @@ def _check_known_machine(machine, serial, machine_record):
     keys on. **The serial is not a secret** (it is on a sticker and in the console), so this
     binds onboarding to the hardware rather than proving it: it stops a code being spent on
     an arbitrary existing name, and what is left is visible in the Onboarding list. A name
-    whose record carries no usable serial (a VM, a whitebox) cannot be checked at all and is
-    refused until an operator deletes the old record, the same step a re-imaged PC under a
-    live enrollment takes.
+    whose record carries no usable serial (a VM, a whitebox) used to be refused outright
+    until an operator deleted the old record.
+
+    **The serial is now one of three identifiers** (2026-11-02): the SMBIOS UUID and the
+    Windows MachineGuid let a placeholder-serial whitebox prove it is the PC that reported
+    under the name, and identity.compare decides -- hardware first, the GUID only when the
+    hardware has nothing to say. Only SAME admits. DIFFERENT is a second PC that happens to
+    share the name, and UNKNOWN is a record with nothing to compare against; both are still
+    refused here, because until machines are keyed on something other than their hostname
+    (hub/identity.py) admitting a second PC would hand it the first one's record.
     """
     if machine_record is None:
         return
     record = machine_record(machine)
     if record is None:
         return
-    known = (record.get("serial") or "").strip().lower()
-    if not known or known != str(serial or "").strip().lower():
+    known = identity.evidence(record.get("serial"), record.get("machine_guid"),
+                              record.get("smbios_uuid"))
+    if identity.compare(known, presented) != identity.SAME:
         raise NameEnrolled(NAME_KNOWN_MESSAGE)
 
 
-def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_record=None):
+def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_record=None,
+                machine_guid=None, smbios_uuid=None):
     """Spend `code` for `machine` and return (agent_id, token). Raises OnboardingError.
+
+    `serial`, `machine_guid` and `smbios_uuid` are what the PC says it is; they matter only
+    when the name has history (see _check_known_machine).
 
     **A name that a live agent already holds is refused, and the code is NOT spent.** Without
     this, anybody holding any valid code could mint a second, unrevoked credential for an
@@ -307,7 +324,8 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
             raise OnboardingError(INVALID_MESSAGE)
         if fleet.live_agent_holds(conn, machine):
             raise NameEnrolled(NAME_ENROLLED_MESSAGE)
-        _check_known_machine(machine, serial, machine_record)
+        presented = identity.evidence(serial, machine_guid, smbios_uuid)
+        _check_known_machine(machine, presented, machine_record)
         claimed = conn.execute(
             "UPDATE onboarding_codes SET redeemed_at = ?, redeemed_machine = ?, redeemed_ip = ? "
             "WHERE code_id = ? AND redeemed_at IS NULL AND revoked_at IS NULL "
@@ -319,6 +337,11 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
         agent_id, token = fleet.insert_agent(conn, machine)
         conn.execute("UPDATE onboarding_codes SET agent_id = ? WHERE code_id = ?",
                      (agent_id, row["code_id"]))
+        # This PC spent a code and passed the identity check, so what it presented is now
+        # the name's identity -- including a re-imaged PC's NEW MachineGuid, which a report
+        # could never overwrite (identity.remember is write-once without replace_guid).
+        identity.remember(conn, machine, machine_guid, smbios_uuid, replace_guid=True,
+                          now=now)
 
     fleet.audit_enroll(db_path, machine, agent_id, actor=f"onboarding:{row['label']}",
                        detail={"code_id": row["code_id"]})

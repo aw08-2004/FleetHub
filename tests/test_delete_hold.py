@@ -137,8 +137,31 @@ def test_failed_delete_releases_hold():
           unsigned_report(name).status_code == 200)
 
 
+def test_placeholder_serial_matches_on_uuid_without_a_delete():
+    print("\n-- a placeholder-serial PC that reported its SMBIOS UUID needs no delete at all --")
+    name = "UUID-WHITEBOX"
+    uuid = "4C4C4544-0042-3510-8048-B3C04F4E3532"
+    client.post("/api/report", json={"machine": name, "temp": 40.0,
+                                     "serial_number": PLACEHOLDER, "smbios_uuid": uuid})
+    check("the report stored the UUID beside the record",
+          app._machine_record(name).get("smbios_uuid") == uuid.lower())
+    _, code = onboarding.create_code(app.DB_PATH, "test", actor="test")
+    other = client.post("/api/onboarding/redeem", json={
+        "code": code, "machine": name, "serial": PLACEHOLDER,
+        "smbios_uuid": "4C4C4544-0042-3510-8048-B3C04F4E3599"})
+    check("a different board under the name is still refused 409", other.status_code == 409)
+    same = client.post("/api/onboarding/redeem", json={
+        "code": code, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": uuid})
+    check("the PC that reported that UUID enrolls with the same code",
+          same.status_code == 200 and same.get_json().get("token"))
+    client.delete(f"/api/machines/{name}", headers=HEADERS)
+    check("a delete forgets the UUID with the record", app._machine_record(name) is None
+          and not app.identity.lookup(app.get_db_conn(), name))
+
+
 def main():
     test_placeholder_serial_can_be_reonboarded()
+    test_placeholder_serial_matches_on_uuid_without_a_delete()
     test_hold_expires()
     test_other_names_unaffected()
     test_delete_ignores_case()

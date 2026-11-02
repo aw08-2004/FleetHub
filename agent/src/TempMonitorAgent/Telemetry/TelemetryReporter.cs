@@ -90,6 +90,11 @@ public sealed class TelemetryReporter : IDisposable
             ["manufacturer"] = _identity.Manufacturer,
             ["asset_tag"] = _identity.AssetTag,
             ["service_tag"] = _identity.ServiceTag,
+            // Which PC this is when its name is shared or its BIOS serial is a placeholder --
+            // the hub weighs these when a PC onboards under a name it already knows (see
+            // hub/identity.py). Write-once on the hub, so sending them every report is free.
+            ["machine_guid"] = _identity.MachineGuid,
+            ["smbios_uuid"] = _identity.SmbiosUuid,
             // On every report, alongside the identity fields, rather than on the heartbeat:
             // the hub COALESCEs a null away, so a report that could not read the OS costs
             // nothing, and one that could fills the gap at the next tick rather than at the

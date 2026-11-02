@@ -127,4 +127,6 @@ public sealed class SystemIdentity
     [JsonPropertyName("os_version")] public string? OsVersion { get; set; }
     [JsonPropertyName("os_build")] public string? OsBuild { get; set; }
     [JsonPropertyName("os_arch")] public string? OsArchitecture { get; set; }
+    [JsonPropertyName("machine_guid")] public string? MachineGuid { get; set; }
+    [JsonPropertyName("smbios_uuid")] public string? SmbiosUuid { get; set; }
 }

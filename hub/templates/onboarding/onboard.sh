@@ -79,7 +79,18 @@ main() {
     if [[ -r /sys/class/dmi/id/product_serial ]]; then
         serial="$(tr -d '\000-\037' < /sys/class/dmi/id/product_serial | sed 's/^ *//; s/ *$//; s/\\/\\\\/g; s/"/\\"/g')"
     fi
-    printf '{"code":"%s","machine":"%s","serial":"%s"}' "$code" "$machine" "$serial" > "$work/redeem.json"
+    # The DMI product UUID and /etc/machine-id, read where the agent reads them. They let a
+    # machine with a placeholder serial prove it is the one that reported -- hub/identity.py.
+    # Kept to hex and dashes, so nothing in them can break the JSON below.
+    local smbios_uuid="" machine_guid=""
+    if [[ -r /sys/class/dmi/id/product_uuid ]]; then
+        smbios_uuid="$(tr -cd '0-9A-Fa-f-' < /sys/class/dmi/id/product_uuid)"
+    fi
+    if [[ -r /etc/machine-id ]]; then
+        machine_guid="$(tr -cd '0-9A-Fa-f' < /etc/machine-id)"
+    fi
+    printf '{"code":"%s","machine":"%s","serial":"%s","smbios_uuid":"%s","machine_guid":"%s"}' \
+        "$code" "$machine" "$serial" "$smbios_uuid" "$machine_guid" > "$work/redeem.json"
 
     local ok=0
     if have curl; then

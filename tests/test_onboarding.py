@@ -272,6 +272,29 @@ def test_redeem_onto_enrolled_name(db):
     check("a name the hub has never seen needs no serial",
           bool(onboarding.redeem_code(db, fresh, "PC-NEW-1", machine_record=lookup)[0]))
 
+    print("\n-- a placeholder serial can prove itself with its UUID or MachineGuid --")
+    uuid = "4c4c4544-0042-3510-8048-b3c04f4e3532"
+    guid = "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
+    records["wb-1"] = {"serial": None, "smbios_uuid": uuid, "machine_guid": None}
+    records["wb-2"] = {"serial": None, "smbios_uuid": None, "machine_guid": guid}
+    wid, wcode = onboarding.create_code(db, "Whitebox")
+    e = raises(lambda: onboarding.redeem_code(
+        db, wcode, "WB-1", serial="To Be Filled By O.E.M.",
+        smbios_uuid="4C4C4544-0042-3510-8048-B3C04F4E3533", machine_record=lookup))
+    check("another board's UUID under the name: refused", isinstance(e, onboarding.NameEnrolled))
+    check("...and the code is not spent", onboarding.get_code(db, wid)["status"] == "active")
+    check("the UUID the name reported: enrolled despite the placeholder serial",
+          bool(onboarding.redeem_code(db, wcode, "WB-1", serial="To Be Filled By O.E.M.",
+                                      smbios_uuid=uuid.upper(), machine_record=lookup)[0]))
+    _, gcode = onboarding.create_code(db, "Whitebox 2")
+    check("with nothing in the hardware, the MachineGuid it reported: enrolled",
+          bool(onboarding.redeem_code(db, gcode, "WB-2", machine_guid="{" + guid.upper() + "}",
+                                      machine_record=lookup)[0]))
+    with sqlite3.connect(db) as conn:
+        stored = conn.execute("SELECT smbios_uuid FROM machine_identity WHERE machine = 'wb-1'"
+                              ).fetchone()
+    check("a redeem records the identity it was admitted on", stored and stored[0] == uuid)
+
 
 def main():
     db = fresh_db()
