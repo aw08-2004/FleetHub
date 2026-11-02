@@ -162,7 +162,7 @@ hub that day, except the two items still open below.
   `TerminateProcess` never ran and the root shell was left to `ClosePseudoConsole`.
 
 **Android agent (next beta) — the provisioning QR actually enrolls the device**
-- [ ] **QR enrolls hands-off.** Factory-reset a phone, scan a QR minted by the hub, and let
+- [x] **QR enrolls hands-off.** Factory-reset a phone, scan a QR minted by the hub, and let
   the wizard finish. The app opens on its status, not on the setup screen, and the device
   appears in the console enrolled, with no URL or secret typed. `adb logcat -s FleetHubAgent`
   shows *Adopted hub URL from the QR* and *Adopted the enrollment secret from the QR*, and
@@ -171,13 +171,13 @@ hub that day, except the two items still open below.
   had been throwing the hub URL and secret away.
 
 **Android agent (next beta) — wipe actually erases, and a managed device's hub URL is locked**
-- [ ] **Wipe erases on Android 14+.** On a scratch fully managed phone on Android 14 or later,
+- [x] **Wipe erases on Android 14+.** On a scratch fully managed phone on Android 14 or later,
   wipe it from the console. It reboots into the factory reset within about ten seconds of the
   command reading *done*, and stops reporting. Until now `wipeData` threw
   `IllegalStateException` on every Android 14+ device (target SDK 36, system user), after the
   console had already been told the wipe had started; the agent now calls `wipeDevice` there.
   Seen on SM-A155M-42608627 (Android 16), which kept reporting after a "successful" wipe.
-- [ ] **Hub URL is locked on a device owner.** On a QR-provisioned phone, open the app →
+- [x] **Hub URL is locked on a device owner.** On a QR-provisioned phone, open the app →
   *Advanced*: the hub field is greyed out, labelled as set by provisioning, and shows the real
   hub. *Save* with only a secret typed still works.
 - [x] **Still editable where it should be.** On a phone with the agent sideloaded (no device
@@ -225,15 +225,15 @@ push to `beta` that touches `hub/` after this merges.
 The owner sent it to `main` with the rest on 2026-10-22 without a beta pass, so these checks
 are owed on the production hub instead. Nothing changes until a pasted block or a Cloudflare
 key is saved in Settings.
-- [ ] **Pasted block.** Generate a credential with Cloudflare's `generate-ice-servers` (a long
+- [x] **Pasted block.** Generate a credential with Cloudflare's `generate-ice-servers` (a long
   TTL), paste the whole response into **Settings → Remote Control → Provided ICE servers** and
   save. The card counts the servers and URLs, and the credential appears nowhere on the page.
-- [ ] **It relays.** With the hub's own TURN cleared (or a peer off the LAN), a session
+- [x] **It relays.** With the hub's own TURN cleared (or a peer off the LAN), a session
   connects and `chrome://webrtc-internals` shows the selected pair's local or remote candidate
   as `relay` from `turn.cloudflare.com`.
-- [ ] **Cloudflare key.** Clear the pasted block, save a TURN key ID + API token, press *Test*
+- [x] **Cloudflare key.** Clear the pasted block, save a TURN key ID + API token, press *Test*
   (it reports a URL count), and start two sessions: each gets a different minted username.
-- [ ] **Outage.** With a wrong API token, *Test* fails with a message, and a session still
+- [x] **Outage.** With a wrong API token, *Test* fails with a message, and a session still
   starts on whatever else is configured.
 - [x] **Translations.** The two new blocks read correctly in German and Spanish.
   *Confirmed 2026-10-30 from the `de`/`es` catalog: every new key reads correctly.*
@@ -273,8 +273,8 @@ rejected alternative, a hub-side timer locating with no map open, is recorded in
   its history gains no *did not answer* rows. - Not working
 - [ ] **Location switched on** (needs the next Android agent). On a fully managed phone, turn
   Location off in quick settings and locate it: the switch comes back on and a fresh fix
-  arrives, instead of *location is switched off on this device*.
-- [ ] **One chime.** On that agent, with the map open, the "This device was located" notice sounds
+  arrives, instead of *location is switched off on this device*. - Not working
+- [x] **One chime.** On that agent, with the map open, the "This device was located" notice sounds
   once and then updates silently until it is dismissed.
 - [x] **Translations.** The *Live* switch, its status line and the new setting read correctly in
   German and Spanish. *Confirmed 2026-10-30 from the catalog.*
