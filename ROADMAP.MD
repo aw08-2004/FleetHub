@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.176.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.177.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -588,6 +588,24 @@ Planned as the next change; until it lands, a second PC with a taken name stays 
   and *View security audit* only, open `/api/fleet/commands/<id>` for a new Remote session's
   command, and its *issue_command* line in the Audit Log. Both list relay URLs with no
   `username` or `credential`, and a Remote session still connects.
+
+**Hub 1.177.0: an enrolled machine can re-run its onboarding script** (#29)
+A name with a live agent used to be refused outright (the PR #119 rule), so re-running the
+installer on an enrolled PC -- to repair it, or because it fell offline -- needed an operator
+to revoke it first (found on `openmediavault`, 2026-11-02). The scripts now send the
+credential they find in `agent.json`, and a live credential for that very name replaces
+itself: the old agent is revoked in the same transaction that mints the new one
+(`fleet.proven_live_agent`). Holding the credential is the one proof a code holder cannot read
+off the console or a sticker. Rejected: replacing an agent that matches on serial/UUID and has
+been quiet for a day -- anyone with a code and a serial could then take over every machine
+that happens to be switched off. A PC whose credential is lost or revoked still needs the
+revoke-then-onboard route, and a second live agent on the name is still refused.
+- [ ] **Re-run on an enrolled machine.** On an enrolled Linux or Windows machine, run a fresh
+  onboarding script without revoking anything. It ends in *Done*, the machine stays one row in
+  Devices, and the Audit Log shows a *revoke_agent* for the old agent id beside the redeem.
+- [ ] **Another machine's credential is no use.** Copy one machine's `agent.json` to a second
+  machine with a different name and run a script there under the first name: still refused as
+  *already enrolled*, and the code is not used.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 

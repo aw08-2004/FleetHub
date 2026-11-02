@@ -381,7 +381,8 @@ def _redeem(db_path, data, ip, valid_machine_name, machine_record):
     """Spend a code and return this machine's credential, once. Called by the install script,
     never by the wizard page -- see the module docstring. `serial`, `machine_guid` and
     `smbios_uuid` are what the PC says it is, which onboarding.redeem_code checks when the
-    name already has history."""
+    name already has history; `previous_agent_id` / `previous_token` are the credential an
+    enrolled PC already holds, which lets it replace itself."""
     machine = str(data.get("machine") or "").strip()
     if valid_machine_name is not None and not valid_machine_name(machine):
         return jsonify({"error": "invalid machine name"}), 400
@@ -389,7 +390,9 @@ def _redeem(db_path, data, ip, valid_machine_name, machine_record):
         agent_id, token = onboarding.redeem_code(
             db_path, data.get("code"), machine, ip=ip, serial=data.get("serial"),
             machine_record=machine_record, machine_guid=data.get("machine_guid"),
-            smbios_uuid=data.get("smbios_uuid"))
+            smbios_uuid=data.get("smbios_uuid"),
+            previous_agent_id=data.get("previous_agent_id"),
+            previous_token=data.get("previous_token"))
     except onboarding.NameEnrolled as e:
         # A live code, a taken name: say so, so the person knows the code is unspent.
         return refusals.refuse(e, 409)

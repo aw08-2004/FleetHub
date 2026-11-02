@@ -294,6 +294,23 @@ def main():
         check("a spent code no longer gets a script",
               c.get(f"/onboarding/run/{code}.ps1").status_code == 404)
 
+        print("\n== An enrolled machine re-running the installer (hub 1.177.0) ==")
+        reset_limits()
+        check("both scripts send the credential they find in agent.json",
+              '"previous_token":"%s"' in shell and "$previous_token\"" in shell
+              and "previous_token = $previousToken" in script)
+        check("...and the Linux one deletes the request body that carried it",
+              'rm -f "$work/answer.json" "$work/redeem.json"' in shell)
+        _, again_code = onboarding.create_code(db, "DC again")
+        dc_id, dc_tok = fleet.issue_agent_identity(db, "DC-02", actor="test")
+        mine = c.post("/api/onboarding/redeem",
+                      json={"code": again_code, "machine": "DC-02",
+                            "previous_agent_id": dc_id, "previous_token": dc_tok})
+        check("the route passes it on: the machine gets a new credential",
+              mine.status_code == 200 and mine.get_json()["agent_id"] != dc_id)
+        check("...and its old one stops working",
+              fleet.authenticate_agent(db, dc_id, dc_tok, touch=False) is None)
+
         print("\n== Revoking a spent code ==")
         CURRENT_USER = "tech@x.com"
         code_id = c.get("/api/onboarding/codes").get_json()["codes"][0]["code_id"]

@@ -313,6 +313,64 @@ def test_redeem_onto_enrolled_name(db):
           stored and stored[0] == other_uuid)
 
 
+def test_redeem_with_own_credential(db):
+    print("\n-- an enrolled PC re-running the installer replaces its own credential --")
+    old_id, old_tok = fleet.issue_agent_identity(db, "NAS-1", actor="test")
+    other_id, other_tok = fleet.issue_agent_identity(db, "NAS-2", actor="test")
+    # A record whose serial the PC does NOT present: the credential alone must carry it.
+    records = {"nas-1": {"serial": "43XTKB2"}}
+    lookup = lambda name: records.get(name.lower())
+    cid, code = onboarding.create_code(db, "NAS again")
+
+    e = raises(lambda: onboarding.redeem_code(db, code, "NAS-1", machine_record=lookup,
+                                              previous_agent_id=old_id,
+                                              previous_token=old_tok + "x"))
+    check("a wrong token is no proof: refused as enrolled", isinstance(e, onboarding.NameEnrolled))
+    e = raises(lambda: onboarding.redeem_code(db, code, "NAS-1", machine_record=lookup,
+                                              previous_agent_id=other_id,
+                                              previous_token=other_tok))
+    check("another machine's live credential is no proof for this name",
+          isinstance(e, onboarding.NameEnrolled))
+    check("...neither spent the code", onboarding.get_code(db, cid)["status"] == "active")
+
+    new_id, new_tok = onboarding.redeem_code(db, code, "nas-1", machine_record=lookup,
+                                             previous_agent_id=old_id, previous_token=old_tok)
+    check("its own live credential: enrolled, in any case of the name, without the serial",
+          bool(new_id) and new_id != old_id)
+    check("...the old credential is revoked in the same step",
+          fleet.authenticate_agent(db, old_id, old_tok, touch=False) is None)
+    check("...the new one works", fleet.authenticate_agent(db, new_id, new_tok, touch=False)
+          == "nas-1")
+    check("...the other machine is untouched",
+          fleet.authenticate_agent(db, other_id, other_tok, touch=False) == "NAS-2")
+    with sqlite3.connect(db) as conn:
+        detail = conn.execute(
+            "SELECT detail_json FROM audit_log WHERE action = 'onboarding.redeem' "
+            "ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+        revoked_line = conn.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'revoke_agent' AND target = ?",
+            (old_id,)).fetchone()[0]
+    check("the audit trail names the agent it replaced", old_id in detail and revoked_line == 1)
+
+    _, again = onboarding.create_code(db, "NAS once more")
+    e = raises(lambda: onboarding.redeem_code(db, again, "NAS-1", machine_record=lookup,
+                                              previous_agent_id=old_id,
+                                              previous_token=old_tok))
+    check("a replaced (revoked) credential proves nothing any more",
+          isinstance(e, onboarding.NameEnrolled))
+
+    print("\n-- one credential does not vouch for a second live agent on the name --")
+    a_id, a_tok = fleet.issue_agent_identity(db, "TWIN", actor="test")
+    fleet.issue_agent_identity(db, "TWIN", actor="test")
+    _, tcode = onboarding.create_code(db, "Twin")
+    e = raises(lambda: onboarding.redeem_code(db, tcode, "TWIN", previous_agent_id=a_id,
+                                              previous_token=a_tok))
+    check("refused while another live agent holds the name",
+          isinstance(e, onboarding.NameEnrolled))
+    check("...and the proven agent was not revoked by the refusal",
+          fleet.authenticate_agent(db, a_id, a_tok, touch=False) == "TWIN")
+
+
 def main():
     db = fresh_db()
     try:
@@ -323,6 +381,7 @@ def main():
         test_secret_path_unchanged(db)
         test_authorize_report(db)
         test_redeem_onto_enrolled_name(db)
+        test_redeem_with_own_credential(db)
     finally:
         try:
             os.remove(db)

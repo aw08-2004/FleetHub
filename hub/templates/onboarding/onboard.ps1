@@ -93,7 +93,14 @@
         try { $smbiosUuid = ([string](Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID).Trim() } catch { $smbiosUuid = $null }
         $machineGuid = $null
         try { $machineGuid = [string](Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid) } catch { $machineGuid = $null }
-        $body = @{ code = $Code; machine = $env:COMPUTERNAME; serial = $serial; smbios_uuid = $smbiosUuid; machine_guid = $machineGuid } | ConvertTo-Json -Compress
+        # The credential this PC already holds, if it was enrolled before. A live one for this
+        # name lets the hub replace it instead of refusing the name -- onboarding.redeem_code.
+        $previous = $null
+        try { $previous = Get-Content -LiteralPath $IdentityPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $previous = $null }
+        $previousId = $null; $previousToken = $null
+        if ($previous) { $previousId = [string]$previous.agent_id; $previousToken = [string]$previous.token }
+        $body = @{ code = $Code; machine = $env:COMPUTERNAME; serial = $serial; smbios_uuid = $smbiosUuid; machine_guid = $machineGuid; previous_agent_id = $previousId; previous_token = $previousToken } | ConvertTo-Json -Compress
+        $previous = $null; $previousToken = $null
         try {
             $identity = Invoke-RestMethod -Method Post -Uri "$HubUrl/api/onboarding/redeem" `
                 -ContentType 'application/json' -Body $body -UseBasicParsing
@@ -133,7 +140,7 @@
         }
         Set-Acl -LiteralPath $tmp -AclObject $acl
         Move-Item -LiteralPath $tmp -Destination $IdentityPath -Force
-        $identity = $null; $json = $null
+        $identity = $null; $json = $null; $body = $null
 
         Start-Service -Name $ServiceName
         Write-Host "`nDone. $env:COMPUTERNAME is enrolled and should appear in FleetHub within a minute." -ForegroundColor Green
