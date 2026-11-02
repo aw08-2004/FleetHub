@@ -11,6 +11,11 @@ namespace TempMonitorAgent.Telemetry;
 /// from the BIOS serial, and where Dell's Service Tag lives) with the same placeholder
 /// filtering. Also reads the operating system (Win32_OperatingSystem) and exposes system
 /// uptime.
+///
+/// The SMBIOS UUID (Win32_ComputerSystemProduct.UUID) and the Windows MachineGuid are read
+/// for the hub to tell apart PCs that share a name, or prove a placeholder-serial PC is the
+/// one that reported before (hub/identity.py). Sent raw: the hub owns the placeholder list,
+/// the same split as the BIOS serial, so one table decides what identifies nothing.
 /// </summary>
 public static class SystemInfo
 {
@@ -64,6 +69,22 @@ public static class SystemInfo
         catch (Exception e)
         {
             logger.LogWarning(e, "[system-info] Could not read BIOS/system info");
+        }
+
+        // Its own try/catch, for the reason the OS read below has one: a machine whose WMI
+        // product class or registry key misbehaves must not lose its serial and model too.
+        try
+        {
+            info.SmbiosUuid = Clean(QueryFirst("Win32_ComputerSystemProduct", "UUID"));
+            using var key = Microsoft.Win32.RegistryKey
+                .OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine,
+                             Microsoft.Win32.RegistryView.Registry64)
+                .OpenSubKey(@"SOFTWARE\Microsoft\Cryptography");
+            info.MachineGuid = Clean(key?.GetValue("MachineGuid")?.ToString());
+        }
+        catch (Exception e)
+        {
+            logger.LogWarning(e, "[system-info] Could not read SMBIOS UUID / MachineGuid");
         }
 
         // Its own try/catch, and deliberately AFTER the block above: an OS read that throws

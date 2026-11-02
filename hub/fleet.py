@@ -1862,10 +1862,14 @@ def create_command(db_path, machine, command_type, params, issued_by,
     # system is created here -- the deploy scheduler, the wake relay and the terminal all
     # come through this function -- so this one call is what makes the doorbell complete.
     notify_commands(machine)
+    # The trail gets the operator's view of the params, never the agent's: the Audit Log is
+    # readable with view_audit_log alone, and a start_remote_session's params carry a working
+    # TURN credential (issue #199, found in review after the command route was closed).
+    audit_params = json.dumps(operator_view({"params": params})["params"], sort_keys=True)
     audit(db_path, actor=issued_by, action="issue_command",
           level=LEVEL_SECURITY, target=machine,
           detail={"command_id": command_id, "type": command_type,
-                  "params": params_json[:AUDIT_PARAMS_MAX_CHARS]})
+                  "params": audit_params[:AUDIT_PARAMS_MAX_CHARS]})
     return command_id
 
 
@@ -2313,6 +2317,39 @@ def get_command(db_path, command_id):
     command["params"] = json.loads(command.pop("params_json"))
     command["result"] = dict(result) if result else None
     return command
+
+
+# Keys inside a command's params that are a credential for the AGENT, never for whoever reads
+# the command back. Each entry of a start_remote_session's `ice_servers` carries a TURN
+# username and credential -- minted per session, or a pasted provider block that lives for
+# its whole TTL -- and the agent needs them to reach the relay.
+_ICE_SECRET_KEYS = ("username", "credential")
+
+
+def operator_view(command):
+    """`command` as the console may show it: the TURN username and credential stripped out of
+    any `ice_servers` in its params, URLs kept.
+
+    **Found in issue #199.** GET /api/fleet/commands/<id> is gated on `view` plus scope, which
+    is right for a command's status and output, and returned params verbatim -- so an operator
+    holding only `view` and `view_audit_log` could read a remote session's command id off the Audit
+    Log and fetch a working relay credential with it, one capability short of `remote_control`.
+    Applied on the way out (this route, and create_command's `issue_command` audit row, which
+    carried the same params and is readable with `view_audit_log` alone) rather than to the
+    stored row, because the agent fetches that row and does need the credential. Rejected: refusing the whole command to non-`remote_control`
+    callers -- its status and result are what the machine page's command list shows everyone
+    with `view`, and only these two fields were ever the problem.
+    """
+    params = command.get("params") if command else None
+    servers = params.get("ice_servers") if isinstance(params, dict) else None
+    if not isinstance(servers, list):
+        return command
+    redacted = []
+    for server in servers:
+        if isinstance(server, dict):
+            server = {k: v for k, v in server.items() if k not in _ICE_SECRET_KEYS}
+        redacted.append(server)
+    return {**command, "params": {**params, "ice_servers": redacted}}
 
 
 # ================================
