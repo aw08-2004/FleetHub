@@ -292,7 +292,8 @@ def _check_known_machine(machine, presented, machine_record):
 
 
 def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_record=None,
-                machine_guid=None, smbios_uuid=None):
+                machine_guid=None, smbios_uuid=None, previous_agent_id=None,
+                previous_token=None):
     """Spend `code` for `machine` and return (agent_id, token). Raises OnboardingError.
 
     `serial`, `machine_guid` and `smbios_uuid` are what the PC says it is; they matter only
@@ -306,6 +307,19 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
     PC keeping its hostname -- is the operator deleting or revoking the old enrollment first,
     which is the deliberate step it should be. The code stays live because nothing was
     minted, so the same person can run the installer again once that is done.
+
+    **Unless the PC proves it is that agent** (2026-11-02): the install scripts send the
+    credential they find in agent.json as `previous_agent_id` / `previous_token`, and a live
+    credential for this very name replaces itself -- the old agent is revoked in the same
+    transaction that mints the new one. Re-running the installer on an enrolled PC (to repair
+    it, or because it fell offline) used to need an operator to revoke first. The credential
+    is the one proof a code holder cannot get from the console or a sticker, which is why it
+    is this and not the serial, and not "the old agent has been quiet for a day" -- that
+    alternative was rejected because it would let anybody holding a code and a serial take
+    over every machine that happens to be switched off. A proven credential also skips the
+    identity comparison: it is stronger evidence than the hardware, and a board swap on a
+    PC that kept its disk is still that PC. A second live agent on the same name is still
+    refused -- the credential proves one of them, not the other.
 
     The check, the claim and the agent row are one IMMEDIATE transaction: two codes redeemed
     for the same name at the same moment cannot both pass the check, and two PCs racing one
@@ -325,10 +339,14 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
         row = _live_row(conn, norm, now)
         if row is None:
             raise OnboardingError(INVALID_MESSAGE)
-        if fleet.live_agent_holds(conn, machine):
+        replaced = fleet.proven_live_agent(conn, machine, previous_agent_id, previous_token)
+        if fleet.live_agent_holds(conn, machine, except_agent=replaced):
             raise NameEnrolled(NAME_ENROLLED_MESSAGE)
-        presented = identity.evidence(serial, machine_guid, smbios_uuid)
-        had_record = _check_known_machine(machine, presented, machine_record)
+        if replaced:
+            had_record = True
+        else:
+            presented = identity.evidence(serial, machine_guid, smbios_uuid)
+            had_record = _check_known_machine(machine, presented, machine_record)
         claimed = conn.execute(
             "UPDATE onboarding_codes SET redeemed_at = ?, redeemed_machine = ?, redeemed_ip = ? "
             "WHERE code_id = ? AND redeemed_at IS NULL AND revoked_at IS NULL "
@@ -340,6 +358,8 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
         agent_id, token = fleet.insert_agent(conn, machine)
         conn.execute("UPDATE onboarding_codes SET agent_id = ? WHERE code_id = ?",
                      (agent_id, row["code_id"]))
+        if replaced:
+            conn.execute("UPDATE agents SET revoked = 1 WHERE agent_id = ?", (replaced,))
         # This PC spent a code and passed the identity check, so what it presented is now
         # the name's identity -- including a re-imaged PC's NEW MachineGuid, which a report
         # could never overwrite (identity.remember is write-once unless authoritative). A
@@ -352,9 +372,14 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
 
     fleet.audit_enroll(db_path, machine, agent_id, actor=f"onboarding:{row['label']}",
                        detail={"code_id": row["code_id"]})
+    redeem_detail = {"code_id": row["code_id"], "agent_id": agent_id, "ip": ip}
+    if replaced:
+        redeem_detail["replaced_agent_id"] = replaced
+        fleet.audit(db_path, f"onboarding:{row['label']}", "revoke_agent", replaced,
+                    {"reason": "replaced by onboarding", "new_agent_id": agent_id},
+                    level=fleet.LEVEL_SECURITY)
     fleet.audit(db_path, f"onboarding:{row['label']}", "onboarding.redeem", machine,
-                {"code_id": row["code_id"], "agent_id": agent_id, "ip": ip},
-                level=fleet.LEVEL_SECURITY)
+                redeem_detail, level=fleet.LEVEL_SECURITY)
     return agent_id, token
 
 

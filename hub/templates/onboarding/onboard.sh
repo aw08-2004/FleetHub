@@ -89,8 +89,19 @@ main() {
     if [[ -r /etc/machine-id ]]; then
         machine_guid="$(tr -cd '0-9A-Fa-f' < /etc/machine-id)"
     fi
-    printf '{"code":"%s","machine":"%s","serial":"%s","smbios_uuid":"%s","machine_guid":"%s"}' \
-        "$code" "$machine" "$serial" "$smbios_uuid" "$machine_guid" > "$work/redeem.json"
+    # The credential this machine already holds, if it was enrolled before. A live one for this
+    # name lets the hub replace it instead of refusing the name -- onboarding.redeem_code. Kept
+    # to the token alphabet, so nothing in the file can break the JSON below; it goes only into
+    # the request body in the private folder, never onto a command line or the screen.
+    local previous_agent_id="" previous_token=""
+    if [[ -r "$identity" ]]; then
+        previous_agent_id="$(sed -n 's/.*"agent_id" *: *"\([A-Za-z0-9_-]*\)".*/\1/p' "$identity" | head -1)"
+        previous_token="$(sed -n 's/.*"token" *: *"\([A-Za-z0-9_-]*\)".*/\1/p' "$identity" | head -1)"
+    fi
+    printf '{"code":"%s","machine":"%s","serial":"%s","smbios_uuid":"%s","machine_guid":"%s","previous_agent_id":"%s","previous_token":"%s"}' \
+        "$code" "$machine" "$serial" "$smbios_uuid" "$machine_guid" \
+        "$previous_agent_id" "$previous_token" > "$work/redeem.json"
+    previous_token=""
 
     local ok=0
     if have curl; then
@@ -130,7 +141,7 @@ main() {
     printf '{"agent_id":"%s","token":"%s"}' "$agent_id" "$token" \
         | install -m 0600 -o root -g root /dev/stdin "$identity"
     agent_id=""; token=""
-    rm -f "$work/answer.json"
+    rm -f "$work/answer.json" "$work/redeem.json"
 
     systemctl start "$service"
     printf '\nDone. %s is enrolled and should appear in FleetHub within a minute.\n' "$machine"

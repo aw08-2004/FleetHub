@@ -1288,6 +1288,31 @@ def live_agent_holds(conn, machine, except_agent=None):
     ).fetchone() is not None
 
 
+def proven_live_agent(conn, machine, agent_id, token):
+    """`agent_id` if (agent_id, token) is a live credential for `machine`, else None.
+
+    For onboarding.redeem_code: a PC re-running the installer sends the credential it already
+    holds, and holding it is the proof that it IS the enrolled machine -- the one thing the
+    serial and the other identifiers cannot prove, because they are not secrets. Same checks
+    as authenticate_agent (constant-time, revoked refused) plus the name, on the caller's
+    connection, and **without touching last_seen**: a credential used only to replace itself
+    must not make the machine look alive for a moment.
+    """
+    if not agent_id or not token:
+        return None
+    row = conn.execute(
+        "SELECT machine, token_hash, revoked FROM agents WHERE agent_id = ?",
+        (str(agent_id),),
+    ).fetchone()
+    if row is None or row["revoked"]:
+        return None
+    if str(row["machine"]).lower() != str(machine).lower():
+        return None
+    if not hmac.compare_digest(row["token_hash"], _hash_token(str(token))):
+        return None
+    return str(agent_id)
+
+
 def authenticate_agent(db_path, agent_id, token, touch=True):
     """Return the agent's machine name if (agent_id, token) is valid and not
     revoked, else None. Constant-time token comparison. When `touch`, refreshes

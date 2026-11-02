@@ -37,6 +37,13 @@ in *could not be matched*, and the code is not used. Delete the old record, then
 script again. The UUID and MachineGuid are recorded from enrolled agents' signed reports
 (hub 1.176.0 and the next agent) and from each successful onboarding.
 
+**Running the script again on a machine that is still enrolled** works too (hub 1.177.0), with
+no revoke first: the script sends the credential the agent already holds, and the hub swaps it
+for a new one and revokes the old. Use it to repair an agent or bring back one that has gone
+offline. If that credential is gone or was revoked, the hub cannot tell the machine from a
+stranger and answers *already enrolled* -- revoke the old agent in the console, then run the
+script again.
+
 **A Linux machine onboards the same way** (hub 1.169.0). After step 2, pick **Linux** on the
 install step (the page guesses from the browser, but a headless server is usually set up from
 another computer). Paste the one-line command it shows into a terminal on the machine:
