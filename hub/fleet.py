@@ -2315,6 +2315,38 @@ def get_command(db_path, command_id):
     return command
 
 
+# Keys inside a command's params that are a credential for the AGENT, never for whoever reads
+# the command back. Each entry of a start_remote_session's `ice_servers` carries a TURN
+# username and credential -- minted per session, or a pasted provider block that lives for
+# its whole TTL -- and the agent needs them to reach the relay.
+_ICE_SECRET_KEYS = ("username", "credential")
+
+
+def operator_view(command):
+    """`command` as the console may show it: the TURN username and credential stripped out of
+    any `ice_servers` in its params, URLs kept.
+
+    **Found in issue #199.** GET /api/fleet/commands/<id> is gated on `view` plus scope, which
+    is right for a command's status and output, and returned params verbatim -- so an operator
+    holding only `view` and `view_audit_log` could read a remote session's command id off the Audit
+    Log and fetch a working relay credential with it, one capability short of `remote_control`.
+    Redacted here rather than at create_command because the agent fetches the same row and
+    does need the credential. Rejected: refusing the whole command to non-`remote_control`
+    callers -- its status and result are what the machine page's command list shows everyone
+    with `view`, and only these two fields were ever the problem.
+    """
+    params = command.get("params") if command else None
+    servers = params.get("ice_servers") if isinstance(params, dict) else None
+    if not isinstance(servers, list):
+        return command
+    redacted = []
+    for server in servers:
+        if isinstance(server, dict):
+            server = {k: v for k, v in server.items() if k not in _ICE_SECRET_KEYS}
+        redacted.append(server)
+    return {**command, "params": {**params, "ice_servers": redacted}}
+
+
 # ================================
 # FAVORITES (saved commands / scripts)
 # ================================

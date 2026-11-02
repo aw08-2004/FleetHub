@@ -2,6 +2,7 @@
 Avoids app.py's Google-OAuth boot requirement by wiring the blueprint directly.
 """
 import functools
+import json
 import os
 import sqlite3
 import sys
@@ -507,6 +508,24 @@ def main():
         r = c.post(f"/api/agent/commands/{cid2}/result", json={"success": True},
                    headers={"Authorization": f"Bearer {a2}:{t2}"})
         check("foreign agent completing -> 403", r.status_code == 403)
+
+        print("\n== A remote session's TURN credential never reaches the console (issue #199) ==")
+        rsid = fleet.create_command(
+            db_path, machine="PC-01", command_type="start_remote_session",
+            params={"session_id": "s1", "ice_servers": [
+                {"urls": ["stun:turn.example:3478"]},
+                {"urls": ["turn:turn.example:3478"], "username": "u-secret",
+                 "credential": "c-secret"}]},
+            issued_by="ann@x.com")
+        body = c.get(f"/api/fleet/commands/{rsid}").get_json()
+        servers = body["params"]["ice_servers"]
+        check("the console's command view carries no TURN username or credential",
+              "u-secret" not in json.dumps(body) and "c-secret" not in json.dumps(body))
+        check("...but keeps the relay URLs", servers[1]["urls"] == ["turn:turn.example:3478"])
+        pulled = [cmd for cmd in c.get("/api/agent/commands", headers=auth).get_json()["commands"]
+                  if cmd["id"] == rsid]
+        check("the agent still receives the credential it needs",
+              pulled and pulled[0]["params"]["ice_servers"][1].get("credential") == "c-secret")
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)

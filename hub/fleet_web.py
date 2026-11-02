@@ -806,7 +806,8 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         command = fleet.get_command(db_path, command_id)
         if command is None:
             return jsonify({"error": "unknown command"}), 404
-        return jsonify(command), 200
+        # Never a TURN credential to the console (issue #199) -- see fleet.operator_view.
+        return jsonify(fleet.operator_view(command)), 200
 
     @bp.route("/api/fleet/commands/<command_id>/output", methods=["GET"])
     @login_required
