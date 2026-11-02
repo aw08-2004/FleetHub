@@ -291,6 +291,21 @@ def _check_known_machine(machine, presented, machine_record):
     return True
 
 
+def _admit(conn, machine, machine_record, presented, previous_agent_id, previous_token):
+    """Raise NameEnrolled unless this PC may take `machine`; else (replaced, had_record).
+
+    `replaced` is the agent id the PC proved it holds (fleet.proven_live_agent), which the
+    caller revokes, or None. A proven credential skips the identity comparison -- see
+    redeem_code -- and counts as history, so the name's identity row is kept.
+    """
+    replaced = fleet.proven_live_agent(conn, machine, previous_agent_id, previous_token)
+    if fleet.live_agent_holds(conn, machine, except_agent=replaced):
+        raise NameEnrolled(NAME_ENROLLED_MESSAGE)
+    if replaced:
+        return replaced, True
+    return None, _check_known_machine(machine, presented, machine_record)
+
+
 def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_record=None,
                 machine_guid=None, smbios_uuid=None, previous_agent_id=None,
                 previous_token=None):
@@ -339,14 +354,9 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
         row = _live_row(conn, norm, now)
         if row is None:
             raise OnboardingError(INVALID_MESSAGE)
-        replaced = fleet.proven_live_agent(conn, machine, previous_agent_id, previous_token)
-        if fleet.live_agent_holds(conn, machine, except_agent=replaced):
-            raise NameEnrolled(NAME_ENROLLED_MESSAGE)
-        if replaced:
-            had_record = True
-        else:
-            presented = identity.evidence(serial, machine_guid, smbios_uuid)
-            had_record = _check_known_machine(machine, presented, machine_record)
+        replaced, had_record = _admit(conn, machine, machine_record,
+                                      identity.evidence(serial, machine_guid, smbios_uuid),
+                                      previous_agent_id, previous_token)
         claimed = conn.execute(
             "UPDATE onboarding_codes SET redeemed_at = ?, redeemed_machine = ?, redeemed_ip = ? "
             "WHERE code_id = ? AND redeemed_at IS NULL AND revoked_at IS NULL "
@@ -359,6 +369,9 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
         conn.execute("UPDATE onboarding_codes SET agent_id = ? WHERE code_id = ?",
                      (agent_id, row["code_id"]))
         if replaced:
+            # Inline, not fleet.revoke_agent: that opens its own connection and could not join
+            # this transaction, and the revoke must commit with the mint or not at all. Its
+            # audit line is written after commit, below, for the same reason.
             conn.execute("UPDATE agents SET revoked = 1 WHERE agent_id = ?", (replaced,))
         # This PC spent a code and passed the identity check, so what it presented is now
         # the name's identity -- including a re-imaged PC's NEW MachineGuid, which a report
