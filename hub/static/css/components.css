@@ -1550,6 +1550,37 @@ label.checkbox input {
     flex: none;
 }
 
+/* ============ Notice ============ */
+/* A tinted box for a state the operator should read before acting: a firmware change, a
+   wake request, the BIOS image warning. Firmware, Wake, Discovery, Alerts and the image
+   library all built `notice notice--<tone>` for months while no stylesheet defined it, so
+   each one rendered as loose text with a 16px section title and browser bullets. The tones
+   are the status-pill tones, so a pill and a notice for the same state agree. */
+.notice {
+    border: 1px solid var(--card-border);
+    border-left-width: 3px;
+    border-radius: var(--radius-md);
+    background: var(--control-bg);
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-3);
+}
+
+.notice > :last-child { margin-bottom: 0; }
+.notice .section-title { font-size: var(--text-base); margin-bottom: var(--space-1); }
+.notice--ok { border-left-color: var(--success); background: var(--success-bg); }
+.notice--warn { border-left-color: var(--warning); background: var(--warning-bg); }
+.notice--danger { border-left-color: var(--danger); background: var(--danger-bg); }
+.notice--muted { border-left-color: var(--muted); }
+
+/* A list that is a stack of rows, not prose: no bullets, no indent. */
+.plain-list {
+    list-style: none;
+    margin: 0 0 var(--space-2);
+    padding: 0;
+}
+
+.plain-list > li + li { margin-top: var(--space-2); }
+
 /* ============ Data table ============ */
 .data-table {
     width: 100%;

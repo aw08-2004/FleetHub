@@ -638,6 +638,11 @@ dialog says *whole fleet* instead.
 - [ ] **GPU tile** is absent on a PC with no GPU readings.
 - [ ] **Copy.** The sidebar reads *Audit log*, *Permission groups*, *Invite links*, *Download
   client*, *Group policy*; the machine page says *Agent version*; spot-check German and Spanish.
+- [ ] **Firmware tab layout.** On a Dell's Firmware tab: the *Reported ... BIOS x* line and the
+  search/Setup password/Re-read buttons share one row; there is one search box, not two; every
+  Value control is the same width; an old *applied* change is a single grey line, not a green
+  card; and after changing a setting far down the list, the Apply/Discard bar is pinned to the
+  bottom of the window. Also check a *Failed* BIOS update reads as a row with no bullet.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
