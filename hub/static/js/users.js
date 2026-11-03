@@ -105,7 +105,7 @@ function renderUserRow(user) {
     const edit = el('button', 'btn', t('common.edit'));
     edit.type = 'button';
     edit.addEventListener('click', () => openEditor(user));
-    const remove = el('button', 'btn', t('common.delete'));
+    const remove = el('button', 'btn btn--danger', t('common.delete'));
     remove.type = 'button';
     remove.addEventListener('click', () => deleteUser(user, remove));
     wrap.append(edit, remove);

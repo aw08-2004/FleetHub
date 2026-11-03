@@ -147,8 +147,10 @@ async function loadRules() {
             edit.addEventListener('click', () => openEditor(rule));
             toolRow.appendChild(edit);
 
+            // The verb for what the click does, as on Watchdogs -- not the state word. The
+            // state word read "Disabled" on every enabled rule, and clicking it disabled it.
             const toggle = el('button', 'btn btn--ghost',
-                rule.enabled ? t('rules.disabled') : t('rules.enabled'));
+                rule.enabled ? t('rules.disable') : t('rules.enable'));
             toggle.type = 'button';
             toggle.addEventListener('click', async () => {
                 await api(`/api/rules/${rule.id}/enabled`, json('PUT', { enabled: !rule.enabled }));
@@ -156,7 +158,7 @@ async function loadRules() {
             });
             toolRow.appendChild(toggle);
 
-            const remove = el('button', 'btn btn--ghost', t('rules.delete'));
+            const remove = el('button', 'btn btn--danger', t('rules.delete'));
             remove.type = 'button';
             remove.addEventListener('click', async () => {
                 if (!await confirmDialog({
@@ -1158,7 +1160,7 @@ function renderScripts() {
             edit.addEventListener('click', () => openScript(script.name));
             toolRow.appendChild(edit);
 
-            const remove = el('button', 'btn btn--ghost', t('scripts.delete'));
+            const remove = el('button', 'btn btn--danger', t('scripts.delete'));
             remove.type = 'button';
             remove.addEventListener('click', () => deleteScript(script.name));
             toolRow.appendChild(remove);

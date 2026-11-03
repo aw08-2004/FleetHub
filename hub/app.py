@@ -174,7 +174,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.177.0"
+HUB_VERSION = "1.178.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -6038,6 +6038,11 @@ def _fleet_attention_lists(rows, top, low_disk_pct):
         "low_disk_free_pct": low_disk_pct,
     }
 
+# The setting the console reads to colour a temperature red. One name, three readers (the
+# dashboard, Devices and the machine page) -- a typo in one would silently fall back to the
+# default there and the three pages would disagree about what is hot.
+HOT_TEMP_SETTING = "hub.hot_temp_threshold_c"
+
 
 def _build_fleet_summary(top):
     """Compute one summary for the CURRENT caller's scope. Called under the cache lock."""
@@ -6084,7 +6089,7 @@ def _build_fleet_summary(top):
         if pinned:
             latest_by_platform[p] = pinned
     machine_platforms = capabilities.platforms_for(DB_PATH, scoped_names)
-    hot_threshold = settings.get_int(DB_PATH, "hub.hot_temp_threshold_c")
+    hot_threshold = settings.get_int(DB_PATH, HOT_TEMP_SETTING)
     low_disk_pct = settings.get_int(DB_PATH, "hub.low_disk_free_pct")
 
     counts = {"total": len(rows), "online": 0, "offline": 0, "never_enrolled": 0,
@@ -7622,8 +7627,11 @@ def index():
 @login_required
 @access.require(permissions.VIEW)
 def inventory_page():
+    # The hot threshold rides along so the Last temp column can colour a reading at or over
+    # it -- the same setting, and the same >= comparison, as the machine page's temp tile.
     return render_template("inventory.html", hub_version=HUB_VERSION,
-                           latest_agent_version=get_latest_agent_version())
+                           latest_agent_version=get_latest_agent_version(),
+                           hot_threshold_c=settings.get_int(DB_PATH, HOT_TEMP_SETTING))
 
 @app.route("/alerts")
 @login_required
@@ -7721,7 +7729,7 @@ def machine_page(machine):
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
         # The Dashboard's "over N °C" filter, so the machine page marks the same reading hot
         # that the fleet view counts as hot. One setting, not a second threshold to drift.
-        hot_threshold_c=settings.get_int(DB_PATH, "hub.hot_temp_threshold_c"),
+        hot_threshold_c=settings.get_int(DB_PATH, HOT_TEMP_SETTING),
         live_window_seconds=settings.get_int(DB_PATH, "hub.live_default_window_seconds"),
         # How often the page renews its "somebody is watching this" ping. Served rather than
         # hardcoded in machine.js so the ping rate and the watch TTL it has to beat stay one

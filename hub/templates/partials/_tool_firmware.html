@@ -15,7 +15,12 @@
             <span class="status-pill status-pill--muted" id="firmware-status">
                 <span class="status-pill__dot"></span><span id="firmware-status-text">{{ t('common.loading') }}</span></span>
         </summary>
-        <div class="terminal__head-actions fold__actions">
+        {# One row: what the machine reported on the left, what you can do on the right. The
+           meta line used to sit alone under a right-aligned toolbar, so the eye zig-zagged
+           from the far right back to the far left before reaching the table. #}
+        <div class="firmware-toolbar">
+        <div id="firmware-meta" class="firmware-toolbar__meta"></div>
+        <div class="firmware-toolbar__actions">
             <input type="search" id="firmware-search" class="input"
                    placeholder="{{ t('machine.firmware.search') }}"
                    aria-label="{{ t('machine.firmware.search') }}">
@@ -28,14 +33,16 @@
                     title="{{ t('machine.firmware.refresh_title') }}">{{ t('machine.firmware.refresh') }}</button>
             {% endif %}
         </div>
-        <div id="firmware-meta" class="terminal__hint"></div>
+        </div>
         {# The pending/last change, above the table on purpose: while a change is in
            flight every value in that table may be about to be wrong. #}
         <div id="firmware-change"></div>
         <div id="firmware-body"></div>
         {# Only rendered into when at least one row has been edited. An apply bar that is
            always present invites the click that submits nothing. #}
-        <div id="firmware-apply" hidden>
+        {# Sticky to the bottom of the viewport: a Dell reports a hundred-odd settings, and an
+           edit on row eighty used to leave Apply a long scroll away, out of sight. #}
+        <div id="firmware-apply" class="firmware-apply" hidden>
             <span id="firmware-apply-count" class="stat-card__meta"></span>
             <button id="firmware-apply-btn" type="button" class="btn btn--primary">{{ t('machine.firmware.apply') }}</button>
             <button id="firmware-reset-btn" type="button" class="btn btn--ghost">{{ t('machine.firmware.discard') }}</button>

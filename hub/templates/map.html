@@ -25,11 +25,13 @@
     </div>
     <div style="text-align: right;">
         <span class="stat-card__meta" id="fleet-map-count"></span>
-        {# Revealed by fleet-map.js only for an operator who may locate. Unchecking it is the
-           pause: nothing is asked while it is off or while this tab is hidden. #}
+        {# Revealed by fleet-map.js only for an operator who may locate. Unchecked by default:
+           ticking it re-locates every online device and shows each user a notice, so it must
+           be somebody's choice, not a side effect of opening the page. fleet-map.js restores
+           the operator's own last choice. Nothing is asked while it is off or the tab hidden. #}
         <div id="fleet-map-live" hidden>
             <label class="stat-card__meta">
-                <input type="checkbox" id="fleet-map-live-toggle" checked>
+                <input type="checkbox" id="fleet-map-live-toggle">
                 {{ t('location.map.live') }}
             </label>
             <span class="stat-card__meta" id="fleet-map-live-status"></span>

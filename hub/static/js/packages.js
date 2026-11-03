@@ -200,7 +200,7 @@ function renderPackageRow(pkg) {
     editBtn.addEventListener('click', () => openPackage(pkg));
     actions.appendChild(editBtn);
 
-    const delBtn = el('button', 'btn', t('common.delete'));
+    const delBtn = el('button', 'btn btn--danger', t('common.delete'));
     delBtn.type = 'button';
     delBtn.addEventListener('click', async () => {
         if (!await confirmDialog({

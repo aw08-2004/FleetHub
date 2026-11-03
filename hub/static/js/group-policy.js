@@ -273,7 +273,7 @@
             const wrap = el('div', 'perm-row-actions');
             if (CAN_MANAGE) {
                 wrap.appendChild(button(t('common.edit'), 'btn', () => openEditor(policy)));
-                wrap.appendChild(button(t('common.delete'), 'btn', () => removePolicy(policy)));
+                wrap.appendChild(button(t('common.delete'), 'btn btn--danger', () => removePolicy(policy)));
             }
             actions.appendChild(wrap);
             tr.appendChild(actions);

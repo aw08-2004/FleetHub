@@ -100,6 +100,51 @@
 
     // ------------------------------------------------------------------ control
 
+    // How many exception lines the Windows Update card shows before "Show all", and how many
+    // update names one machine's outside-install line spells out before the ellipsis.
+    const CONTROL_VISIBLE = 5;
+    const CONTROL_TITLES = 3;
+
+    // One name per distinct update: the KB when there is one, else the title. The same KB
+    // arrives once per scan, which is what made the old card 216 lines long.
+    function distinctUpdates(installs) {
+        const titles = [];
+        const seen = new Set();
+        for (const item of installs) {
+            const key = item.kb || (item.title || '').trim();
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            titles.push(key);
+        }
+        return titles;
+    }
+
+    // The exception lines for one machine: its ownership state, then its outside installs
+    // collapsed to distinct updates. Split out of renderControl so the card builder reads as
+    // layout and this reads as the rules.
+    function controlNotes(row) {
+        const notes = [];
+        if (row.state === 'managed_elsewhere') {
+            notes.push(t('patches.control.managed_elsewhere', { machine: row.machine }));
+        } else if (row.desired && !row.state) {
+            notes.push(t('patches.control.not_reported', { machine: row.machine }));
+        } else if (row.desired && row.state === 'windows') {
+            notes.push(t('patches.control.pending', { machine: row.machine }));
+        }
+        const titles = distinctUpdates(row.outside_installs || []);
+        if (titles.length === 1) {
+            notes.push(t('patches.control.outside_install', {
+                machine: row.machine, title: titles[0] }));
+        } else if (titles.length > 1) {
+            const named = titles.slice(0, CONTROL_TITLES).join(', ');
+            notes.push(tPlural('patches.control.outside_installs', titles.length, {
+                machine: row.machine,
+                titles: titles.length > CONTROL_TITLES ? `${named}, …` : named,
+            }));
+        }
+        return notes;
+    }
+
     // Who installs Windows updates on each PC (issue #140). The point of the card is the
     // exceptions, not the count: a PC a window wants owned whose agent never said so (too
     // old, or not scanned yet), a PC Group Policy or Intune already manages, and a PC where
@@ -114,25 +159,36 @@
         card.append(el('div', 'stat-card__label', t('patches.control.heading')),
                     el('div', 'stat-card__value',
                        t('patches.control.owned', { owned, total: rows.length })));
-        const notes = [];
-        for (const row of rows) {
-            if (row.state === 'managed_elsewhere') {
-                notes.push(t('patches.control.managed_elsewhere', { machine: row.machine }));
-            } else if (row.desired && !row.state) {
-                notes.push(t('patches.control.not_reported', { machine: row.machine }));
-            } else if (row.desired && row.state === 'windows') {
-                notes.push(t('patches.control.pending', { machine: row.machine }));
-            }
-            for (const item of row.outside_installs || []) {
-                notes.push(t('patches.control.outside_install', {
-                    machine: row.machine,
-                    title: item.kb ? `${item.kb} ${item.title}` : item.title,
-                }));
-            }
+        // **One line per machine for its outside installs, not one per update.** A fleet whose
+        // PCs a local admin had patched by hand printed 216 lines here, the same KB repeated
+        // once per scan, and pushed the update tabs some 4000 px down the page. Now each
+        // machine says how many distinct updates and names the first few; and only the first
+        // CONTROL_VISIBLE notes show until somebody asks for the rest.
+        const notes = rows.flatMap(controlNotes);
+        const shown = notes.slice(0, CONTROL_VISIBLE);
+        for (const note of shown) card.append(el('div', 'stat-card__meta', note));
+        const rest = notes.slice(CONTROL_VISIBLE);
+        if (rest.length) {
+            const more = el('div');
+            more.hidden = true;
+            for (const note of rest) more.append(el('div', 'stat-card__meta', note));
+            const toggle = el('button', 'btn btn--ghost',
+                tPlural('patches.control.show_all', notes.length));
+            toggle.type = 'button';
+            toggle.style.marginTop = 'var(--space-2)';
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.addEventListener('click', () => {
+                more.hidden = !more.hidden;
+                toggle.setAttribute('aria-expanded', String(!more.hidden));
+                toggle.textContent = more.hidden
+                    ? tPlural('patches.control.show_all', notes.length)
+                    : t('patches.control.show_fewer');
+            });
+            card.append(more, toggle);
         }
-        for (const note of notes) card.append(el('div', 'stat-card__meta', note));
         controlBox.append(card);
     }
+
 
     // ------------------------------------------------------------------ updates
 
@@ -309,7 +365,7 @@
                 const edit = el('button', 'btn', t('common.edit'));
                 edit.type = 'button';
                 edit.addEventListener('click', () => openWindowEditor(win));
-                const remove = el('button', 'btn', t('common.delete'));
+                const remove = el('button', 'btn btn--danger', t('common.delete'));
                 remove.type = 'button';
                 remove.addEventListener('click', async () => {
                     if (!await confirmDialog({

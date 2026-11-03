@@ -118,7 +118,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-10-31
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-11-03
 
 **How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
 `beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.177.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.165.0**; `beta` is at **1.178.0**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -606,6 +606,43 @@ revoke-then-onboard route, and a second live agent on the name is still refused.
 - [ ] **Another machine's credential is no use.** Copy one machine's `agent.json` to a second
   machine with a different name and run a script there under the first name: still refused as
   *already enrolled*, and the code is not used.
+
+**Hub 1.178.0: console design-review fixes** (no agent release)
+Thirteen findings from a design review of the 1.177.0 console, all hub-only. The two that
+change what the console *does* rather than how it looks are the fleet-wide wake, which now
+asks first, and the provisioning QR, which is no longer fetched (and audited) on page load.
+Rejected: narrowing the fleet wake to the filtered rows -- the hub decides who relays for whom
+and the scheduler would disagree with the console about which machines are asleep, so the
+dialog says *whole fleet* instead.
+- [ ] **Rules toggle.** On Rules, an enabled rule's button reads *Disable* and a disabled one's
+  *Enable*, and clicking each does what it says.
+- [ ] **Fleet wake asks.** On Devices with a PC offline, set a search that hides it and click
+  *Wake all offline PCs*: a dialog names the whole-fleet offline count, Cancel sends nothing,
+  and the button sits at the far right, apart from *Export CSV*.
+- [ ] **Map Live is off.** Open the map in a fresh browser: *Live* is unchecked and no device
+  shows a locate notice. Tick it, reload, and it stays ticked.
+- [ ] **Machine header.** A machine page shows Online/Offline (and *not enrolled* where it
+  applies) beside the name, with *Last seen ... ago* that keeps ticking.
+- [ ] **Patches card.** With outside installs reported, the Windows Update card has one line
+  per machine and a *Show all N* toggle past five. Patches and Events summaries render as tiles.
+- [ ] **BitLocker read count.** A volume whose key was read shows *Read N times, most recently
+  ...*, not a key name.
+- [ ] **Delete is red** on Packages, Rules, Watchdogs, Group policy, Device policy, Users,
+  Invite links and Device groups, with a gap from Edit.
+- [ ] **Hot temps.** Set the hot threshold below a machine's reading: its *Last temp* on
+  Devices and the Dashboard's *Hottest right now* turn red.
+- [ ] **Network tab.** On an online PC, *Already awake* looks disabled, and a past *No check-in*
+  verdict no longer shows above the green *Awake*.
+- [ ] **Provisioning.** Opening Device provisioning writes no *provisioning_qr* audit line and
+  shows no code; *Show code* draws it and writes one. The payload table lists the component once.
+- [ ] **GPU tile** is absent on a PC with no GPU readings.
+- [ ] **Copy.** The sidebar reads *Audit log*, *Permission groups*, *Invite links*, *Download
+  client*, *Group policy*; the machine page says *Agent version*; spot-check German and Spanish.
+- [ ] **Firmware tab layout.** On a Dell's Firmware tab: the *Reported ... BIOS x* line and the
+  search/Setup password/Re-read buttons share one row; there is one search box, not two; every
+  Value control is the same width; an old *applied* change is a single grey line, not a green
+  card; and after changing a setting far down the list, the Apply/Discard bar is pinned to the
+  bottom of the window. Also check a *Failed* BIOS update reads as a row with no bullet.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 

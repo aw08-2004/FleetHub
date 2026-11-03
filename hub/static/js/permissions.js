@@ -198,7 +198,7 @@ function renderDetail() {
     const sub = el('button', 'btn btn--primary', t('permissions.new_subgroup'));
     sub.type = 'button';
     sub.addEventListener('click', () => openEditor(null, group.id));
-    const remove = el('button', 'btn', t('common.delete'));
+    const remove = el('button', 'btn btn--danger', t('common.delete'));
     remove.type = 'button';
     remove.addEventListener('click', () => deleteGroup(group, remove));
     actions.append(edit, sub, remove);
@@ -375,7 +375,7 @@ function actionsCell(group) {
     const edit = el('button', 'btn', t('common.edit'));
     edit.type = 'button';
     edit.addEventListener('click', () => openEditor(group));
-    const remove = el('button', 'btn', t('common.delete'));
+    const remove = el('button', 'btn btn--danger', t('common.delete'));
     remove.type = 'button';
     remove.addEventListener('click', () => deleteGroup(group, remove));
     wrap.append(edit, remove);

@@ -127,7 +127,7 @@
 
             const targets = el('td', null, entry.fleet_wide
                 ? t('policy.targets.fleet')
-                : t('policy.targets.machines', { count: entry.machines.length }));
+                : tPlural('policy.targets.machines', entry.machines.length));
             if (entry.machines_hidden) {
                 targets.appendChild(document.createTextNode(' '));
                 targets.appendChild(el('span', 'stat-card__meta',
@@ -141,7 +141,7 @@
                 edit.type = 'button';
                 edit.addEventListener('click', () => openEditor(entry));
                 actions.appendChild(edit);
-                const remove = el('button', 'btn btn--ghost', t('policy.delete'));
+                const remove = el('button', 'btn btn--danger', t('policy.delete'));
                 remove.type = 'button';
                 remove.addEventListener('click', () => destroy(entry));
                 actions.appendChild(remove);

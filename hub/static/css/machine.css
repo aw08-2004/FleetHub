@@ -1067,3 +1067,105 @@
     font-size: var(--text-base);
     font-weight: 600;
 }
+
+/* ============ Firmware tab ============ */
+/* Roadmap #9. Laid out for the case that actually happens: a Dell reports ~100 settings,
+   almost all of them a two- or three-way choice. Before this the search box sat alone on
+   the right, the "Reported ... BIOS 1.39.0" line alone on the left under it, the generic
+   table toolbar added a second search box, and every select sized itself to its own
+   longest option -- so the Value column was a ragged edge 102 rows long. */
+.firmware-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin: var(--space-3) 0;
+}
+
+.firmware-toolbar__meta {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    min-width: 0;
+}
+
+.firmware-toolbar__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.firmware-toolbar__actions .input[type="search"] {
+    width: 16rem;
+    max-width: 100%;
+}
+
+/* The applied-change line: history, so it reads as metadata, not as an alert. */
+.firmware-lastchange {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    margin: 0 0 var(--space-3);
+}
+
+.firmware-lastchange strong {
+    color: var(--success);
+    font-weight: 600;
+}
+
+/* Wide enough that a hundred rows are not a phone screen each, and scrolls sideways on its
+   own on a narrow screen rather than pushing the whole page. */
+#firmware-body {
+    overflow-x: auto;
+}
+
+.firmware-table td {
+    padding-top: var(--space-2);
+    padding-bottom: var(--space-2);
+    vertical-align: middle;
+}
+
+/* One width for every control in the column, so the eye can run straight down it. */
+.firmware-table__value {
+    width: 18rem;
+}
+
+.firmware-table__value .input {
+    width: 100%;
+}
+
+.firmware-table__kind {
+    width: 1%;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: var(--text-sm);
+    text-align: right;
+}
+
+.firmware-table tbody tr:hover {
+    background: var(--accent-soft);
+}
+
+/* Pinned to the bottom of the viewport while there is something to apply: see the template. */
+.firmware-apply:not([hidden]) {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin: var(--space-3) calc(-1 * var(--space-5)) 0;
+    padding: var(--space-3) var(--space-5);
+    background: var(--card);
+    border-top: 1px solid var(--card-border);
+    box-shadow: 0 -8px 16px rgb(0 0 0 / 0.12);
+}
+
+.firmware-apply #firmware-apply-count {
+    margin-right: auto;
+}
+
+.firmware-update .status-pill {
+    margin-right: var(--space-2);
+}

@@ -104,10 +104,12 @@
                 row.appendChild(button);
             }
             if (protector.read_count) {
-                row.appendChild(el('div', 'stat-card__meta', t('bitlocker.escrow.read_before', {
-                    count: protector.read_count,
-                    when: new Date(protector.last_read_at * 1000).toLocaleString(),
-                })));
+                // tPlural, not t(): read_before is a {one, other} pair, and t() on the
+                // parent key printed the raw key name on every machine whose key was read.
+                row.appendChild(el('div', 'stat-card__meta', tPlural('bitlocker.escrow.read_before',
+                    protector.read_count, {
+                        when: new Date(protector.last_read_at * 1000).toLocaleString(),
+                    })));
             }
             cell.appendChild(row);
         });

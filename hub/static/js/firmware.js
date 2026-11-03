@@ -178,10 +178,36 @@
     }
 
     // ---------------------------------------------------------------- change panel
+    function appliedLine(change) {
+        const line = el('p', 'firmware-lastchange');
+        line.appendChild(el('strong', null, labelFor(CHANGE_LABELS, change.status)));
+        const rows = (change.results && change.results.length)
+            ? change.results : change.changes;
+        for (const row of rows || []) {
+            line.appendChild(document.createTextNode(' · '));
+            line.appendChild(el('span', null, `${row.name}: ` + t(
+                'machine.firmware.change.transition',
+                { from: row.from || '—', to: row.to || '—' })));
+        }
+        line.appendChild(document.createTextNode(' · '));
+        line.appendChild(el('span', null, t('machine.firmware.change.meta',
+            { who: change.requested_by || '—', when: fmtTime(change.requested_at) })));
+        return line;
+    }
+
     function renderChange() {
         changeBox.replaceChildren();
         const change = (data && data.changes && data.changes[0]) || null;
         if (!change) return;
+
+        // A change that applied cleanly is history, not news. It used to render as the same
+        // big card as a failure, so a WirelessLan toggle from two months ago headed the tab
+        // above every newer report. Now it is one quiet line; anything that still needs a
+        // human (failed, partial, pending_reboot, in flight) keeps the full card.
+        if (change.status === 'applied') {
+            changeBox.appendChild(appliedLine(change));
+            return;
+        }
 
         const card = el('div', `notice notice--${CHANGE_TONES[change.status] || 'muted'}`);
         card.appendChild(el('div', 'section-title',
@@ -360,7 +386,7 @@
                 .catch(() => null);
             const mine = detail && (detail.targets || [])
                 .find((target) => target.machine === currentMachine());
-            const item = el('li');
+            const item = el('li', 'firmware-update');
             const pill = el('span',
                             `status-pill status-pill--${UPDATE_TONES[mine && mine.status] || 'muted'}`);
             pill.appendChild(el('span', 'status-pill__dot'));
@@ -407,9 +433,13 @@
         if (data.vendor) {
             metaLine.appendChild(document.createTextNode(' · '));
             // The vendor and the interface it answered on are the machine's own words --
-            // product/namespace names, not prose, so they are shown verbatim.
-            metaLine.appendChild(el('span', null,
-                data.interface ? `${data.vendor} (${data.interface})` : data.vendor));
+            // product/namespace names, not prose, so they are shown verbatim. The interface
+            // (a WMI namespace like root\dcim\sysman\biosattributes) is for whoever is
+            // debugging a read, not for the operator scanning the tab, so it moved into the
+            // tooltip instead of being dropped.
+            const vendor = el('span', null, data.vendor);
+            if (data.interface) vendor.title = data.interface;
+            metaLine.appendChild(vendor);
         }
         if (data.bios_version) {
             metaLine.appendChild(document.createTextNode(' · '));
@@ -479,7 +509,12 @@
             return;
         }
 
-        const table = el('table', 'data-table');
+        const table = el('table', 'data-table firmware-table');
+        // The card already has its own search box above it, so the generic table toolbar
+        // only added a second one ("Search this table") that filtered differently. "off"
+        // rather than "filters": with three columns, one of them free text, the column
+        // filters had nothing the search box does not already do.
+        table.dataset.tableTools = 'off';
         const thead = el('thead');
         const headRow = el('tr');
         // Literal keys, not a loop over a suffix: a key assembled by concatenation is
@@ -487,7 +522,7 @@
         // catalog entry would caption itself with its own key and raise nowhere.
         headRow.appendChild(el('th', null, t('machine.firmware.col.setting')));
         headRow.appendChild(el('th', null, t('machine.firmware.col.value')));
-        headRow.appendChild(el('th', null, t('machine.firmware.col.kind')));
+        headRow.appendChild(el('th', 'firmware-table__kind', t('machine.firmware.col.kind')));
         thead.appendChild(headRow);
         table.appendChild(thead);
 
@@ -506,7 +541,7 @@
             tr.appendChild(nameCell);
 
             const editable = canEdit && !attr.read_only;
-            const valueCell = el('td');
+            const valueCell = el('td', 'firmware-table__value');
             valueCell.appendChild(valueControl(attr, editable));
             if (!editable && attr.possible_values && attr.possible_values.length > 1) {
                 // Only worth listing when there is no control offering them. With a <select>
@@ -520,7 +555,7 @@
             }
             tr.appendChild(valueCell);
 
-            const kindCell = el('td');
+            const kindCell = el('td', 'firmware-table__kind');
             kindCell.appendChild(el('span', null, kindLabel(attr.kind)));
             if (attr.read_only) {
                 kindCell.appendChild(document.createTextNode(' · '));

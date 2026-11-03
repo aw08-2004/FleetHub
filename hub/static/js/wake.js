@@ -232,14 +232,9 @@
         }
     }
 
-    function renderWakeState() {
-        wakeState.replaceChildren();
-        const request = data.request || (data.history || [])[0];
-        if (!request) return;
-
-        const card = el('div', `notice notice--${STATUS_TONES[request.status] || 'muted'}`);
-        card.appendChild(el('div', 'section-title', labelFor(STATUS_LABELS, request.status)));
-
+    // The explanation under a wake request's title, by status. Split out of renderWakeState
+    // so the card and its cancel button are not buried in the per-status wording.
+    function wakeStateLines(request) {
         const lines = [];
         if (request.status === 'pending') {
             lines.push(request.subnet
@@ -255,6 +250,10 @@
             // gone and nothing will ever acknowledge it. What resolves this row is the
             // machine itself checking in.
             lines.push(t('machine.network.sent_note'));
+        } else if (request.status === 'no_answer') {
+            // From the catalog, not request.error: that is the hub's English log sentence,
+            // which started lower-case and was never translated.
+            lines.push(t('machine.network.no_answer_note'));
         } else if (request.error) {
             lines.push(request.error);
         }
@@ -262,6 +261,22 @@
             lines.push(t('machine.network.delivered_by',
                          { method: labelFor(DELIVERY_LABELS, request.delivery) }));
         }
+        return lines;
+    }
+
+    function renderWakeState() {
+        wakeState.replaceChildren();
+        const request = data.request || (data.history || [])[0];
+        if (!request) return;
+        // A "no check-in since the packet was sent" verdict is stale the moment the PC is
+        // online -- it plainly has checked in since -- and a warning card above a green
+        // "Awake" pill read as two answers to one question. The row stays in Wake history.
+        if (data.online && request.status === 'no_answer') return;
+
+        const card = el('div', `notice notice--${STATUS_TONES[request.status] || 'muted'}`);
+        card.appendChild(el('div', 'section-title', labelFor(STATUS_LABELS, request.status)));
+
+        const lines = wakeStateLines(request);
         lines.forEach((line) => card.appendChild(el('p', 'stat-card__meta', line)));
 
         if (request.status === 'pending' && wakeBtn) {
