@@ -127,9 +127,18 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.165.0**; `beta` is at **1.178.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.166.0**; `beta` is at **1.178.1**. The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
+
+**2026-11-03: hub 1.167.0 through 1.178.1 sent to `main` unconfirmed, on the owner's call.** Every
+box still open below was open when that `beta` → `main` PR was opened, so each is now owed on the
+production hub (or the named agent) instead of the beta one -- the same footing as 1.165.0. They
+stay here until ticked. **Before merging it, do *Move the Docker hosts first*:** a Docker host
+still on `HUB_TAG=latest` follows whichever channel is newer once that workflow is live. The
+same PR syncs `.github/workflows/hub-image.yml` on `beta` to `main`'s bytes, because `main` had
+taken workflow-only fixes (#196 and after) that `beta` never got, and the release would
+otherwise have stopped on a conflict in that file.
 
 **Hub 1.159.0 — Group Policy, waiting on agent 3.48.0** (#163)
 - [x] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*

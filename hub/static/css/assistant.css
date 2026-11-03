@@ -474,6 +474,8 @@
 /* Only the buttons fade: the time beside them (issue #167) is there to be read without
    pointing at anything. */
 .asst__msg-actions .asst__icon {
+    width: 26px;
+    height: 26px;
     opacity: 0.35;
     transition: opacity 0.15s;
 }
@@ -514,11 +516,6 @@
 
 .asst__action-title .asst__time {
     font-weight: normal;
-}
-
-.asst__msg-actions .asst__icon {
-    width: 26px;
-    height: 26px;
 }
 
 .asst__msg-actions .asst__icon svg {
