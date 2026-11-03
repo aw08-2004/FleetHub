@@ -178,6 +178,23 @@
     }
 
     // ---------------------------------------------------------------- change panel
+    function appliedLine(change) {
+        const line = el('p', 'firmware-lastchange');
+        line.appendChild(el('strong', null, labelFor(CHANGE_LABELS, change.status)));
+        const rows = (change.results && change.results.length)
+            ? change.results : change.changes;
+        for (const row of rows || []) {
+            line.appendChild(document.createTextNode(' · '));
+            line.appendChild(el('span', null, `${row.name}: ` + t(
+                'machine.firmware.change.transition',
+                { from: row.from || '—', to: row.to || '—' })));
+        }
+        line.appendChild(document.createTextNode(' · '));
+        line.appendChild(el('span', null, t('machine.firmware.change.meta',
+            { who: change.requested_by || '—', when: fmtTime(change.requested_at) })));
+        return line;
+    }
+
     function renderChange() {
         changeBox.replaceChildren();
         const change = (data && data.changes && data.changes[0]) || null;
@@ -188,20 +205,7 @@
         // above every newer report. Now it is one quiet line; anything that still needs a
         // human (failed, partial, pending_reboot, in flight) keeps the full card.
         if (change.status === 'applied') {
-            const line = el('p', 'firmware-lastchange');
-            line.appendChild(el('strong', null, labelFor(CHANGE_LABELS, change.status)));
-            const rows = (change.results && change.results.length)
-                ? change.results : change.changes;
-            for (const row of rows || []) {
-                line.appendChild(document.createTextNode(' · '));
-                line.appendChild(el('span', null, `${row.name}: ` + t(
-                    'machine.firmware.change.transition',
-                    { from: row.from || '—', to: row.to || '—' })));
-            }
-            line.appendChild(document.createTextNode(' · '));
-            line.appendChild(el('span', null, t('machine.firmware.change.meta',
-                { who: change.requested_by || '—', when: fmtTime(change.requested_at) })));
-            changeBox.appendChild(line);
+            changeBox.appendChild(appliedLine(change));
             return;
         }
 

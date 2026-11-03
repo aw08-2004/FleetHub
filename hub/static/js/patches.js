@@ -105,6 +105,46 @@
     const CONTROL_VISIBLE = 5;
     const CONTROL_TITLES = 3;
 
+    // One name per distinct update: the KB when there is one, else the title. The same KB
+    // arrives once per scan, which is what made the old card 216 lines long.
+    function distinctUpdates(installs) {
+        const titles = [];
+        const seen = new Set();
+        for (const item of installs) {
+            const key = item.kb || (item.title || '').trim();
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            titles.push(key);
+        }
+        return titles;
+    }
+
+    // The exception lines for one machine: its ownership state, then its outside installs
+    // collapsed to distinct updates. Split out of renderControl so the card builder reads as
+    // layout and this reads as the rules.
+    function controlNotes(row) {
+        const notes = [];
+        if (row.state === 'managed_elsewhere') {
+            notes.push(t('patches.control.managed_elsewhere', { machine: row.machine }));
+        } else if (row.desired && !row.state) {
+            notes.push(t('patches.control.not_reported', { machine: row.machine }));
+        } else if (row.desired && row.state === 'windows') {
+            notes.push(t('patches.control.pending', { machine: row.machine }));
+        }
+        const titles = distinctUpdates(row.outside_installs || []);
+        if (titles.length === 1) {
+            notes.push(t('patches.control.outside_install', {
+                machine: row.machine, title: titles[0] }));
+        } else if (titles.length > 1) {
+            const named = titles.slice(0, CONTROL_TITLES).join(', ');
+            notes.push(tPlural('patches.control.outside_installs', titles.length, {
+                machine: row.machine,
+                titles: titles.length > CONTROL_TITLES ? `${named}, …` : named,
+            }));
+        }
+        return notes;
+    }
+
     // Who installs Windows updates on each PC (issue #140). The point of the card is the
     // exceptions, not the count: a PC a window wants owned whose agent never said so (too
     // old, or not scanned yet), a PC Group Policy or Intune already manages, and a PC where
@@ -124,35 +164,7 @@
         // once per scan, and pushed the update tabs some 4000 px down the page. Now each
         // machine says how many distinct updates and names the first few; and only the first
         // CONTROL_VISIBLE notes show until somebody asks for the rest.
-        const notes = [];
-        for (const row of rows) {
-            if (row.state === 'managed_elsewhere') {
-                notes.push(t('patches.control.managed_elsewhere', { machine: row.machine }));
-            } else if (row.desired && !row.state) {
-                notes.push(t('patches.control.not_reported', { machine: row.machine }));
-            } else if (row.desired && row.state === 'windows') {
-                notes.push(t('patches.control.pending', { machine: row.machine }));
-            }
-            const titles = [];
-            const seen = new Set();
-            for (const item of row.outside_installs || []) {
-                const title = item.kb ? `${item.kb} ${item.title || ''}`.trim() : (item.title || '');
-                const key = item.kb || title;
-                if (!key || seen.has(key)) continue;
-                seen.add(key);
-                titles.push(item.kb || title);
-            }
-            if (titles.length === 1) {
-                notes.push(t('patches.control.outside_install', {
-                    machine: row.machine, title: titles[0] }));
-            } else if (titles.length > 1) {
-                const named = titles.slice(0, CONTROL_TITLES).join(', ');
-                notes.push(tPlural('patches.control.outside_installs', titles.length, {
-                    machine: row.machine,
-                    titles: titles.length > CONTROL_TITLES ? `${named}, …` : named,
-                }));
-            }
-        }
+        const notes = rows.flatMap(controlNotes);
         const shown = notes.slice(0, CONTROL_VISIBLE);
         for (const note of shown) card.append(el('div', 'stat-card__meta', note));
         const rest = notes.slice(CONTROL_VISIBLE);
