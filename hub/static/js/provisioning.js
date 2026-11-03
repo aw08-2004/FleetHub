@@ -163,7 +163,13 @@
         try {
             response = await fetch('/api/provisioning/qr');
         } catch (e) {
+            // Show code again, under the "unreachable" line: the button hid itself on the
+            // click, so without this a dropped connection left no way to retry short of a
+            // page reload. Not revealed any more either, so a live event cannot fetch the
+            // code behind the operator's back while the button is offering to.
             loading.textContent = t('provisioning.qr.unreachable');
+            revealed = false;
+            reveal.hidden = false;
             return;
         }
         const data = await response.json().catch(() => ({}));
@@ -366,6 +372,7 @@
     showButton.addEventListener('click', () => {
         revealed = true;
         reveal.hidden = true;
+        loading.textContent = t('provisioning.qr.loading');
         loading.hidden = false;
         void load();
     });
