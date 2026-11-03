@@ -33,6 +33,16 @@
     const digestInput = document.getElementById('digest-input');
     const convertButton = document.getElementById('convert-digest');
     const digestResult = document.getElementById('digest-result');
+    const reveal = document.getElementById('qr-reveal');
+    const showButton = document.getElementById('qr-show');
+
+    // **The code is fetched on a click, not on page load.** The answer carries the fleet's
+    // enrollment secret, so it was on screen -- photographable over a shoulder -- the moment
+    // anybody opened Settings > Provisioning to upload an APK, and every such visit wrote a
+    // security-level `provisioning_qr` audit row claiming the secret had been handed out. The
+    // audit now means what it says: somebody pressed Show code. Once shown, it stays live
+    // (an APK upload or a 'provisioning' event redraws it) until the page is left.
+    let revealed = false;
 
     // The string the QR encodes. Held so Copy hands over exactly what was scanned rather than
     // a re-serialisation of the table beside it.
@@ -118,6 +128,11 @@
         const rows = [[t('provisioning.payload.component'), component]];
         Object.keys(payload || {}).sort().forEach((key) => {
             const value = payload[key];
+            // The component is already the first row, so its own extra is not listed again.
+            // It was, as DEVICE_ADMIN_COMPONENT_NAME, and two rows with one value read as two
+            // settings that had to be kept in step.
+            if (key === 'android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME'
+                && String(value) === String(component)) return;
             rows.push([
                 // The raw extra name, deliberately, not a friendly label: this is what an
                 // operator compares against a vendor's provisioning documentation when a
@@ -286,6 +301,7 @@
     /** Redraw the code as well as the card. An upload that left a stale QR on screen would be
      *  showing a code for an APK this hub no longer serves -- which scans, and then fails. */
     async function reloadBoth() {
+        if (!revealed) { await loadApk(); return; }
         loading.hidden = false;
         ready.hidden = true;
         unconfigured.hidden = true;
@@ -347,7 +363,13 @@
         await reloadBoth();
     });
 
+    showButton.addEventListener('click', () => {
+        revealed = true;
+        reveal.hidden = true;
+        loading.hidden = false;
+        void load();
+    });
+
     loadApk();
-    load();
-    window.FleetLive.watch(['provisioning'], load);
+    window.FleetLive.watch(['provisioning'], () => (revealed ? load() : undefined));
 })();

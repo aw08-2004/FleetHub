@@ -156,7 +156,7 @@ function renderInviteRow(invite) {
         revoke.addEventListener('click', () => revokeInvite(invite, revoke));
         wrap.appendChild(revoke);
     }
-    const remove = el('button', 'btn', t('common.delete'));
+    const remove = el('button', 'btn btn--danger', t('common.delete'));
     remove.type = 'button';
     remove.addEventListener('click', () => deleteInvite(invite, remove));
     wrap.appendChild(remove);

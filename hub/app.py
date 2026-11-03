@@ -174,7 +174,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.177.0"
+HUB_VERSION = "1.178.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -7622,8 +7622,11 @@ def index():
 @login_required
 @access.require(permissions.VIEW)
 def inventory_page():
+    # The hot threshold rides along so the Last temp column can colour a reading at or over
+    # it -- the same setting, and the same >= comparison, as the machine page's temp tile.
     return render_template("inventory.html", hub_version=HUB_VERSION,
-                           latest_agent_version=get_latest_agent_version())
+                           latest_agent_version=get_latest_agent_version(),
+                           hot_threshold_c=settings.get_int(DB_PATH, "hub.hot_temp_threshold_c"))
 
 @app.route("/alerts")
 @login_required

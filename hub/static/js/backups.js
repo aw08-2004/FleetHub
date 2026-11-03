@@ -1228,7 +1228,7 @@ function renderDestinationRow(dest) {
     const actions = el('td', 'data-table__actions');
     const edit = el('button', 'btn', t('common.edit'));
     edit.addEventListener('click', () => openDestination(dest));
-    const remove = el('button', 'btn', t('common.delete'));
+    const remove = el('button', 'btn btn--danger', t('common.delete'));
     remove.addEventListener('click', async () => {
         if (!await confirmDialog({
             title: t('backups.destinations.confirm_delete_title'),

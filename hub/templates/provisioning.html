@@ -25,8 +25,16 @@
 <div class="card" style="margin-bottom: var(--space-5);">
     <h2 class="section-title" style="font-size: var(--text-md);">{{ t('provisioning.qr.heading') }}</h2>
 
+    {# Nothing is fetched until this is pressed: the code carries the enrollment secret, and
+       /api/provisioning/qr writes the security audit row that says somebody took a copy.
+       A page visit to upload an APK is not that. See provisioning.js, `revealed`. #}
+    <div id="qr-reveal">
+        <p class="stat-card__meta" style="margin-bottom: var(--space-3);">{{ t('provisioning.qr.reveal_help') }}</p>
+        <button class="btn btn--primary" type="button" id="qr-show">{{ t('provisioning.qr.show') }}</button>
+    </div>
+
     {# Shown while the payload is being fetched, replaced by one of the two panes below. #}
-    <p class="stat-card__meta" id="qr-loading">{{ t('provisioning.qr.loading') }}</p>
+    <p class="stat-card__meta" id="qr-loading" hidden>{{ t('provisioning.qr.loading') }}</p>
 
     {# Not configured yet: the reason from the API, then what to do about it. #}
     <div id="qr-unconfigured" hidden>

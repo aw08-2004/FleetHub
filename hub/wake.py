@@ -1082,7 +1082,7 @@ def confirm_once(db_path, machines=None, now=None,
             confirmed += 1
         elif now - sent_at >= int(confirm_timeout):
             _finish(db_path, request["id"], STATUS_NO_ANSWER,
-                    error="the magic packet was sent and the machine has not checked in",
+                    error="The magic packet was sent and the machine has not checked in.",
                     now=now)
             given_up += 1
     return confirmed, given_up

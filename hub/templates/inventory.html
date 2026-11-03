@@ -14,6 +14,7 @@
    Wake and Deploy buttons are rendered or not right here. Every action behind either is gated
    on the server again (wake on issue_commands and scope, deploy on deploy_packages and scope). #}
 <div id="devices-root"
+     data-hot-threshold-c="{{ hot_threshold_c if hot_threshold_c is defined else '' }}"
      data-can-issue-commands="{{ 1 if cap.ISSUE_COMMANDS in user_capabilities else 0 }}">
 <h1 class="section-title" style="font-size: var(--text-xl); margin-bottom: var(--space-5);">{{ t('inventory.heading') }}</h1>
 <p class="stat-card__meta" style="margin-bottom: var(--space-5);">
@@ -37,15 +38,21 @@
 
        Starts hidden, and inventory.js shows it only while something in the list is offline:
        it was the most prominent control on the page even with the whole fleet awake, ahead
-       of the search people actually came for. #}
-    {% if cap.ISSUE_COMMANDS in user_capabilities %}
-    <button id="inventory-wake-all" type="button" class="btn btn--ghost" hidden
-            title="{{ t('inventory.wake_all_title') }}">{{ t('inventory.wake_all') }}</button>
-    <span class="stat-card__meta" id="inventory-wake-status"></span>
-    {% endif %}
+       of the search people actually came for.
+
+       It sits apart from Export CSV, at the far end of the toolbar (.inventory-fleet-actions),
+       and asks first with the count: the two used to be adjacent ghost buttons, one harmless
+       and one that powers on every offline PC in the fleet whatever filter is set. #}
     {# Exports the rows on screen -- the search applied, in the sort shown. What you see is
        what you get, rather than the whole roster behind a filter you forgot was set. #}
     <button id="inventory-export" type="button" class="btn btn--ghost">{{ t('inventory.export_csv') }}</button>
+    {% if cap.ISSUE_COMMANDS in user_capabilities %}
+    <span class="inventory-fleet-actions">
+        <span class="stat-card__meta" id="inventory-wake-status"></span>
+        <button id="inventory-wake-all" type="button" class="btn" hidden
+                title="{{ t('inventory.wake_all_title') }}">{{ t('inventory.wake_all') }}</button>
+    </span>
+    {% endif %}
 </div>
 
 {# Quick status filter (console review, hub 1.140.0): the four questions people open this page

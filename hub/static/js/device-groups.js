@@ -119,9 +119,8 @@
                 const edit = el('button', 'btn btn--ghost', t('device_groups.edit'));
                 edit.type = 'button';
                 edit.addEventListener('click', () => openEditor(group));
-                const remove = el('button', 'btn btn--ghost', t('device_groups.delete'));
+                const remove = el('button', 'btn btn--danger', t('device_groups.delete'));
                 remove.type = 'button';
-                remove.style.color = 'var(--danger)';
                 remove.addEventListener('click', () => removeGroup(group));
                 actions.append(edit, remove);
             }

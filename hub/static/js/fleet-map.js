@@ -1,8 +1,8 @@
 // The fleet map (roadmap #23 phase C): every device in scope that has a known position.
 //
 // **Last-known positions, refreshed only while somebody watches.** Each point is where a device
-// was the last time it answered a locate. With Live on (the default for an operator who may
-// locate), the page asks every online device in scope again on location.live_interval_seconds
+// was the last time it answered a locate. With Live on (off by default, see LIVE_STORAGE_KEY,
+// and offered only to an operator who may locate), the page asks every online device in scope again on location.live_interval_seconds
 // for as long as it is open and visible, and the points move as the answers arrive. Closed,
 // hidden or paused, nothing is asked -- the hub has no timer of its own (see location.py). The
 // age of every fix stays on screen and stale ones are drawn differently, because a point that
@@ -41,6 +41,17 @@
     const liveEl = document.getElementById('fleet-map-live');
     const liveToggle = document.getElementById('fleet-map-live-toggle');
     const liveStatus = document.getElementById('fleet-map-live-status');
+
+    // **Live starts OFF** and only an operator's own tick turns it on, remembered per browser.
+    // It used to be checked by default, so merely opening the map re-located every online
+    // device every minute and put a "located by" notice in front of each of their users --
+    // a side effect nobody chose. localStorage rather than a server setting: it is one
+    // operator's habit at one desk, and a failed read (private mode) just means "off".
+    const LIVE_STORAGE_KEY = 'fleethub.map.live';
+    if (liveToggle) {
+        try { liveToggle.checked = localStorage.getItem(LIVE_STORAGE_KEY) === '1'; }
+        catch (e) { liveToggle.checked = false; }
+    }
 
     function el(tag, className, text) {
         const node = document.createElement(tag);
@@ -257,6 +268,8 @@
 
     if (liveToggle) {
         liveToggle.addEventListener('change', () => {
+            try { localStorage.setItem(LIVE_STORAGE_KEY, liveToggle.checked ? '1' : '0'); }
+            catch (e) { /* private mode: the choice lasts for this page view only */ }
             describeLive();
             if (liveOn()) startLive(); else scheduleLive();
         });

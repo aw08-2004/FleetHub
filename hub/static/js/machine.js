@@ -45,6 +45,25 @@ function showLastSeen(updatedAt) {
     uptimeLabelEl.textContent = t('machine.last_seen');
     fmtAgoInto(uptimeValueEl, updatedAt || null);
 }
+
+// The status pill and "Last seen X ago" beside the H1. `enrolled` is remembered from the last
+// full record because a live report does not carry it, and the pill would otherwise drop
+// its "not enrolled" qualifier on every reading. fmtAgoInto keeps the age ticking.
+const headStatusEl = document.getElementById('machine-head-status');
+const headSeenEl = document.getElementById('machine-head-seen');
+const headSeenAgoEl = document.getElementById('machine-head-seen-ago');
+let headEnrolled;
+
+function showHeadStatus(status, updatedAt, enrolled) {
+    if (enrolled !== undefined) headEnrolled = enrolled;
+    if (!headStatusEl) return;
+    setMachineStatusPill(headStatusEl, { status, enrolled: headEnrolled });
+    headStatusEl.hidden = false;
+    if (headSeenEl && headSeenAgoEl) {
+        fmtAgoInto(headSeenAgoEl, updatedAt || null);
+        headSeenEl.hidden = !updatedAt;
+    }
+}
 const VIEWPORT_RELOAD_DEBOUNCE_MS = 250;
 let viewportReloadTimer = null;
 let lastHistoryRequest = null;
@@ -749,14 +768,17 @@ function setCardVisible(id, visible) {
 }
 
 function applyPresence(d) {
+    // The GPU card is decided BEFORE the has_sensors gate, unlike the rest. Its four lines are
+    // all dashes on any machine with no GPU reading, known or not, and a tile of four "--"
+    // says nothing a missing tile does not -- except, wrongly, that something is broken. It
+    // stays as long as the machine reports ANY of the four, because a GPU that reports load
+    // but no temperature is still a GPU worth showing. Starts hidden in the template.
+    setCardVisible('card-gpu',
+                   hasReading(d.gpu_temp, d.gpu_load_pct, d.gpu_clock_mhz, d.gpu_power_w));
     if (!d.has_sensors) return;
     setCardVisible('card-cpu-load', hasReading(d.cpu_load_pct));
     setCardVisible('card-cpu-clock', hasReading(d.cpu_clock_mhz));
     setCardVisible('card-cpu-power', hasReading(d.cpu_power_w));
-    // One card for four GPU readings: it stays as long as the machine reports ANY of them,
-    // because a GPU that reports load but no temperature is still a GPU worth showing.
-    setCardVisible('card-gpu',
-                   hasReading(d.gpu_temp, d.gpu_load_pct, d.gpu_clock_mhz, d.gpu_power_w));
     setCardVisible('card-storage', Array.isArray(d.disks) && d.disks.length > 0);
     setCardVisible('card-cooling', Array.isArray(d.fans) && d.fans.length > 0);
     for (const p of panels) setPanelVisible(p, panelHasSubject(p));
@@ -822,6 +844,7 @@ async function loadMachineInfo() {
         const info = await resp.json();
         applyDiagnostics(info.diagnostics);
         applyTemp(info.temp);
+        showHeadStatus(info.status, info.updated_at, info.enrolled);
         if (info.status === 'offline') {
             showLastSeen(info.updated_at);
         } else {
@@ -1321,6 +1344,8 @@ socket.on('new_temp', (msg) => {
     if (msg.uptime_seconds !== undefined && msg.uptime_seconds !== null) {
         showUptime(msg.uptime_seconds);
     }
+    // ...and so the header pill says online, seen just now.
+    showHeadStatus('online', msg.timestamp || Math.floor(Date.now() / 1000));
     // Follow an agent self-update without a refresh. Only present when the client
     // reported one, so an older client's silence can't blank the version we already show.
     if (msg.companion_version) {
