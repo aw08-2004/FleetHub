@@ -367,6 +367,52 @@ def main():
         check("...and one with no capability cannot", c.get("/map").status_code == 403)
         CURRENT_USER = "super@x.com"
 
+        print("\n== The live map asks again, per device, only while it is wanted ==")
+        # The silent failure here was the map that could locate a device ONCE: after the first
+        # answer nothing on the page could ask again, and the point never moved.
+        CURRENT_USER = "super@x.com"
+        fleet.enroll_agent(db_path, "PHONE-5", SECRET, SECRET)
+        capabilities.record_capabilities(db_path, "PHONE-5", {
+            "platform": "android", "commands": ["locate_device"],
+            "features": [capabilities.FEATURE_LOCATE]})
+        fleet.touch_last_seen(db_path, "PHONE-5")
+        fleet.touch_last_seen(db_path, "PHONE-1")
+        check("the fleet payload tells the page how often to ask",
+              c.get("/api/location/fleet").get_json()["live"] == {"interval_seconds": 60})
+        r = c.post("/api/location/fleet/locate", json={})
+        body = r.get_json()
+        check("an online device nobody asked recently is asked",
+              r.status_code == 202 and body["asked"] == ["PHONE-5"])
+        check("...one asked moments ago is left alone, whoever asked",
+              body["skipped"].get("PHONE-1") == "recent")
+        check("...an offline one is not queued a locate it would let expire",
+              body["skipped"].get("LAPTOP-9") == "offline"
+              and fleet.list_commands(db_path, "LAPTOP-9") == [])
+        rows = [row for row in fleet.list_audit(db_path, action="locate_device", limit=50)["entries"]
+                if row["target"] == "PHONE-5"]
+        check("...and the live ask is audited like any other, marked as live",
+              len(rows) == 1 and rows[0]["actor"] == "super@x.com"
+              and '"live": true' in json.dumps(rows[0].get("detail")))
+        r = c.post("/api/location/fleet/locate", json={})
+        check("a second viewer's tick does not ask again while one is in flight",
+              r.get_json()["skipped"].get("PHONE-5") == "pending"
+              and len(fleet.list_commands(db_path, "PHONE-5")) == 1)
+        check("recently_requested sees the ask, and forgets it once the window has passed",
+              location.recently_requested(db_path, ["PHONE-5"], 0) == {"PHONE-5"}
+              and location.recently_requested(db_path, ["PHONE-5"], 4_000_000_000) == set())
+
+        CURRENT_USER = "tech@x.com"
+        check("issue_commands alone cannot drive the live map",
+              c.post("/api/location/fleet/locate", json={}).status_code == 403)
+        CURRENT_USER = "finder@x.com"
+        body = c.post("/api/location/fleet/locate", json={}).get_json()
+        check("a scoped operator's live map reaches only their own devices",
+              body["asked"] == [] and set(body["skipped"]) <= {"PHONE-1"})
+        check("...and a form-encoded body is refused here too",
+              c.post("/api/location/fleet/locate", data="x=1",
+                     content_type="application/x-www-form-urlencoded").status_code == 415)
+        CURRENT_USER = "super@x.com"
+
         print("\n== There is no way to write a position ==")
         # A machine reports its own position through the command RESULT endpoint, with its own
         # bearer token. A console-facing write would be a way to put a device anywhere.

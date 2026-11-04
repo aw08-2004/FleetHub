@@ -11,7 +11,7 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version -- the field keeps that name
     /// because every agent in the field already sends it. Also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
-    public const string Version = "3.48.1";
+    public const string Version = "3.49.0";
 
     /// <summary>Reads a FLEETHUB_* setting, falling back to the pre-rename TEMP_MONITOR_*
     /// name. Machines installed before the FleetHub rename still have the old machine-level
@@ -29,7 +29,7 @@ public static class AgentConfig
 
     // --- Hub endpoints -----------------------------------------------------
     // Base URL is overridable via FLEETHUB_HUB (legacy: TEMP_MONITOR_HUB) for local
-    // testing (e.g. http://localhost:3001).
+    // testing (e.g. https://localhost:29443).
     public static string HubBase =>
         (Env("HUB", "HUB") ?? "https://your.hub.url").TrimEnd('/');
 
@@ -214,46 +214,9 @@ public static class AgentConfig
     public const int CommandBurstSeconds = 20;
 
     // --- Interactive PTY terminals (ConPTY) --------------------------------
-    // These sit OUTSIDE the command queue: once a shell_open command is claimed, keystrokes
-    // and VT output flow over /api/agent/pty/* on their own cadence, because the command
-    // channel's 1-10s tick is nowhere near interactive.
-    //
-    // The echo an operator feels is roughly PtyInputPollMillis/2 + PtyOutputFlushMillis +
-    // the console's own output poll. These numbers put that at ~250-400ms typical, which is
-    // a usable terminal. Going lower buys little (the browser poll dominates) and costs the
-    // hub real request volume: waitress runs a fixed thread pool, and every open session is
-    // already ~7 req/s while someone is actually typing.
-    public const int PtyInputPollMillis = 150;
-    // ...backing off to this once nothing has been typed for PtyIdleAfterMillis. A terminal
-    // left open on a second monitor should cost about what a heartbeat costs.
-    public const int PtyInputPollIdleMillis = 1000;
-    public const int PtyIdleAfterMillis = 15_000;
-    // Coalesce output for a beat before posting: a single `dir` produces dozens of small
-    // writes and one POST per write would be pure overhead. Short enough to stay invisible.
-    public const int PtyOutputFlushMillis = 40;
-    // Matches terminal.PTY_MAX_CHUNK_CHARS on the hub; split before it would refuse one.
-    public const int PtyMaxChunkChars = 16_000;
-    // A terminal deliberately outlives the page that opened it -- an operator starts a
-    // download, goes off to Packages, and comes back to the same shell -- so the HUB is the
-    // authority on when a session has been abandoned (terminal.PTY_ABANDONED_SECONDS, one
-    // hour, measured on a clock only the console's own polls refresh) and it tells us via
-    // `closing`.
-    //
-    // This is therefore a BACKSTOP for the one case the hub cannot cover: a hub that forgot
-    // the session, or lost its database, while still answering our polls. It must sit
-    // comfortably above the hub's horizon or it would pre-empt it and reap exactly the
-    // absence the feature exists to support -- but it must still exist, because the thing
-    // being leaked is a SYSTEM console.
-    public const int PtyIdleTimeoutSeconds = 2 * 60 * 60;
-    public const int MaxPtySessions = 8;
-
-    public static string PtyInputUrl(string sessionId, int afterSeq) =>
-        HubBase + "/api/agent/pty/" + Uri.EscapeDataString(sessionId) +
-        "/input?after_seq=" + afterSeq;
-    public static string PtyOutputUrl(string sessionId) =>
-        HubBase + "/api/agent/pty/" + Uri.EscapeDataString(sessionId) + "/output";
-    public static string PtyClosedUrl(string sessionId) =>
-        HubBase + "/api/agent/pty/" + Uri.EscapeDataString(sessionId) + "/closed";
+    // Their cadence, limits and URLs are agent-shared/Pty/PtyProtocol.cs (PtyTimings, PtyHttp),
+    // shared with the Linux agent: they are the hub protocol and what an operator perceives, not
+    // anything about Windows. Read the reasoning for each number there.
 
     // Exit code the service returns to request an SCM-driven restart onto a
     // freshly swapped binary (installer configures `sc failure ... restart`).
@@ -302,15 +265,19 @@ public static class AgentConfig
     /// The env override still wins, and still overrides BOTH channels: it exists so the
     /// self-update path can be exercised against a local server, and a test server that only
     /// answered for one channel would be a worse tool rather than a safer one.</summary>
+    /// <summary>The env override's name, which has no legacy spelling: it was added after the
+    /// rename, so the FLEETHUB_ and TEMP_MONITOR_ prefixes both read the same suffix.</summary>
+    private const string UpdateManifestUrlEnv = "UPDATE_MANIFEST_URL";
+
     public static string UpdateManifestUrl =>
-        Env("UPDATE_MANIFEST_URL", "UPDATE_MANIFEST_URL")
+        Env(UpdateManifestUrlEnv, UpdateManifestUrlEnv)
         ?? ManifestUrlForPin(State.RuntimeConfigStore.Current.PinnedVersion)
         ?? ManifestUrlFor(State.RuntimeConfigStore.Current.Channel);
 
     /// <summary>Whether the env override points the updater at a test server, in which case
     /// a persisted pin is ignored and the manifest is read the automatic way.</summary>
     public static bool UpdateManifestOverridden =>
-        Env("UPDATE_MANIFEST_URL", "UPDATE_MANIFEST_URL") is not null;
+        Env(UpdateManifestUrlEnv, UpdateManifestUrlEnv) is not null;
 
     // One signed manifest per released version, written by release.ps1 beside the channel
     // manifest. The set of versions a pin can reach is exactly the set of files here on main,

@@ -55,7 +55,21 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
    write can reach must be in the writer's scope, and a link keeps its author's scope after
    more PCs are filed beneath its node. `manage_group_policy` is security-sensitive on its
    own: `SOFTWARE\Policies` holds Windows Defender and firewall policy, so it can weaken a
-   PC's protection without `issue_commands`. Grant it as carefully as that
+   PC's protection without `issue_commands`. Grant it as carefully as that.
+   Administrative Templates change none of this: a template setting is compiled on the hub into
+   the same allow-listed values. The templates themselves are uploaded by agents, so the hub
+   treats them as hostile input: one PC per unknown set is asked, the upload is size-capped,
+   every zip entry must be a bare `.admx`/`.adml` name (nothing is extracted to disk), the set's
+   hash is recomputed and must match the one claimed, and XML with a DTD is refused outright.
+   Since agent 3.49 the values go into the PC's local GPO (`Machine\Registry.pol`) and Windows
+   writes them, which widens nothing: the agent's allow-list is checked before anything goes
+   into the file, a Disabled template's delete is the one new kind of row and is held to the
+   same paths, and every entry the agent did not write is copied back byte for byte. A
+   `Registry.pol` the agent cannot parse is refused, never rewritten. Since 3.49 User
+   Configuration writes the local GPO's `User\Registry.pol` under the same allow-list (relative
+   to HKCU), and Windows applies it to every user who signs in -- administrators included, so a
+   User Configuration policy reaches the people who administer the PC as well. It cannot reach
+   another hive, and an agent before 3.49 is never sent a User Configuration row.
 7. **Signed Updates:** Binary replacements verified before execution. **Version pins widen
    what a compromised hub can choose** (roadmap #21): the hub sends a version string, the agent
    builds the manifest url from a compiled-in base on `main` and installs only what the offline
@@ -77,7 +91,7 @@ inventoried separately here so that nobody has to infer it from a feature list.
 
 | What | From whom | Why | Where | How long | Who can see it |
 |---|---|---|---|---|---|
-| **Device position** — latitude, longitude, accuracy radius, provider, and when the fix was taken | Managed Android devices, **only when an operator asks**. Never sampled, never periodic, never in the background | Finding a lost or stolen device, and confirming where a company device is before securing it | `machine_locations` in the hub's SQLite database | `data.location_retention_days`, default **30 days**, then deleted by the retention pruner. Deleting a machine erases its history immediately | Reading: `view` **plus** the machine being in the operator's scope. Asking for a new fix: the separate `locate_device` capability |
+| **Device position** — latitude, longitude, accuracy radius, provider, and when the fix was taken | Managed Android devices, **only when an operator asks**: a Locate button, or the device map open with *Live* on, which asks every online device in scope again every `location.live_interval_seconds` (60 s) while the page is visible. Never sampled by the hub on its own, never while nobody is looking | Finding a lost or stolen device, and confirming where a company device is before securing it | `machine_locations` in the hub's SQLite database | `data.location_retention_days`, default **30 days**, then deleted by the retention pruner. Deleting a machine erases its history immediately | Reading: `view` **plus** the machine being in the operator's scope. Asking for a new fix: the separate `locate_device` capability |
 | **Installed applications** — package name, label, version, and whether each is enabled or suspended | Managed Android devices, on the inventory loop | Writing an app policy at all: blocking an app means naming a package, and nobody types `com.zhiliaoapp.musically` from memory. Also how a partly-applied policy becomes visible | `machine_apps` in the hub's SQLite database, replaced on each report | Held while the device is enrolled, replaced on each report. Deleting a machine erases it immediately | `view` **plus** the machine being in the operator's scope |
 | **App usage** — foreground seconds per package, per the device's own local day | Managed Android devices, **only where somebody has granted usage access on the device itself** | Enforcing daily screen-time budgets, and showing an operator why a budget did or did not bite | `machine_usage` in the hub's SQLite database | `data.usage_retention_days`, default **14 days**, then deleted by the retention pruner. Deleting a machine erases it immediately | `view` **plus** the machine being in the operator's scope |
 | **File and folder names, with their sizes, over time**: the full path of every folder and file on each fixed NTFS drive, including other users' profiles | Managed Windows PCs with agent 3.40.0 or newer, by a daily read of the drive's file table (roadmap #27). File contents are never read | Showing what is filling a disk and when it will be full, and comparing a folder with an earlier day | One SQLite file per machine and drive under `logs/disk_history/`, outside the main database; the latest two trees also stay on the PC in `%ProgramData%\FleetHub\Agent\diskusage`, readable by SYSTEM and Administrators only | `data.disk_usage_daily_days` (default **90 days**) daily, then weekly until `data.disk_usage_keep_days` (default **365 days**), then folded into one baseline. Deleting a machine erases it immediately | `issue_commands` **plus** the machine being in the operator's scope, the same gate as browsing the machine's files |
@@ -85,9 +99,18 @@ inventoried separately here so that nobody has to infer it from a feature list.
 
 Four properties of that row are deliberate and worth stating plainly:
 
-- **Collection is on demand only.** There is no background location, no periodic sample and no
-  travel history. The only history that exists is a history of *when somebody asked*, which is
-  a different and much smaller thing.
+- **Collection happens only while somebody is asking.** The hub has no timer and takes no
+  sample on its own. The one repetition is the live map (hub 1.167.0): while an operator with
+  `locate_device` has it open and visible, each online device in their scope is asked about once
+  a minute, and every ask is audited and notified on the device like a single one. **A map left
+  open therefore does build a short travel history**, capped at 100 positions per device and
+  pruned by `data.location_retention_days`. Pausing *Live*, or closing or hiding the tab, stops
+  it.
+- **A managed device's location switch is not the holder's to keep off.** On a fully managed
+  Android device, a locate that finds Location switched off switches it back on before taking
+  the fix (Android agents released after 0.3.2). Only a locate does this, it is not held on afterwards, and the
+  notice still names who asked. A device with the agent installed as an ordinary app is never
+  switched on. It just answers that location is off.
 - **Asking has its own capability.** `locate_device` is not part of `issue_commands`, which
   every other command-issuing feature reuses. Being able to reboot a PC does not imply being
   able to find out where an employee is. The hub refuses a hand-rolled `locate_device` through

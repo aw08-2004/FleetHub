@@ -8,14 +8,17 @@
 #   docker compose -f deploy/docker/compose.yaml pull
 #   docker compose -f deploy/docker/compose.yaml up -d
 #
-# Pin HUB_TAG to a version (HUB_TAG=1.143.0) to choose when a release goes in; "latest"
-# follows main, "beta" follows the beta branch. Deploy order is unchanged: hub first, agent
-# releases after.
+# Pin HUB_TAG to a version (HUB_TAG=1.143.0) to choose when a release goes in;
+# "stable-latest" follows main, "beta-latest" follows the beta branch, and "latest" is the
+# newest of the two -- which is usually beta, so it is not the default. Deploy order is
+# unchanged: hub first, agent releases after.
 name: fleethub
 
 services:
   hub:
-    image: ghcr.io/aw08-2004/temp_monitor-hub:${HUB_TAG:-latest}
+    # Was ghcr.io/aw08-2004/temp_monitor-hub until 2026-10-27. The workflow still mirrors
+    # every tag there, so a host on the old line keeps updating, but it should move to this one.
+    image: ghcr.io/aw08-2004/fleethub:${HUB_TAG:-stable-latest}
     container_name: fleethub-hub
     # Exactly one replica, ever: the schedulers, db_writer and Socket.IO state are in-process.
     restart: unless-stopped
@@ -37,10 +40,15 @@ services:
       # 10001.
       - fleethub-state:/state
     ports:
-      # Loopback only: TLS is terminated in front of the hub (Cloudflare tunnel, nginx), and
-      # ProxyFix trusts exactly one hop. Publish on 0.0.0.0 only if that proxy is on another
-      # host.
-      - "127.0.0.1:3001:3001"
+      # Loopback only: the public TLS is terminated in front of the hub (Cloudflare tunnel,
+      # nginx), and ProxyFix trusts exactly one hop. Publish on 0.0.0.0 only if that proxy is
+      # on another host.
+      #
+      # The port follows FLEETHUB_PORT from .env. example.env sets 29443 with FLEETHUB_TLS=1
+      # (the hub then serves HTTPS to the proxy too, hub 1.170.0+); a .env written before that
+      # has neither key, so it falls back to 3001 and plain HTTP -- the image's own default --
+      # and an existing deployment is not moved by pulling this file.
+      - "127.0.0.1:${FLEETHUB_PORT:-3001}:${FLEETHUB_PORT:-3001}"
     # Uncomment on a LINUX host (and drop `ports:`) if the hub must send Wake-on-LAN packets
     # itself. On the default bridge network the hub is never on a target's subnet, so only
     # the agent-relayed wake works -- which is the primary path anyway. Docker Desktop's

@@ -163,7 +163,7 @@
                 });
                 actions.appendChild(toggle);
 
-                var remove = el('button', 'btn btn--ghost', t('watchdogs.delete'));
+                var remove = el('button', 'btn btn--danger', t('watchdogs.delete'));
                 remove.type = 'button';
                 remove.addEventListener('click', async function () {
                     if (!await confirmDialog({

@@ -141,6 +141,10 @@ _FACET_BY_VARIABLE = {
     "metric.disk_load_pct": FACET_DISK,
     "metric.net_rx_bps": FACET_NETWORK,
     "metric.net_tx_bps": FACET_NETWORK,
+    # metric.battery_pct is left out on purpose and buckets as `other`. A battery running
+    # down is a power-supply question, and none of the facets above is one: filing it under
+    # thermal or cpu would bundle "unplugged laptop" with "fan failing" and then offer to
+    # explain a connection that is not there.
 }
 
 _FACET_BY_PREFIX = (

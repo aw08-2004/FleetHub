@@ -39,6 +39,7 @@ import users
 import invites
 import invites_web
 import onboarding
+import identity
 import packages
 import backups
 import remote
@@ -120,6 +121,7 @@ from assistant_web import RouteDispatcher, create_assistant_blueprint
 from webfetch_web import create_webfetch_blueprint
 from correlate_web import create_correlate_blueprint
 from rules_web import create_rules_blueprint
+from schedules_web import create_schedules_blueprint
 from watchdogs_web import create_watchdogs_blueprint
 from tickets_web import create_tickets_blueprint
 import device_groups
@@ -128,6 +130,8 @@ import pc_tree
 from pc_tree_web import create_pc_tree_blueprint
 import gpo
 from gpo_web import create_gpo_blueprint
+import admx
+from admx_web import create_admx_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
 from apitokens_web import create_apitokens_blueprint
@@ -170,7 +174,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.166.0"
+HUB_VERSION = "1.178.1"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -225,6 +229,10 @@ FILE_SPOOL_DIR = os.path.join(LOG_DIR, "filespool")
 # the main database rather than in it. A system drive's history is millions of rows, and the
 # main database is the file every backup copies and every query shares. See disk_history.py.
 DISK_HISTORY_DIR = os.path.join(LOG_DIR, "disk_history")
+# Administrative Templates the PCs uploaded, one parsed catalogue per Windows build (roadmap
+# #32). Beside the database for the disk-history reason: a catalogue is megabytes, and the
+# PCs send it again if it is lost, so it is working data rather than something to back up.
+ADMX_DIR = os.path.join(LOG_DIR, "admx")
 # Ticket screenshots (roadmap #31): <root>/<ticket_id>/<attachment_id>.jpg. Outside the
 # database for the disk-history reason, and under LOG_DIR rather than the install root because
 # they are short-lived working data with a retention of their own, not operator files kept
@@ -936,6 +944,41 @@ def _package_power(sensors, hardware_substr, preferred_name_substrs):
     return max(value for _, value in candidates)
 
 
+# Both spellings of a battery's charge reading. LHM on Windows reports "Charge Level" as
+# SensorType.Level; the Android agent reports the same reading as "Load"
+# (AndroidSensorReader.ReadBattery), because its Models.cs mirrors the types the hub already
+# charted. Matching only "Level" would leave every phone and tablet UNKNOWN in rules.
+_BATTERY_CHARGE_TYPES = ("Level", "Load")
+
+
+def _battery_charge_pct(sensors):
+    """State of charge, in percent, of the machine's battery -- None on a machine without one.
+
+    **Name-exact, with no fallback**, unlike _find_sensor_value. LHM reports "Degradation
+    Level" as a Level sensor on the same battery hardware, so a "first candidate" fallback
+    would chart wear as charge: a new battery reads ~0% "charge" and a battery rule fires on a
+    laptop sitting at 100%. A battery that reports no "Charge Level" is UNKNOWN in rules, which
+    never fires -- the safe way round for an alert.
+
+    The first match in block order, on the rare machine with two batteries. Rejected: the
+    minimum, because a hot-swap bay holding a flat spare would alert forever on a laptop that
+    is fine; and the mean, because two packs of different capacity do not average by percent,
+    so it would be a number Windows never shows the user either.
+    """
+    for s in sensors:
+        if s.get("type") not in _BATTERY_CHARGE_TYPES:
+            continue
+        haystack = f"{s.get('hardware_id') or ''} {s.get('hardware') or ''}".lower()
+        if "battery" not in haystack:
+            continue
+        if "charge level" not in str(s.get("name") or "").lower():
+            continue
+        value = s.get("value")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
 def sensor_preferences():
     """The operator's four hub-side sensor preference lists, as one dict (roadmap #3).
 
@@ -980,6 +1023,7 @@ def extract_diagnostics(sensors, prefs=None):
             "disk_read_bps": None, "disk_write_bps": None, "disks": [],
             "fan_rpm": None, "fans": [],
             "cpu_power_w": None, "gpu_power_w": None,
+            "battery_pct": None,
         }
     # Resolved after the empty-block return above, not before it: a machine the hub has
     # never had sensors from is a common case on the fleet page, and it needs no preferences.
@@ -1028,6 +1072,9 @@ def extract_diagnostics(sensors, prefs=None):
         "cpu_power_w": _package_power(sensors, "cpu", ["cpu package", "package", "cpu ppt"]),
         "gpu_power_w": _package_power(sensors, "gpu",
                                       ["gpu package", "gpu power", "board power", "gpu ppt"]),
+        # Battery charge, for laptops and Android devices. None on a desktop, so a battery
+        # rule reads UNKNOWN there and never fires -- see _battery_charge_pct.
+        "battery_pct": _battery_charge_pct(sensors),
     }
 
 
@@ -1043,6 +1090,7 @@ READING_METRIC_COLUMNS = (
     "disk_load_pct", "net_rx_bps", "net_tx_bps",
     "disk_read_bps", "disk_write_bps",
     "fan_rpm", "cpu_power_w", "gpu_power_w",
+    "battery_pct",
 )
 
 # Which collection toggle (settings.py `metrics.*`) gates each column at ingest. When a
@@ -1066,6 +1114,7 @@ METRIC_COLUMN_TOGGLE = {
     # chips, and an operator who doesn't care about watts doesn't care about either.
     "cpu_power_w": "metrics.collect_power",
     "gpu_power_w": "metrics.collect_power",
+    "battery_pct": "metrics.collect_battery",
 }
 
 # ...and which per-metric retention window (settings.py `metrics.retention_days_*`) governs
@@ -1089,6 +1138,7 @@ METRIC_COLUMN_RETENTION = {
     "fan_rpm": "metrics.retention_days_fans",
     "cpu_power_w": "metrics.retention_days_power",
     "gpu_power_w": "metrics.retention_days_power",
+    "battery_pct": "metrics.retention_days_battery",
 }
 
 # Friendly metric keys used by the per-machine history endpoint's `metrics` param, mapped
@@ -1108,6 +1158,7 @@ HISTORY_METRIC_COLUMNS = {
     "fan_rpm": "fan_rpm",
     "cpu_power": "cpu_power_w",
     "gpu_power": "gpu_power_w",
+    "battery": "battery_pct",
 }
 _ALLOWED_HISTORY_COLUMNS = frozenset(HISTORY_METRIC_COLUMNS.values())
 
@@ -1445,7 +1496,8 @@ def start_agent_version_watcher():
 
 # ================================
 # HUB SELF-UPDATE  --  opt-in (HUB_AUTO_UPDATE=1). Update in place, then exit; the
-# supervising service relaunches waitress, which re-imports the new code.
+# supervising service relaunches the server (serve.py's cheroot, or waitress-serve on a hub
+# installed before 1.170.0), which re-imports the new code.
 #
 # Two source strategies, chosen by what's on disk:
 #   .git present  -> fetch + reset --hard origin/main (developer clones, and hubs
@@ -1885,7 +1937,7 @@ def perform_hub_update(code_dir):
     return _tree_version_is_newer(code_dir)
 
 def restart_hub():
-    """Exit non-zero so the supervisor treats it as a failure and relaunches waitress with
+    """Exit non-zero so the supervisor treats it as a failure and relaunches the server with
     the new code. Under the WinSW service that's `onfailure action="restart"` (~5s); under
     the legacy SYSTEM Scheduled Task the 2-min repetition trigger relaunches regardless of
     exit code. Abrupt by design -- WAL + per-batch commits make this as safe as the crash
@@ -2140,6 +2192,10 @@ from rate_limit import RateLimiter
 rate_limiter = RateLimiter(app)
 # Trust one hop of X-Forwarded-* from nginx, so url_for(_external=True) builds
 # HUB_URL (e.g. https://your.domain.com/...) instead of the local bind address/scheme.
+# The hop is HTTPS since 1.170.0 (serve.py), which changes nothing here: TLS on the origin
+# encrypts the proxy's connection, it does not authenticate it. A client that reaches
+# 29443 directly can still forge these headers, exactly as it could on 3001 before -- keep
+# the port reachable from the proxy only.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 print(f"[hub] Configured public URL: {HUB_URL}")
 # cors_allowed_origins is pinned to our own origin, NOT "*". engine.io does not send a
@@ -2151,13 +2207,13 @@ print(f"[hub] Configured public URL: {HUB_URL}")
 # today, but that is the browser's default doing the work, not ours. The socket carries
 # live telemetry for the whole fleet and is same-origin in every real deployment.
 #
-# THIS CONFIG COSTS ONE WAITRESS THREAD PER OPEN TAB. polling + threading means engineio
+# THIS CONFIG COSTS ONE SERVER THREAD PER OPEN TAB. polling + threading means engineio
 # serves a poll by blocking a worker on a queue until a packet arrives or the ping cycle
 # expires (~25s), and index.html/machine.html both open a socket -- so the serving thread
 # pool has to be sized by concurrent operator tabs, not by request rate. waitress's default
-# of 4 starves the hub outright; install.ps1 passes --threads explicitly and explains why.
-# Don't drop the transport pin to "fix" this: waitress has no WebSocket support, so
-# allowing upgrades here just breaks the socket.
+# of 4 (cheroot's: 10) starves the hub outright; serve.py and install.ps1 pass 128 explicitly
+# and explain why. Don't drop the transport pin to "fix" this: neither cheroot nor waitress
+# has WebSocket support, so allowing upgrades here just breaks the socket.
 socketio = SocketIO(
     app,
     cors_allowed_origins=[HUB_URL.rstrip("/")],
@@ -2701,6 +2757,10 @@ app.register_blueprint(create_pc_tree_blueprint(
 # `issue_commands` for a policy that runs a script, and the writer's scope must cover every PC
 # a write can reach -- see gpo_web.py.
 app.register_blueprint(create_gpo_blueprint(DB_PATH, login_required, access))
+# Its Administrative Templates: the PCs upload their own PolicyDefinitions, and the editor reads
+# the parsed catalogue under `view` -- see admx_web.py. A template setting is SAVED as part of a
+# policy above, never here.
+app.register_blueprint(create_admx_blueprint(DB_PATH, login_required, access))
 
 # Patch inventory, approvals, maintenance windows and runs (roadmap #14). Neither LOG_DIR
 # nor HUB_URL is needed: this feature stores no blobs and hands the agent no URL -- the
@@ -2742,6 +2802,10 @@ app.register_blueprint(create_rules_blueprint(
     lambda machine: resolve_rule_vars(machine),
     lambda: _rules_config(),
 ))
+
+# Schedules: the hub-time preview every schedule picker asks for its next runs. `view`
+# only, because a preview is a calculator; saving a schedule is gated where it is stored.
+app.register_blueprint(create_schedules_blueprint(login_required, access))
 
 # Self-healing watchdogs (roadmap #20). No variable resolver and no config injection, unlike
 # the rules blueprint above, and the absence is the feature: a watchdog is never evaluated on
@@ -2988,7 +3052,7 @@ def _complete_login(user_info, provider):
 
 def _callback_url(endpoint):
     # Anchor the callback to HUB_URL rather than url_for(_external=True): behind a TLS
-    # terminator (nginx/Cloudflare) the request can reach waitress as plain http, so the
+    # terminator (nginx/Cloudflare) the request can reach the hub as plain http, so the
     # _external form emits http://.../auth/callback -- which the provider rejects as a
     # redirect_uri mismatch. HUB_URL is the authoritative public origin (https://...).
     return HUB_URL.rstrip("/") + url_for(endpoint)
@@ -3158,6 +3222,11 @@ def mark_changed(topic, machine=None):
         change_notifier.mark(topic, machine)
     except Exception as e:
         print(f"[changes] Could not mark {topic}: {e}")
+
+
+# Every audit row, whoever writes it, is a notice for the open Audit Log pages -- on the
+# topic its level allows (changes.audit_topic says why there are two).
+fleet.set_audit_listener(lambda level: mark_changed(changes.audit_topic(level)))
 
 
 @socketio.on("connect")
@@ -3585,7 +3654,19 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     # Re-derive the primary temperature from the reported sensor block, so the operator's
     # sensor choice applies to every agent immediately -- including ones too old to
     # receive config. Reports without a sensor block keep the agent's own pick.
-    temp_value = float(resolve_primary_temp(machine_name, float(temp), sensors))
+    #
+    # None when the machine has no temperature at all (a VM -- see report_temp). Such a
+    # report still refreshes the live caches, the status and the socket below; what it does
+    # NOT do is write a readings row, because readings.temp is NOT NULL and the only value
+    # that would fit is a made-up one. 0 was considered, since displayable_temp already reads
+    # it as "could not read", and rejected: the history chart plots whatever is stored, so a
+    # VM would draw a flat 0 °C line, and a "temp below 1" rule written to catch a dead sensor
+    # would fire on every VM in the fleet. The cost is that such a machine has no stored load
+    # or memory history either, since those columns ride the same row -- an empty chart that
+    # is honest, rather than a full one that is not.
+    resolved = resolve_primary_temp(machine_name,
+                                    float(temp) if temp is not None else None, sensors)
+    temp_value = float(resolved) if resolved is not None else None
     now = datetime.now()
     # A reading may carry the client's own timestamp (client_ts) -- e.g. a
     # backfilled reading that was buffered while the hub was unreachable. Store it
@@ -3599,21 +3680,22 @@ def save_and_emit_temp(machine, temp, uptime_seconds=None, sensors=None, timesta
     timestamp_str = to_timestamp_str(reading_dt)
     timestamp_epoch = to_epoch_seconds(reading_dt)
 
-    if WRITE_CSV_ARCHIVE:
-        append_csv_archive(timestamp_str, machine_name, temp_value)
+    if temp_value is not None:
+        if WRITE_CSV_ARCHIVE:
+            append_csv_archive(timestamp_str, machine_name, temp_value)
 
-    # The blob rides at most one reading every SENSOR_BLOB_MIN_SECONDS -- see
-    # _should_store_sensor_blob for why, and why the charts do not notice. The METRICS below
-    # are extracted from every report regardless, so a machine reporting at 1 Hz because
-    # somebody is watching it stores 1 Hz history.
-    sensors_json = (json.dumps(sensors)
-                    if sensors and _should_store_sensor_blob(machine_name, timestamp_epoch)
-                    else None)
-    # Promote the chartable metrics from THIS report's sensor block into their own columns,
-    # each gated by its collection toggle -- a toggled-off metric is recorded as NULL.
-    reading_metrics = metrics_for_storage(sensors)
-    enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value, sensors_json,
-                    metrics=reading_metrics)
+        # The blob rides at most one reading every SENSOR_BLOB_MIN_SECONDS -- see
+        # _should_store_sensor_blob for why, and why the charts do not notice. The METRICS
+        # below are extracted from every report regardless, so a machine reporting at 1 Hz
+        # because somebody is watching it stores 1 Hz history.
+        sensors_json = (json.dumps(sensors)
+                        if sensors and _should_store_sensor_blob(machine_name, timestamp_epoch)
+                        else None)
+        # Promote the chartable metrics from THIS report's sensor block into their own
+        # columns, each gated by its collection toggle -- a toggled-off metric is NULL.
+        reading_metrics = metrics_for_storage(sensors)
+        enqueue_reading(timestamp_str, timestamp_epoch, machine_name, temp_value,
+                        sensors_json, metrics=reading_metrics)
 
     # Backfilled (historical) readings go into history only; they must not clobber
     # the "current" live-status caches with a stale value.
@@ -3864,6 +3946,8 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     pc_tree.rename_machine(DB_PATH, dropped, survivor)
     # And its policy history, or every run-once policy script runs a second time on it.
     gpo.rename_machine(DB_PATH, dropped, survivor)
+    # The survivor reports its own template set on its next heartbeat.
+    admx.forget_machine(DB_PATH, dropped)
     # Same reasoning for deployment targets: the merged-away hostname is the survivor, so
     # a deploy aimed at the old name must follow it rather than stall forever on a
     # machine that no longer exists.
@@ -3971,6 +4055,9 @@ def merge_machines(survivor, dropped, actor="system:dedup"):
     # The state rows collide by design when both names reported on one watchdog, and the
     # survivor's own agent overwrites whichever won within a heartbeat.
     watchdogs.rename_machine(DB_PATH, dropped, survivor)
+    # The merged-away name's MachineGuid / SMBIOS UUID fill any blank on the survivor: the
+    # merge has already decided they are one PC, so its identifiers are the survivor's too.
+    identity.rename_machine(DB_PATH, dropped, survivor)
     _evict_live_status(dropped)
     fleet.audit(DB_PATH, actor, "machine.merge", dropped, {"survivor": survivor},
                 level=fleet.LEVEL_NOTICE)
@@ -5280,6 +5367,7 @@ def backup_scheduler():
                 interval_hours=settings.get_int(DB_PATH, "backup.hub_interval_hours"),
                 keep=settings.get_int(DB_PATH, "backup.hub_keep_generations"),
                 hub_version=HUB_VERSION,
+                schedule=settings.get(DB_PATH, "backup.hub_schedule"),
             )
             if run is not None:
                 if run["status"] == backups.RUN_SUCCEEDED:
@@ -5298,6 +5386,7 @@ def backup_scheduler():
                 fleet_include=settings.get_list(DB_PATH, "backup.files_include"),
                 fleet_exclude=settings.get_list(DB_PATH, "backup.files_exclude"),
                 interval_hours=settings.get_int(DB_PATH, "backup.files_interval_hours"),
+                schedule=settings.get(DB_PATH, "backup.files_schedule"),
                 full_every=settings.get_int(DB_PATH, "backup.files_full_every"),
                 keep_chains=settings.get_int(DB_PATH, "backup.files_keep_chains"),
                 limits={
@@ -5387,6 +5476,7 @@ def start_directory_sync_scheduler():
 
 init_db()
 fleet.init_fleet_db(DB_PATH)
+identity.init_identity_db(DB_PATH)
 alerts.init_alerts_db(DB_PATH)
 correlate.init_correlate_db(DB_PATH)
 settings.init_settings_db(DB_PATH)
@@ -5437,6 +5527,8 @@ tickets.init_tickets_db(DB_PATH)
 device_groups.init_device_groups_db(DB_PATH)
 pc_tree.init_pc_tree_db(DB_PATH)
 gpo.init_gpo_db(DB_PATH)
+admx.init_admx_db(DB_PATH)
+admx.configure(ADMX_DIR)
 ai.init_ai_db(DB_PATH)
 assistant.init_assistant_db(DB_PATH)
 # Points notify at the database and starts its delivery worker. Separate from the init_*
@@ -5555,6 +5647,56 @@ _unsigned_reporters_lock = threading.Lock()
 UNSIGNED_REPORTER_WINDOW_SECONDS = 86400
 
 
+# Names an operator deleted recently: lower-cased name -> epoch of the delete. While a name is
+# here, an UNSIGNED report under it is refused, so the record cannot come back before an
+# onboarding code claims the name.
+#
+# **Without this, a PC whose BIOS serial is a placeholder could not be re-onboarded at all.**
+# onboarding._check_known_machine refuses a name with history unless the PC presents the
+# serial that history reported, and a placeholder ("System Serial Number", "Default string")
+# binds nothing, so for those PCs the only way in is a name with no record. The operator
+# deletes the record, and the onboarding script then installs and STARTS the agent before it
+# spends the code -- it has to, a failed install must not burn a one-time code -- and that
+# agent's first unsigned report rebuilds the record a few seconds before the redeem asks. The
+# operator saw "could not be matched" after every delete, with nothing on the page saying why
+# (DESKTOP-DEQ7B5D, 2026-10-31).
+#
+# Rejected: a -NoStart switch for agent-install.ps1. The script fetches the installer from
+# main, so a hub on beta could not rely on the switch existing, and an unknown parameter
+# fails the install outright. Also rejected: letting onboarding take an unsigned-only record
+# that has no usable serial -- that is the takeover route PR #119's review closed, in a
+# narrower coat. The hold only stops unauthenticated writes for a while after an operator
+# said "this record is gone", which is what the delete meant anyway. Signed reports are not
+# held: an agent that enrolls (by code or by secret) reports at once.
+#
+# In memory, like _unsigned_reporters: a restart inside the hour drops the hold, and the
+# worst that costs is the old race, once. One dict is enough because the hub is one process
+# -- serve.py runs threads, never workers -- so every report sees the delete's hold.
+_deleted_name_holds = {}
+_deleted_name_holds_lock = threading.Lock()
+DELETED_NAME_HOLD_SECONDS = 3600
+
+
+def _hold_deleted_name(machine):
+    now = int(time.time())
+    with _deleted_name_holds_lock:
+        _deleted_name_holds[str(machine).strip().lower()] = now
+        for name in [m for m, ts in _deleted_name_holds.items()
+                     if ts < now - DELETED_NAME_HOLD_SECONDS]:
+            _deleted_name_holds.pop(name, None)
+
+
+def _release_deleted_name(machine):
+    with _deleted_name_holds_lock:
+        _deleted_name_holds.pop(str(machine or "").strip().lower(), None)
+
+
+def _deleted_name_held(machine):
+    with _deleted_name_holds_lock:
+        ts = _deleted_name_holds.get(str(machine or "").strip().lower())
+    return ts is not None and ts >= int(time.time()) - DELETED_NAME_HOLD_SECONDS
+
+
 def _note_unsigned_reporter(machine):
     now = int(time.time())
     with _unsigned_reporters_lock:
@@ -5600,18 +5742,20 @@ def _machine_has_history(machine):
 
 
 def _machine_record(machine):
-    """None if the hub holds no record under `machine` (any case), else {"serial": its BIOS
-    serial when that is distinct enough to key identity on, or None}. What onboarding asks
-    before letting a code take a name with history -- see onboarding._check_known_machine.
-    Same is_valid_serial rule as the duplicate merge, so a placeholder serial binds nothing."""
+    """None if the hub holds no record under `machine` (any case), else identity.evidence()
+    for it: {serial, machine_guid, smbios_uuid}, each None unless distinct enough to key
+    identity on. What onboarding asks before letting a code take a name with history -- see
+    onboarding._check_known_machine. Placeholders bind nothing, the same rule as the
+    duplicate merge's is_valid_serial."""
     with get_db_conn() as conn:
         row = conn.execute(
             "SELECT serial_number FROM machine_info WHERE machine = ? COLLATE NOCASE LIMIT 1",
             (machine,)).fetchone()
-    if row is None:
-        return None
-    serial = row["serial_number"]
-    return {"serial": serial if is_valid_serial(serial) else None}
+        if row is None:
+            return None
+        stored = identity.lookup(conn, machine) or {}
+    return identity.evidence(row["serial_number"], stored.get("machine_guid"),
+                             stored.get("smbios_uuid"))
 
 
 def unsigned_reporters():
@@ -5636,6 +5780,12 @@ def _report_refusal(outcome, reason, machine):
                             "reason": "unsigned"}), 401
         if settings.get_bool(DB_PATH, "security.require_enrolled_telemetry"):
             return jsonify({"error": "only enrolled agents may report telemetry",
+                            "reason": "unsigned"}), 401
+        # Same answer as the switch above, so an agent treats it exactly as it already
+        # treats that one -- see _deleted_name_holds for why the name is held.
+        if _deleted_name_held(machine):
+            return jsonify({"error": "this machine was just deleted; only an enrolled agent "
+                                     "may report under its name for now",
                             "reason": "unsigned"}), 401
     return None
 
@@ -5715,6 +5865,16 @@ def _authorize_and_store_report(machine, data, temp_value):
         os_build=data.get('os_build'),
         os_arch=data.get('os_arch'),
     )
+    # MachineGuid and SMBIOS UUID, write-once -- the evidence onboarding weighs when a PC
+    # enrols under a name the hub already knows. See hub/identity.py.
+    #
+    # **Signed reports only, unlike the serial above.** These ids are what let a code onto a
+    # placeholder-serial name that used to be unclaimable, so whoever writes them first
+    # decides who may enrol there. An unsigned report is anybody who can reach the hub, and
+    # write-once would make a planted UUID permanent and lock the real PC out (found in
+    # review). An unenrolled PC gets its ids recorded by its first onboarding instead.
+    if outcome == fleet.REPORT_SIGNED:
+        identity.record(DB_PATH, machine, data.get('machine_guid'), data.get('smbios_uuid'))
     return None
 
 
@@ -5751,10 +5911,20 @@ def report_temp():
     # BEFORE the identity gate below, because that gate writes (a rename, last_report_auth),
     # and a report refused for its payload must not have moved an enrollment first (review
     # on PR #119).
-    try:
-        temp_value = float(data['temp'])
-    except (TypeError, ValueError):
-        return jsonify({"error": "temp must be a number"}), 400
+    #
+    # **`temp: null` is a report, not a malformed one.** A machine with no CPU temperature
+    # sensor -- every VM: Windows Sandbox, Hyper-V, a cloud-GPU box -- has an identity, an
+    # uptime and a load to report, and the agent used to send nothing at all for want of a
+    # number here. The machine then never got an identity row, so it enrolled, heartbeated
+    # and was nowhere in the Inventory. The key itself stays required: an old agent always
+    # sends it, and a body without it is still not a report.
+    if data['temp'] is None:
+        temp_value = None
+    else:
+        try:
+            temp_value = float(data['temp'])
+        except (TypeError, ValueError):
+            return jsonify({"error": "temp must be a number"}), 400
 
     # --- identity gate (roadmap #29), then every write it guards ---
     # Under the ingest gate, so a delete of this machine cannot land between the two: see
@@ -5868,6 +6038,11 @@ def _fleet_attention_lists(rows, top, low_disk_pct):
         "low_disk_free_pct": low_disk_pct,
     }
 
+# The setting the console reads to colour a temperature red. One name, three readers (the
+# dashboard, Devices and the machine page) -- a typo in one would silently fall back to the
+# default there and the three pages would disagree about what is hot.
+HOT_TEMP_SETTING = "hub.hot_temp_threshold_c"
+
 
 def _build_fleet_summary(top):
     """Compute one summary for the CURRENT caller's scope. Called under the cache lock."""
@@ -5878,16 +6053,12 @@ def _build_fleet_summary(top):
             "FROM machine_info ORDER BY machine ASC"
         ).fetchall()
     rows = [dict(row) for row in db_rows]
-    known = {row["machine"] for row in rows}
-    # Same union get_machines() does: a machine that has reported telemetry but has no
-    # identity row yet still exists, and a total that omitted it would disagree with the
-    # Inventory beside it.
-    for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
-        if machine not in known:
-            rows.append({"machine": machine, "companion_version": None, "os_caption": None,
-                         "os_build": None, "ad_os": None, "updated_at": None,
-                         "update_channel": None})
-            known.add(machine)
+    # Same union get_machines() does: a machine with no identity row yet still exists, and a
+    # total that omitted it would disagree with the Inventory beside it.
+    for machine, updated_at in _rows_without_identity({row["machine"] for row in rows}):
+        rows.append({"machine": machine, "companion_version": None, "os_caption": None,
+                     "os_build": None, "ad_os": None, "updated_at": updated_at,
+                     "update_channel": None})
 
     # Narrow BEFORE enriching, exactly as get_machines does -- there is no reason to extract
     # diagnostics for machines the caller will never be shown, and every number below has to
@@ -5918,7 +6089,7 @@ def _build_fleet_summary(top):
         if pinned:
             latest_by_platform[p] = pinned
     machine_platforms = capabilities.platforms_for(DB_PATH, scoped_names)
-    hot_threshold = settings.get_int(DB_PATH, "hub.hot_temp_threshold_c")
+    hot_threshold = settings.get_int(DB_PATH, HOT_TEMP_SETTING)
     low_disk_pct = settings.get_int(DB_PATH, "hub.low_disk_free_pct")
 
     counts = {"total": len(rows), "online": 0, "offline": 0, "never_enrolled": 0,
@@ -6090,12 +6261,50 @@ def fleet_summary():
 
 def _all_known_machines():
     """Every machine name the hub knows, for building a cache key. Cheap: one indexed
-    column, plus the in-memory keys the roster union above also folds in."""
+    column, plus the names the roster union above also folds in."""
     with get_db_conn() as conn:
         names = {row["machine"] for row in conn.execute("SELECT machine FROM machine_info")}
-    names.update(latest_temp.keys())
-    names.update(latest_uptime.keys())
+    names.update(machine for machine, _ in _rows_without_identity(names))
     return names
+
+
+def _rows_without_identity(known):
+    """[(machine, updated_at)] for every machine the hub knows that has no machine_info row
+    among `known` -- the names the Inventory and the Dashboard add to the identity rows.
+
+    Two sources. A machine that has reported telemetry but whose identity write has not landed
+    (an older client, or the first report racing the write) is in the live caches, and has no
+    `updated_at` to give. An **enrolled agent that has never reported** has only its agents row,
+    and gets that row's last heartbeat as `updated_at`, so it reads online while it is.
+
+    **The second one is why this exists.** The roster used to be machine_info plus the caches,
+    and machine_info is written only by /api/report -- which a Windows agent did not send at all
+    while it had no CPU temperature to put in it. A Windows Sandbox and a cloud-GPU VM both
+    enrolled, heartbeated and showed online in /api/fleet/status, and were in neither the
+    Inventory nor the Dashboard; a command queued for one sat pending with no machine page to
+    say why. The agent now reports without a temperature, but an older one in the field still
+    will not, and an enrollment is a live credential: one the operator cannot see is one they
+    cannot revoke.
+
+    Case-folded against `known`, because Windows hostnames are and a rename (OpenClaw ->
+    OPENCLAW) can leave the agents row and the identity row differing only in case -- that is
+    one machine, and listing it twice would be the duplicate the serial merge exists to remove.
+    """
+    seen = {str(name).lower() for name in known}
+    extra = []
+    for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
+        if machine.lower() not in seen:
+            extra.append((machine, None))
+            seen.add(machine.lower())
+    for agent in fleet.list_agent_status(DB_PATH):
+        machine = agent["machine"]
+        if machine.lower() in seen:
+            continue
+        last_seen = agent.get("last_seen")
+        extra.append((machine, to_timestamp_str(datetime.fromtimestamp(int(last_seen)))
+                      if last_seen else None))
+        seen.add(machine.lower())
+    return extra
 
 
 @app.route('/api/machines')
@@ -6115,18 +6324,15 @@ def get_machines():
             "FROM machine_info ORDER BY machine ASC"
         ).fetchall()
     result = [dict(row) for row in rows]
-    known_machines = {row['machine'] for row in result}
-    # Also surface machines that have reported temps but no identity fields yet
-    # (e.g. an older client, or the very first report before a DB write lands).
-    for machine in list(latest_temp.keys()) + list(latest_uptime.keys()):
-        if machine not in known_machines:
-            result.append({
-                'machine': machine, 'asset_tag': None, 'serial_number': None,
-                'service_tag': None, 'manufacturer': None, 'model': None,
-                'companion_version': None, 'os_caption': None, 'os_version': None,
-                'os_build': None, 'os_arch': None, 'ad_os': None, 'updated_at': None,
-            })
-            known_machines.add(machine)
+    # Also surface machines with no identity row yet -- see _rows_without_identity for who
+    # those are, and for the enrolled-but-silent machine that went missing without it.
+    for machine, updated_at in _rows_without_identity({row['machine'] for row in result}):
+        result.append({
+            'machine': machine, 'asset_tag': None, 'serial_number': None,
+            'service_tag': None, 'manufacturer': None, 'model': None,
+            'companion_version': None, 'os_caption': None, 'os_version': None,
+            'os_build': None, 'os_arch': None, 'ad_os': None, 'updated_at': updated_at,
+        })
     # Narrow BEFORE enriching -- there is no reason to read sensors for machines the
     # caller will never be shown.
     result = access.filter_rows(result)
@@ -6136,7 +6342,12 @@ def get_machines():
     # with a temperature and reads as perfectly healthy while every command, terminal,
     # process and backup on it silently does nothing.
     enrolled = fleet.enrolled_machines(DB_PATH)
+    # The reported platform (roadmap #23), one query for the list. The Ctrl+K palette reads
+    # it to leave Remote off a Linux or Android row, where no agent answers a remote
+    # session. "" is "has not said", never Windows -- see capabilities.platforms_for.
+    platforms = capabilities.platforms_for(DB_PATH, [row['machine'] for row in result])
     for row in result:
+        row['platform'] = platforms.get(row['machine'], '')
         row['uptime_seconds'] = get_latest_uptime(row['machine'])
         row['temp'] = displayable_temp(get_latest_temp(row['machine']))
         row['diagnostics'] = extract_diagnostics(get_latest_sensors(row['machine']))
@@ -6185,14 +6396,21 @@ def machine_detail(machine):
         ).fetchone()
     uptime_seconds = get_latest_uptime(machine_name)
     temp = get_latest_temp(machine_name)
+    # An enrolled agent that has never reported is a machine too -- the list shows it (see
+    # _rows_without_identity), so its own page must not answer "Unknown machine".
+    enrolled_only = None
     if row is None and uptime_seconds is None and temp is None:
-        return None
+        enrolled_only = next((r for r in _rows_without_identity(set())
+                              if r[0] == machine_name), None)
+        if enrolled_only is None:
+            return None
 
+    heard_at = enrolled_only[1] if enrolled_only else None
     result = dict(row) if row else {
         'machine': machine_name, 'asset_tag': None, 'serial_number': None,
         'service_tag': None, 'manufacturer': None, 'model': None,
         'companion_version': None, 'os_caption': None, 'os_version': None,
-        'os_build': None, 'os_arch': None, 'updated_at': None,
+        'os_build': None, 'os_arch': None, 'updated_at': heard_at,
         'ad_ou': None, 'ad_dn': None, 'ad_owner': None, 'ad_os': None,
         'ad_disabled': None, 'ad_synced_at': None,
     }
@@ -6601,14 +6819,36 @@ def delete_machine(machine):
     # other order a report that authenticated before the agents went wrote machine_info back
     # after it was deleted, and the PC reappeared as "Online, not enrolled" -- every time a
     # month of readings made the DELETE below slow enough to queue one. See _ingest_gate.
-    with _ingest_gate(machine_name):
-        decommissioned = fleet.delete_machine(
-            DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
-        # Under the gate, so every reading a finished report left queued is behind the mark.
-        drop_queued_readings(machine_name)
-    with get_db_conn() as conn:
-        conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
-        conn.execute("DELETE FROM machine_info WHERE machine = ?", (machine_name,))
+    # The hold goes on before the gate is taken, so no unsigned report that queues behind the
+    # delete can rebuild the record either. See _deleted_name_holds.
+    # A delete that raises releases the hold again (review on PR #200). Usually it raised
+    # before anything went, and holding the name would drop an hour of a live PC's readings
+    # for a delete that never happened. If it raised after fleet.delete_machine committed, the
+    # agent rows are gone but the record may not be, and an unsigned agent can rebuild it --
+    # the old race, which is the better failure than refusing a PC the operator still has.
+    #
+    # The hold is set whether or not the name had a record, deliberately. Knowing that first
+    # needs a read outside the gate, and a name nothing reports under loses nothing by being
+    # held: every name that reports has a record, so a typo holds a name no PC uses.
+    _hold_deleted_name(machine_name)
+    try:
+        with _ingest_gate(machine_name):
+            decommissioned = fleet.delete_machine(
+                DB_PATH, machine_name, uninstall_actor=actor if uninstall else None)
+            # Under the gate, so every reading a finished report left queued is behind the mark.
+            drop_queued_readings(machine_name)
+        with get_db_conn() as conn:
+            conn.execute("DELETE FROM readings WHERE machine = ?", (machine_name,))
+            # NOCASE, because onboarding asks _machine_record with NOCASE: a record stored as
+            # `desktop-x` would survive a delete of `DESKTOP-X` and keep refusing every code.
+            # Not on readings above -- idx_readings_machine_ts is BINARY, and a NOCASE match
+            # there is a full scan of the biggest table, under the delete the gate comment
+            # warns is already slow. A leftover reading is history, not identity.
+            conn.execute("DELETE FROM machine_info WHERE machine = ? COLLATE NOCASE",
+                         (machine_name,))
+    except BaseException:
+        _release_deleted_name(machine_name)
+        raise
     # Drop the hostname from every permission group's scope too. If the name is later
     # reused by a different physical box, it must not silently inherit this one's
     # access grants -- a stale grant is invisible until it's abused.
@@ -6616,6 +6856,7 @@ def delete_machine(machine):
     # Same hazard through the PC tree: a reused hostname must not land in the old box's folder.
     pc_tree.forget_machine(DB_PATH, machine_name)
     gpo.forget_machine(DB_PATH, machine_name)
+    admx.forget_machine(DB_PATH, machine_name)
     # And drop its deployment targets, so a deploy isn't left stuck at 9/10 waiting on a
     # machine whose command rows fleet.delete_machine has just removed.
     packages.forget_machine(DB_PATH, machine_name)
@@ -6706,6 +6947,9 @@ def delete_machine(machine):
     files.forget_machine(DB_PATH, machine_name, spool_dir=FILE_SPOOL_DIR)
     # ...and any live-chart watch on it, for the same reason.
     live.forget_machine(DB_PATH, machine_name)
+    # And its MachineGuid / SMBIOS UUID, or the next PC onboarded under the name would be
+    # measured against a deleted machine's hardware (hub/identity.py).
+    identity.forget_machine(DB_PATH, machine_name)
     # And every share of it (roadmap #15). Unlike the merge above there is no survivor to
     # follow, so the shares are revoked: if the hostname is later reused by a different
     # physical box, another hub must not silently inherit a window onto it -- the same
@@ -7383,8 +7627,11 @@ def index():
 @login_required
 @access.require(permissions.VIEW)
 def inventory_page():
+    # The hot threshold rides along so the Last temp column can colour a reading at or over
+    # it -- the same setting, and the same >= comparison, as the machine page's temp tile.
     return render_template("inventory.html", hub_version=HUB_VERSION,
-                           latest_agent_version=get_latest_agent_version())
+                           latest_agent_version=get_latest_agent_version(),
+                           hot_threshold_c=settings.get_int(DB_PATH, HOT_TEMP_SETTING))
 
 @app.route("/alerts")
 @login_required
@@ -7468,12 +7715,21 @@ def tools_page():
 @login_required
 @access.require_machine(permissions.VIEW)
 def machine_page(machine):
+    # **A name the hub has never heard of is a 404, not an empty machine page.** The URL is
+    # typed, and require_machine above only asks whether the name is in scope -- which for a
+    # fleet-wide operator is every string there is. The page then rendered for anything,
+    # every tab looked like a machine that had merely gone quiet, and its buttons queued
+    # commands for a name no agent will ever claim (fleet.create_command now refuses those
+    # too). machine_detail is the test because it is exactly what the page would load: if it
+    # has nothing, the page has nothing to show.
+    if machine_detail(machine) is None:
+        return render_template("denied.html", missing_machine=str(machine).strip()), 404
     return render_template(
         "machine.html", machine=machine,
         low_load_threshold=settings.get_int(DB_PATH, "hub.low_load_threshold"),
         # The Dashboard's "over N °C" filter, so the machine page marks the same reading hot
         # that the fleet view counts as hot. One setting, not a second threshold to drift.
-        hot_threshold_c=settings.get_int(DB_PATH, "hub.hot_temp_threshold_c"),
+        hot_threshold_c=settings.get_int(DB_PATH, HOT_TEMP_SETTING),
         live_window_seconds=settings.get_int(DB_PATH, "hub.live_default_window_seconds"),
         # How often the page renews its "somebody is watching this" ping. Served rather than
         # hardcoded in machine.js so the ping rate and the watch TTL it has to beat stay one
@@ -7520,6 +7776,13 @@ if __name__ == "__main__":
     # Load/Clock flicker. See wsgi.py for how to re-enable on an agent-less box.
     # start_local_logger()
 
-    # Use socketio.run instead of app.run
+    # Use socketio.run instead of app.run. A dev run only -- the service runs serve.py --
+    # but on the same port and scheme, so an OAuth redirect URI registered for local
+    # development (https://localhost:29443/auth/callback) works under both.
+    import tls
+    _cert, _key, _ = tls.ensure_certificate(
+        os.path.join(STATE_ROOT, "tls", "hub.crt"), os.path.join(STATE_ROOT, "tls", "hub.key"),
+        [LOCAL_MACHINE])
     print(f"Starting hub on {LOCAL_MACHINE}...")
-    socketio.run(app, host="0.0.0.0", port=3001, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=29443, debug=False, allow_unsafe_werkzeug=True,
+                 ssl_context=(_cert, _key))

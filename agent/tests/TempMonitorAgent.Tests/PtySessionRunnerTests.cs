@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
-using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Shell;
+using FleetHub.Shared.Pty;
 
 namespace TempMonitorAgent.Tests;
 
@@ -83,7 +83,7 @@ public class PtySessionRunnerTests
     }
 
     private static PtySessionRunner NewRunner(FakeHub hub) =>
-        new(Guid.NewGuid().ToString("N"), hub, NullLogger.Instance);
+        new(Guid.NewGuid().ToString("N"), hub, NullLogger.Instance, PtySession.Start);
 
     [Fact]
     public async Task TypedInput_ReachesTheShellAndItsOutputReachesTheHub()

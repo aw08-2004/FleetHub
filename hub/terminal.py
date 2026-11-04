@@ -66,7 +66,12 @@ STATUS_LIVE = "live"        # the agent has attached and is streaming
 STATUS_CLOSING = "closing"  # the console asked to end it; the agent has yet to confirm
 STATUS_CLOSED = "closed"    # over, for whatever reason
 
-PTY_SHELLS = ("powershell", "cmd")
+# The Windows pair plus the Linux pair (Linux agent 0.4.0 answers shell_open on a Unix pty).
+# Not validated against the machine's platform here: the console only offers the pair that
+# fits, and an agent handed the other pair's name opens its own default shell rather than
+# refusing -- a terminal that will not open over a shell NAME is worse than one that opens
+# in bash and shows its own prompt. Same choices as run_script's enum in fleet.COMMAND_PARAMS.
+PTY_SHELLS = ("powershell", "cmd", "bash", "sh")
 
 # Rolling REPLAY buffer. This is what a returning operator sees: a terminal session
 # outlives the page that opened it, so navigating to Packages and back re-attaches to the
@@ -191,6 +196,11 @@ def normalize_shell(shell):
     shell = str(shell or "powershell").strip().lower()
     if shell in ("batch", "bat", "cmd"):
         return "cmd"
+    # Before 1.169.0 everything else collapsed to powershell, which was harmless while only
+    # Windows agents opened terminals. Kept distinct now so a Linux session row and its
+    # shell_open say what the operator picked.
+    if shell in ("bash", "sh"):
+        return shell
     return "powershell"
 
 

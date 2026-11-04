@@ -120,6 +120,18 @@ function saveSort() {
     try { localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort)); } catch (e) { /* private mode */ }
 }
 
+// The hub's hot threshold (hub.hot_temp_threshold_c), from the template. Infinity when it is
+// missing, so a page rendered without it colours nothing rather than everything.
+const HOT_THRESHOLD_C = Number(document.getElementById('devices-root')?.dataset.hotThresholdC) || Infinity;
+
+/** Write a temperature into its cell, marked hot at or over the threshold (the machine page's
+ *  >= rule), so a PC running hot stands out in the column instead of reading like the rest. */
+function paintTemp(td, temp) {
+    td.textContent = formatTemp(temp);
+    const hot = temp !== null && temp !== undefined && Number(temp) >= HOT_THRESHOLD_C;
+    td.classList.toggle('temp--hot', hot);
+}
+
 function formatTemp(temp) {
     return (temp === null || temp === undefined) ? '--' : `${Number(temp).toFixed(1)} °C`;
 }
@@ -451,7 +463,7 @@ function renderRow(row) {
     // until you did the arithmetic. Both cells are tagged with their machine so a live
     // reading can rewrite them in place (onLiveReading below).
     const tempTd = document.createElement('td');
-    tempTd.textContent = formatTemp(row.temp);
+    paintTemp(tempTd, row.temp);
     tempTd.dataset.liveTemp = row.machine;
     const seenTd = document.createElement('td');
     fmtAgoInto(seenTd, row.updated_at);
@@ -704,6 +716,17 @@ if (bulkDeployBtn && deployLink) {
 if (wakeAllBtn) {
     const wakeStatus = document.getElementById('inventory-wake-status');
     wakeAllBtn.addEventListener('click', async () => {
+        // Ask first, with the number. The count is over allRows, NOT visibleRows: the hub
+        // wakes every offline PC in scope whatever search, group or status filter is set,
+        // and a dialog quoting the filtered count would understate what is about to happen.
+        // It used to fire on the click alone -- one misplaced click beside Export CSV
+        // powered on the fleet.
+        const offline = allRows.filter((r) => r.status !== 'online').length;
+        if (!await confirmDialog({
+            title: t('inventory.wake_all_confirm_title'),
+            message: tPlural('inventory.wake_all_confirm', offline),
+            confirmLabel: t('inventory.wake_all'),
+        })) return;
         wakeAllBtn.disabled = true;
         wakeStatus.textContent = '';
         try {
@@ -791,7 +814,7 @@ function onLiveReading(msg) {
     if (msg.timestamp) row.updated_at = msg.timestamp;
     const name = CSS.escape(msg.machine);
     const tempTd = inventoryBody.querySelector(`[data-live-temp="${name}"]`);
-    if (tempTd) tempTd.textContent = formatTemp(row.temp);
+    if (tempTd) paintTemp(tempTd, row.temp);
     const seenTd = inventoryBody.querySelector(`[data-live-seen="${name}"]`);
     if (seenTd) fmtAgoInto(seenTd, row.updated_at);
 }
@@ -799,5 +822,11 @@ function onLiveReading(msg) {
 loadGroups();
 loadInventory();
 window.FleetLive.onTemp(onLiveReading);
+// Never while a row's menu is open. render() closes it, and `status` arrives every few seconds
+// with agents reporting, so the menu used to vanish about five seconds after it opened --
+// failed on the beta hub 2026-10-30 (ROADMAP.MD, hub 1.174.1 *Any page*). The menu closes on
+// any click elsewhere, Escape, Tab, scroll or resize, so the held refresh runs moments later.
+// Rejected: re-rendering and re-pointing the open menu at the new row's button, which would
+// keep showing items built from the old row -- Wake for a PC that has since come online.
 window.FleetLive.watch(['machines', 'status', 'device_groups'], loadInventory,
-    { minInterval: 3000 });
+    { minInterval: 3000, busy: () => menuOwner !== null });

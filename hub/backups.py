@@ -82,6 +82,7 @@ import backup_paths
 import capabilities
 import envfile
 import fleet
+import schedule_spec
 
 # AES-GCM comes from `cryptography`, which Authlib already pulls in -- so this is not a
 # new install-time dependency in practice, only a newly explicit one in requirements.txt.
@@ -2791,12 +2792,17 @@ def build_file_command_params(*, machine, run_id, plan, config, destination, mac
     }
 
 
-def files_due_at(db_path, machine, interval_hours):
+def files_due_at(db_path, machine, interval_hours, schedule=None):
     """When this machine's next file backup is due, as an epoch.
 
     Anchored on the last ATTEMPT for the same reason the hub-DB schedule is: a machine
     that has been failing for a week should not be retried every tick. A machine that has
     never run is due immediately.
+
+    With a `schedule` (a schedule_spec fire spec) the answer is the first slot after that
+    attempt, through the same _due_after the hub database uses -- so the offline catch-up
+    files_dispatch_once relies on is unchanged: a laptop shut at 02:00 stays due, and is
+    backed up once, not once per missed night, within a tick of coming back.
     """
     with get_conn(db_path) as conn:
         row = conn.execute(
@@ -2804,7 +2810,7 @@ def files_due_at(db_path, machine, interval_hours):
             "WHERE kind = ? AND machine = ?",
             (BACKUP_MACHINE_FILES, machine)).fetchone()
     last = row["last"] if row else None
-    return 0 if not last else int(last) + int(interval_hours) * 3600
+    return 0 if not last else _due_after(int(last), interval_hours, schedule)
 
 
 def start_file_run(db_path, machine, destination_id, plan, trigger, actor, now,
@@ -2873,18 +2879,42 @@ def expire_stale_file_runs(db_path, now=None, max_seconds=24 * 60 * 60):
 # ================================
 # SCHEDULER
 # ================================
-def next_due_at(db_path, interval_hours):
+def _due_after(last_attempt, interval_hours, schedule):
+    """The first moment a backup is owed after `last_attempt`.
+
+    Without a schedule that is the interval, as it has always been. With one it is the
+    next slot strictly after the attempt -- "daily at 02:00" means the 02:00 after the last
+    run, not 24 hours after it, which is the whole reason the schedule exists: an interval
+    drifts later by however long each run took to be noticed, and after a month of 60 s
+    ticks "nightly" is running at lunchtime.
+
+    A missed slot (hub down, PC off) is served ONCE, late, because a backup that is late is
+    still worth taking; a backup is not a reboot. See ROADMAP.MD -> *Schedules* for the
+    per-feature table of what a late slot does.
+    """
+    if schedule:
+        fires = schedule_spec.next_fires(schedule, last_attempt, 1)
+        if fires:
+            return fires[0]
+    return last_attempt + int(interval_hours) * 3600
+
+
+def next_due_at(db_path, interval_hours, schedule=None):
     """When the next scheduled hub backup is due, as an epoch.
 
     Anchored on the last ATTEMPT, not the last success. Anchoring on success would mean a
     destination that has been down for a week gets retried on every single tick, hammering
     an endpoint that is already unhappy and filling the run list with noise; the operator
     is told about the failure by the run row either way.
+
+    A never-run hub is due immediately even with a fixed-time schedule: the operator who
+    just turned backups on has no backup at all, and waiting until 02:00 to find out the
+    destination rejects the upload is the wrong way round.
     """
     last = get_state(db_path, LAST_ATTEMPT_STATE_KEY)
     if last is None:
         return 0        # never run: due immediately
-    return int(last) + int(interval_hours) * 3600
+    return _due_after(int(last), interval_hours, schedule)
 
 
 def mint_upload(db_path, log_dir, destination_id, object_key, hub_url="", run_id=""):
@@ -2935,7 +2965,7 @@ def roster_entry(entry):
 
 def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
                         fleet_include, fleet_exclude, interval_hours, full_every,
-                        limits, machines, now=None, hub_url="",
+                        limits, machines, now=None, hub_url="", schedule=None,
                         max_concurrent=DEFAULT_MAX_CONCURRENT_FILE_RUNS,
                         ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS):
     """Queue a `backup_files` command for every ONLINE machine that is due or has been
@@ -3011,7 +3041,8 @@ def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
                 continue
             stored = get_machine_config(db_path, machine)
             requested = stored["run_requested_at"]
-            if not requested and now < files_due_at(db_path, machine, interval_hours):
+            if not requested and now < files_due_at(db_path, machine, interval_hours,
+                                                     schedule):
                 continue
             if not online:
                 continue        # stays due / stays requested -- see the docstring
@@ -3074,7 +3105,7 @@ def object_key_for_machine(destination, machine, plan, now):
 
 def files_tick(db_path, log_dir, *, fleet_enabled, fleet_destination, fleet_include,
                fleet_exclude, interval_hours, full_every, keep_chains, limits, machines,
-               now=None, hub_url="",
+               now=None, hub_url="", schedule=None,
                max_concurrent=DEFAULT_MAX_CONCURRENT_FILE_RUNS,
                ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECONDS):
     """One per-PC scheduler pass: retire abandoned runs, then dispatch due ones.
@@ -3100,7 +3131,8 @@ def files_tick(db_path, log_dir, *, fleet_enabled, fleet_destination, fleet_incl
         fleet_destination=fleet_destination, fleet_include=fleet_include,
         fleet_exclude=fleet_exclude, interval_hours=interval_hours,
         full_every=full_every, limits=limits, machines=machines, now=now,
-        hub_url=hub_url, max_concurrent=max_concurrent, ttl_seconds=ttl_seconds)
+        hub_url=hub_url, schedule=schedule, max_concurrent=max_concurrent,
+        ttl_seconds=ttl_seconds)
     return expired, dispatched
 
 
@@ -3923,7 +3955,7 @@ def audit_download(db_path, *, actor, machine, plan):
 
 
 def tick(db_path, log_dir, *, enabled, destination_id, interval_hours, keep,
-         now=None, hub_version=""):
+         now=None, hub_version="", schedule=None):
     """One scheduler pass. Returns the run row if a backup ran, else None.
 
     Every knob is a parameter rather than a settings.get_int() call, so the whole
@@ -3932,7 +3964,7 @@ def tick(db_path, log_dir, *, enabled, destination_id, interval_hours, keep,
     now = int(time.time() if now is None else now)
     if not enabled or not destination_id:
         return None
-    if now < next_due_at(db_path, interval_hours):
+    if now < next_due_at(db_path, interval_hours, schedule):
         return None
     run = backup_hub_database(db_path, log_dir, destination_id, keep=keep,
                               trigger=TRIGGER_SCHEDULE, actor="scheduler", now=now,

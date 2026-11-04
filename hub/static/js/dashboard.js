@@ -158,8 +158,12 @@
         telemetryEl.replaceChildren(
             tile(t('dashboard.telemetry.avg_temp'),
                  s.avg_cpu_temp === null ? DASH : celsius(s.avg_cpu_temp)),
+            // Red at or over the hub's hot threshold -- the same >= the tile after it counts
+            // with. Uncoloured, 95 °C looked exactly as calm as the average beside it.
             tile(t('dashboard.telemetry.peak_temp'),
-                 s.peak_cpu_temp === null ? DASH : celsius(s.peak_cpu_temp)),
+                 s.peak_cpu_temp === null ? DASH : celsius(s.peak_cpu_temp),
+                 { tone: (s.peak_cpu_temp !== null && s.threshold_c
+                          && s.peak_cpu_temp >= s.threshold_c) ? 'bad' : null }),
             // The threshold is IN the label, not implied by it: this is a filter somebody
             // chose in Settings, not the hub declaring these machines faulty.
             tile(t('dashboard.telemetry.over_threshold', { threshold: s.threshold_c }),
@@ -246,8 +250,9 @@
             ? t('dashboard.telemetry.celsius', { value: n.toFixed(1) }) : DASH;
     }
 
-    /** One ranked list: a title and up to `top` rows, each linking to its machine. */
-    function attentionList(title, rows, valueFor, emptyText) {
+    /** One ranked list: a title and up to `top` rows, each linking to its machine. `hotFor`,
+     *  when given, says which rows' values to mark hot (temp--hot). */
+    function attentionList(title, rows, valueFor, emptyText, hotFor) {
         const box = el('div', 'attention');
         box.appendChild(el('div', 'section-title dashboard__subhead', title));
         if (!rows.length) {
@@ -259,7 +264,9 @@
             const line = el('div', 'attention-list__row');
             const link = el('a', 'attention-list__name', row.machine);
             link.href = '/machine/' + encodeURIComponent(row.machine);
-            line.append(link, el('span', 'attention-list__value', valueFor(row)));
+            const value = el('span', 'attention-list__value', valueFor(row));
+            if (hotFor && hotFor(row)) value.classList.add('temp--hot');
+            line.append(link, value);
             list.appendChild(line);
         }
         box.appendChild(list);
@@ -277,10 +284,14 @@
 
     function renderAttention(summary) {
         const a = summary.attention;
+        // The same threshold, and the same >=, as the "over threshold" tile beside it and the
+        // machine page -- a list headed "hottest" that coloured nothing made 95 °C look like 40.
+        const hotC = Number(summary.telemetry && summary.telemetry.threshold_c);
+        const isHot = (r) => Number.isFinite(hotC) && hotC > 0 && Number(r.temp) >= hotC;
         attentionEl.replaceChildren(
             attentionList(t('dashboard.attention.hottest'), a.hottest,
                           (r) => celsius(r.temp),
-                          t('dashboard.attention.no_readings')),
+                          t('dashboard.attention.no_readings'), isHot),
             attentionList(t('dashboard.attention.low_disk'), a.low_disk,
                           (r) => t('dashboard.attention.free_pct', { pct: r.free_pct, gb: r.free_gb }),
                           t('dashboard.attention.no_disks')),

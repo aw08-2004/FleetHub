@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.Logging;
+using FleetHub.Shared.Pty;
 
 namespace TempMonitorAgent.Fleet.Shell;
 
@@ -26,7 +27,7 @@ namespace TempMonitorAgent.Fleet.Shell;
 ///  * No echo. A real console echoes typed characters itself, so the terminal emulator must
 ///    NOT echo locally or every keystroke appears twice.
 /// </summary>
-public sealed class PtySession : IDisposable
+public sealed class PtySession : IPtySession
 {
     private readonly ConPtyProcess _pty;
     private readonly ILogger _log;

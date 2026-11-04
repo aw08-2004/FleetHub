@@ -100,6 +100,10 @@ public sealed class TelemetryReporter : IDisposable
             ["model"] = _identity.Model,
             ["manufacturer"] = _identity.Manufacturer,
             ["asset_tag"] = _identity.AssetTag,
+            // Which machine this is when its name is shared or its DMI serial is a placeholder
+            // (hub/identity.py). /etc/machine-id stands in for the Windows MachineGuid.
+            ["machine_guid"] = _identity.MachineGuid,
+            ["smbios_uuid"] = _identity.SmbiosUuid,
             // On every report rather than on the heartbeat: the hub COALESCEs a null away, so
             // a report that could not read the OS costs nothing and one that could fills the
             // gap at the next tick.

@@ -23,6 +23,16 @@ public static class PolicyAllowList
     public const string String = "string";
     public const string ExpandString = "expand_string";
     public const string MultiString = "multi_string";
+    /// <summary>Not a value: "delete this one" -- what a Disabled Administrative Template asks
+    /// for (phase 2). Written as a Registry.pol <c>**del.</c> entry, so it only ever exists in
+    /// the local GPO; the hub sends it only to an agent reporting <c>lgpo</c>.</summary>
+    public const string Delete = "delete";
+
+    /// <summary>Computer Configuration (HKLM) and User Configuration (HKCU of every user who
+    /// signs in, through the local GPO's User\Registry.pol -- phase 3). The rules in this class
+    /// are the same for both: <see cref="Root"/> is relative to either hive.</summary>
+    public const string Machine = "machine";
+    public const string User = "user";
 
     public const string Root = @"SOFTWARE\Policies\";
     public const int MaxPathChars = 255;
@@ -70,7 +80,7 @@ public static class PolicyAllowList
 
     private static string? ContentRefusal(PolicyValue value) => value.Type switch
     {
-        Dword => null,
+        Dword or Delete => null,
         String or ExpandString => IsBadText(value.Text)
             ? "the text is too long or contains a NUL" : null,
         MultiString => value.Lines.Count > MaxLines || value.Lines.Any(IsBadText)
@@ -79,12 +89,14 @@ public static class PolicyAllowList
     };
 
     /// <summary>The id the hub and the agent both key one value on (gpo.setting_id): the
-    /// first 16 hex characters of SHA-256 over <c>lower(path)|lower(name)</c>. Case-folded,
-    /// because the registry is case-insensitive and two spellings are one value.</summary>
-    public static string IdFor(string path, string name)
+    /// first 16 hex characters of SHA-256 over <c>lower(path)|lower(name)</c>, with
+    /// <c>user|</c> in front for a User Configuration value. Case-folded, because the registry
+    /// is case-insensitive and two spellings are one value; a machine value hashes exactly what
+    /// it did before User Configuration existed, so no id moved.</summary>
+    public static string IdFor(string path, string name, string? cls = Machine)
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(
-            $"{path.ToLowerInvariant()}|{name.ToLowerInvariant()}"));
-        return Convert.ToHexStringLower(bytes)[..16];
+        var text = $"{path.ToLowerInvariant()}|{name.ToLowerInvariant()}";
+        if (cls == User) text = $"{User}|{text}";
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..16];
     }
 }

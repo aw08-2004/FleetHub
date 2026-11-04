@@ -144,6 +144,7 @@
         return [
             tPlural('gpo.count.agent', Object.keys(s.agent_settings || {}).length),
             tPlural('gpo.count.registry', (s.registry || []).length),
+            tPlural('gpo.count.admx', (s.admx || []).length),
             tPlural('gpo.count.scripts', (s.scripts || []).length),
         ].join(' · ');
     }
@@ -272,7 +273,7 @@
             const wrap = el('div', 'perm-row-actions');
             if (CAN_MANAGE) {
                 wrap.appendChild(button(t('common.edit'), 'btn', () => openEditor(policy)));
-                wrap.appendChild(button(t('common.delete'), 'btn', () => removePolicy(policy)));
+                wrap.appendChild(button(t('common.delete'), 'btn btn--danger', () => removePolicy(policy)));
             }
             actions.appendChild(wrap);
             tr.appendChild(actions);
@@ -484,6 +485,18 @@
         if (!result.agent_supports_registry && result.registry.length) {
             host.appendChild(el('p', 'setting__help', t('gpo.rsop.agent_too_old')));
         }
+        // Where the values land (phase 2): an administrator at the PC who opens gpedit.msc
+        // sees them only when the agent writes the local GPO, and should know which to expect.
+        if (result.agent_supports_registry && result.registry.length) {
+            host.appendChild(el('p', 'setting__help', result.agent_writes_local_gpo
+                ? t('gpo.rsop.local_gpo') : t('gpo.rsop.direct_registry')));
+        }
+        // User Configuration (phase 3) is the local GPO's User half: Windows applies it to
+        // everyone who signs in, at sign-in, so "Applied" here never means "the signed-in user
+        // has it right now".
+        if (result.registry.some((entry) => entry.class === 'user')) {
+            host.appendChild(el('p', 'setting__help', t('gpo.rsop.user_note')));
+        }
 
         if (result.links.length) {
             const section = el('div', 'gpo-section');
@@ -520,6 +533,28 @@
             host.appendChild(section);
         }
 
+        if ((result.admx || []).length) {
+            const section = el('div', 'gpo-section');
+            section.appendChild(el('h3', null, t('gpo.admx.heading')));
+            const { table: tbl, body } = table([t('gpo.rsop.col.setting'), t('gpo.admx.col_state'),
+                t('gpo.rsop.col.from')]);
+            result.admx.forEach((entry) => {
+                const tr = el('tr');
+                const name = el('td', null, entry.name);
+                name.appendChild(el('div', 'stat-card__meta', halfLabel(entry.class)));
+                tr.appendChild(name);
+                const state = el('td', null, admxSummary(entry));
+                if ((entry.deletes || []).length && !result.agent_writes_local_gpo) {
+                    state.title = t('gpo.admx.deletes_old_agent');
+                }
+                tr.appendChild(state);
+                tr.appendChild(el('td', 'stat-card__meta', entry.gpo));
+                body.appendChild(tr);
+            });
+            section.appendChild(tbl);
+            host.appendChild(section);
+        }
+
         if (result.registry.length) {
             const section = el('div', 'gpo-section');
             section.appendChild(el('h3', null, t('gpo.editor.registry')));
@@ -527,11 +562,20 @@
                 t('gpo.rsop.col.from'), t('gpo.rsop.col.state')]);
             result.registry.forEach((entry) => {
                 const tr = el('tr');
-                tr.appendChild(el('td', 'gpo-mono', `${entry.path}\\${entry.name}`));
-                tr.appendChild(el('td', 'gpo-mono', displayValue(entry.value)));
+                const setting = el('td', 'gpo-mono', `${hive(entry.class)}\\${entry.path}\\${entry.name}`);
+                if (entry.admx_name) setting.appendChild(el('div', 'stat-card__meta', entry.admx_name));
+                tr.appendChild(setting);
+                const deleted = entry.type === 'delete';
+                tr.appendChild(el('td', 'gpo-mono', deleted ? t('gpo.rsop.deleted') : displayValue(entry.value)));
                 tr.appendChild(el('td', 'stat-card__meta', entry.gpo));
+                // A delete never reaches an agent that cannot write the local GPO, so it would
+                // otherwise sit at "Waiting for the PC" for ever.
+                // A user row likewise never reaches an agent before 3.49.
+                let pending = t('gpo.rsop.pending');
+                if (entry.class === 'user' && !result.agent_applies_user) pending = t('gpo.rsop.user_needs_agent');
+                else if (deleted && !result.agent_writes_local_gpo) pending = t('gpo.rsop.delete_needs_agent');
                 const state = el('td', entry.state ? `gpo-state--${entry.state}` : 'stat-card__meta',
-                    entry.state ? (result.state_labels[entry.state] || entry.state) : t('gpo.rsop.pending'));
+                    entry.state ? (result.state_labels[entry.state] || entry.state) : pending);
                 if (entry.state_detail) state.title = entry.state_detail;
                 tr.appendChild(state);
                 body.appendChild(tr);
@@ -643,11 +687,27 @@
         host.replaceChildren();
         draft.registry.forEach((entry, index) => {
             const row = el('div', 'gpo-row');
+            // HKLM is Computer Configuration, HKCU User Configuration (phase 3) -- the same
+            // SOFTWARE\Policies tree under either, as the server and the agent both insist.
+            const half = el('select', 'input gpo-row__class');
+            half.setAttribute('aria-label', t('gpo.editor.hive'));
+            half.append(option('machine', hive('machine')), option('user', hive('user')));
+            half.value = entry.class === 'user' ? 'user' : 'machine';
+            half.addEventListener('change', () => { entry.class = half.value; });
             const path = el('input', 'input gpo-row__path');
             path.placeholder = t('gpo.editor.path_placeholder');
             path.setAttribute('aria-label', t('gpo.editor.path'));
             path.value = entry.path || '';
-            path.addEventListener('input', () => { entry.path = path.value; });
+            path.addEventListener('input', () => {
+                entry.path = path.value;
+                // A path pasted out of regedit names its hive; let it move the picker rather
+                // than be refused at save as contradicting it (gpo._registry_target).
+                const named = pastedHive(path.value);
+                if (named && named !== entry.class) {
+                    entry.class = named;
+                    half.value = named;
+                }
+            });
             const name = el('input', 'input gpo-row__name');
             name.placeholder = t('gpo.editor.value_name');
             name.setAttribute('aria-label', t('gpo.editor.value_name'));
@@ -679,7 +739,7 @@
                 value.addEventListener('input', () => { entry.value = value.value; });
             }
             value.setAttribute('aria-label', t('gpo.editor.value'));
-            row.append(path, name, type, value, button(t('gpo.editor.remove'), 'btn btn--ghost', () => {
+            row.append(half, path, name, type, value, button(t('gpo.editor.remove'), 'btn btn--ghost', () => {
                 draft.registry.splice(index, 1);
                 renderRegistryRows();
             }));
@@ -723,6 +783,324 @@
         add.hidden = locked || add.options.length <= 1;
     }
 
+    // ---------------------------------------------------------------- Administrative Templates
+    //
+    // gpedit's tree, read from the template sets the PCs reported (/api/gpo/admx). The browser
+    // only collects a setting's state and option values; what they WRITE is worked out on the
+    // server (admx.compile_policy) when the policy is saved, so this page never decides what a
+    // template means. The draft entry is {set, ref, name, state, options}.
+
+    const admxDialog = document.getElementById('gpo-admx-dialog');
+    let admxSets = [];
+    let admxSet = null;        // the hash being browsed
+    let admxTree = null;       // {categories, policies} for admxSet
+    let admxHalf = 'machine';  // 'machine' | 'user'
+    let admxCategory = null;
+    let admxEditing = null;    // {detail, entry} while one setting is open
+
+    function admxSummary(entry) {
+        return entry.state === 'enabled' ? t('gpo.admx.state_enabled') : t('gpo.admx.state_disabled');
+    }
+
+    function halfLabel(cls) {
+        return cls === 'user' ? t('gpo.admx.user') : t('gpo.admx.computer');
+    }
+
+    function hive(cls) {
+        return cls === 'user' ? 'HKCU' : 'HKLM';
+    }
+
+    // The half a pasted path's hive prefix names, or null -- the same prefixes the server
+    // strips (gpo._HIVE_PREFIXES).
+    function pastedHive(text) {
+        const upper = text.trim().replaceAll('/', '\\').toUpperCase();
+        if (/^(HKEY_CURRENT_USER|HKCU:?)\\/.test(upper)) return 'user';
+        if (/^(HKEY_LOCAL_MACHINE|HKLM:?)\\/.test(upper)) return 'machine';
+        return null;
+    }
+
+    // The half a template is set in: its own when it lives in one, the half being browsed
+    // when gpedit lists it under both -- there it is two settings, one per half.
+    function halfFor(policy) {
+        return policy.class === 'both' ? admxHalf : policy.class;
+    }
+
+    function sameSetting(entry, ref, cls) {
+        return entry.ref === ref && (entry.class || 'machine') === cls;
+    }
+
+    function renderAdmxRows() {
+        const host = document.getElementById('gpo-admx-rows');
+        host.replaceChildren();
+        draft.admx.forEach((entry, index) => {
+            const row = el('div', 'gpo-row');
+            row.appendChild(el('span', 'gpo-row__label', entry.name || entry.ref));
+            row.appendChild(el('span', 'stat-card__meta', `${halfLabel(entry.class)} · ${admxSummary(entry)}`));
+            row.appendChild(button(t('gpo.admx.edit'), 'btn btn--ghost',
+                () => openAdmxSetting(entry.set, entry.ref, entry.class || 'machine')));
+            row.appendChild(button(t('gpo.editor.remove'), 'btn btn--ghost', () => {
+                draft.admx.splice(index, 1);
+                renderAdmxRows();
+            }));
+            host.appendChild(row);
+        });
+    }
+
+    function inHalf(policy) {
+        return policy.class === 'both' || policy.class === admxHalf;
+    }
+
+    function admxChildren(parent) {
+        return admxTree.categories.filter((c) => (c.parent || null) === parent);
+    }
+
+    // A category is shown in a half only when something of that half sits beneath it, as in
+    // gpedit, where Computer and User Configuration list different trees.
+    function categoryHasPolicies(ref, memo) {
+        if (memo.has(ref)) return memo.get(ref);
+        memo.set(ref, false);
+        const found = admxTree.policies.some((p) => p.category === ref && inHalf(p))
+            || admxChildren(ref).some((c) => categoryHasPolicies(c.ref, memo));
+        memo.set(ref, found);
+        return found;
+    }
+
+    function selectAdmx(half, category) {
+        admxHalf = half;
+        admxCategory = category;
+        renderAdmxTree();
+        renderAdmxList();
+    }
+
+    // The categories beneath `parent` that hold something of the open half, depth-first.
+    function appendAdmxCategories(nav2, parent, depth, memo) {
+        admxChildren(parent).filter((c) => categoryHasPolicies(c.ref, memo)).forEach((c) => {
+            const item = button(c.name, 'gpo-admx-node', () => selectAdmx(admxHalf, c.ref));
+            item.style.paddingLeft = `calc(var(--space-3) * ${depth + 1})`;
+            if (admxCategory === c.ref) item.classList.add('is-selected');
+            nav2.appendChild(item);
+            appendAdmxCategories(nav2, c.ref, depth + 1, memo);
+        });
+    }
+
+    function renderAdmxTree() {
+        const nav2 = document.getElementById('gpo-admx-tree');
+        nav2.replaceChildren();
+        if (!admxTree) return;
+        const memo = new Map();
+        ['machine', 'user'].forEach((half) => {
+            const label = half === 'machine' ? t('gpo.admx.computer') : t('gpo.admx.user');
+            const head = button(label, 'gpo-admx-node gpo-admx-node--half', () => selectAdmx(half, null));
+            if (admxHalf === half) head.classList.add('is-selected');
+            nav2.appendChild(head);
+            if (admxHalf === half) appendAdmxCategories(nav2, null, 1, memo);
+        });
+    }
+
+    function admxRowState(policy) {
+        if (policy.unsupported) return t(`gpo.admx.unsupported.${policy.unsupported}`);
+        const configured = draft.admx.find((d) => sameSetting(d, policy.ref, halfFor(policy)));
+        return configured ? admxSummary(configured) : t('gpo.admx.state_not_configured');
+    }
+
+    function renderAdmxList() {
+        const host = document.getElementById('gpo-admx-list');
+        host.replaceChildren();
+        if (!admxTree) return;
+        const query = document.getElementById('gpo-admx-search').value.trim().toLowerCase();
+        const shown = admxTree.policies.filter((p) => inHalf(p)
+            && (query ? p.name.toLowerCase().includes(query) : p.category === admxCategory));
+        if (!shown.length) {
+            host.appendChild(el('p', 'stat-card__meta', query ? t('gpo.admx.no_match') : t('gpo.admx.pick_category')));
+            return;
+        }
+        shown.slice(0, 500).forEach((p) => {
+            const row = el('div', 'gpo-admx-policy');
+            const name = button(p.name, 'gpo-admx-policy__name', () => openAdmxSetting(admxSet, p.ref, halfFor(p)));
+            row.appendChild(name);
+            row.appendChild(el('span', 'stat-card__meta', admxRowState(p)));
+            if (p.unsupported) row.classList.add('is-unavailable');
+            host.appendChild(row);
+        });
+    }
+
+    async function loadAdmxSet(digest) {
+        admxSet = digest;
+        admxTree = null;
+        admxCategory = null;
+        renderAdmxTree();
+        renderAdmxList();
+        if (!digest) return;
+        try {
+            admxTree = await api(`/api/gpo/admx/${encodeURIComponent(digest)}/tree`);
+        } catch (e) {
+            document.getElementById('gpo-admx-list').replaceChildren(el('p', 'setting__error', e.message));
+            return;
+        }
+        renderAdmxTree();
+        renderAdmxList();
+    }
+
+    async function openAdmxBrowser() {
+        try {
+            admxSets = (await api('/api/gpo/admx/sets')).sets;
+        } catch (e) {
+            fail(e);
+            return;
+        }
+        const picker = document.getElementById('gpo-admx-set');
+        picker.replaceChildren();
+        admxSets.forEach((set) => picker.appendChild(option(set.hash,
+            t('gpo.admx.set_label', { os: set.os || set.hash.slice(0, 12), count: set.machines }))));
+        document.getElementById('gpo-admx-empty').hidden = admxSets.length > 0;
+        document.getElementById('gpo-admx-search').value = '';
+        showAdmxBrowse();
+        admxDialog.showModal();
+        // Most-reported first (admx.list_sets), so the default is the build most of the
+        // caller's PCs run -- the templates that match what those PCs will read.
+        await loadAdmxSet(admxSets.length ? admxSets[0].hash : null);
+    }
+
+    function showAdmxBrowse() {
+        admxEditing = null;
+        document.getElementById('gpo-admx-browse').hidden = false;
+        document.getElementById('gpo-admx-setting').hidden = true;
+    }
+
+    function optionField(item, element, options) {
+        const wrap = el('label', 'gpo-admx-field');
+        // A list box's caption is often the presentation's text line just above it, with the
+        // box's own label empty -- gpedit shows nothing there, and neither does this.
+        if (item.label) wrap.appendChild(el('span', 'setting__label', item.label));
+        else wrap.setAttribute('aria-label', element.id);
+        const current = options[element.id];
+        let input;
+        if (item.kind === 'checkbox') {
+            input = el('input');
+            input.type = 'checkbox';
+            input.checked = current === undefined ? !!item.default : !!current;
+            input.addEventListener('change', () => { options[element.id] = input.checked; });
+            options[element.id] = input.checked;
+            wrap.classList.add('checkbox');
+            wrap.prepend(input);
+            return wrap;
+        }
+        if (item.kind === 'dropdown') {
+            input = el('select', 'input');
+            element.items.forEach((label, index) => input.appendChild(option(String(index), label)));
+            input.value = String(current ?? item.default ?? 0);
+            input.addEventListener('change', () => { options[element.id] = Number(input.value); });
+            options[element.id] = Number(input.value);
+        } else if (item.kind === 'listbox' || item.kind === 'multitext') {
+            input = el('textarea', 'input');
+            if (element.explicit) input.placeholder = t('gpo.admx.list_explicit_help');
+            const lines = Array.isArray(current) ? current.map((v) => (Array.isArray(v) ? `${v[0]}=${v[1]}` : v)) : [];
+            input.value = lines.join('\n');
+            const read = () => {
+                const raw = input.value.split('\n').map((v) => v.trim()).filter(Boolean);
+                options[element.id] = element.explicit
+                    ? raw.map((line) => { const at = line.indexOf('='); return at < 0 ? [line, ''] : [line.slice(0, at), line.slice(at + 1)]; })
+                    : raw;
+            };
+            input.addEventListener('input', read);
+            read();
+        } else {
+            input = el('input', 'input');
+            if (element.type === 'decimal') {
+                input.type = 'number';
+                input.min = element.min;
+                input.max = element.max;
+            } else if (element.max_length) {
+                input.maxLength = element.max_length;
+            }
+            input.value = String(current ?? item.default ?? '');
+            input.addEventListener('input', () => { options[element.id] = input.value; });
+            options[element.id] = input.value;
+        }
+        wrap.appendChild(input);
+        return wrap;
+    }
+
+    function renderAdmxOptions(detail, options) {
+        const host = document.getElementById('gpo-admx-options');
+        host.replaceChildren();
+        const byId = new Map(detail.elements.map((e) => [e.id, e]));
+        detail.presentation.forEach((item) => {
+            if (item.kind === 'text') {
+                host.appendChild(el('p', 'setting__help', item.label));
+                return;
+            }
+            const element = byId.get(item.ref);
+            if (element) host.appendChild(optionField(item, element, options));
+        });
+    }
+
+    async function openAdmxSetting(digest, ref, cls) {
+        let detail;
+        try {
+            detail = await api(`/api/gpo/admx/${encodeURIComponent(digest)}/policy?ref=${encodeURIComponent(ref)}`);
+        } catch (e) {
+            fail(e);
+            return;
+        }
+        if (!admxDialog.open) admxDialog.showModal();
+        const existing = draft.admx.find((d) => sameSetting(d, ref, cls));
+        const entry = existing
+            ? { ...existing, options: structuredClone(existing.options || {}) }
+            : { set: digest, ref, class: cls, name: detail.name, state: '', options: {} };
+        admxEditing = { detail, entry };
+        document.getElementById('gpo-admx-browse').hidden = true;
+        document.getElementById('gpo-admx-setting').hidden = false;
+        document.getElementById('gpo-admx-setting-title').textContent = `${detail.name} (${halfLabel(cls)})`;
+        document.getElementById('gpo-admx-explain').textContent = detail.explain;
+        let why = '';
+        if (detail.unsupported) why = t(`gpo.admx.unsupported.${detail.unsupported}`);
+        const blocked = why !== '';
+        const reason = document.getElementById('gpo-admx-reason');
+        reason.hidden = !blocked;
+        reason.textContent = why;
+        document.querySelectorAll('input[name="gpo-admx-state"]').forEach((radio) => {
+            radio.checked = radio.value === (entry.state || 'not_configured');
+            radio.disabled = !!blocked;
+        });
+        document.getElementById('gpo-admx-ok').disabled = !!blocked;
+        renderAdmxOptions(detail, entry.options);
+        syncAdmxOptions();
+    }
+
+    function admxState() {
+        const picked = document.querySelector('input[name="gpo-admx-state"]:checked');
+        return picked ? picked.value : 'not_configured';
+    }
+
+    // Options mean something only when Enabled, exactly as in gpedit, where they grey out.
+    function syncAdmxOptions() {
+        const enabled = admxState() === 'enabled';
+        document.querySelectorAll('#gpo-admx-options input, #gpo-admx-options select, #gpo-admx-options textarea')
+            .forEach((input) => { input.disabled = !enabled; });
+    }
+
+    function applyAdmxSetting() {
+        if (!admxEditing) return;
+        const { entry } = admxEditing;
+        const state = admxState();
+        const cls = entry.class || 'machine';
+        const index = draft.admx.findIndex((d) => sameSetting(d, entry.ref, cls));
+        if (index >= 0) draft.admx.splice(index, 1);
+        // Not configured is the absence of the setting, as in gpedit -- never a stored state.
+        if (state !== 'not_configured') {
+            draft.admx.push({ set: entry.set, ref: entry.ref, class: cls, name: entry.name, state,
+                options: state === 'enabled' ? entry.options : {} });
+        }
+        renderAdmxRows();
+        if (admxTree) {
+            showAdmxBrowse();
+            renderAdmxList();
+        } else {
+            admxDialog.close();
+        }
+    }
+
     function openEditor(policy) {
         if (!dialog) return;
         editing = policy;
@@ -730,6 +1108,8 @@
         draft = {
             agent_settings: { ...(s.agent_settings || {}) },
             registry: JSON.parse(JSON.stringify(s.registry || [])),
+            admx: (s.admx || []).map((a) => ({ set: a.set, ref: a.ref, class: a.class || 'machine',
+                name: a.name, state: a.state, options: structuredClone(a.options || {}) })),
             scripts: JSON.parse(JSON.stringify(s.scripts || [])),
         };
         document.getElementById('gpo-dialog-title').textContent = policy
@@ -740,6 +1120,7 @@
         document.getElementById('gpo-error').textContent = '';
         renderAgentRows();
         renderRegistryRows();
+        renderAdmxRows();
         renderScriptRows();
         dialog.showModal();
         document.getElementById('gpo-name').focus();
@@ -752,8 +1133,11 @@
             enabled: document.getElementById('gpo-enabled').checked,
             settings: {
                 agent_settings: draft.agent_settings,
-                registry: draft.registry.map((e) => ({ path: e.path, name: e.name, type: e.type || 'dword',
+                registry: draft.registry.map((e) => ({ class: e.class === 'user' ? 'user' : 'machine',
+                    path: e.path, name: e.name, type: e.type || 'dword',
                     value: e.type === 'multi_string' ? (e.value || []).filter((v) => v !== '') : e.value })),
+                admx: draft.admx.map((a) => ({ set: a.set, ref: a.ref, class: a.class || 'machine',
+                    state: a.state, options: a.options })),
                 scripts: draft.scripts,
             },
         };
@@ -797,8 +1181,20 @@
         document.getElementById('gpo-new').addEventListener('click', () => openEditor(null));
         document.getElementById('gpo-cancel').addEventListener('click', () => dialog.close());
         document.getElementById('gpo-save').addEventListener('click', savePolicy);
+        document.getElementById('gpo-admx-add').addEventListener('click', () => { void openAdmxBrowser(); });
+        document.getElementById('gpo-admx-close').addEventListener('click', () => admxDialog.close());
+        document.getElementById('gpo-admx-back').addEventListener('click', () => {
+            if (admxTree) showAdmxBrowse();
+            else admxDialog.close();
+        });
+        document.getElementById('gpo-admx-ok').addEventListener('click', applyAdmxSetting);
+        document.getElementById('gpo-admx-set').addEventListener('change', (e) => { void loadAdmxSet(e.target.value); });
+        document.getElementById('gpo-admx-search').addEventListener('input', renderAdmxList);
+        document.querySelectorAll('input[name="gpo-admx-state"]').forEach((radio) => {
+            radio.addEventListener('change', syncAdmxOptions);
+        });
         document.getElementById('gpo-registry-add').addEventListener('click', () => {
-            draft.registry.push({ path: 'SOFTWARE\\Policies\\', name: '', type: 'dword', value: '' });
+            draft.registry.push({ class: 'machine', path: 'SOFTWARE\\Policies\\', name: '', type: 'dword', value: '' });
             renderRegistryRows();
         });
         document.getElementById('gpo-agent-add').addEventListener('change', (e) => {

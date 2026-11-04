@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using TempMonitorAgent.Backup;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Watchdog;
+using FleetHub.Shared.Pty;
 
 namespace TempMonitorAgent.Fleet;
 
@@ -20,26 +21,6 @@ public readonly record struct OutputPostResult(bool Ok, bool Truncated);
 public interface IOutputSink
 {
     Task<OutputPostResult> PostOutputAsync(string commandId, int seq, string text, CancellationToken ct);
-}
-
-/// <summary>One item the console queued for an open terminal: either raw bytes the operator
-/// typed (<c>Kind == "data"</c>) or a terminal resize (<c>Kind == "resize"</c>).</summary>
-public readonly record struct PtyInputItem(int Seq, string Kind, string Data, short Cols, short Rows);
-
-/// <summary>Result of one keystroke poll. <c>Ok</c> is false when the hub couldn't be
-/// reached at all — distinct from "reached it, nothing typed", because only the former
-/// should make the session give up. <c>Closing</c> is the console asking us to shut the
-/// terminal down.</summary>
-public readonly record struct PtyInputBatch(
-    bool Ok, IReadOnlyList<PtyInputItem> Items, int NextSeq, bool Closing, bool Gone);
-
-/// <summary>The terminal half of the hub API, split out for the same reason as IOutputSink:
-/// PtySessionRunner's polling/coalescing/backoff is worth testing without a live hub.</summary>
-public interface IPtyChannel
-{
-    Task<PtyInputBatch> PullPtyInputAsync(string sessionId, int afterSeq, CancellationToken ct);
-    Task<bool> PostPtyOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct);
-    Task ReportPtyClosedAsync(string sessionId, string reason, CancellationToken ct);
 }
 
 /// <summary>Fetching a package payload, for DeployPackageExecutor. An interface for the
@@ -109,6 +90,11 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     /// reason <see cref="Watchdogs"/> is. Null means no <c>gpo_version</c> is sent, which is
     /// exactly how the hub tells an agent that cannot apply registry policy from one that can.</summary>
     public TempMonitorAgent.GroupPolicy.GroupPolicyRunner? GroupPolicy { get; set; }
+
+    /// <summary>This PC's Administrative Templates (roadmap #32): its hash rides every
+    /// heartbeat, and the hub's <c>admx_wanted</c> answer queues one upload. Set from
+    /// Program.cs for the reason given on <see cref="Watchdogs"/>.</summary>
+    public TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader? PolicyDefinitions { get; set; }
 
     /// <summary>Takes the agent off this PC when the hub says its machine was deleted with
     /// "uninstall the agent" ticked (roadmap #30). Handed over after construction for the
@@ -308,9 +294,17 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
             if (GroupPolicy is { } policy)
             {
                 body["gpo_version"] = policy.Version;
+                // How it applies them -- "lgpo" since 3.49: into the local GPO, so gpedit.msc
+                // shows them. Present or absent like the version, never a minor to compare.
+                body["gpo_features"] = new JsonArray(
+                    [.. TempMonitorAgent.GroupPolicy.GroupPolicyRunner.Features.Select(f => (JsonNode)f)]);
                 policyStates = TempMonitorAgent.GroupPolicy.GroupPolicyReporter.TakeIfChanged();
                 if (policyStates is not null) body["gpo"] = policyStates.DeepClone();
             }
+            // Administrative Templates (roadmap #32): the hash of this PC's PolicyDefinitions on
+            // every heartbeat, which is all the hub needs to know whether it holds this set. The
+            // files themselves go up separately, only when asked (UploadPolicyDefinitionsAsync).
+            if (PolicyDefinitions?.Hash is { } templates) body["admx_hash"] = templates;
             // What this build can do (roadmap #23), the first capabilities block a Windows agent
             // has sent. **Features only, never `commands`**: the hub reads an absent command
             // list as "can run anything" and a present one as the whole truth, so listing
@@ -577,7 +571,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         }
         catch (Exception e)
         {
-            _log.LogWarning("Ignoring malformed update policy from the hub: {Msg}", e.Message);
+            _log.LogWarning(e, "Ignoring malformed update policy from the hub: {Msg}", e.Message);
         }
     }
 
@@ -672,6 +666,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         {
             var root = JsonNode.Parse(body)?.AsObject();
             if (root is null) return;
+            // The hub lacks this PC's template set and has picked this PC to send it. Only
+            // queued here; the upload runs on the policy loop, off the heartbeat's clock.
+            if (root["admx_wanted"]?.GetValue<bool>() == true) PolicyDefinitions?.RequestUpload();
             if (!root.TryGetPropertyValue("gpo_document", out var node) || node is null) return;
             var version = root["gpo_version"]?.GetValue<string>() ?? "";
             var document = TempMonitorAgent.GroupPolicy.PolicyDocument.Parse(node, version);
@@ -1015,104 +1012,31 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
     }
 
     // ---------------------------------------------------------------- interactive terminal
-    // These three are the whole hub-facing surface of a ConPTY session. They are separate
-    // from the command endpoints above because a terminal is a stream, not a command: it
-    // has no result, no exit code worth recording, and a lifetime measured in an operator's
-    // attention span. See hub/terminal.py for the other end.
+    // The three terminal requests are agent-shared/Pty/PtyProtocol.cs (PtyHttp), the same code
+    // the Linux agent runs: the URLs, the 404-means-gone rule and the input parse are the hub
+    // protocol (hub/terminal.py). This client supplies its HttpClient, its bearer token and the
+    // enrolled check. Separate from the command endpoints above because a terminal is a stream,
+    // not a command: no result, and a lifetime measured in an operator's attention span.
 
-    /// <summary>Fetch keystrokes and resizes the console queued for this session. Called on
-    /// a tight loop while a terminal is open, so it must be cheap and must never throw.</summary>
-    public async Task<PtyInputBatch> PullPtyInputAsync(string sessionId, int afterSeq, CancellationToken ct)
-    {
-        var empty = Array.Empty<PtyInputItem>();
-        if (!_identity.IsEnrolled) return new PtyInputBatch(false, empty, afterSeq, false, false);
+    /// <summary>The shared terminal requests over this client. Built per call rather than once:
+    /// it costs one small object, and reading AgentConfig.HubBase each time keeps it honest if
+    /// the hub address is ever changed while the agent runs.</summary>
+    private PtyHttp Pty => new(_http, Authorized, AgentConfig.HubBase, _log);
 
-        try
-        {
-            using var req = Authorized(HttpMethod.Get, AgentConfig.PtyInputUrl(sessionId, afterSeq));
-            using var resp = await _http.SendAsync(req, ct);
+    public Task<PtyInputBatch> PullPtyInputAsync(string sessionId, int afterSeq, CancellationToken ct) =>
+        _identity.IsEnrolled
+            ? Pty.PullInputAsync(sessionId, afterSeq, ct)
+            : Task.FromResult(new PtyInputBatch(false, Array.Empty<PtyInputItem>(), afterSeq, false, false));
 
-            // The hub forgot this session (reaped, or the DB was reset). Nothing will ever
-            // arrive for it, so the session should end rather than poll a 404 forever.
-            if (resp.StatusCode == HttpStatusCode.NotFound)
-                return new PtyInputBatch(true, empty, afterSeq, Closing: true, Gone: true);
-            if (!resp.IsSuccessStatusCode)
-                return new PtyInputBatch(false, empty, afterSeq, false, false);
+    public Task<bool> PostPtyOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct) =>
+        _identity.IsEnrolled
+            ? Pty.PostOutputAsync(sessionId, seq, chunk, ct)
+            : Task.FromResult(false);
 
-            var json = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct));
-            var items = new List<PtyInputItem>();
-            if (json?["items"] is JsonArray array)
-            {
-                foreach (var node in array)
-                {
-                    if (node is null) continue;
-                    var seq = node["seq"]?.GetValue<int>() ?? -1;
-                    var kind = node["kind"]?.GetValue<string>() ?? "data";
-                    if (kind == "resize")
-                    {
-                        var size = node["size"];
-                        items.Add(new PtyInputItem(seq, "resize", "",
-                            (short)(size?["cols"]?.GetValue<int>() ?? 120),
-                            (short)(size?["rows"]?.GetValue<int>() ?? 30)));
-                    }
-                    else
-                    {
-                        items.Add(new PtyInputItem(seq, "data", node["data"]?.GetValue<string>() ?? "", 0, 0));
-                    }
-                }
-            }
-            return new PtyInputBatch(
-                true, items,
-                json?["next_seq"]?.GetValue<int>() ?? afterSeq,
-                json?["closing"]?.GetValue<bool>() ?? false,
-                Gone: false);
-        }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
-        {
-            _log.LogDebug("pty input poll for {Id} failed: {Msg}", sessionId, e.Message);
-            return new PtyInputBatch(false, empty, afterSeq, false, false);
-        }
-    }
-
-    /// <summary>Post one VT chunk. Like PostOutputAsync, a retry MUST reuse the same seq —
-    /// the hub keys on it, and a fresh number would duplicate bytes into the middle of an
-    /// escape sequence and corrupt the operator's screen.</summary>
-    public async Task<bool> PostPtyOutputAsync(string sessionId, int seq, string chunk, CancellationToken ct)
-    {
-        if (!_identity.IsEnrolled) return false;
-        var body = new JsonObject { ["seq"] = seq, ["chunk"] = chunk };
-        try
-        {
-            using var req = Authorized(HttpMethod.Post, AgentConfig.PtyOutputUrl(sessionId));
-            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp = await _http.SendAsync(req, ct);
-            return resp.IsSuccessStatusCode;
-        }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
-        {
-            _log.LogDebug("pty output post for {Id} seq {Seq} failed: {Msg}", sessionId, seq, e.Message);
-            return false;
-        }
-    }
-
-    /// <summary>Tell the hub the session is over, so the console can stop polling and say
-    /// why. Best-effort: if it doesn't land, the hub's idle reaper closes it anyway.</summary>
-    public async Task ReportPtyClosedAsync(string sessionId, string reason, CancellationToken ct)
-    {
-        if (!_identity.IsEnrolled) return;
-        var body = new JsonObject { ["reason"] = reason };
-        try
-        {
-            using var req = Authorized(HttpMethod.Post, AgentConfig.PtyClosedUrl(sessionId));
-            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp = await _http.SendAsync(req, ct);
-            _ = resp.IsSuccessStatusCode;
-        }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
-        {
-            _log.LogDebug("pty close report for {Id} failed: {Msg}", sessionId, e.Message);
-        }
-    }
+    public Task ReportPtyClosedAsync(string sessionId, string reason, CancellationToken ct) =>
+        _identity.IsEnrolled
+            ? Pty.ReportClosedAsync(sessionId, reason, ct)
+            : Task.CompletedTask;
 
     /// <summary>Report a command's result. Must run under the same agent_id that claimed it.</summary>
     public async Task<bool> ReportResultAsync(string commandId, CommandResult result, CancellationToken ct)
@@ -1684,6 +1608,37 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
             _log.LogDebug("Disk usage POST failed: {Msg}", e.Message);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Upload this PC's Administrative Templates as a zip (roadmap #32), streamed from disk
+    /// with a Content-Length like the disk-usage history below. Returns whether the hub took
+    /// it; a refusal is logged and not retried until the hub asks again, which it does only
+    /// while it still lacks the set and this PC still holds the claim on sending it.
+    /// </summary>
+    public async Task<bool> UploadPolicyDefinitionsAsync(string path, string hash, CancellationToken ct)
+    {
+        var url = $"{AgentConfig.HubBase}/api/agent/gpo/templates/{Uri.EscapeDataString(hash)}";
+        try
+        {
+            var length = new FileInfo(path).Length;
+            using var body = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                                            1024 * 1024, useAsync: true);
+            using var req = Authorized(HttpMethod.Post, url);
+            req.Content = new StreamContent(body);
+            req.Content.Headers.ContentLength = length;
+            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+            using var resp = await _downloadHttp.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode) return true;
+            _log.LogWarning("Hub refused the Administrative Templates upload ({Status}): {Body}",
+                            (int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
+        {
+            _log.LogWarning(e, "Administrative Templates upload failed ({Kind}): {Msg}",
+                            e.GetType().Name, e.GetBaseException().Message);
         }
         return false;
     }

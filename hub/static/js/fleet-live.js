@@ -31,6 +31,12 @@
 // worse than a stale number. So a refresh is deferred while any <dialog> on the page is open
 // (every editor modal here is one), and while the page's own `busy()` says so (an inline
 // form with unsaved values, an editor panel that is showing). It runs the moment that clears.
+// It also waits while a NATIVE POPUP may be open: a <select>'s list or a date/time input's
+// picker closes the instant its element is replaced, and the DOM has no "open" state to ask
+// -- so a focused one of those, used in the last POPUP_RECENT_MS, counts as busy. Recency is
+// what keeps a select left focused after use from freezing the page: once the operator has
+// not touched the page for that long, the refresh goes ahead. Rejected: any focused field,
+// which would stall every page whose search box simply kept the cursor.
 //
 // ALSO HERE: the relative-time ticker. Any element written by fmtAgoInto() (common.js) is
 // re-rendered every AGO_TICK_MS, so "last seen 2m ago" never sits there saying 2m for an
@@ -45,6 +51,12 @@
     const BUSY_RETRY_MS = 2000;
     const FALLBACK_TICK_MS = 30000;
     const AGO_TICK_MS = 10000;
+    // Controls whose open list or picker lives outside the DOM (the header says why they count).
+    const POPUP_CONTROLS = 'select, input[type="date"], input[type="time"], '
+        + 'input[type="datetime-local"], input[type="month"], input[type="week"]';
+    // A list open longer than this with no click or key reaching the page gets refreshed under.
+    // Scrolling inside a native list sends the page nothing, so it is generous on purpose.
+    const POPUP_RECENT_MS = 30000;
 
     /** The topbar's Live pill, in the document that owns the socket. */
     function setPill(state) {
@@ -160,6 +172,21 @@
             releases.clear();
         });
 
+        // When the operator last clicked or typed in this document (capture, so a handler
+        // that stops propagation cannot hide it). Feeds popupInUse().
+        let lastInput = 0;
+        const noteInput = () => { lastInput = Date.now(); };
+        for (const type of ['pointerdown', 'keydown', 'change']) {
+            owner.document.addEventListener(type, noteInput, true);
+        }
+
+        function popupInUse() {
+            const active = owner.document.activeElement;
+            return !!active && typeof active.matches === 'function'
+                && active.matches(POPUP_CONTROLS)
+                && Date.now() - lastInput < POPUP_RECENT_MS;
+        }
+
         /**
          * Run `refresh` whenever one of `topics` changes.
          *   topics:  an array of topic names (hub/changes.py), or '*' for every change.
@@ -169,7 +196,8 @@
          *   opts.minInterval:  ms between runs; default 2s.
          *   opts.temp:  also run on `new_temp` (for that machine, if opts.machine).
          *   opts.busy():  true while a refresh would clobber something the operator is
-         *                 doing; the refresh waits. An open <dialog> always counts.
+         *                 doing; the refresh waits. An open <dialog> always counts, and so
+         *                 does a dropdown or date/time picker in use (popupInUse).
          * Returns an unsubscribe function.
          */
         function watch(topics, refresh, opts) {
@@ -184,6 +212,7 @@
             function busy() {
                 try {
                     if (owner.document.querySelector('dialog[open]')) return true;
+                    if (popupInUse()) return true;
                     return !!opts.busy?.();
                 } catch (e) {
                     // A busy() that throws must not wedge the page forever: treat it as idle,

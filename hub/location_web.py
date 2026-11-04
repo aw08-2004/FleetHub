@@ -30,6 +30,8 @@ located; the trail can always answer who asked.
 The CSRF note from fleet_web.py applies verbatim: bodies are read with
 request.get_json(silent=True), which requires Content-Type: application/json.
 """
+import time
+
 from flask import Blueprint, jsonify, render_template, request
 
 import capabilities
@@ -122,7 +124,39 @@ def create_location_blueprint(db_path, login_required, access):
             "unlocated": _unlocated(db_path, access, rows),
             "can_locate": access.can(permissions.LOCATE_DEVICE),
             "map": _map_config(),
+            # The page's own timer reads this; the POST below enforces it per device anyway,
+            # so a page left on an old value cannot ask faster than the setting allows.
+            "live": {"interval_seconds": _live_interval()},
         }), 200
+
+    def _live_interval():
+        return settings.get_int(db_path, "location.live_interval_seconds")
+
+    def _ask(machine, actor, *, live=False):
+        """Queue one locate and audit it. Raises ValueError (fleet.UnsupportedCommand among
+        them) exactly as create_command does. Shared by the single ask and the live map so the
+        two cannot drift on the params, the TTL or the audit row."""
+        command_id = fleet.create_command(
+            db_path, machine=machine, command_type=location.COMMAND_TYPE,
+            # The device's own time budget. WHICH provider to use is deliberately not
+            # here -- see fleet.LOCATION_COMMANDS.
+            params={"timeout_seconds": settings.get_int(
+                db_path, "location.default_timeout_seconds")},
+            issued_by=actor,
+            ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"))
+        # Audited at security level, like issuing any other command -- and here the actor is
+        # the point of the row rather than a detail of it. `create_command` already writes its
+        # own `issue_command` entry; this one exists so that "who located this device, and
+        # when" is answerable by searching for one action rather than by reading command
+        # params. The device names the same operator in its own notification. A live-map ask
+        # is the same row with `live` set, not a quieter one: being located once a minute is
+        # more worth a trail than being located once.
+        detail = {"command_id": command_id}
+        if live:
+            detail["live"] = True
+        fleet.audit(db_path, actor=actor, action="locate_device",
+                    level=fleet.LEVEL_SECURITY, target=machine, detail=detail)
+        return command_id
 
     # ---------------- Ask ----------------
     @bp.route("/api/location/machines/<machine>", methods=["POST"])
@@ -155,31 +189,110 @@ def create_location_blueprint(db_path, login_required, access):
             return jsonify(_payload(machine)), 202
 
         try:
-            command_id = fleet.create_command(
-                db_path, machine=machine, command_type=location.COMMAND_TYPE,
-                # The device's own time budget. WHICH provider to use is deliberately not
-                # here -- see fleet.LOCATION_COMMANDS.
-                params={"timeout_seconds": settings.get_int(
-                    db_path, "location.default_timeout_seconds")},
-                issued_by=actor,
-                ttl_seconds=settings.get_int(db_path, "fleet.command_ttl_seconds"))
+            _ask(machine, actor)
         except ValueError as e:
             # Covers fleet.UnsupportedCommand (this device cannot locate) and a genuinely bad
             # machine name. Both are 400 with the reason, which for the first is a sentence
             # naming the machine, the command and the platform.
             return refusals.refuse(e)
-
-        # Audited at security level, like issuing any other command -- and here the actor is
-        # the point of the row rather than a detail of it. `create_command` already writes its
-        # own `issue_command` entry; this one exists so that "who located this device, and
-        # when" is answerable by searching for one action rather than by reading command
-        # params. The device names the same operator in its own notification.
-        fleet.audit(db_path, actor=actor, action="locate_device",
-                    level=fleet.LEVEL_SECURITY, target=machine,
-                    detail={"command_id": command_id})
         return jsonify(_payload(machine)), 202
 
+    @bp.route("/api/location/fleet/locate", methods=["POST"])
+    @login_required
+    @access.require(permissions.LOCATE_DEVICE)
+    def locate_fleet():
+        """Ask every online, locatable device in this operator's scope again -- the live map.
+
+        **Before this the map could locate a device once**: its Locate button lived only on the
+        "not located yet" list, so the moment a phone answered it moved to the located list,
+        which had none, and the map showed that first fix for as long as anybody looked.
+
+        **Names no machine, so `require` plus `filter_rows` rather than `require_machine`.**
+        The capability is checked on the route and scope is applied to the candidate list
+        before anything is queued, so the set this can reach is exactly the set the single-
+        device route could reach one at a time.
+
+        Skipped, and reported back so the page can say why a point did not move -- see
+        _live_candidates for the three reasons.
+        """
+        if not request.is_json:
+            return jsonify({"error": "expected application/json"}), 415
+        actor = permissions_web.current_actor()
+        interval = _live_interval()
+        targets, skipped, since = _live_candidates(db_path, access, int(time.time()), interval)
+        asked, refused = _ask_each(db_path, targets, since,
+                                   lambda name: _ask(name, actor, live=True))
+        skipped.update(refused)
+        return jsonify({"asked": asked, "skipped": skipped,
+                        "live": {"interval_seconds": interval}}), 202
+
     return bp
+
+
+def _live_candidates(db_path, access, now, interval):
+    """Split the operator's locatable devices into the ones the live map should ask now and the
+    ones it should leave alone. Returns `(targets, skipped, since)`, `skipped` being
+    `{machine: reason}` and `since` the cut-off _ask_each re-checks against.
+
+    Left alone:
+      * **offline** devices -- a locate queued at a switched-off phone expires into a "did not
+        answer" row every TTL, which would bury its real history in noise;
+      * devices with a locate **in flight**, for the reason the single-device route gives;
+      * devices asked **within the live interval**, by anybody -- see
+        location.recently_requested, which is what spaces asks per device rather than per
+        viewer.
+
+    Module level, like _unlocated, so the blueprint factory stays a list of routes.
+    """
+    names = [c["machine"] for c in access.filter_rows(
+        [{"machine": m} for m in
+         capabilities.machines_with_feature(db_path, capabilities.FEATURE_LOCATE)])]
+    online = {row["machine"] for row in fleet.list_agent_status(
+        db_path, offline_after=settings.get_int(db_path, "fleet.offline_after_seconds"))
+        if row["status"] == "online"}
+    in_flight = set(location.open_requests(db_path, names))
+    # A little under the interval, so a page whose timer fires a second early is not turned
+    # away on every other tick and left updating at half the rate.
+    since = now - interval + 5
+    recent = location.recently_requested(db_path, names, since)
+
+    targets, skipped = [], {}
+    for name in names:
+        if name not in online:
+            skipped[name] = "offline"
+        elif name in in_flight:
+            skipped[name] = "pending"
+        elif name in recent:
+            skipped[name] = "recent"
+        else:
+            targets.append(name)
+    return targets, skipped, since
+
+
+def _ask_each(db_path, targets, since, ask):
+    """Ask each target, re-checking it just before. Returns `(asked, {machine: reason})`.
+
+    **The re-check narrows a race; it does not close one.** Two viewers whose ticks land in
+    the same instant both read the candidate list before either has queued anything, and
+    without this both would ask every phone. Checking each device immediately before its own
+    ask leaves a window of one statement rather than one whole fleet, and what slips through
+    it is one extra GPS fix -- not worth a lock on the command table. Rejected: an atomic
+    claim (INSERT ... WHERE NOT EXISTS) in fleet.create_command, which every other command
+    type would pay for to save a phone an occasional duplicate locate.
+    """
+    asked, skipped = [], {}
+    for name in targets:
+        if location.recently_requested(db_path, [name], since):
+            skipped[name] = "recent"
+            continue
+        try:
+            ask(name)
+            asked.append(name)
+        except ValueError:
+            # A device that has since stopped reporting the feature. One refusal must not
+            # cost every other device its update.
+            skipped[name] = "unsupported"
+    return asked, skipped
 
 
 def _unlocated(db_path, access, fixes):

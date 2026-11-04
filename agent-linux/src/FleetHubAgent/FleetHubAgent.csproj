@@ -24,7 +24,7 @@
          will get the same treatment: a release script that moves both, never a hand edit.
          0.x is deliberate and load-bearing; the reasoning is on AgentConfig.Version, and
          VersionGateTests is what enforces it. -->
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -54,5 +54,13 @@
        cannot mean something different on one platform. See agent-shared/UpdatePins.cs. -->
   <ItemGroup>
     <Compile Include="..\..\..\agent-shared\UpdatePins.cs" Link="Update\UpdatePins.cs" />
+  </ItemGroup>
+
+  <!-- The interactive terminal's hub side (runner, registry, hub calls, timings), shared with
+       the Windows agent because it is the hub protocol rather than anything about the OS.
+       Only the pty itself is this agent's own: Fleet/Shell/UnixPty.cs and PtySession.cs.
+       See agent-shared/Pty/PtySessionRunner.cs. -->
+  <ItemGroup>
+    <Compile Include="..\..\..\agent-shared\Pty\*.cs" LinkBase="Fleet\Shell\Shared" />
   </ItemGroup>
 </Project>

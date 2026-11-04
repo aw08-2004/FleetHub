@@ -772,6 +772,34 @@
     border-color: var(--accent-fill-hover, var(--accent-hover));
 }
 
+/* A disabled button has to LOOK disabled. Without this a disabled primary ("Already awake"
+   on the Network tab) kept its full accent fill and hover, and read as the one thing on the
+   panel to click. The :disabled:hover rules out-rank each variant's :hover by specificity,
+   so hovering a disabled button changes nothing -- a hover reaction is a promise of a click. */
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn:disabled:hover {
+    border-color: var(--card-border);
+    background: var(--control-bg);
+}
+
+.btn--ghost:disabled:hover {
+    background: transparent;
+}
+
+.btn--primary:disabled:hover {
+    background: var(--accent-fill, var(--accent));
+    border-color: var(--accent-fill, var(--accent));
+}
+
+.btn--danger:disabled:hover {
+    border-color: var(--danger, #f85149);
+    color: var(--danger, #f85149);
+}
+
 .btn--icon {
     padding: var(--space-2);
     width: 34px;
@@ -1357,6 +1385,26 @@
 }
 
 /* ============ Stat card ============ */
+/* The base tile and its grid. Patches and Events build bare `div.stat-card`s inside a
+   `.stat-grid`, and for as long as only the modifiers and children below existed those
+   rendered as loose text stacked down the page instead of tiles. The values repeat .card
+   and .card-grid on purpose, so `card stat-card` (machine page, sharing) looks the same
+   as a bare `stat-card` and neither page has to change. */
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--space-4);
+}
+
+.stat-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    padding: var(--space-5);
+    min-width: 0;
+}
+
 .stat-card__label {
     font-size: var(--text-sm);
     color: var(--muted);
@@ -1395,6 +1443,14 @@
 
 .stat-card--high-temp .stat-card__value {
     color: var(--danger);
+}
+
+/* A temperature at or over hub.hot_temp_threshold_c, wherever one is printed in a list (Devices'
+   Last temp, the Dashboard's Hottest right now). The same --danger the machine page's hot
+   tile uses, so "hot" is one colour across the console. */
+.temp--hot {
+    color: var(--danger);
+    font-weight: 600;
 }
 
 /* The one reading in a list-style card that tripped the card's alert state, so the eye
@@ -1440,6 +1496,24 @@
     font-size: var(--text-sm);
 }
 
+/* Devices: the fleet-wide wake, pushed to the far end of the toolbar behind a rule so it
+   never reads as a sibling of Export CSV. One is a download, the other powers on every
+   offline PC in the fleet. */
+.inventory-fleet-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-left: auto;
+    padding-left: var(--space-3);
+    border-left: 1px solid var(--card-border);
+}
+
+/* No stray rule on a fully awake fleet: the button is hidden then, and so is its frame --
+   unless a result line from the last wake is still showing. */
+.inventory-fleet-actions:not(:has(.btn:not([hidden]))):not(:has(.stat-card__meta:not(:empty))) {
+    display: none;
+}
+
 .select, .input {
     background: var(--control-bg);
     color: var(--text);
@@ -1476,6 +1550,37 @@ label.checkbox input {
     flex: none;
 }
 
+/* ============ Notice ============ */
+/* A tinted box for a state the operator should read before acting: a firmware change, a
+   wake request, the BIOS image warning. Firmware, Wake, Discovery, Alerts and the image
+   library all built `notice notice--<tone>` for months while no stylesheet defined it, so
+   each one rendered as loose text with a 16px section title and browser bullets. The tones
+   are the status-pill tones, so a pill and a notice for the same state agree. */
+.notice {
+    border: 1px solid var(--card-border);
+    border-left-width: 3px;
+    border-radius: var(--radius-md);
+    background: var(--control-bg);
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-3);
+}
+
+.notice > :last-child { margin-bottom: 0; }
+.notice .section-title { font-size: var(--text-base); margin-bottom: var(--space-1); }
+.notice--ok { border-left-color: var(--success); background: var(--success-bg); }
+.notice--warn { border-left-color: var(--warning); background: var(--warning-bg); }
+.notice--danger { border-left-color: var(--danger); background: var(--danger-bg); }
+.notice--muted { border-left-color: var(--muted); }
+
+/* A list that is a stack of rows, not prose: no bullets, no indent. */
+.plain-list {
+    list-style: none;
+    margin: 0 0 var(--space-2);
+    padding: 0;
+}
+
+.plain-list > li + li { margin-top: var(--space-2); }
+
 /* ============ Data table ============ */
 .data-table {
     width: 100%;
@@ -1508,6 +1613,13 @@ label.checkbox input {
 }
 
 .data-table__actions .btn + .btn {
+    margin-left: var(--space-2);
+}
+
+/* The same gap for an action cell that never got the class above -- Device policy and
+   Watchdogs append Edit and Delete straight into a bare <td>, and with no whitespace
+   between JS-built nodes the two buttons touched, so Delete read as half of Edit. */
+td > .btn + .btn {
     margin-left: var(--space-2);
 }
 
@@ -2099,6 +2211,13 @@ label.checkbox input {
     min-width: 6rem;
     padding: var(--space-1) var(--space-2);
     font-size: var(--text-sm);
+}
+
+/* A detail row (tr[data-table-detail]) whose owner row the filter hid. A class, not [hidden]:
+   the page owns that row's hidden as its open/closed state (table-tools.js). Two classes plus
+   an element, so it also outranks the card layout's display: block below. */
+.data-table tr.data-table__filtered-out {
+    display: none;
 }
 
 /* ============ Card tables (phones) ============

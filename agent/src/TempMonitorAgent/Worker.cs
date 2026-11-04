@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Shell;
+using FleetHub.Shared.Pty;
 using TempMonitorAgent.State;
 using TempMonitorAgent.Telemetry;
 using TempMonitorAgent.Update;
@@ -56,6 +57,7 @@ public sealed class Worker : BackgroundService
     private readonly PtySessionManager _ptys;
     private readonly WatchdogRunner _watchdogs;
     private readonly TempMonitorAgent.GroupPolicy.GroupPolicyRunner _groupPolicy;
+    private readonly TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader _policyDefinitions;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll
     /// loop from re-dispatching something already running.</summary>
@@ -71,6 +73,11 @@ public sealed class Worker : BackgroundService
     private DateTime _lastEnrollAttemptUtc = DateTime.MinValue;
     private bool _telemetryOnlyLogged;
 
+    /// <summary>Whether "no CPU temperature sensor" has been logged since the sensor was last
+    /// seen. Once per transition, not per tick: a VM has no sensor for its whole life, and a
+    /// warning every five seconds would bury everything else in the log.</summary>
+    private bool _noTempLogged;
+
     /// <summary>Set by the telemetry loop when the hub reports a newer version, and by the
     /// update loop's own weekly clock. Read and cleared by the update loop.</summary>
     private volatile bool _updateDue;
@@ -85,7 +92,8 @@ public sealed class Worker : BackgroundService
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
         TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
         SelfUpdater updater, ShellSessionManager shells, PtySessionManager ptys,
-        WatchdogRunner watchdogs, TempMonitorAgent.GroupPolicy.GroupPolicyRunner groupPolicy)
+        WatchdogRunner watchdogs, TempMonitorAgent.GroupPolicy.GroupPolicyRunner groupPolicy,
+        TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader policyDefinitions)
     {
         _log = log;
         _state = state;
@@ -98,6 +106,7 @@ public sealed class Worker : BackgroundService
         _ptys = ptys;
         _watchdogs = watchdogs;
         _groupPolicy = groupPolicy;
+        _policyDefinitions = policyDefinitions;
         _enrollmentSecret = ReadEnrollmentSecret();
     }
 
@@ -178,45 +187,55 @@ public sealed class Worker : BackgroundService
                 bool includeUptime = (now - lastUptime).TotalSeconds >= AgentConfig.UptimeIntervalSeconds;
 
                 var snapshot = _sensors.Read();
-                if (snapshot.CpuTemp is double temp)
+                // **Reported with or without a CPU temperature.** This used to be the gate on
+                // the whole report, so a machine with no temperature sensor -- every VM:
+                // Windows Sandbox, Hyper-V, a cloud-GPU box -- never sent one. It enrolled and
+                // heartbeated, and the hub, which creates a machine's identity row only from
+                // a report, never listed it in Inventory. A null temp is now sent instead and
+                // the hub (1.168.0 and later) stores everything but the reading. An older hub
+                // refuses that report with a 400, which TelemetryReporter drops rather than
+                // retrying -- no worse than the nothing it got before.
+                if (snapshot.CpuTemp is null && !_noTempLogged)
                 {
-                    var result = await _reporter.ReportAsync(
-                        temp,
-                        includeSensors ? snapshot.Sensors : null,
-                        includeUptime ? SystemInfo.UptimeSeconds() : null,
-                        ct);
-
-                    if (includeSensors) lastSensor = now;
-                    if (includeUptime) lastUptime = now;
-
-                    // A report the HUB ACCEPTED is one of the two things that prove an
-                    // updated build works rather than merely starts, so it retires the
-                    // previous binary -- see SelfUpdater.ConfirmRunningBuild. The heartbeat
-                    // loop carries the other, because this branch only runs when the CPU
-                    // sensor produced a reading and an update's fate must not hang on that.
-                    //
-                    // **Gated on the result, not on reaching this line.** ReportAsync
-                    // swallows connectivity failures and returns Sent:false rather than
-                    // throwing (see TelemetryReporter), so a machine that boots the new
-                    // build into a dead network still gets here on its first tick -- and
-                    // confirming there would delete the rollback binary in precisely the
-                    // situation the binary is kept for. A non-2xx is not proof either: the
-                    // hub answered, but it did not take the report, and ticks are five
-                    // seconds apart so waiting for a real one costs nothing.
-                    if (result is { Sent: true, StatusCode: >= 200 and < 300 })
-                    {
-                        _updater.ConfirmRunningBuild();
-                    }
-
-                    if (result.LatestVersion is { Length: > 0 } lv &&
-                        VersionUtil.Compare(lv, AgentConfig.Version) > 0)
-                    {
-                        _updateDue = true;
-                    }
+                    _log.LogWarning("No CPU temperature sensor; reporting without a temperature");
+                    _noTempLogged = true;
                 }
-                else
+                else if (snapshot.CpuTemp is not null)
                 {
-                    _log.LogWarning("No CPU temperature reading this cycle");
+                    _noTempLogged = false;
+                }
+                var result = await _reporter.ReportAsync(
+                    snapshot.CpuTemp,
+                    includeSensors ? snapshot.Sensors : null,
+                    includeUptime ? SystemInfo.UptimeSeconds() : null,
+                    ct);
+
+                if (includeSensors) lastSensor = now;
+                if (includeUptime) lastUptime = now;
+
+                // A report the HUB ACCEPTED is one of the two things that prove an
+                // updated build works rather than merely starts, so it retires the
+                // previous binary -- see SelfUpdater.ConfirmRunningBuild. The heartbeat
+                // loop carries the other, because an older hub refuses a report with no
+                // temperature and an update's fate must not hang on that.
+                //
+                // **Gated on the result, not on reaching this line.** ReportAsync
+                // swallows connectivity failures and returns Sent:false rather than
+                // throwing (see TelemetryReporter), so a machine that boots the new
+                // build into a dead network still gets here on its first tick -- and
+                // confirming there would delete the rollback binary in precisely the
+                // situation the binary is kept for. A non-2xx is not proof either: the
+                // hub answered, but it did not take the report, and ticks are five
+                // seconds apart so waiting for a real one costs nothing.
+                if (result is { Sent: true, StatusCode: >= 200 and < 300 })
+                {
+                    _updater.ConfirmRunningBuild();
+                }
+
+                if (result.LatestVersion is { Length: > 0 } lv &&
+                    VersionUtil.Compare(lv, AgentConfig.Version) > 0)
+                {
+                    _updateDue = true;
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
@@ -582,7 +601,42 @@ public sealed class Worker : BackgroundService
                 // itself threw. Logged and continued, like the watchdog loop.
                 _log.LogWarning(e, "Group Policy pass failed");
             }
+            await PolicyDefinitionsPassAsync(ct);
             if (!await DelayAsync(TempMonitorAgent.GroupPolicy.GroupPolicyRunner.TickSeconds, ct)) break;
+        }
+    }
+
+    /// <summary>Keep the Administrative Templates hash current, and upload the set when the hub
+    /// asked for it (roadmap #32). On the policy loop because it is the same feature and a
+    /// minute's latency is nothing for a once-per-build upload; never on the heartbeat, which a
+    /// multi-megabyte upload over a slow link would hold up long enough to read the PC
+    /// offline. Its own try/catch, so a template folder that cannot be read never stops the
+    /// policy pass above it.</summary>
+    private async Task PolicyDefinitionsPassAsync(CancellationToken ct)
+    {
+        string? zip = null;
+        try
+        {
+            _policyDefinitions.Refresh();
+            if (!_policyDefinitions.TakeUploadRequest(out _)) return;
+            // Not the update staging folder: SelfUpdater owns that one and clears it.
+            var folder = Path.Combine(AgentConfig.ProgramDataDir, "gpo");
+            Directory.CreateDirectory(folder);
+            zip = Path.Combine(folder, "policy-definitions.zip");
+            var hash = _policyDefinitions.WriteZip(zip);
+            if (await _fleet.UploadPolicyDefinitionsAsync(zip, hash, ct))
+                _log.LogInformation("Uploaded this PC's Administrative Templates ({Hash})", hash);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.LogWarning(e, "Could not read or upload the Administrative Templates");
+        }
+        finally
+        {
+            if (zip is not null)
+            {
+                try { File.Delete(zip); } catch (IOException) { /* next pass overwrites it */ }
+            }
         }
     }
 

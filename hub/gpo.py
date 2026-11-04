@@ -16,19 +16,26 @@ already knows, so the precedence rules below are Windows' rules, not new ones:
     two enforced links, the one HIGHER in the tree wins -- again Windows' rule, and the only
     one under which "enforced" means something to the people above.
 
-A policy object carries three kinds of setting, each delivered its own way:
+A policy object carries four kinds of setting, each delivered its own way:
 
   * **Agent settings** -- the `agent=True` hub settings (report interval, network collection,
     the tray...). Resolved per machine and merged into the heartbeat `config` block, so they
     work on every agent already in the field: the agent cannot tell a per-OU value from a
     fleet-wide one, and does not need to.
-  * **Registry values** under `HKLM\\SOFTWARE\\Policies` only -- the tree Windows itself
-    reserves for policy, and the one every ADMX template writes. Delivered as a versioned
+  * **Registry values** under `SOFTWARE\\Policies` only -- the tree Windows itself reserves
+    for policy, and the one every ADMX template writes -- in HKLM for Computer Configuration or,
+    since phase 3, in HKCU for User Configuration (`class`, below). Delivered as a versioned
     `gpo_document` on the heartbeat (the watchdog pattern), applied by the agent, which keeps
     its own copy of the same allow-list. **It never overwrites a value it did not write**: a
     value already there belongs to a domain GPO or a person, and is reported back as
     `managed_elsewhere` instead. Fighting real Group Policy every 90 minutes would be worse
     than not applying the setting.
+  * **Administrative Templates** -- gpedit's Enabled / Disabled settings, read from the
+    ADMX templates the PCs themselves report (admx.py). Each one is COMPILED at save time into
+    registry values of the kind above, validated by the same allow-list and stored beside the
+    setting, so resolution and the heartbeat never need a template. Last-wins per setting, as
+    in Windows: a later policy's "Disabled" replaces an earlier one's "Enabled" whole, option
+    values included, rather than leaving the earlier options behind.
   * **Scripts** from the library, run ONCE per PC per version of the script body, through the
     ordinary `run_script` command. Writing one needs `issue_commands` as well, exactly as a
     rule that runs one does.
@@ -38,11 +45,14 @@ idea): a link made by an operator scoped to the Cajas PCs applies to those PCs o
 after another PC is filed beneath the node. Without that, filing a PC (manage_pc_tree) would
 silently hand it to a link somebody else wrote.
 
-Rejected: an ADMX parser (large, and the allow-listed raw value is what every template
-resolves to); authoring real Windows GPOs (the agent is not assumed to be domain-joined, and
-SYSVOL is not ours to write); arbitrary registry paths (HKLM is the machine's trust root);
-HKCU (per-user hives are only loaded while somebody is signed in, and "applies when Ana next
-logs on" is a promise this agent cannot keep yet).
+Rejected: authoring real Windows GPOs (the agent is not assumed to be domain-joined, and
+SYSVOL is not ours to write); arbitrary registry paths (HKLM is the machine's trust root).
+HKCU was rejected too at first -- per-user hives are only loaded while somebody is signed in,
+so "applies when Ana next logs on" was a promise the agent could not keep. Phase 3 keeps it
+without loading a hive: since phase 2 the agent writes the PC's local GPO, and Windows itself
+applies its `User\\Registry.pol` to every user at sign-in. An ADMX parser was rejected here too at
+first, as large; the owner asked for gpedit's editor on 2026-10-29, and admx.py is it -- the
+compile-to-raw-values design is what kept it from touching anything below this module.
 
 Authorization lives upstream in gpo_web.py. Kept free of Flask so it can be unit-tested in
 isolation, like every other model module here.
@@ -53,6 +63,7 @@ import re
 import sqlite3
 import time
 
+import admx
 import directory
 import fleet
 import pc_tree
@@ -65,6 +76,10 @@ NAME_MAX = 80
 DESCRIPTION_MAX = 500
 MAX_REGISTRY_VALUES = 200
 MAX_SCRIPTS = 20
+MAX_ADMX_SETTINGS = 200
+#: The option values one template setting may carry, serialised. A list box of URLs is the
+#: largest real one; this is far past it.
+MAX_ADMX_OPTIONS_CHARS = 32 * 1024
 MAX_LINKS_PER_NODE = 50
 
 NODE_ROOT = "root"
@@ -89,6 +104,21 @@ REG_SZ = "string"
 REG_EXPAND_SZ = "expand_string"
 REG_MULTI_SZ = "multi_string"
 REGISTRY_TYPES = (REG_DWORD, REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ)
+# Not a type an operator can type: "delete this value", what a Disabled Administrative Template
+# often asks for (phase 2). The agent writes it into the local GPO as a Registry.pol `**del.`
+# entry, so it goes only to an agent that reports "lgpo" (resolve_for). An older agent writes
+# the registry directly and has no honest way to delete a value it never owned.
+REG_DELETE = "delete"
+# Which half of Group Policy a registry row belongs to (phase 3). Computer Configuration writes
+# HKLM; User Configuration writes HKCU of EVERY user who signs in to the PC, administrators
+# included, through the local GPO's User\\Registry.pol -- per-user and per-group local GPOs
+# (MLGPO) are not offered. A row without `class` is a machine row: every row stored before
+# phase 3 and every row an older agent is sent, so machine rows, their ids and the documents
+# built from them do not change.
+CLASS_MACHINE = "machine"
+CLASS_USER = "user"
+CLASSES = (CLASS_MACHINE, CLASS_USER)
+_HIVES = {CLASS_MACHINE: "HKLM", CLASS_USER: "HKCU"}
 MAX_PATH_CHARS = 255
 MAX_VALUE_NAME_CHARS = 255
 MAX_STRING_CHARS = 2048
@@ -222,6 +252,13 @@ def init_gpo_db(db_path):
             )
             """
         )
+        # How the agent applies the document, from its `gpo_features` (phase 2). "lgpo": into
+        # the PC's local GPO, where gpedit.msc and gpresult see it; absent: straight into the
+        # registry, as agents before 3.49 do. Comma-separated, sorted. NULL on rows from
+        # before the column, which reads exactly as an agent that sent no features.
+        agent_columns = {row["name"] for row in conn.execute("PRAGMA table_info(machine_gpo_agent)")}
+        if "features" not in agent_columns:
+            conn.execute("ALTER TABLE machine_gpo_agent ADD COLUMN features TEXT")
 
 
 # ================================================================ the cache
@@ -256,15 +293,27 @@ def _hash(value):
 
 
 # ================================================================ validation
+_HIVE_PREFIXES = (
+    ("HKEY_LOCAL_MACHINE\\", CLASS_MACHINE), ("HKLM:\\", CLASS_MACHINE), ("HKLM\\", CLASS_MACHINE),
+    ("HKEY_CURRENT_USER\\", CLASS_USER), ("HKCU:\\", CLASS_USER), ("HKCU\\", CLASS_USER),
+)
+
+
+def _split_hive(path):
+    """(class the hive prefix names, or None; the path without it)."""
+    text = str(path or "").strip().replace("/", "\\").strip("\\")
+    for prefix, cls in _HIVE_PREFIXES:
+        if text.upper().startswith(prefix):
+            return cls, text[len(prefix):]
+    return None, text
+
+
 def normalize_registry_path(path):
     """`HKLM\\SOFTWARE\\Policies\\X` and `SOFTWARE/Policies/X/` both become
-    `SOFTWARE\\Policies\\X`. The hive prefix is accepted because it is what people paste
-    out of regedit, and only HKLM is ever meant."""
-    text = str(path or "").strip().replace("/", "\\").strip("\\")
-    for prefix in ("HKEY_LOCAL_MACHINE\\", "HKLM:\\", "HKLM\\"):
-        if text.upper().startswith(prefix):
-            text = text[len(prefix):]
-            break
+    `SOFTWARE\\Policies\\X`. A hive prefix is accepted because it is what people paste out of
+    regedit; which hive is meant is the row's `class`, which a prefix may state but never
+    contradict (_registry_target)."""
+    _, text = _split_hive(path)
     return "\\".join(part.strip() for part in text.split("\\"))
 
 
@@ -276,7 +325,7 @@ def registry_path_error(path):
     if len(path) > MAX_PATH_CHARS:
         return f"the key path is longer than {MAX_PATH_CHARS} characters"
     if not path.lower().startswith(REGISTRY_ROOT.lower()) or len(path) <= len(REGISTRY_ROOT):
-        return "only keys under HKLM\\SOFTWARE\\Policies can be set by policy"
+        return "only keys under SOFTWARE\\Policies can be set by policy"
     parts = path.split("\\")
     if any(not part or part in (".", "..") or not _PATH_COMPONENT.match(part) for part in parts):
         return "the key path has an empty or invalid component"
@@ -288,10 +337,27 @@ def registry_path_error(path):
     return None
 
 
-def setting_id(path, name):
-    """A stable id for one registry value, the same on hub and agent: case-folded, because
-    the registry is case-insensitive and two spellings are one value."""
-    return hashlib.sha256(f"{path.lower()}|{name.lower()}".encode("utf-8")).hexdigest()[:16]
+def setting_id(path, name, cls=CLASS_MACHINE):
+    """A stable id for one registry value, the same on hub and agent (PolicyAllowList.IdFor):
+    case-folded, because the registry is case-insensitive and two spellings are one value. A
+    User Configuration value hashes `user|` in front, so HKCU and HKLM under one path are two
+    values; a machine value hashes exactly what it did before phase 3, so no id moved."""
+    text = f"{path.lower()}|{name.lower()}"
+    if cls == CLASS_USER:
+        text = f"{CLASS_USER}|{text}"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def row_class(row):
+    """The class of a stored or resolved registry row: machine unless it says user."""
+    return CLASS_USER if row.get("class") == CLASS_USER else CLASS_MACHINE
+
+
+def display_path(row):
+    """`HKCU\\path\\name` for a user row, `path\\name` for a machine one, as messages
+    have always shown machine rows."""
+    text = f"{row['path']}\\{row['name']}"
+    return f"{_HIVES[CLASS_USER]}\\{text}" if row_class(row) == CLASS_USER else text
 
 
 class PolicyRejected(ValueError):
@@ -331,9 +397,17 @@ _VALUE_CLEANERS = {REG_DWORD: _dword, REG_MULTI_SZ: _multi_string,
                    REG_SZ: _string, REG_EXPAND_SZ: _string}
 
 
-def _registry_value(raw):
-    if not isinstance(raw, dict):
-        raise PolicyRejected("a registry value must be an object")
+def _registry_target(raw):
+    """The (path, name, class) a registry row names, through the same allow-list for a value
+    and a delete, and for either hive: User Configuration is held to SOFTWARE\\Policies too."""
+    hive, _ = _split_hive(raw.get("path"))
+    stated = raw.get("class") or None
+    if stated is not None and stated not in CLASSES:
+        raise PolicyRejected("a registry value belongs to Computer or User Configuration")
+    if hive and stated and hive != stated:
+        raise PolicyRejected(f"the key path names {_HIVES[hive]}, but the value is set for"
+                             f" {_HIVES[stated]}")
+    cls = stated or hive or CLASS_MACHINE
     path = normalize_registry_path(raw.get("path"))
     error = registry_path_error(path)
     if error:
@@ -343,12 +417,33 @@ def _registry_value(raw):
         raise PolicyRejected("a registry value needs a value name (the default value cannot be set)")
     if len(name) > MAX_VALUE_NAME_CHARS or "\\" in name or any(ord(c) < 32 for c in name):
         raise PolicyRejected(f"the value name {name!r} is not valid")
+    return path, name, cls
+
+
+def _row(path, name, cls, kind, value):
+    row = {"id": setting_id(path, name, cls), "path": path, "name": name, "type": kind,
+           "value": value}
+    if cls == CLASS_USER:
+        row["class"] = CLASS_USER
+    return row
+
+
+def _registry_value(raw):
+    if not isinstance(raw, dict):
+        raise PolicyRejected("a registry value must be an object")
+    path, name, cls = _registry_target(raw)
     kind = str(raw.get("type") or "").strip()
     cleaner = _VALUE_CLEANERS.get(kind)
     if cleaner is None:
         raise PolicyRejected(f"the value type must be one of {', '.join(REGISTRY_TYPES)}")
-    return {"id": setting_id(path, name), "path": path, "name": name, "type": kind,
-            "value": cleaner(name, raw.get("value"))}
+    return _row(path, name, cls, kind, cleaner(name, raw.get("value")))
+
+
+def _delete_row(raw):
+    """A value a template setting deletes, in the row shape the document carries. Accepts the
+    `{path, name}` phase 1 stored, so a policy saved before phase 2 deletes too."""
+    path, name, cls = _registry_target(raw if isinstance(raw, dict) else {})
+    return _row(path, name, cls, REG_DELETE, None)
 
 
 def _bounded_list(raw, what, limit):
@@ -380,9 +475,75 @@ def _registry(raw):
     for entry in _bounded_list(raw, "registry values", MAX_REGISTRY_VALUES):
         value = _registry_value(entry)
         if value["id"] in seen:
-            raise PolicyRejected(f"{value['path']}\\{value['name']} is set twice in this policy")
+            raise PolicyRejected(f"{display_path(value)} is set twice in this policy")
         seen.add(value["id"])
         clean.append(value)
+    return clean
+
+
+def _admx_name(template):
+    # English on purpose: this is what the audit log and a later reader of the stored policy
+    # see, and the stored policy has no language.
+    return (template.get("display") or {}).get("en") or template["ref"]
+
+
+def _admx_entry(raw):
+    """One Administrative Template setting -> its stored form, compiled values included."""
+    if not isinstance(raw, dict):
+        raise PolicyRejected("a template setting must be an object")
+    digest, ref = admx.clean_hash(raw.get("set")), str(raw.get("ref") or "")
+    template = admx.find_policy(digest, ref) if digest else None
+    if template is None:
+        raise PolicyRejected(f"{ref or 'a template setting'} is not in the template set it names")
+    cls = _template_class(template, raw.get("class"))
+    options = raw.get("options") or {}
+    if not isinstance(options, dict) or len(json.dumps(options)) > MAX_ADMX_OPTIONS_CHARS:
+        raise PolicyRejected(f"the options of {_admx_name(template)} are not valid")
+    state = str(raw.get("state") or "")
+    try:
+        compiled = admx.compile_policy(template, state, options)
+    except admx.AdmxRejected as e:
+        raise PolicyRejected(f"{_admx_name(template)}: {e}")
+    values = [_registry_value({**row, "class": cls}) for row in compiled["rows"]]
+    deletes = [_delete_row({**row, "class": cls}) for row in compiled["deletes"]]
+    return {"set": digest, "ref": ref, "class": cls, "name": _admx_name(template),
+            "state": state, "options": options, "values": values, "deletes": deletes}
+
+
+def _template_class(template, stated):
+    """Which half a template setting is set in. A Computer- or User-only template decides it;
+    one that appears in both halves (gpedit lists it under each) takes the half the editor
+    named, Computer when none -- which is what every setting saved before phase 3 was."""
+    fixed = {admx.CLASS_MACHINE: CLASS_MACHINE, admx.CLASS_USER: CLASS_USER}.get(template["class"])
+    if stated in (None, ""):
+        return fixed or CLASS_MACHINE
+    if stated not in CLASSES or (fixed and stated != fixed):
+        raise PolicyRejected(f"{_admx_name(template)} cannot be set in"
+                             f" {'User' if stated == CLASS_USER else 'Computer'} Configuration")
+    return stated
+
+
+def _admx(raw, registry):
+    """Every template setting, checked against each other and against the raw values: one
+    registry value set twice in one policy is refused whichever way it was set, because "which
+    one wins" inside a single policy has no answer an operator could predict."""
+    clean, seen_refs = [], set()
+    owners = {entry["id"]: display_path(entry) for entry in registry}
+    for entry in _bounded_list(raw, "template settings", MAX_ADMX_SETTINGS):
+        entry = _admx_entry(entry)
+        # One template in both halves is two settings, as in gpedit.
+        if (entry["class"], entry["ref"]) in seen_refs:
+            raise PolicyRejected(f"{entry['name']} is set twice in this policy")
+        seen_refs.add((entry["class"], entry["ref"]))
+        for value in entry["values"] + entry["deletes"]:
+            if value["id"] in owners:
+                verb = "deletes" if value["type"] == REG_DELETE else "writes"
+                raise PolicyRejected(f"{entry['name']} {verb} {display_path(value)},"
+                                     f" which {owners[value['id']]} also sets in this policy")
+            owners[value["id"]] = entry["name"]
+        clean.append(entry)
+    if len(owners) > MAX_REGISTRY_VALUES:
+        raise PolicyRejected(f"this policy writes more than {MAX_REGISTRY_VALUES} registry values")
     return clean
 
 
@@ -434,12 +595,14 @@ def validate(payload, script_specs=None):
         raw_settings = payload.get("settings") or {}
         if not isinstance(raw_settings, dict):
             raise PolicyRejected("settings must be an object")
+        registry = _registry(raw_settings.get("registry"))
         return None, {
             "name": _text(payload, "name", "name", NAME_MAX, required=True),
             "description": _text(payload, "description", "description", DESCRIPTION_MAX),
             "enabled": bool(payload.get("enabled", True)),
             "settings": {"agent_settings": _agent_settings(raw_settings.get("agent_settings")),
-                         "registry": _registry(raw_settings.get("registry")),
+                         "registry": registry,
+                         "admx": _admx(raw_settings.get("admx"), registry),
                          "scripts": _scripts(raw_settings.get("scripts"), script_specs)},
         }
     except ValueError as e:
@@ -458,7 +621,7 @@ def _decode(row):
     except (TypeError, ValueError):
         # A corrupt row fails CLOSED: a policy that sets nothing, never one that sets
         # something nobody wrote.
-        policy["settings"] = {"agent_settings": {}, "registry": [], "scripts": []}
+        policy["settings"] = {"agent_settings": {}, "registry": [], "admx": [], "scripts": []}
     policy["enabled"] = bool(policy["enabled"])
     return policy
 
@@ -873,11 +1036,34 @@ def applied_links(db_path, machine, *, nodes=None, links=None, options=None, pol
             for link, depth, label in plain + enforced if _usable(link, policies, machine)]
 
 
+def _merge_admx(registry, templates, entries, winner):
+    """Apply one policy's template settings over what earlier policies left. A setting this
+    policy names REPLACES that setting's earlier values whole: the values an earlier policy's
+    template wrote are dropped first (unless something else has since taken them over), so an
+    option the later state does not write does not linger from the earlier one. Its deletes
+    are rows like its values, so a nearer Disabled's delete beats a farther Enabled's value
+    for the same id exactly as a nearer value would."""
+    for entry in entries:
+        ref, cls = entry["ref"], row_class(entry)
+        # Per (half, setting): a template in both halves is two settings, as in gpedit.
+        for sid in [sid for sid, value in registry.items()
+                    if value.get("admx_ref") == ref and row_class(value) == cls]:
+            del registry[sid]
+        templates[f"{cls}|{ref}"] = {"ref": ref, "class": cls, "name": entry["name"],
+                                     "state": entry["state"], "options": entry["options"],
+                                     "deletes": entry.get("deletes") or [], **winner}
+        # A delete stored before phase 3 has no class; it takes its setting's.
+        rows = entry["values"] + [_delete_row({**d, "class": d.get("class") or cls})
+                                  for d in entry.get("deletes") or []]
+        registry.update({value["id"]: {**value, "admx_ref": ref, "admx_name": entry["name"],
+                                       **winner} for value in rows})
+
+
 def _merge(applied):
-    """Fold the applied links' settings in apply order. Agent settings and registry values are
-    last-wins; scripts are additive -- two policies each asking for a different script both
-    mean it, and the same script from two policies runs once."""
-    agent_settings, registry, script_entries = {}, {}, {}
+    """Fold the applied links' settings in apply order. Agent settings, registry values and
+    template settings are last-wins; scripts are additive -- two policies each asking for a
+    different script both mean it, and the same script from two policies runs once."""
+    agent_settings, registry, templates, script_entries = {}, {}, {}, {}
     for item in applied:
         policy = item["policy"]
         winner = {"gpo_id": policy["id"], "gpo": policy["name"]}
@@ -885,9 +1071,10 @@ def _merge(applied):
         agent_settings.update({key: {"value": value, **winner}
                                for key, value in (body.get("agent_settings") or {}).items()})
         registry.update({entry["id"]: {**entry, **winner} for entry in body.get("registry") or []})
+        _merge_admx(registry, templates, body.get("admx") or [], winner)
         for entry in body.get("scripts") or []:
             script_entries.setdefault(entry["name"], {**entry, **winner})
-    return agent_settings, registry, script_entries
+    return agent_settings, registry, templates, script_entries
 
 
 def _public_applied(item):
@@ -901,12 +1088,14 @@ def rsop(db_path, machine, **cached):
     """The Resultant Set of Policy for one PC: what every setting ends up as and which policy
     won it, plus the links considered. The console's "why is this PC like this?" answer."""
     applied = applied_links(db_path, machine, **cached)
-    agent_settings, registry, script_entries = _merge(applied)
+    agent_settings, registry, templates, script_entries = _merge(applied)
     return {
         "machine": machine,
         "links": [_public_applied(item) for item in applied],
         "agent_settings": agent_settings,
-        "registry": sorted(registry.values(), key=lambda e: (e["path"].lower(), e["name"].lower())),
+        "registry": sorted(registry.values(), key=lambda e: (row_class(e), e["path"].lower(),
+                                                             e["name"].lower())),
+        "admx": sorted(templates.values(), key=lambda e: (e["class"], e["name"].lower())),
         "scripts": sorted(script_entries.values(), key=lambda e: e["name"]),
     }
 
@@ -916,12 +1105,26 @@ def config_overrides(db_path, machine):
     return {key: entry["value"] for key, entry in rsop(db_path, machine)["agent_settings"].items()}
 
 
-def resolve_for(db_path, machine):
+def resolve_for(db_path, machine, features=()):
     """The registry document the agent applies: {"version", "values": [...]}. Always returns a
     document -- an EMPTY one when nothing applies, which is what tells the agent to remove the
-    values it wrote (the watchdog/device-policy release valve)."""
-    values = [{"id": e["id"], "path": e["path"], "name": e["name"], "type": e["type"],
-               "value": e["value"]} for e in rsop(db_path, machine)["registry"]]
+    values it wrote (the watchdog/device-policy release valve).
+
+    Delete rows go only to an agent whose `features` include "lgpo" (see REG_DELETE), and
+    User Configuration rows only to one that includes "user" (phase 3). Left out for any other,
+    which would drop them anyway -- or, for a user row before 3.49, misread it as a machine row
+    of the same path; leaving them out also keeps that agent's document version from moving over
+    rows it can never apply."""
+    deletes, users = "lgpo" in features, "user" in features
+    values = []
+    for e in rsop(db_path, machine)["registry"]:
+        if (e["type"] == REG_DELETE and not deletes) or (row_class(e) == CLASS_USER and not users):
+            continue
+        row = {"id": e["id"], "path": e["path"], "name": e["name"], "type": e["type"],
+               "value": e["value"]}
+        if row_class(e) == CLASS_USER:
+            row["class"] = CLASS_USER
+        values.append(row)
     return {"version": _hash(values), "values": values}
 
 
@@ -934,20 +1137,43 @@ def config_version(base_version, overrides):
 
 
 # ================================================================ agent reports
-def note_agent(db_path, machine, version, now=None):
-    """Remember that this PC's agent can apply a registry document."""
+# The features an agent may report. Anything else is dropped rather than stored: the column
+# is read back into the console, and a free-form list from an agent is not something to show.
+AGENT_FEATURES = ("lgpo", "user")
+
+
+def clean_features(raw):
+    """The known features in `raw` (an agent's `gpo_features`), sorted -- [] for anything
+    that is not a list."""
+    if not isinstance(raw, list):
+        return []
+    return sorted({f for f in raw if isinstance(f, str) and f in AGENT_FEATURES})
+
+
+def note_agent(db_path, machine, version, features=(), now=None):
+    """Remember that this PC's agent can apply a registry document, and how."""
     with get_conn(db_path) as conn:
         conn.execute(
-            "INSERT INTO machine_gpo_agent (machine, version, seen_at) VALUES (?, ?, ?)"
+            "INSERT INTO machine_gpo_agent (machine, version, seen_at, features) VALUES (?, ?, ?, ?)"
             " ON CONFLICT(machine) DO UPDATE SET version = excluded.version,"
-            " seen_at = excluded.seen_at",
-            (machine, str(version or "")[:64], int(now or time.time())))
+            " seen_at = excluded.seen_at, features = excluded.features",
+            (machine, str(version or "")[:64], int(now or time.time()),
+             ",".join(clean_features(list(features)))))
+
+
+def agent_features(db_path, machine):
+    """The features this PC's agent reported, or None when it has never said it can apply a
+    registry document at all."""
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT features FROM machine_gpo_agent WHERE machine = ?",
+                           (machine,)).fetchone()
+    if row is None:
+        return None
+    return [f for f in (row["features"] or "").split(",") if f]
 
 
 def agent_supports(db_path, machine):
-    with get_conn(db_path) as conn:
-        return conn.execute("SELECT 1 FROM machine_gpo_agent WHERE machine = ?",
-                            (machine,)).fetchone() is not None
+    return agent_features(db_path, machine) is not None
 
 
 def _clean_state(entry, machine, now):

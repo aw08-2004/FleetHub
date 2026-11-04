@@ -8,8 +8,8 @@ Service, the PawnIO sensor driver, and SCM failure-recovery for self-updates).
 
 ### Onboarding a PC with a code (no enrollment secret)
 
-A Windows PC can enrol itself without the fleet-wide `AGENT_ENROLLMENT_SECRET`
-(roadmap #29):
+A Windows PC or a Linux machine can enrol itself without the fleet-wide
+`AGENT_ENROLLMENT_SECRET` (roadmap #29):
 
 1. In the console, **Administration → Onboarding → New code**. Give it a label, pick how
    long it lasts (1 hour, 1 day or 7 days), and copy the six-character code or the link.
@@ -26,6 +26,38 @@ Administrators. Each code works once. The Onboarding list shows which machine us
 from which IP. **Revoke** on a used code also revokes that machine's agent.
 
 `HUB_URL` must be the hub's public `https://` address; the script refuses anything else.
+
+**A name the fleet already has** is admitted only for the same PC. The script sends the PC's
+BIOS serial, SMBIOS UUID and MachineGuid, and the hub compares them with what it recorded
+for that name. The hardware ids are compared first; the MachineGuid counts only when the
+hardware has nothing usable. So a re-imaged PC (revoke its old agent first) re-onboards
+without deleting its record, even when its serial is a placeholder like *To Be Filled By
+O.E.M.*. A different PC with the same name, or a record with nothing to compare against, ends
+in *could not be matched*, and the code is not used. Delete the old record, then run the
+script again. The UUID and MachineGuid are recorded from enrolled agents' signed reports
+(hub 1.176.0 and the next agent) and from each successful onboarding.
+
+**Running the script again on a machine that is still enrolled** works too (hub 1.177.0), with
+no revoke first: the script sends the credential the agent already holds, and the hub swaps it
+for a new one and revokes the old. Use it to repair an agent or bring back one that has gone
+offline. If that credential is gone or was revoked, the hub cannot tell the machine from a
+stranger and answers *already enrolled* -- revoke the old agent in the console, then run the
+script again.
+
+**A Linux machine onboards the same way** (hub 1.169.0). After step 2, pick **Linux** on the
+install step (the page guesses from the browser, but a headless server is usually set up from
+another computer). Paste the one-line command it shows into a terminal on the machine:
+
+```
+if command -v curl >/dev/null; then curl -fsSL '<hub>/onboarding/run/<CODE>.sh'; else wget -qO- '<hub>/onboarding/run/<CODE>.sh'; fi | sudo bash
+```
+
+It installs the agent with `agent-linux/install/install.sh`, which checks the build against the
+fleet's signed Linux manifest. Only when that succeeds does it spend the code, and it writes
+the machine's credential to `/var/lib/fleethub/agent/agent.json` (0600, root). An account that
+is not in sudoers (usual on OpenMediaVault) runs `su -` first and drops the `sudo`. The machine
+is enrolled under its hostname up to the first dot, which is the name the agent reports. The
+same requirements as a technician's install apply: x86-64, glibc, systemd and OpenSSL 3.
 
 ### Telemetry only from enrolled agents
 
@@ -94,8 +126,9 @@ right directory is cleaned up.
 
 Component-specific parameters: `-HubUrl` / `-EnrollmentSecret` / `-AgentUrl` / `-AgentExe` /
 `-AddDefenderExclusion` / `-SkipDefenderExclusion` (Agent); `-HubPort <port>`
-(default `3001`) and `-HubInstallDir <path>` (Hub — takes precedence over
-`-InstallDir`); `-TurnHost` / `-TurnSecret` / `-TurnDistro` / `-TurnPort` /
+(default `29443`), `-HubInstallDir <path>` (Hub — takes precedence over
+`-InstallDir`), `-HubTlsCert <pem>` / `-HubTlsKey <pem>` and `-MigrateHubServer`
+(Hub, see [The hub's HTTPS listener](#the-hubs-https-listener)); `-TurnHost` / `-TurnSecret` / `-TurnDistro` / `-TurnPort` /
 `-SkipTurn` (Turn — and the same flags apply to Hub, which can set the relay up
 as part of its own install).
 
@@ -232,7 +265,9 @@ so it can also be flipped from the Settings tab. The hub checks
 `HUB_VERSION` on `main` every 15 minutes either way — the *check* is unconditional, only
 the *installing* is opt-in. When enabled and `main` is ahead it updates itself, re-installs
 `requirements.txt`, then exits non-zero so the `FleetHub - Hub` Windows Service
-auto-restarts waitress on the new code (WinSW `onfailure`, ~5 s downtime).
+auto-restarts the hub on the new code (WinSW `onfailure`, ~5 s downtime). A self-update
+never changes the service's command line, so a hub installed before 1.170.0 stays on
+waitress and port 3001 after it.
 
 Two checks stand between "the files were replaced" and that restart, because the hub has
 no restart-count guard and cannot roll itself back once it has exited. It re-reads the
@@ -293,11 +328,16 @@ is the release, and the hub never updates itself.
 
 ### Running the hub in Docker
 
-The hub also ships as a public container image, `ghcr.io/aw08-2004/temp_monitor-hub`, built
+The hub also ships as a public container image, `ghcr.io/aw08-2004/fleethub`, built
 by `.github/workflows/hub-image.yml` on every push to `main` that touches `hub/`. It is public,
 like the repository it is built from, so the hub host needs no `docker login`. It runs on
 Docker Engine (Linux) or Docker Desktop (Windows). Agents need no change as long as the
 public `HUB_URL` stays the same: they know only that URL and pin no certificate.
+
+Until 2026-10-27 the image was `ghcr.io/aw08-2004/temp_monitor-hub`. Every tag is still
+pushed under that name too, so a host on an older `compose.yaml` keeps updating, but change
+its `image:` line to `fleethub` the next time you touch it — the old name is a mirror that
+will be retired.
 
 Start from the template beside the compose file, fill in the required values, then start:
 
@@ -311,11 +351,18 @@ docker compose -f deploy/docker/compose.yaml up -d
 
 | Tag | Follows |
 |---|---|
-| `X.Y.Z` | exactly that `HUB_VERSION`, never rebuilt |
-| `latest` | `main` |
-| `beta-X.Y.Z`, `beta` | the `beta` branch |
+| `X.Y.Z` | exactly that `HUB_VERSION` from `main`, never rebuilt |
+| `beta-X.Y.Z` | exactly that `HUB_VERSION` from `beta`, never rebuilt |
+| `stable-latest` | the newest `main` release (the default) |
+| `beta-latest` | the newest `beta` release |
+| `latest` | whichever of the two has the higher `HUB_VERSION` (usually beta; on a tie, the `main` build) |
 
 Set `HUB_TAG` (for example `HUB_TAG=1.143.0`) to choose when a release goes in.
+
+**`latest` changed meaning on 2026-10-30.** It used to follow `main`; it now follows whichever
+channel is newer, which is usually `beta`. A host whose `.env` still says `HUB_TAG=latest`
+from the old template starts pulling beta builds, so set it to `stable-latest`. The old `beta`
+tag no longer moves; a host on it stays on its last image until it is set to `beta-latest`.
 
 **Updating is pull and recreate.** The image sets `HUB_UPDATE_MODE=image`, which switches off
 every in-place update path: the watcher, **Update now**, and the boot-time self-heal. They
@@ -347,11 +394,13 @@ then reverts on the next recreate. `example.env` lists them. Don't set `HUB_STAT
 - **Named volume by default.** SQLite on a Docker Desktop bind mount is slow and its locking
   is unreliable. On a Linux host a bind mount is fine, owned by uid `10001`.
 - **Exactly one container.** The schedulers, the database writer and Socket.IO's state live
-  in the process. A second replica, or waitress workers instead of threads, would run every
+  in the process. A second replica, or server workers instead of threads, would run every
   scheduled job twice.
-- **Behind the same proxy as before.** The port is published on loopback only. TLS stays at
-  the Cloudflare tunnel or nginx, which must not buffer responses (agents long-poll for
-  commands).
+- **Behind the same proxy as before.** The port is published on loopback only. The public
+  TLS stays at the Cloudflare tunnel or nginx, which must not buffer responses (agents
+  long-poll for commands). With `FLEETHUB_PORT=29443` and `FLEETHUB_TLS=1` in `.env` (as
+  `example.env` ships) the hub also serves HTTPS to that proxy; without them the image
+  keeps the pre-1.170.0 plain HTTP on 3001, so an existing deployment is not moved by a pull.
 - **Wake-on-LAN:** on the default bridge network the hub is never on a target's subnet, so
   only agent-relayed wake works. That is the primary path anyway. On a Linux host,
   `network_mode: host` in the compose file restores the hub's own magic packet.
@@ -372,8 +421,8 @@ then reverts on the next recreate. `example.env` lists them. Don't set `HUB_STAT
    10001:10001 /state` from that container, and remove any `HUB_*_DIR` lines from the copied
    `.env`. It keeps working as the hub's own store. `deploy/docker/.env` must still exist for
    compose: copy the bootstrap keys into it, or leave it as just `HUB_TAG`.
-3. Run `docker compose up -d`, and point the tunnel or proxy origin at port 3001 on the
-   container host.
+3. Run `docker compose up -d`, and point the tunnel or proxy origin at the port in `.env`
+   on the container host: `https://…:29443` with `FLEETHUB_TLS=1`, `http://…:3001` without.
 4. Check that agents keep checking in. They need no reconfiguration.
 
 To roll back, stop the container, copy `logs\` back, and start the service. Database writes
@@ -385,11 +434,36 @@ Data is persisted to `logs/temp_v2.db` (SQLite) with optional CSV archiving;
 rotated log files also live under `logs/`. The code lives in `hub/`; `.env` and
 `logs/` sit one level up in the install root (`STATE_ROOT`), so a self-update that
 replaces the code directory can never touch operator state. Run it via
-`hub/wsgi.py` (`wsgi:application` under waitress), or directly with:
+`hub/serve.py` (cheroot serving `wsgi:application`, HTTPS on 29443), or for development
+directly with:
 
 ```powershell
 python hub/app.py
 ```
+
+## The hub's HTTPS listener
+
+Since hub 1.170.0 a **new** install serves HTTPS itself, on **29443**, with cheroot in
+place of waitress (which cannot do TLS). Port 3001 is assigned to another product in the
+IANA registry; 29443 is unassigned. The public TLS still ends at the tunnel or proxy — what
+changed is that the proxy's own connection to the hub is encrypted too.
+
+- **Certificate.** On first start the hub creates a self-signed certificate in `tls\hub.crt`
+  and `tls\hub.key` under the install folder (`/state/tls/` in Docker), covering this
+  machine's name, the `HUB_URL` host, `localhost` and `127.0.0.1`. To use your own, pass
+  `-HubTlsCert` / `-HubTlsKey` (PEM) to `install.ps1`, drop the pair into `tls\` yourself,
+  or set `FLEETHUB_TLS_CERT` / `FLEETHUB_TLS_KEY` in `.env`. An existing pair is never
+  overwritten; delete both files and restart to get a fresh self-signed one.
+- **Proxy origin.** Cloudflare tunnel: service `https://localhost:29443` with **No TLS
+  Verify** (or **Origin Server Name** plus a trusted certificate). nginx:
+  `proxy_pass https://127.0.0.1:29443;` with `proxy_ssl_verify off;`, or
+  `proxy_ssl_trusted_certificate` pointing at `hub.crt`.
+- **Existing hubs stay where they are.** Re-running `install.ps1` over a hub whose service
+  still runs waitress keeps waitress and its port. `-MigrateHubServer` moves it to HTTPS on
+  29443; change the tunnel or proxy origin in the same step, or the console goes dark.
+  Agents and the desktop client need no change — they use the public `HUB_URL`.
+- **Keep 29443 reachable from the proxy only.** TLS encrypts the hop, it does not
+  authenticate the caller, and the hub trusts one hop of `X-Forwarded-*` headers.
 
 ## Signing releases
 

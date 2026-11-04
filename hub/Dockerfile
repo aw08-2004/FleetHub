@@ -18,7 +18,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HUB_UPDATE_MODE=image \
-    HUB_STATE_DIR=/state
+    HUB_STATE_DIR=/state \
+    FLEETHUB_PORT=3001 \
+    FLEETHUB_TLS=0
 
 # Dependencies come from requirements.lock -- exact versions, every wheel checked against a
 # recorded hash, wheels only so no package's setup script runs here. tools/lock_hub_requirements.py
@@ -56,15 +58,24 @@ COPY --chown=root:root templates /app/hub/templates
 WORKDIR /app/hub
 USER fleethub
 VOLUME ["/state"]
-EXPOSE 3001
+# **The image defaults to the pre-1.170.0 listener -- plain HTTP on 3001 -- on purpose.** An
+# image is replaced on every pull, but the operator's .env and compose file are not, and an
+# existing deployment publishes 3001 to a proxy that dials http://. Defaulting the image to
+# HTTPS on 29443 would take every one of them dark on the next pull. New deployments opt in
+# through example.env (FLEETHUB_PORT=29443, FLEETHUB_TLS=1); serve.py then generates the
+# certificate under /state/tls/ on first start.
+EXPOSE 3001 29443
 
-# The same probe install.ps1 makes after starting the Windows service. Python rather than curl
-# because the slim base has no curl, and adding one for a health check is not worth a layer.
+# The same probe install.ps1 makes after starting the Windows service, on whichever port and
+# scheme serve.py was told to use. Python rather than curl because the slim base has no curl,
+# and adding one for a health check is not worth a layer. The certificate is not verified: it
+# is usually self-signed, and this asks "is the hub answering", not "is TLS trusted".
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:3001/', timeout=8).status < 500 else 1)"]
+    CMD ["python", "-c", "import os,ssl,sys,urllib.request; t=os.environ.get('FLEETHUB_TLS','0').lower() not in ('0','false','no','off'); u=('https' if t else 'http')+'://127.0.0.1:'+os.environ.get('FLEETHUB_PORT','3001')+'/'; sys.exit(0 if urllib.request.urlopen(u, timeout=8, context=ssl._create_unverified_context() if t else None).status < 500 else 1)"]
 
 # One process, many threads -- never workers. Every scheduler, the db_writer and Socket.IO's
 # in-memory state assume they are alone, and a second process would run each scheduled job
 # twice against the same SQLite files. 128 threads because every open console tab and every
-# held agent command long-poll pins one; install.ps1's service definition explains the number.
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=3001", "--threads=128", "wsgi:application"]
+# held agent command long-poll pins one; install.ps1's service definition explains the number,
+# and serve.py's THREADS carries it (cheroot since 1.170.0 -- waitress cannot serve TLS).
+CMD ["python", "serve.py"]

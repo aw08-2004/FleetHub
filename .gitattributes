@@ -56,3 +56,8 @@ agent-linux/packaging/*.service text eol=lf
 hub/static/vendor/*.js -text
 hub/static/vendor/*.css -text
 hub/static/vendor/fonts/** -text
+
+# The onboarding script a Linux machine pipes into bash (hub/templates/onboarding/onboard.sh).
+# onboarding_web also strips CRs when it serves it; pinned anyway so the file reads the same
+# in the repo as on the wire.
+hub/templates/onboarding/*.sh text eol=lf

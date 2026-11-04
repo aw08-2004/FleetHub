@@ -99,8 +99,9 @@ public sealed class RunScriptExecutor : ICommandExecutor
     /// bash is preferred because an operator writing a "shell script" for a fleet console is
     /// writing bash -- arrays, [[ ]], pipefail -- and a container image with only dash would
     /// otherwise fail those with a syntax error rather than a useful message. /bin/sh always
-    /// exists, so this never resolves to nothing.</summary>
-    private static string BashOrSh()
+    /// exists, so this never resolves to nothing. Shared with the interactive terminal
+    /// (PtySession.ResolveShell), so the two never disagree about which shell a box has.</summary>
+    internal static string BashOrSh()
     {
         if (File.Exists("/bin/bash")) return "/bin/bash";
         if (File.Exists("/usr/bin/bash")) return "/usr/bin/bash";

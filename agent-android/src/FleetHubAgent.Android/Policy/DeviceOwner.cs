@@ -279,6 +279,56 @@ public static class DeviceOwner
         return accepted;
     }
 
+    /// <summary>
+    /// Switch the device's location setting back on -- called by a locate that found it off.
+    ///
+    /// **Without this, locating a managed phone was opt-out from the quick-settings shade.** The
+    /// permission is the Device Owner's to grant (see <see cref="GrantLocation"/>), but the
+    /// master location switch is the user's, and a locate against a phone with it off answered
+    /// "location is switched off on this device" -- observed on the first located A15. A
+    /// device owner is allowed to turn it back on, and on a company handset that is the point.
+    ///
+    /// **Only when asked, never at startup, and never held on.** The switch is flipped by the
+    /// locate that needs it and left where it lands; nothing here blocks the person turning it
+    /// off again (DISALLOW_CONFIG_LOCATION would). That is a narrower power than the
+    /// restriction, on ApplyBaseline's rule that this agent takes what the feature reads and no
+    /// more: the next locate turns it on again, and the disclosure notice says who asked.
+    ///
+    /// setLocationEnabled exists from API 30. Below it the only device-owner route is the
+    /// LOCATION_MODE secure setting, which setSecureSetting accepted from a device owner until
+    /// 30 deprecated it; it is tried and its refusal logged. Returns whether a call was
+    /// accepted -- the caller re-reads the providers rather than trusting this.
+    /// </summary>
+    public static bool EnableLocation(Context? context, ILogger log)
+    {
+        if (!IsManaged(context)) return false;
+        var dpm = Manager(context);
+        if (dpm is null || context is null) return false;
+        var admin = Component(context);
+        try
+        {
+            if (OperatingSystem.IsAndroidVersionAtLeast(30))
+            {
+                dpm.SetLocationEnabled(admin, true);
+            }
+            else
+            {
+#pragma warning disable CA1422 // the pre-30 route, reached only below 30
+                // 3 is LOCATION_MODE_HIGH_ACCURACY: GPS and network both, which is what the
+                // reader listens to.
+                dpm.SetSecureSetting(admin, global::Android.Provider.Settings.Secure.LocationMode, "3");
+#pragma warning restore CA1422
+            }
+            log.LogInformation("Device Owner: location switched on for a locate");
+            return true;
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "Device Owner: could not switch location on: {Msg}", e.Message);
+            return false;
+        }
+    }
+
     /// <summary>One line for the setup screen. Phrased for the person holding the device, who
     /// is usually the helpdesk technician provisioning it and needs to know whether the QR
     /// actually took -- the difference between "fully managed" and "installed like any other

@@ -109,10 +109,37 @@ function schedulePoll() {
             const fresh = await api('/api/backups/runs');
             state.runs = fresh.runs;
             state.schedule = fresh.schedule;
-            render();
+            renderRunsInPlace();
         } catch (e) { /* transient — the next user action will resync */ }
         schedulePoll();
     }, 4000);
+}
+
+// What the poll fetched is the runs and the schedule's due time, so that is all it redraws.
+// It used to call render(), which rebuilt every card -- the schedule picker, the destination
+// and mode dropdowns -- every 4 s for as long as `running` held, closing whichever native
+// dropdown the operator had open (1.174.1, from a screen recording of exactly that).
+function renderRunsInPlace() {
+    const old = hubPane.querySelector('[data-runs-card]');
+    if (old) old.replaceWith(renderRunsCard());
+    const due = document.getElementById('schedule-due');
+    if (due) due.textContent = scheduleDueText(state.schedule);
+}
+
+// True while the operator has a field on this tab in hand. A live re-read runs render(), and
+// a native dropdown -- a <select>'s list, the time picker's clock -- closes the moment its
+// element is replaced; nothing in the DOM says the list is open, so focus stands in for it.
+// The re-read runs once focus leaves (fleet-live.js retries every 2 s). Checkboxes and
+// buttons do not count: they open nothing, and focus parks on them after a click.
+// Deliberately WITHOUT fleet-live's 30 s recency limit: the number fields here save on
+// change, i.e. on blur, so a focused one may hold a value not yet saved, and render() would
+// put the stored number back over it. The runs list does not wait on this -- the poll
+// redraws it in place either way -- so what waits is only destinations and the key banner.
+function operatorEditing() {
+    const active = document.activeElement;
+    if (!active || !backupPanel.contains(active)) return false;
+    return active.matches('select, textarea, input:not([type="checkbox"]):not([type="radio"])')
+        || !!active.closest('.schedule-picker');
 }
 
 function render() {
@@ -338,17 +365,9 @@ function renderScheduleCard() {
     enabledLabel.appendChild(enabled);
     enabledLabel.appendChild(document.createTextNode(' ' + t('backups.schedule.enabled')));
     enabledWrap.appendChild(enabledLabel);
-    // next_due_at is 0 for "never run, so due immediately" — a falsy number that would
-    // otherwise render as the "it's off" message on a schedule that is very much on.
-    let dueText;
-    if (!schedule.enabled) {
-        dueText = t('backups.schedule.off');
-    } else if (!schedule.next_due_at || schedule.next_due_at * 1000 <= Date.now()) {
-        dueText = t('backups.schedule.due_now');
-    } else {
-        dueText = t('backups.schedule.next_due', { when: fmtTime(schedule.next_due_at) });
-    }
-    enabledWrap.appendChild(el('p', 'setting__default', dueText));
+    const due = el('p', 'setting__default', scheduleDueText(schedule));
+    due.id = 'schedule-due';
+    enabledWrap.appendChild(due);
     grid.appendChild(enabledWrap);
 
     const destWrap = el('div');
@@ -369,8 +388,15 @@ function renderScheduleCard() {
     destWrap.appendChild(select);
     grid.appendChild(destWrap);
 
-    grid.appendChild(numberField('schedule-interval', t('backups.schedule.interval'),
-                                 schedule.interval_hours, 1, 720, saveSchedule));
+    const intervalField = numberField('schedule-interval', t('backups.schedule.interval'),
+                                      schedule.interval_hours, 1, 720, saveSchedule);
+    // A fixed-time schedule replaces the interval rather than combining with it, so the
+    // interval is shown greyed out instead of hidden: switching the picker back to "every N
+    // hours" should bring back the number that was there, not a default.
+    intervalField.querySelector('input').disabled = !!schedule.schedule;
+    grid.appendChild(intervalField);
+    grid.appendChild(scheduleField(t('backups.schedule.when'), schedule.schedule,
+                                   (spec) => saveScheduleSpec('backup.hub_schedule', spec)));
     grid.appendChild(numberField('schedule-keep', t('backups.schedule.keep'),
                                  schedule.keep_generations, 1, 365, saveSchedule));
     card.appendChild(grid);
@@ -420,6 +446,55 @@ async function saveSchedule() {
     }
 }
 
+// next_due_at is 0 for "never run, so due immediately" — a falsy number that would
+// otherwise render as the "it's off" message on a schedule that is very much on.
+function scheduleDueText(schedule) {
+    if (!schedule.enabled) return t('backups.schedule.off');
+    if (!schedule.next_due_at || schedule.next_due_at * 1000 <= Date.now()) {
+        return t('backups.schedule.due_now');
+    }
+    return t('backups.schedule.next_due', { when: fmtTime(schedule.next_due_at) });
+}
+
+// A picker change saves ONLY its own key, and updates the card in place instead of calling
+// render(). Every other field here re-renders on save, which is harmless for a checkbox and
+// ruinous for a cron box: the input being typed into would be rebuilt under the cursor.
+async function saveScheduleSpec(key, spec) {
+    const files = key === 'backup.files_schedule';
+    const setStatus = files ? setFilesStatus : setScheduleStatus;
+    setStatus(t('common.saving'), '');
+    try {
+        const result = await api('/api/backups/schedule', json('PUT', { [key]: spec }));
+        state.schedule = result.schedule;
+        state.files = result.files;
+        const interval = document.getElementById(files ? 'files-interval' : 'schedule-interval');
+        if (interval) interval.disabled = !!spec;
+        const due = document.getElementById('schedule-due');
+        if (due) due.textContent = scheduleDueText(state.schedule);
+        setStatus(t('common.saved'), 'autosave--saved');
+    } catch (e) {
+        setStatus(e.message, 'autosave--error');
+    }
+}
+
+// "When" for a backup: the interval (the picker's "not scheduled" mode, so a hub that never
+// opens this behaves as it always has), set times, or a cron expression. The picker only hands
+// back specs the hub's preview accepted, so a half-typed cron never reaches the autosave.
+function scheduleField(label, value, onCommit) {
+    const wrap = el('div');
+    wrap.style.gridColumn = '1 / -1';
+    wrap.appendChild(el('label', 'setting__label', label));
+    window.FleetSchedulePicker.mount(wrap, {
+        purpose: 'fire',
+        value: value || null,
+        allowNone: true,
+        noneLabel: t('backups.schedule.use_interval'),
+        kinds: ['weekly', 'cron'],
+        onChange: onCommit,
+    });
+    return wrap;
+}
+
 function numberField(id, label, value, min, max, onCommit) {
     const wrap = el('div');
     const labelEl = el('label', 'setting__label', label);
@@ -441,6 +516,7 @@ function numberField(id, label, value, min, max, onCommit) {
 
 function renderRunsCard() {
     const card = el('div', 'card');
+    card.dataset.runsCard = '';       // found by renderRunsInPlace()
     card.style.marginTop = 'var(--space-5)';
     card.appendChild(el('h2', 'section-title', t('backups.runs.title')));
 
@@ -595,8 +671,12 @@ function renderSettingsPane() {
     destWrap.appendChild(filesDest);
     grid.appendChild(destWrap);
 
-    grid.appendChild(numberField('files-interval', t('backups.files.interval'),
-                                 files.interval_hours, 1, 720, saveFileSettings));
+    const filesInterval = numberField('files-interval', t('backups.files.interval'),
+                                      files.interval_hours, 1, 720, saveFileSettings);
+    filesInterval.querySelector('input').disabled = !!files.schedule;
+    grid.appendChild(filesInterval);
+    grid.appendChild(scheduleField(t('backups.files.when'), files.schedule,
+                                   (spec) => saveScheduleSpec('backup.files_schedule', spec)));
     grid.appendChild(numberField('files-full-every', t('backups.files.full_every'),
                                  files.full_every, 1, 90, saveFileSettings));
     grid.appendChild(numberField('files-keep-chains', t('backups.files.keep_chains'),
@@ -1148,7 +1228,7 @@ function renderDestinationRow(dest) {
     const actions = el('td', 'data-table__actions');
     const edit = el('button', 'btn', t('common.edit'));
     edit.addEventListener('click', () => openDestination(dest));
-    const remove = el('button', 'btn', t('common.delete'));
+    const remove = el('button', 'btn btn--danger', t('common.delete'));
     remove.addEventListener('click', async () => {
         if (!await confirmDialog({
             title: t('backups.destinations.confirm_delete_title'),
@@ -1318,7 +1398,7 @@ function boot() {
     if (!boot.watching) {
         boot.watching = true;
         window.FleetLive.watch(['backups'], () => load().catch(onLoadFailed),
-            { minInterval: 3000 });
+            { minInterval: 3000, busy: operatorEditing });
     }
     // Whichever folds are open on arrival still need their contents; the toggle listeners
     // above only fire on a change.

@@ -94,7 +94,7 @@
 
             const targets = el('td', null, policy.fleet_wide
                 ? t('policy.targets.fleet')
-                : t('policy.targets.machines', { count: policy.machines.length }));
+                : tPlural('policy.targets.machines', policy.machines.length));
             // An operator scoped to three phones sees a policy covering ninety. Saying so
             // beats showing them three and letting them believe that is all of it.
             if (policy.machines_hidden) {
@@ -110,7 +110,7 @@
                 edit.type = 'button';
                 edit.addEventListener('click', () => openEditor(policy));
                 actions.appendChild(edit);
-                const remove = el('button', 'btn btn--ghost', t('policy.delete'));
+                const remove = el('button', 'btn btn--danger', t('policy.delete'));
                 remove.type = 'button';
                 remove.addEventListener('click', () => destroy(policy));
                 actions.appendChild(remove);
@@ -234,12 +234,12 @@
         }
 
         const affected = data.machines.filter((m) => m.would_suspend.length > 0);
-        previewOut.appendChild(el('p', 'stat-card__meta', t('policy.preview.summary', {
+        previewOut.appendChild(el('p', 'stat-card__meta', tPlural('policy.preview.summary', data.machines.length, {
             machines: affected.length, total: data.machines.length,
         })));
         if (data.machines_hidden) {
             previewOut.appendChild(el('p', 'stat-card__meta',
-                t('policy.preview.hidden', { count: data.machines_hidden })));
+                tPlural('policy.preview.hidden', data.machines_hidden)));
         }
         if (affected.length === 0) {
             previewOut.appendChild(el('p', 'stat-card__meta', t('policy.preview.nothing')));

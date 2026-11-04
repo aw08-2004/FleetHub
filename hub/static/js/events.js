@@ -226,7 +226,7 @@
                 const edit = el('button', 'btn', t('common.edit'));
                 edit.type = 'button';
                 edit.addEventListener('click', () => openEditor(sub));
-                const remove = el('button', 'btn', t('common.delete'));
+                const remove = el('button', 'btn btn--danger', t('common.delete'));
                 remove.type = 'button';
                 remove.addEventListener('click', () => removeSubscription(sub));
                 bar.append(toggle, edit, remove);

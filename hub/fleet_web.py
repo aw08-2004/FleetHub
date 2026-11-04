@@ -32,6 +32,7 @@ import functools
 
 from flask import Blueprint, jsonify, request, session
 
+import admx
 import apps
 import auth_helpers
 import backups
@@ -574,14 +575,26 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
                 print(f"[gpo] Could not record policy state for {machine}: {e}")
         if "gpo_version" in data:
             try:
-                if not gpo.agent_supports(db_path, machine):
-                    gpo.note_agent(db_path, machine, data.get("gpo_version"))
-                document = gpo.resolve_for(db_path, machine)
+                # Written when it is new or its features changed -- an agent updated to 3.49
+                # starts sending "lgpo" -- not on every heartbeat.
+                features = gpo.clean_features(data.get("gpo_features"))
+                if gpo.agent_features(db_path, machine) != features:
+                    gpo.note_agent(db_path, machine, data.get("gpo_version"), features)
+                document = gpo.resolve_for(db_path, machine, features)
                 if data.get("gpo_version") != document["version"]:
                     payload["gpo_document"] = {"values": document["values"]}
                     payload["gpo_version"] = document["version"]
             except Exception as e:
                 print(f"[gpo] Could not resolve policy for {machine}: {e}")
+        # Administrative Templates (roadmap #32): the agent reports the hash of its PC's
+        # PolicyDefinitions, and the hub asks for the files only when it lacks that set and this
+        # PC holds the claim on uploading it -- one PC per Windows build, not the fleet.
+        if "admx_hash" in data:
+            try:
+                if admx.note_machine(db_path, machine, data.get("admx_hash")):
+                    payload["admx_wanted"] = True
+            except Exception as e:
+                print(f"[admx] Could not record the template set for {machine}: {e}")
         # Whether anything the people at this PC can see of their tickets has changed
         # (roadmap #31 phase D). Same presence rule as `watchdog_version` directly above: only
         # an agent that sends `tickets_marker` runs a tray, and only that agent is answered --
@@ -793,7 +806,8 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         command = fleet.get_command(db_path, command_id)
         if command is None:
             return jsonify({"error": "unknown command"}), 404
-        return jsonify(command), 200
+        # Never a TURN credential to the console (issue #199) -- see fleet.operator_view.
+        return jsonify(fleet.operator_view(command)), 200
 
     @bp.route("/api/fleet/commands/<command_id>/output", methods=["GET"])
     @login_required
@@ -967,6 +981,9 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
             return jsonify({"error": "Files are browsed and moved from the Files tool, "
                                      "not the command channel."}), 400
         try:
+            # A name typed here reaches no agent unless one enrolled under it -- see
+            # fleet.require_enrolled, and why that is not in create_command itself.
+            fleet.require_enrolled(db_path, data.get("machine"))
             command_id = fleet.create_command(
                 db_path,
                 machine=data.get("machine"),
@@ -1121,12 +1138,36 @@ def create_fleet_blueprint(db_path, enrollment_secret, login_required, access,
         # is offline and never will" without this: a shell_open that expired means the
         # machine never picked it up.
         if body["status"] == terminal.STATUS_OPEN and found.get("command_id"):
-            command = fleet.get_command(db_path, found["command_id"])
-            if command and command["status"] == fleet.STATUS_EXPIRED:
-                terminal.finish_session(db_path, found["id"], "the agent never picked it up")
+            reason = _never_attached(fleet.get_command(db_path, found["command_id"]))
+            if reason:
+                terminal.finish_session(db_path, found["id"], reason)
                 body["status"] = terminal.STATUS_CLOSED
-                body["close_reason"] = "the agent never picked it up"
+                body["close_reason"] = reason
         return jsonify(body), 200
+
+    def _never_attached(command):
+        """Why a session still `open` never will attach, or None while it still might.
+
+        Expired is the machine never picking the command up. FINISHED while the session is
+        still open is the other case, added in hub 1.169.0: the agent claimed shell_open and
+        answered without ever attaching -- an agent too old to know the command ("unknown
+        command type"). That became reachable when a machine with no reported version began
+        getting the real console instead of the line terminal, and without this the console
+        sat at Connecting forever. The agent's own answer is shown, because it says why.
+        A terminal that did attach is not `open` by then: its first output marks it live
+        (terminal.push_output), and every way the agent ends a session reports it closed
+        BEFORE the command completes. If that report was lost, closing here with the
+        command's own answer is the right outcome anyway.
+        """
+        if not command:
+            return None
+        if command["status"] == fleet.STATUS_EXPIRED:
+            return "the agent never picked it up"
+        if command["status"] in (fleet.STATUS_FAILED, fleet.STATUS_DONE):
+            said = ((command.get("result") or {}).get("output") or "").strip().splitlines()
+            return ("the agent did not open a terminal: " + said[0][:200]) if said else \
+                "the agent did not open a terminal"
+        return None
 
     @bp.route("/api/fleet/pty/<session_id>/clear", methods=["POST"])
     @login_required

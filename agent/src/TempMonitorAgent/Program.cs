@@ -5,6 +5,7 @@ using TempMonitorAgent.Bios;
 using TempMonitorAgent.Fleet;
 using TempMonitorAgent.Fleet.Executors;
 using TempMonitorAgent.Fleet.Shell;
+using FleetHub.Shared.Pty;
 using TempMonitorAgent.Files;
 using TempMonitorAgent.Network;
 using TempMonitorAgent.Remote;
@@ -210,7 +211,13 @@ try
     // heartbeat delivers, reconciled on its own loop in Worker.
     builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.IRegistryValueStore,
                                   TempMonitorAgent.GroupPolicy.RegistryValueStore>();
+    // Since 3.49 the values go into the PC's local GPO, which Windows applies (phase 2).
+    builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.ILocalGroupPolicy>(
+        _ => new TempMonitorAgent.GroupPolicy.LocalGroupPolicy());
+    builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.AddSingleton<TempMonitorAgent.GroupPolicy.GroupPolicyRunner>();
+    // And this PC's Administrative Templates, hashed on the same loop and uploaded when asked.
+    builder.Services.AddSingleton(_ => new TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader());
 
     // Self-update
     builder.Services.AddSingleton<SelfUpdater>();
@@ -241,6 +248,8 @@ try
     // Group Policy (roadmap #32), handed over the same way and for the same reason.
     host.Services.GetRequiredService<FleetClient>().GroupPolicy =
         host.Services.GetRequiredService<TempMonitorAgent.GroupPolicy.GroupPolicyRunner>();
+    host.Services.GetRequiredService<FleetClient>().PolicyDefinitions =
+        host.Services.GetRequiredService<TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader>();
     // The self-uninstall (roadmap #30), handed over the same way and for the same reason.
     host.Services.GetRequiredService<FleetClient>().Uninstaller =
         host.Services.GetRequiredService<TempMonitorAgent.Update.SelfUninstaller>();

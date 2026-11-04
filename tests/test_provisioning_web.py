@@ -276,6 +276,15 @@ def main():
               and html.index("banner--warn") < html.index('id="qr-canvas"'))
         check("the page never renders the payload server-side, so no secret is in the HTML",
               SECRET not in html)
+        # Opening the page used to fetch the QR straight away, which drew the enrollment
+        # secret into every screen share and wrote a provisioning_qr Security row per visit.
+        # The fetch now waits for "Show code"; this is the part that would quietly regress
+        # if somebody un-hid the loading line to make the page "feel faster".
+        check("...and opens with a Show code button, not the code",
+              'id="qr-show"' in html
+              and re.search(r'id="qr-loading"[^>]*\bhidden\b', html) is not None)
+        check("...and the script only draws the code from that button's click",
+              "showButton.addEventListener('click'" in script)
         CURRENT_USER = "tech@x.com"
         # issue_commands is the capability somebody reaches for by reflex. It is not enough,
         # and that is the whole gating decision: this endpoint hands out a credential.

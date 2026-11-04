@@ -149,7 +149,12 @@ def test_dockerfile_sets_mode():
     with open(os.path.join(_REPO, "hub", "Dockerfile"), encoding="utf-8") as fh:
         text = fh.read()
     check("Dockerfile sets HUB_UPDATE_MODE=image", "HUB_UPDATE_MODE=image" in text)
-    check("Dockerfile serves with 128 waitress threads", "--threads=128" in text)
+    # The 128 now lives in serve.py (THREADS); tests/test_serve.py pins the number itself.
+    check("Dockerfile serves through serve.py", 'CMD ["python", "serve.py"]' in text)
+    # An existing compose file publishes 3001 to a proxy dialling http://, and a pull replaces
+    # the image but not that file -- so the image's OWN default must stay the old listener.
+    check("Dockerfile defaults to the pre-1.170.0 listener (3001, plain)",
+          "FLEETHUB_PORT=3001" in text and "FLEETHUB_TLS=0" in text)
 
 
 # Never in the image: the build files themselves, and what a working tree grows on its own.

@@ -30,6 +30,10 @@ public static class SystemInfo
             Model = Clean(ReadFile(Path.Combine(DmiRoot, "product_name"))),
             Manufacturer = Clean(ReadFile(Path.Combine(DmiRoot, "sys_vendor"))),
             AssetTag = Clean(ReadFile(Path.Combine(DmiRoot, "chassis_asset_tag"))),
+            // product_uuid is root-only like product_serial; /etc/machine-id is the install's
+            // id, the Linux counterpart of the Windows MachineGuid (hub/identity.py).
+            SmbiosUuid = Clean(ReadFile(Path.Combine(DmiRoot, "product_uuid"))),
+            MachineGuid = Clean(ReadFile("/etc/machine-id")),
             OsArchitecture = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
         };
 

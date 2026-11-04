@@ -73,6 +73,13 @@
     </nav>
     <div class="machine-head">
         <h1 class="section-title machine-head__title">{{ machine }}</h1>
+        {# Online or offline, right beside the name -- the same pill the Devices list draws
+           (setMachineStatusPill), filled by machine.js from /api/machines/<name> and kept
+           current by the live socket. The page used to say it only indirectly, by the Uptime
+           tile turning into "Last seen" further down the Overview. Hidden until the first
+           answer, so a slow hub never shows a guess. #}
+        <span class="status-pill" id="machine-head-status" hidden></span>
+        <span class="stat-card__meta" id="machine-head-seen" hidden>{{ t('machine.last_seen') }} <span id="machine-head-seen-ago"></span></span>
         {# <details> for the disclosure semantics and Esc/outside-click handling in
            machine-switcher.js. The rows are plain <a>s so shell.js routes them through the
            frame exactly like any other link. #}
@@ -93,11 +100,11 @@
             {# A LINK to the Remote page, not a tab. The Remote page holds several PCs side by
                side and keeps each session alive while you work elsewhere; a second viewer
                embedded here would be two sessions for one screen.
-               No ?machine= yet: remote.js does not read one, and a parameter it ignores would
-               promise a screen that never opens. Pre-selecting this PC there is part of the
-               Devices phase of this redesign (ROADMAP note, hub 1.114.0). #}
+               It carries ?machine= since hub 1.169.0: remote-workspace.js opens a screen on
+               each one it is given, so this button lands on THIS PC already connecting rather
+               than on an empty picker -- the same URL the Ctrl+K Remote action builds. #}
             {% if cap.REMOTE_CONTROL in user_capabilities %}
-            <a class="btn btn--ghost" id="machine-open-remote" href="{{ url_for('remote_page') }}">{{ t('machine.open_remote') }}</a>
+            <a class="btn btn--ghost" id="machine-open-remote" href="{{ url_for('remote_page', machine=machine) }}">{{ t('machine.open_remote') }}</a>
             {% endif %}
         </div>
     </div>
@@ -192,7 +199,7 @@
             <div class="stat-card__label">{{ t('machine.cpu_power') }}</div>
             <div class="stat-card__value" id="stat-cpu-power">{{ t('machine.watts', value=t('machine.unknown')) }}</div>
         </div>
-        <div class="card stat-card identity-block" id="card-gpu">
+        <div class="card stat-card identity-block" id="card-gpu" hidden>
             <div class="stat-card__label">{{ t('machine.gpu') }}</div>
             <div class="stat-card__meta" id="stat-gpu-temp">{{ t('machine.gpu_temp', value=t('machine.unknown')) }}</div>
             <div class="stat-card__meta" id="stat-gpu-load">{{ t('machine.gpu_load', value=t('machine.unknown')) }}</div>

@@ -1,0 +1,194 @@
+"""Deleting a machine holds its name against unsigned reports, so an onboarding code can take it.
+
+**The silent failure this file exists to catch is a PC that can never be re-onboarded.** A
+PC whose BIOS serial is a placeholder has nothing onboarding can match a record to, so the
+only way in is a name with no record. The operator deletes the record; the onboarding script
+installs and starts the agent before it spends the code; that agent's first unsigned report
+rebuilds the record; and the redeem a few seconds later is refused "could not be matched".
+Every delete looks like it worked, and every run of the installer fails the same way
+(DESKTOP-DEQ7B5D, 2026-10-31). Also caught: a delete that matched the name case-sensitively
+while onboarding's checks do not, so a record under another case survived and kept refusing.
+
+Imports app the way test_decommission.py does (env + cwd set before import).
+"""
+import os
+import sys
+import tempfile
+from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
+
+_TMPDIR = tempfile.mkdtemp(prefix="hub-delete-hold-test-")
+os.environ["HUB_LOG_DIR"] = os.path.join(_TMPDIR, "logs")
+os.chdir(_TMPDIR)
+os.environ["ALLOWED_EMAILS"] = "tester@example.com"
+
+import app  # noqa: E402
+import fleet  # noqa: E402
+import onboarding  # noqa: E402
+
+PASS = 0
+FAIL = 0
+
+
+def check(name, cond):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  [ok] {name}")
+    else:
+        FAIL += 1
+        print(f"  [XX] {name}")
+
+
+client = app.app.test_client()
+with client.session_transaction() as sess:
+    sess["user"] = {"email": "tester@example.com"}
+    sess["csrf_token"] = "t"
+HEADERS = {"X-CSRF-Token": "t"}
+PLACEHOLDER = "System Serial Number"
+
+
+def unsigned_report(name):
+    return client.post("/api/report", json={"machine": name, "temp": 40.0,
+                                            "serial_number": PLACEHOLDER})
+
+
+def has_record(name):
+    return app._machine_record(name) is not None
+
+
+def redeem(name):
+    _, code = onboarding.create_code(app.DB_PATH, "test", actor="test")
+    return client.post("/api/onboarding/redeem",
+                       json={"code": code, "machine": name, "serial": PLACEHOLDER})
+
+
+def test_placeholder_serial_can_be_reonboarded():
+    print("\n-- a placeholder-serial PC: delete, its agent keeps reporting, the code still works --")
+    name = "WHITEBOX-PC"
+    check("an unsigned report creates the record", unsigned_report(name).status_code == 200
+          and has_record(name))
+    check("...and while it exists, a code is refused 409",
+          redeem(name).status_code == 409)
+
+    check("the delete succeeds",
+          client.delete(f"/api/machines/{name}", headers=HEADERS).status_code == 200)
+    r = unsigned_report(name)
+    check("an unsigned report right after the delete is refused 401 'unsigned'",
+          r.status_code == 401 and r.get_json().get("reason") == "unsigned")
+    check("...and wrote no record back", not has_record(name))
+    check("...under another case too", unsigned_report(name.lower()).status_code == 401
+          and not has_record(name))
+
+    r = redeem(name)
+    check("the onboarding code now enrolls the PC", r.status_code == 200
+          and r.get_json().get("token"))
+    ident = r.get_json()
+    signed = client.post("/api/report", json={"machine": name, "temp": 40.0},
+                         headers={"Authorization": f"Bearer {ident['agent_id']}:{ident['token']}"})
+    check("the new agent's signed report is accepted during the hold",
+          signed.status_code == 200 and has_record(name))
+
+
+def test_hold_expires():
+    print("\n-- the hold is temporary: a still-running unsigned agent reappears afterwards --")
+    name = "STALE-RECORD"
+    unsigned_report(name)
+    client.delete(f"/api/machines/{name}", headers=HEADERS)
+    check("held right after the delete", unsigned_report(name).status_code == 401)
+    with app._deleted_name_holds_lock:
+        app._deleted_name_holds[name.lower()] -= app.DELETED_NAME_HOLD_SECONDS + 1
+    check("accepted again once the hold has run out",
+          unsigned_report(name).status_code == 200 and has_record(name))
+
+
+def test_other_names_unaffected():
+    print("\n-- the hold is per name --")
+    unsigned_report("NEIGHBOUR-PC")
+    client.delete("/api/machines/DELETED-PC", headers=HEADERS)
+    check("an unsigned report under another name is still accepted",
+          unsigned_report("NEIGHBOUR-PC").status_code == 200)
+
+
+def test_delete_ignores_case():
+    print("\n-- a delete removes the agent row and record whatever their case --")
+    unsigned_report("mixed-case-pc")
+    fleet.issue_agent_identity(app.DB_PATH, "mixed-case-pc", actor="test")
+    check("the record was stored under the lower-case name", has_record("mixed-case-pc"))
+    client.delete("/api/machines/MIXED-CASE-PC", headers=HEADERS)
+    with fleet.get_conn(app.DB_PATH) as conn:
+        check("the agent row under another case is gone",
+              not fleet.live_agent_holds(conn, "MIXED-CASE-PC"))
+    check("...and so is the record", not has_record("mixed-case-pc"))
+
+
+def test_failed_delete_releases_hold():
+    print("\n-- a delete that fails holds nothing: the record it left keeps reporting --")
+    name = "FAILED-DELETE-PC"
+    unsigned_report(name)
+    with mock.patch.object(fleet, "delete_machine", side_effect=RuntimeError("test")):
+        try:
+            client.delete(f"/api/machines/{name}", headers=HEADERS)
+        except RuntimeError:
+            pass
+    check("the name is not held", not app._deleted_name_held(name))
+    check("...so its unsigned reports are still accepted",
+          unsigned_report(name).status_code == 200)
+
+
+def test_placeholder_serial_matches_on_uuid_without_a_delete():
+    print("\n-- a re-imaged placeholder-serial PC re-onboards on its SMBIOS UUID, no delete --")
+    name = "UUID-WHITEBOX"
+    uuid = "4C4C4544-0042-3510-8048-B3C04F4E3532"
+    planted = "4C4C4544-0042-3510-8048-B3C04F4E3599"
+    r = client.post("/api/report", json={"machine": name, "temp": 40.0,
+                                         "serial_number": PLACEHOLDER, "smbios_uuid": planted})
+    check("an unsigned report is accepted...", r.status_code == 200 and has_record(name))
+    check("...but stores no UUID: unsigned is anybody, and first writer would win",
+          app._machine_record(name).get("smbios_uuid") is None)
+    _, code = onboarding.create_code(app.DB_PATH, "test", actor="test")
+    r = client.post("/api/onboarding/redeem", json={
+        "code": code, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": planted})
+    check("so the planted UUID admits nobody: refused 409 as before", r.status_code == 409)
+
+    client.delete(f"/api/machines/{name}", headers=HEADERS)
+    with app._deleted_name_holds_lock:
+        app._deleted_name_holds.pop(name.lower(), None)
+    first = client.post("/api/onboarding/redeem", json={
+        "code": code, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": uuid}).get_json()
+    signed = client.post("/api/report", json={"machine": name, "temp": 40.0,
+                                              "serial_number": PLACEHOLDER, "smbios_uuid": uuid},
+                         headers={"Authorization": f"Bearer {first['agent_id']}:{first['token']}"})
+    check("enrolled, and its signed report keeps the record",
+          signed.status_code == 200 and app._machine_record(name).get("smbios_uuid")
+          == uuid.lower())
+
+    fleet.revoke_agent(app.DB_PATH, first["agent_id"], actor="test")   # re-imaged
+    _, again = onboarding.create_code(app.DB_PATH, "test", actor="test")
+    other = client.post("/api/onboarding/redeem", json={
+        "code": again, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": planted})
+    check("a different board under the name is refused 409", other.status_code == 409)
+    same = client.post("/api/onboarding/redeem", json={
+        "code": again, "machine": name, "serial": PLACEHOLDER, "smbios_uuid": uuid})
+    check("the same board re-onboards with its record still there",
+          same.status_code == 200 and same.get_json().get("token"))
+    client.delete(f"/api/machines/{name}", headers=HEADERS)
+    with app.get_db_conn() as conn:
+        check("a delete forgets the UUID with the record", app._machine_record(name) is None
+              and app.identity.lookup(conn, name) is None)
+
+
+def main():
+    test_placeholder_serial_can_be_reonboarded()
+    test_placeholder_serial_matches_on_uuid_without_a_delete()
+    test_hold_expires()
+    test_other_names_unaffected()
+    test_delete_ignores_case()
+    test_failed_delete_releases_hold()
+    print(f"\n==== {PASS} passed, {FAIL} failed ====")
+    return 1 if FAIL else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

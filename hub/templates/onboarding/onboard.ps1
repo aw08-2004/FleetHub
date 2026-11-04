@@ -86,7 +86,21 @@
         # hardware -- see onboarding._check_known_machine.
         $serial = $null
         try { $serial = ([string](Get-CimInstance -ClassName Win32_BIOS).SerialNumber).Trim() } catch { $serial = $null }
-        $body = @{ code = $Code; machine = $env:COMPUTERNAME; serial = $serial } | ConvertTo-Json -Compress
+        # The SMBIOS UUID and MachineGuid, read where the agent reads them (SystemInfo). They
+        # let a PC whose BIOS serial is a placeholder prove it is the one that reported under
+        # this name -- see hub/identity.py.
+        $smbiosUuid = $null
+        try { $smbiosUuid = ([string](Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID).Trim() } catch { $smbiosUuid = $null }
+        $machineGuid = $null
+        try { $machineGuid = [string](Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid) } catch { $machineGuid = $null }
+        # The credential this PC already holds, if it was enrolled before. A live one for this
+        # name lets the hub replace it instead of refusing the name -- onboarding.redeem_code.
+        $previous = $null
+        try { $previous = Get-Content -LiteralPath $IdentityPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $previous = $null }
+        $previousId = $null; $previousToken = $null
+        if ($previous) { $previousId = [string]$previous.agent_id; $previousToken = [string]$previous.token }
+        $body = @{ code = $Code; machine = $env:COMPUTERNAME; serial = $serial; smbios_uuid = $smbiosUuid; machine_guid = $machineGuid; previous_agent_id = $previousId; previous_token = $previousToken } | ConvertTo-Json -Compress
+        $previous = $null; $previousToken = $null
         try {
             $identity = Invoke-RestMethod -Method Post -Uri "$HubUrl/api/onboarding/redeem" `
                 -ContentType 'application/json' -Body $body -UseBasicParsing
@@ -126,7 +140,7 @@
         }
         Set-Acl -LiteralPath $tmp -AclObject $acl
         Move-Item -LiteralPath $tmp -Destination $IdentityPath -Force
-        $identity = $null; $json = $null
+        $identity = $null; $json = $null; $body = $null
 
         Start-Service -Name $ServiceName
         Write-Host "`nDone. $env:COMPUTERNAME is enrolled and should appear in FleetHub within a minute." -ForegroundColor Green

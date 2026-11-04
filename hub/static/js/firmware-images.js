@@ -136,7 +136,7 @@
             edit.addEventListener('click', () => openEditor(image));
             actions.appendChild(edit);
 
-            const del = el('button', 'btn btn--ghost', t('common.delete'));
+            const del = el('button', 'btn btn--danger', t('common.delete'));
             del.type = 'button';
             del.addEventListener('click', () => deleteImage(image));
             actions.appendChild(del);

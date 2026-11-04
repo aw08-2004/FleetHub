@@ -1230,10 +1230,10 @@ def expire_stale(db_path, now=None, flashing_timeout=DEFAULT_FLASHING_TIMEOUT_SE
              TARGET_REBOOTING, now - int(confirm_timeout)))]
     for target in stale:
         if target["status"] == TARGET_FLASHING:
-            message = ("the machine never reported the outcome. It may have been left "
+            message = ("The machine never reported the outcome. It may have been left "
                        "mid-flash -- check it before trying again")
         else:
-            message = ("the machine never came back reporting the new BIOS version. It may "
+            message = ("The machine never came back reporting the new BIOS version. It may "
                        "not have restarted yet, or the flash may not have taken")
         _finish_target(db_path, target["id"], TARGET_FAILED, error=message)
         closed += 1

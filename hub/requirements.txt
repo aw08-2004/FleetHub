@@ -4,8 +4,13 @@ requests
 # arrive with requests, so these are newly explicit rather than new downloads, for the same
 # reason as cryptography below: the SSRF guard must not depend on another package's tree.
 urllib3>=2
-certifi
-Authlib
+# Floors, not pins, on the two below: a self-update's `pip install -r` leaves any installed
+# version that satisfies the line alone, so an unversioned line never moves a deployed hub
+# off a vulnerable release. certifi 2026.10.23 drops the emSign roots whose intermediate keys
+# were compromised; Authlib 1.9.1 is past the 1.8.0 JWS/JWT signature-forgery advisories,
+# which reach the OIDC login's ID-token check.
+certifi>=2026.10.23
+Authlib>=1.9.1
 python-dotenv
 Flask
 Flask-SocketIO
@@ -15,6 +20,10 @@ Flask-SocketIO
 # `wmi` used to sit beside this and was dropped: nothing in hub/ ever imported it, but the
 # import at module scope made every module that imports app.py Windows-only.
 pywin32; sys_platform == "win32"
+# The server. cheroot runs new installs (serve.py: HTTPS on 29443 -- waitress cannot do TLS);
+# waitress stays because every hub installed before 1.170.0 still launches `waitress-serve`
+# from its WinSW service, and a self-update never rewrites that service definition.
+cheroot
 waitress
 # Backup encryption (AES-256-GCM). Authlib already depends on it, so this is a newly
 # explicit requirement rather than a new download -- but backups.py must not be at the

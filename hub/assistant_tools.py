@@ -129,6 +129,9 @@ READ_POSTS = {
     ("POST", "/api/device-groups/preview"),
     ("POST", "/api/policy/preview"),
     ("POST", "/api/backups/preview"),
+    # A schedule's next runs in hub time (schedules_web.py). A calculator over the body: it
+    # reads nothing about the fleet, so the assistant can answer "when would this run?".
+    ("POST", "/api/schedules/preview"),
     ("POST", "/api/ai/query"),
     ("POST", "/api/ai/summary"),
     ("POST", "/api/ai/machines/<machine>/ask"),
@@ -401,6 +404,16 @@ GENERIC = (
      _params(["method", "path"], method={"type": "string", "enum": ["GET", "POST", "PUT",
                                                                     "PATCH", "DELETE"]},
              path={"type": "string"}, query={"type": "object"}, body={"type": "object"})),
+    # Not a route: it pauses the turn (assistant.wait_for) and reaches nothing, so it is
+    # `read` and offered to everybody. Its ceiling and why it has one: assistant.WAIT_TOOL.
+    ("wait", "Pause, then carry on: for a reboot, an install or a command that needs time "
+     "before it is worth checking again, or when the operator says to wait. Give `seconds`, "
+     "`minutes` or both. The hub may cut a long wait to its limit; the result says how long "
+     "you really waited. The operator sees the wait and can stop it.",
+     _params(seconds={"type": "number", "minimum": 0},
+             minutes={"type": "number", "minimum": 0},
+             reason={"type": "string",
+                     "description": "What you are waiting for, in a few words."})),
 )
 
 # Arguments a curated tool takes that the ROUTE does not: they are kept out of the request and

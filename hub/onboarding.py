@@ -51,6 +51,7 @@ import secrets
 import time
 
 import fleet
+import identity
 import permissions
 
 #: The code alphabet. Upper-case letters and digits **without 0, O, 1, I and L**: a code is
@@ -107,6 +108,9 @@ NAME_KNOWN_MESSAGE = ("The fleet already has a machine with this PC's name, and 
 def init_onboarding_db(db_path):
     with permissions.get_conn(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
+        # redeem_code writes a re-imaged PC's new MachineGuid inside its own transaction, so
+        # the table must exist whether or not app has run identity.init_identity_db yet.
+        identity.ensure_table(conn)
         # One row per code. The redemption columns live on the same row rather than in a
         # side table, unlike invites: a code admits exactly one machine, so there is
         # exactly one redemption to record and a second table would only be a join.
@@ -246,11 +250,13 @@ def create_code(db_path, label, ttl_seconds=DEFAULT_TTL_SECONDS, actor="unknown"
     return code_id, code
 
 
-def _check_known_machine(machine, serial, machine_record):
+def _check_known_machine(machine, presented, machine_record):
     """Raise NameEnrolled unless this PC may take a name the hub already has records for.
+    Returns whether the name had a record at all.
 
     `machine_record(machine)` is app.py's view of machine_info: None for a name the hub has
-    never seen, else {"serial": the stored BIOS serial if it is usable for identity, or None}.
+    never seen, else {serial, machine_guid, smbios_uuid} as it stored them. `presented` is
+    identity.evidence() for what the redeeming PC sent.
 
     **A name with history is the commonest legitimate case and also a takeover route**, which
     is why this is not a plain refusal (review on PR #119). The Onboarding page tells an
@@ -261,22 +267,52 @@ def _check_known_machine(machine, serial, machine_record):
     keys on. **The serial is not a secret** (it is on a sticker and in the console), so this
     binds onboarding to the hardware rather than proving it: it stops a code being spent on
     an arbitrary existing name, and what is left is visible in the Onboarding list. A name
-    whose record carries no usable serial (a VM, a whitebox) cannot be checked at all and is
-    refused until an operator deletes the old record, the same step a re-imaged PC under a
-    live enrollment takes.
+    whose record carries no usable serial (a VM, a whitebox) used to be refused outright
+    until an operator deleted the old record.
+
+    **The serial is now one of three identifiers** (2026-11-02): the SMBIOS UUID and the
+    Windows MachineGuid let a placeholder-serial PC prove it is the one that was enrolled
+    under the name before (they are stored from signed reports and redeems only -- see
+    hub/identity.py), and identity.compare decides -- hardware first, the GUID only when the
+    hardware has nothing to say. Only SAME admits. DIFFERENT is a second PC that happens to
+    share the name, and UNKNOWN is a record with nothing to compare against; both are still
+    refused here, because until machines are keyed on something other than their hostname
+    (hub/identity.py) admitting a second PC would hand it the first one's record.
     """
     if machine_record is None:
-        return
+        return False
     record = machine_record(machine)
     if record is None:
-        return
-    known = (record.get("serial") or "").strip().lower()
-    if not known or known != str(serial or "").strip().lower():
+        return False
+    known = identity.evidence(record.get("serial"), record.get("machine_guid"),
+                              record.get("smbios_uuid"))
+    if identity.compare(known, presented) != identity.SAME:
         raise NameEnrolled(NAME_KNOWN_MESSAGE)
+    return True
 
 
-def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_record=None):
+def _admit(conn, machine, machine_record, presented, previous_agent_id, previous_token):
+    """Raise NameEnrolled unless this PC may take `machine`; else (replaced, had_record).
+
+    `replaced` is the agent id the PC proved it holds (fleet.proven_live_agent), which the
+    caller revokes, or None. A proven credential skips the identity comparison -- see
+    redeem_code -- and counts as history, so the name's identity row is kept.
+    """
+    replaced = fleet.proven_live_agent(conn, machine, previous_agent_id, previous_token)
+    if fleet.live_agent_holds(conn, machine, except_agent=replaced):
+        raise NameEnrolled(NAME_ENROLLED_MESSAGE)
+    if replaced:
+        return replaced, True
+    return None, _check_known_machine(machine, presented, machine_record)
+
+
+def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_record=None,
+                machine_guid=None, smbios_uuid=None, previous_agent_id=None,
+                previous_token=None):
     """Spend `code` for `machine` and return (agent_id, token). Raises OnboardingError.
+
+    `serial`, `machine_guid` and `smbios_uuid` are what the PC says it is; they matter only
+    when the name has history (see _check_known_machine).
 
     **A name that a live agent already holds is refused, and the code is NOT spent.** Without
     this, anybody holding any valid code could mint a second, unrevoked credential for an
@@ -286,6 +322,19 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
     PC keeping its hostname -- is the operator deleting or revoking the old enrollment first,
     which is the deliberate step it should be. The code stays live because nothing was
     minted, so the same person can run the installer again once that is done.
+
+    **Unless the PC proves it is that agent** (2026-11-02): the install scripts send the
+    credential they find in agent.json as `previous_agent_id` / `previous_token`, and a live
+    credential for this very name replaces itself -- the old agent is revoked in the same
+    transaction that mints the new one. Re-running the installer on an enrolled PC (to repair
+    it, or because it fell offline) used to need an operator to revoke first. The credential
+    is the one proof a code holder cannot get from the console or a sticker, which is why it
+    is this and not the serial, and not "the old agent has been quiet for a day" -- that
+    alternative was rejected because it would let anybody holding a code and a serial take
+    over every machine that happens to be switched off. A proven credential also skips the
+    identity comparison: it is stronger evidence than the hardware, and a board swap on a
+    PC that kept its disk is still that PC. A second live agent on the same name is still
+    refused -- the credential proves one of them, not the other.
 
     The check, the claim and the agent row are one IMMEDIATE transaction: two codes redeemed
     for the same name at the same moment cannot both pass the check, and two PCs racing one
@@ -305,9 +354,9 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
         row = _live_row(conn, norm, now)
         if row is None:
             raise OnboardingError(INVALID_MESSAGE)
-        if fleet.live_agent_holds(conn, machine):
-            raise NameEnrolled(NAME_ENROLLED_MESSAGE)
-        _check_known_machine(machine, serial, machine_record)
+        replaced, had_record = _admit(conn, machine, machine_record,
+                                      identity.evidence(serial, machine_guid, smbios_uuid),
+                                      previous_agent_id, previous_token)
         claimed = conn.execute(
             "UPDATE onboarding_codes SET redeemed_at = ?, redeemed_machine = ?, redeemed_ip = ? "
             "WHERE code_id = ? AND redeemed_at IS NULL AND revoked_at IS NULL "
@@ -319,12 +368,31 @@ def redeem_code(db_path, code, machine, ip=None, now=None, serial=None, machine_
         agent_id, token = fleet.insert_agent(conn, machine)
         conn.execute("UPDATE onboarding_codes SET agent_id = ? WHERE code_id = ?",
                      (agent_id, row["code_id"]))
+        if replaced:
+            # Inline, not fleet.revoke_agent: that opens its own connection and could not join
+            # this transaction, and the revoke must commit with the mint or not at all. Its
+            # audit line is written after commit, below, for the same reason.
+            conn.execute("UPDATE agents SET revoked = 1 WHERE agent_id = ?", (replaced,))
+        # This PC spent a code and passed the identity check, so what it presented is now
+        # the name's identity -- including a re-imaged PC's NEW MachineGuid, which a report
+        # could never overwrite (identity.remember is write-once unless authoritative). A
+        # name with no record starts clean: an identity row with nothing beside it is left by
+        # an earlier redeem whose install never reported, and is not evidence of anything.
+        if machine_record is not None and not had_record:
+            conn.execute("DELETE FROM machine_identity WHERE machine = ?", (machine,))
+        identity.remember(conn, machine, machine_guid, smbios_uuid, authoritative=True,
+                          now=now)
 
     fleet.audit_enroll(db_path, machine, agent_id, actor=f"onboarding:{row['label']}",
                        detail={"code_id": row["code_id"]})
+    redeem_detail = {"code_id": row["code_id"], "agent_id": agent_id, "ip": ip}
+    if replaced:
+        redeem_detail["replaced_agent_id"] = replaced
+        fleet.audit(db_path, f"onboarding:{row['label']}", "revoke_agent", replaced,
+                    {"reason": "replaced by onboarding", "new_agent_id": agent_id},
+                    level=fleet.LEVEL_SECURITY)
     fleet.audit(db_path, f"onboarding:{row['label']}", "onboarding.redeem", machine,
-                {"code_id": row["code_id"], "agent_id": agent_id, "ip": ip},
-                level=fleet.LEVEL_SECURITY)
+                redeem_detail, level=fleet.LEVEL_SECURITY)
     return agent_id, token
 
 

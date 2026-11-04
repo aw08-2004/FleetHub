@@ -57,6 +57,8 @@ MAX_PENDING = 500
 #: record's writes are profile fields -- deleting one deliberately leaves group membership
 #: alone (users.delete_user). An AD sync that moves a machine marks `permissions` itself.
 BLUEPRINT_TOPICS = {
+    # Its one write is an agent uploading a template set, which the editor's set picker shows.
+    "admx": "gpo",
     "ai": "settings",
     "apitokens": "tokens",
     "apps": "apps",
@@ -118,6 +120,21 @@ STATUS = "status"
 #: a revocation above all -- reaches a socket that is already open.
 PERMISSIONS = "permissions"
 
+#: A new audit row, marked by fleet.audit itself (app.py installs the listener) -- not by
+#: the after-request hook, which never sees what a scheduler or sweep writes. Two topics,
+#: split on the row's level, because the notice's TIMING is information: an operator who
+#: may read only info and notice rows must not be able to watch for the moment a security
+#: row (a sign-in, a credential reveal, a remote session) is written. `AUDIT` is the
+#: audit blueprint's own topic too, so both writers land on the same name.
+AUDIT = "audit"
+AUDIT_SECURITY = "audit_security"
+
+
+def audit_topic(level):
+    """The topic a new audit row of `level` marks. Fails closed, like the levels do:
+    anything not plainly info or notice is announced only to security readers."""
+    return AUDIT if level in ("info", "notice") else AUDIT_SECURITY
+
 #: Topics only some operators may even hear about, and the capability that decides it.
 #:
 #: A notice carries no data, but it does say WHEN something changed, and for these topics
@@ -139,6 +156,10 @@ PERMISSIONS = "permissions"
 #: device list no longer follows a pairing made from another tab.
 TOPIC_CAPABILITIES = {
     "audit": permissions.VIEW_AUDIT_LOG,
+    # Only the security modifier. An operator holding it without VIEW_AUDIT_LOG hears the
+    # notice and cannot open the page it is for -- harmless, since they are trusted with
+    # exactly these rows; the emit routes one capability per topic, not an intersection.
+    "audit_security": permissions.VIEW_SECURITY_AUDIT,
     "backups": permissions.MANAGE_BACKUPS,
     "deployments": permissions.DEPLOY_PACKAGES,
     "directory": permissions.MANAGE_SETTINGS,
@@ -183,6 +204,9 @@ UNMARKED_RULES = frozenset({
     "/api/agent/files/transfer/<transfer_id>",
     "/api/language",
     "/api/hub/update",
+    # Not a stream but not a change either: a calculator over the request body (the
+    # schedule picker's next runs, schedules_web.py), fired on every pause in typing.
+    "/api/schedules/preview",
 })
 
 #: app.py's own mutating routes have no blueprint; they are about the machine record, except

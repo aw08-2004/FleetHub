@@ -108,7 +108,7 @@ public sealed class SelfUpdater
             // 1. Manifest + detached signature.
             // A pin reads that version's own manifest; the env override (a test server) wins
             // over both and is read the automatic way.
-            var pin = AgentConfig.UpdateManifestOverridden ? null : _state.LoadUpdatePin();
+            var pin = AgentConfig.UpdateManifestOverridden ? null : AgentState.LoadUpdatePin();
             var manifestUrl = AgentConfig.ManifestUrlForPin(pin) ?? AgentConfig.UpdateManifestUrl;
             var manifestBytes = await _http.GetByteArrayAsync(manifestUrl, ct);
             var sigHex = (await _http.GetStringAsync(manifestUrl + ".sig", ct)).Trim();

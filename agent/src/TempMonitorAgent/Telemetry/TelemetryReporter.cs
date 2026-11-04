@@ -41,8 +41,11 @@ public sealed class TelemetryReporter : IDisposable
         };
     }
 
+    /// <summary>Send one report. <paramref name="temp"/> is null on a machine with no CPU
+    /// temperature sensor (a VM), and is sent as JSON null rather than left out: the hub
+    /// requires the key, and reads null as "no reading" -- see Worker.TelemetryLoopAsync.</summary>
     public async Task<ReportResult> ReportAsync(
-        double temp, IReadOnlyList<SensorReading>? sensors, long? uptime, CancellationToken ct)
+        double? temp, IReadOnlyList<SensorReading>? sensors, long? uptime, CancellationToken ct)
     {
         var payload = BuildPayload(temp, sensors, uptime);
         HttpResponseMessage resp;
@@ -67,13 +70,14 @@ public sealed class TelemetryReporter : IDisposable
                 latest = TryParseLatestVersion(body);
                 await FlushOfflineAsync(ct);
             }
-            _log.LogInformation("Sent: {Temp}°C - Hub responded: {Status}", temp, status);
+            _log.LogInformation("Sent: {Temp} - Hub responded: {Status}",
+                temp is double t ? $"{t}°C" : "no temperature", status);
             return new ReportResult(true, status, latest);
         }
     }
 
     private Dictionary<string, object?> BuildPayload(
-        double temp, IReadOnlyList<SensorReading>? sensors, long? uptime)
+        double? temp, IReadOnlyList<SensorReading>? sensors, long? uptime)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -86,6 +90,11 @@ public sealed class TelemetryReporter : IDisposable
             ["manufacturer"] = _identity.Manufacturer,
             ["asset_tag"] = _identity.AssetTag,
             ["service_tag"] = _identity.ServiceTag,
+            // Which PC this is when its name is shared or its BIOS serial is a placeholder --
+            // the hub weighs these when a PC onboards under a name it already knows (see
+            // hub/identity.py). Write-once on the hub, so sending them every report is free.
+            ["machine_guid"] = _identity.MachineGuid,
+            ["smbios_uuid"] = _identity.SmbiosUuid,
             // On every report, alongside the identity fields, rather than on the heartbeat:
             // the hub COALESCEs a null away, so a report that could not read the OS costs
             // nothing, and one that could fills the gap at the next tick rather than at the

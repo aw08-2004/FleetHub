@@ -108,6 +108,37 @@ Agent-facing (token auth): `POST /api/agent/backups/upload/<run_id>`,
 Tunables live in Settings under **Backups**, or on **Fleet tasks → Backup** itself: on/off,
 destination, interval, and generations to keep.
 
+### When backups run
+
+**When to back up** has three modes, the same for the hub database and for PC files:
+
+| Mode | Runs |
+|---|---|
+| **Every N hours (the interval above)** | N hours after the last attempt. The default, and what every hub did before 1.171.0 |
+| **At set times** | on the ticked days, at each time listed, e.g. Mon–Fri at 02:00 and 13:00 |
+| **Cron expression (advanced)** | a five-field cron expression, e.g. `0 3 * * 0` for Sundays at 03:00 |
+
+Under the picker, **Next runs** lists the next five runs. The hub works these out, so they
+are in the **hub's** time, labelled with its UTC offset, even if your browser is in another
+zone. The scheduler uses the same clock.
+
+Set times replace the interval; the interval is greyed out while a schedule is set. A
+backup is due at the first slot **after the last attempt**, which gives two guarantees:
+
+- **A missed slot runs once, late.** A hub that was down at 02:00, or a laptop that was
+  closed, backs up once when it is back — not once per missed night. A late backup is still
+  worth having.
+- **A hub that has never backed up runs at once** when you turn backups on, rather than at
+  the first slot. You find out the destination works now, not at 02:00.
+
+Cron follows the classic rules: Sunday is `0` or `7`, names like `MON-FRI` and `JAN` work,
+and when both day-of-month and day-of-week are set, **either** one matches
+(`0 0 13 * 5` is the 13th *and* every Friday). `@daily`, `@weekly` and friends are accepted;
+`@reboot`, a seconds field, and Quartz's `L W # ?` are refused.
+
+The settings are `backup.hub_schedule` and `backup.files_schedule`; unset means "use the
+interval". `POST /api/schedules/preview` (`view`) answers the picker.
+
 ### Per-PC file backups
 
 Configured on **Fleet tasks → Backup → Backup Settings**, per machine on that machine's

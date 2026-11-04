@@ -1045,6 +1045,21 @@ def _normalize_level(level, action):
     return ACTION_LEVELS.get(str(action), DEFAULT_AUDIT_LEVEL)
 
 
+#: Called with the stored level after every audit row is committed, so the open Audit Log
+#: pages re-read (app.py points it at the change notifier). A hook rather than an import:
+#: this module stays Flask-free and socket-free, and with nothing set -- a test, a script --
+#: auditing simply notifies nobody. Rejected: marking `audit` from the after-request hook,
+#: which misses every row a background writer adds (schedulers, sweeps, the rule
+#: evaluator) -- the page would look live and skip exactly those lines.
+_audit_listener = None
+
+
+def set_audit_listener(listener):
+    """Install the callable told `listener(level)` about each new audit row (None to clear)."""
+    global _audit_listener
+    _audit_listener = listener
+
+
 def audit(db_path, actor, action, target=None, detail=None, level=None):
     """Record one line in the append-only audit trail. Never raises on a bad
     detail payload -- auditing must not be able to break the action it records.
@@ -1056,13 +1071,21 @@ def audit(db_path, actor, action, target=None, detail=None, level=None):
         detail_json = json.dumps(detail, sort_keys=True) if detail is not None else None
     except (TypeError, ValueError):
         detail_json = json.dumps({"_unserializable": str(detail)})
+    stored_level = _normalize_level(level, action)
     with get_conn(db_path) as conn:
         conn.execute(
             "INSERT INTO audit_log(ts, actor, action, target, detail_json, level) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (int(time.time()), str(actor), str(action), target, detail_json,
-             _normalize_level(level, action)),
+            (int(time.time()), str(actor), str(action), target, detail_json, stored_level),
         )
+    # After the commit, so a page that re-reads on the notice finds the row. Swallowed for
+    # the same reason as a bad payload: a notice must not be able to fail the action.
+    listener = _audit_listener
+    if listener is not None:
+        try:
+            listener(stored_level)
+        except Exception as e:
+            print(f"[audit] Change notice failed: {e}")
 
 
 def _decode_audit_row(row):
@@ -1265,6 +1288,31 @@ def live_agent_holds(conn, machine, except_agent=None):
     ).fetchone() is not None
 
 
+def proven_live_agent(conn, machine, agent_id, token):
+    """`agent_id` if (agent_id, token) is a live credential for `machine`, else None.
+
+    For onboarding.redeem_code: a PC re-running the installer sends the credential it already
+    holds, and holding it is the proof that it IS the enrolled machine -- the one thing the
+    serial and the other identifiers cannot prove, because they are not secrets. Same checks
+    as authenticate_agent (constant-time, revoked refused) plus the name, on the caller's
+    connection, and **without touching last_seen**: a credential used only to replace itself
+    must not make the machine look alive for a moment.
+    """
+    if not agent_id or not token:
+        return None
+    row = conn.execute(
+        "SELECT machine, token_hash, revoked FROM agents WHERE agent_id = ?",
+        (str(agent_id),),
+    ).fetchone()
+    if row is None or row["revoked"]:
+        return None
+    if str(row["machine"]).lower() != str(machine).lower():
+        return None
+    if not hmac.compare_digest(row["token_hash"], _hash_token(str(token))):
+        return None
+    return str(agent_id)
+
+
 def authenticate_agent(db_path, agent_id, token, touch=True):
     """Return the agent's machine name if (agent_id, token) is valid and not
     revoked, else None. Constant-time token comparison. When `touch`, refreshes
@@ -1360,7 +1408,7 @@ def _decommission_rows(conn, machine, actor, now):
     machine with the box ticked means the operator wants it gone as well.
     """
     rows = conn.execute(
-        "SELECT agent_id, token_hash FROM agents WHERE machine = ?", (machine,)
+        "SELECT agent_id, token_hash FROM agents WHERE machine = ? COLLATE NOCASE", (machine,)
     ).fetchall()
     for row in rows:
         conn.execute(
@@ -1698,7 +1746,9 @@ def delete_machine(db_path, machine, uninstall_actor=None):
                 f"DELETE FROM command_output_chunks WHERE command_id IN ({placeholders})", cmd_ids
             )
         conn.execute("DELETE FROM commands WHERE machine = ?", (machine,))
-        conn.execute("DELETE FROM agents WHERE machine = ?", (machine,))
+        # NOCASE to match live_agent_holds, which onboarding asks: an agent row stored as
+        # `desktop-x` survived a delete of `DESKTOP-X` and kept answering "already enrolled".
+        conn.execute("DELETE FROM agents WHERE machine = ? COLLATE NOCASE", (machine,))
     if told:
         audit(db_path, actor=uninstall_actor, action="agent.decommission", level=LEVEL_SECURITY,
               target=machine, detail={"agent_ids": told})
@@ -1722,6 +1772,59 @@ class UnsupportedCommand(ValueError):
     happens to be a much better one. Its own type so a scheduler that wants to retire a
     target with "this machine cannot answer" can tell that apart from a genuine bug.
     """
+
+
+class UnknownMachine(ValueError):
+    """A command an operator typed for a name no live agent enrollment answers to.
+
+    A ValueError for the same reason as UnsupportedCommand: every web caller already turns one
+    into a refusal with its sentence.
+    """
+
+
+def require_enrolled(db_path, machine):
+    """Raise UnknownMachine unless `machine` has a live enrollment.
+
+    Only an enrolled agent claims commands, so a command for anything else sits "pending"
+    until it expires, looking exactly like a slow PC. Found on a Windows Sandbox: the operator
+    queued a file listing for the 36-character GUID a ticket showed, the agent had enrolled
+    under the 15 characters Windows truncates that to, and nothing said the two differ. A
+    machine that is merely offline is still enrolled and still queues.
+
+    **Called at the doors an operator types a name into -- the command channel and the Files
+    tool -- and deliberately not from create_command.** The funnel was tried first and broke
+    the schedulers: the package dispatcher claims a target before queueing, and the patch
+    scheduler warns that a raise there "would raise out of this loop and cost every remaining
+    target its pass". A target with no agent is ordinary for them (an AD-synced machine, a
+    revoked one) and already ends through the command's TTL, which is the right outcome
+    there.
+
+    **Not every door is guarded, and that is a known gap, not a claim.** The other operator
+    routes that queue a command -- processes, remote, wipe, location, BIOS, discovery, disk
+    usage, a manual backup run -- are buttons on a machine page, and that page is now a 404
+    for a name the hub does not know, which closes them to anyone navigating. It does not close
+    them to a direct API call: a caller with the capability can still queue one of those for a
+    name nobody enrolled under, and it sits pending until its TTL, as everything did before
+    this check existed (review on PR #182). Adding this call to each of those routes is the fix
+    when one of them is seen doing it.
+
+    **Exact, not case-folded**, because claim_commands is: a command for `openclaw` is never
+    claimed by the agent enrolled as `OPENCLAW`, so queueing it would be the same silent
+    pending this exists to stop. The refusal names the enrolled spelling instead (review on
+    PR #182), since the Inventory lists that machine and "no agent answers" would read as false.
+    """
+    if not is_enrolled(db_path, machine):
+        typed = str(machine or "").strip()
+        spelled = next((name for name in enrolled_machines(db_path)
+                        if name.lower() == typed.lower()), None)
+        if spelled:
+            raise UnknownMachine(
+                f"The agent is enrolled as '{spelled}', not '{typed}'. Machine names are "
+                f"matched exactly -- use '{spelled}'.")
+        raise UnknownMachine(
+            f"No enrolled agent answers to '{typed}', so nothing would "
+            f"ever run this command. Check the name against Inventory -- Windows shortens "
+            f"computer names longer than 15 characters.")
 
 
 def create_command(db_path, machine, command_type, params, issued_by,
@@ -1748,6 +1851,9 @@ def create_command(db_path, machine, command_type, params, issued_by,
     It costs one indexed lookup per command and cannot refuse anything for a machine that has
     not reported -- which is every Windows agent in the field. See capabilities.py's
     absent-report rule; the asymmetry is the whole reason this is safe to put in the funnel.
+
+    It does NOT refuse a machine with no enrollment -- see require_enrolled for why that check
+    lives at the operator's doors instead.
     """
     machine = str(machine or "").strip()
     if not machine:
@@ -1781,10 +1887,14 @@ def create_command(db_path, machine, command_type, params, issued_by,
     # system is created here -- the deploy scheduler, the wake relay and the terminal all
     # come through this function -- so this one call is what makes the doorbell complete.
     notify_commands(machine)
+    # The trail gets the operator's view of the params, never the agent's: the Audit Log is
+    # readable with view_audit_log alone, and a start_remote_session's params carry a working
+    # TURN credential (issue #199, found in review after the command route was closed).
+    audit_params = json.dumps(operator_view({"params": params})["params"], sort_keys=True)
     audit(db_path, actor=issued_by, action="issue_command",
           level=LEVEL_SECURITY, target=machine,
           detail={"command_id": command_id, "type": command_type,
-                  "params": params_json[:AUDIT_PARAMS_MAX_CHARS]})
+                  "params": audit_params[:AUDIT_PARAMS_MAX_CHARS]})
     return command_id
 
 
@@ -2232,6 +2342,39 @@ def get_command(db_path, command_id):
     command["params"] = json.loads(command.pop("params_json"))
     command["result"] = dict(result) if result else None
     return command
+
+
+# Keys inside a command's params that are a credential for the AGENT, never for whoever reads
+# the command back. Each entry of a start_remote_session's `ice_servers` carries a TURN
+# username and credential -- minted per session, or a pasted provider block that lives for
+# its whole TTL -- and the agent needs them to reach the relay.
+_ICE_SECRET_KEYS = ("username", "credential")
+
+
+def operator_view(command):
+    """`command` as the console may show it: the TURN username and credential stripped out of
+    any `ice_servers` in its params, URLs kept.
+
+    **Found in issue #199.** GET /api/fleet/commands/<id> is gated on `view` plus scope, which
+    is right for a command's status and output, and returned params verbatim -- so an operator
+    holding only `view` and `view_audit_log` could read a remote session's command id off the Audit
+    Log and fetch a working relay credential with it, one capability short of `remote_control`.
+    Applied on the way out (this route, and create_command's `issue_command` audit row, which
+    carried the same params and is readable with `view_audit_log` alone) rather than to the
+    stored row, because the agent fetches that row and does need the credential. Rejected: refusing the whole command to non-`remote_control`
+    callers -- its status and result are what the machine page's command list shows everyone
+    with `view`, and only these two fields were ever the problem.
+    """
+    params = command.get("params") if command else None
+    servers = params.get("ice_servers") if isinstance(params, dict) else None
+    if not isinstance(servers, list):
+        return command
+    redacted = []
+    for server in servers:
+        if isinstance(server, dict):
+            server = {k: v for k, v in server.items() if k not in _ICE_SECRET_KEYS}
+        redacted.append(server)
+    return {**command, "params": {**params, "ice_servers": redacted}}
 
 
 # ================================

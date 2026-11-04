@@ -86,7 +86,8 @@
     "empty": "Nada coincide con «{query}».",
     "loading": "Cargando dispositivos…",
     "hint": "↑↓ moverse · ←→ elegir pestaña · Intro abrir · Esc cerrar",
-    "action_overview": "Resumen"
+    "action_overview": "Resumen",
+    "action_remote": "Remoto"
   },
   "device_groups": {
     "heading": "Grupos de dispositivos",
@@ -203,6 +204,10 @@
       "scripts": {
         "one": "{count} script",
         "other": "{count} scripts"
+      },
+      "admx": {
+        "one": "{count} configuración de plantilla",
+        "other": "{count} configuraciones de plantilla"
       }
     },
     "confirm_delete_title": "Eliminar directiva",
@@ -234,7 +239,13 @@
       "links": "Directivas que se aplican, en orden de procesamiento (la última gana en caso de conflicto)",
       "none": "No se aplica ninguna directiva a este PC.",
       "agent_too_old": "El agente de este PC todavía no ha informado de que admite directivas de grupo, así que los valores del registro de abajo no se le aplican. Los ajustes del agente y los scripts sí.",
+      "local_gpo": "El agente de este PC escribe los valores del registro de abajo en la directiva de grupo local del PC, así que gpedit.msc y gpresult los muestran en el PC. Una directiva de dominio que establezca el mismo valor sigue teniendo prioridad.",
+      "direct_registry": "El agente de este PC escribe los valores del registro de abajo directamente en el registro, así que gpedit.msc no los muestra en el PC. A partir del agente 3.49 se escriben en la directiva de grupo local.",
       "pending": "Esperando al PC",
+      "deleted": "Eliminado",
+      "delete_needs_agent": "Requiere el agente 3.49 o posterior",
+      "user_note": "Los valores de la configuración de usuario se aplican a todos los usuarios que inician sesión en este PC, administradores incluidos, en su próximo inicio de sesión o en unos 90 minutos mientras tienen la sesión abierta. \"Aplicado\" significa que están en la directiva de grupo local del PC.",
+      "user_needs_agent": "Requiere el agente 3.49 o posterior",
       "col": {
         "node": "Vinculada en",
         "setting": "Ajuste",
@@ -255,7 +266,8 @@
       "agent_help": "Sustituye el valor general del hub de estos ajustes en los PC a los que se aplica esta directiva. Funciona con cualquier versión del agente.",
       "add_setting": "Añadir un ajuste…",
       "registry": "Valores del registro",
-      "registry_help": "Se escriben solo bajo HKLM\\SOFTWARE\\Policies, en los agentes que lo admiten. Un valor que ya existe y que FleetHub no escribió se deja tal cual y se informa como gestionado por otro.",
+      "hive": "Subárbol",
+      "registry_help": "Se escriben solo bajo SOFTWARE\\Policies, en HKLM (configuración del equipo) o HKCU (configuración de usuario, para todos los usuarios que inician sesión), en los agentes que lo admiten, dentro de la directiva de grupo local del PC, así que gpedit.msc los muestra en el PC. Un valor que ya existe y que FleetHub no estableció se deja tal cual y se informa como gestionado por otro.",
       "add_value": "Añadir un valor",
       "path": "Ruta de la clave",
       "path_placeholder": "SOFTWARE\\Policies\\Microsoft\\Edge",
@@ -289,6 +301,35 @@
       "failed": "Falló",
       "skipped": "Omitido",
       "retry": "Reintentando"
+    },
+    "admx": {
+      "heading": "Plantillas administrativas",
+      "help": "Las configuraciones que muestra el Editor de directivas de grupo local de Windows, leídas de las plantillas que informan sus PC. Cada una se guarda como los valores del registro que escribe, con las mismas reglas que los valores de abajo.",
+      "browse": "Examinar plantillas…",
+      "edit": "Editar",
+      "set": "Conjunto de plantillas",
+      "set_label": "{os} · PC: {count}",
+      "search": "Buscar configuraciones",
+      "no_sets": "Ningún PC ha enviado sus plantillas todavía. Un agente de Windows compatible con las plantillas administrativas las envía por sí solo, una vez por compilación de Windows.",
+      "tree_label": "Categorías de plantillas",
+      "computer": "Configuración del equipo",
+      "user": "Configuración de usuario",
+      "no_match": "Ninguna configuración coincide.",
+      "pick_category": "Seleccione una categoría a la izquierda o busque.",
+      "state_enabled": "Habilitada",
+      "state_disabled": "Deshabilitada",
+      "state_not_configured": "No configurada",
+      "col_state": "Estado",
+      "options": "Opciones",
+      "explain": "Ayuda",
+      "back": "Volver a la lista",
+      "apply": "Aceptar",
+      "list_explicit_help": "Uno por línea: nombre=valor",
+      "deletes_old_agent": "Windows elimina algunos valores cuando se deshabilita esta configuración. El agente de este PC es anterior a la 3.49 y no los elimina; solo quita los valores que escribió él mismo.",
+      "unsupported": {
+        "outside_policy_tree": "Escribe fuera de SOFTWARE\\Policies, por lo que aquí no se puede establecer por directiva",
+        "qword": "Usa un valor QWORD, que la directiva todavía no puede establecer"
+      }
     }
   },
   "toast": {
@@ -312,6 +353,11 @@
     "default_message": "No tienes permiso para ver esta página.",
     "note": "Los permisos provienen de los grupos a los que perteneces. Pide a un administrador que te añada a un grupo que lo incluya.",
     "back": "Volver al panel"
+  },
+  "machine_not_found": {
+    "title": "Equipo no encontrado",
+    "message": "El hub no tiene constancia de ningún equipo llamado {name}.",
+    "note": "Un equipo aparece aquí en cuanto su agente se registra o envía datos. Comprueba el nombre en el Inventario — Windows acorta los nombres de equipo largos a 15 caracteres."
   },
   "dashboard": {
     "heading": "Resumen de la flota",
@@ -464,8 +510,8 @@
     "confirm_delete_title": "Eliminar equipo",
     "delete_failed": "No se pudo eliminar «{machine}»: {error}",
     "load_failed": "No se pudo cargar el inventario.",
-    "wake_all": "Encender los PC apagados",
-    "wake_all_title": "Pedir a un PC encendido de cada subred que encienda los PC apagados.",
+    "wake_all": "Encender todos los PC apagados",
+    "wake_all_title": "Pedir a un PC encendido de cada subred que encienda todos los PC apagados de la flota que usted puede ver, sea cual sea el filtro.",
     "wake_all_result": "Se solicitó el encendido de {count} PC.",
     "wake_all_none": "Todos los PC que puede ver ya están encendidos.",
     "wake_all_failed": "No se pudo solicitar un encendido para toda la flota.",
@@ -477,7 +523,12 @@
       "offline": "Fuera de línea",
       "unenrolled": "Sin registrar"
     },
-    "delete_uninstall_agent": "Desinstalar también el agente de este PC y borrar allí sus datos. Si el PC está apagado, recibe la orden la próxima vez que se conecte."
+    "delete_uninstall_agent": "Desinstalar también el agente de este PC y borrar allí sus datos. Si el PC está apagado, recibe la orden la próxima vez que se conecte.",
+    "wake_all_confirm_title": "¿Encender toda la flota?",
+    "wake_all_confirm": {
+      "one": "Esto enciende el {count} PC apagado de toda la flota que usted puede ver, no solo las filas que muestra la búsqueda o el filtro actual. Un PC encendido de su subred envía el paquete.",
+      "other": "Esto enciende los {count} PC apagados de toda la flota que usted puede ver, no solo las filas que muestra la búsqueda o el filtro actual. Un PC encendido de cada subred envía los paquetes."
+    }
   },
   "alerts": {
     "heading": "Alertas",
@@ -709,7 +760,7 @@
       "revoked": "Revocada"
     },
     "revoke": "Revocar",
-    "confirm_delete": "¿Eliminar la invitación \"{label}\"? Quien ya se haya unido a través de ella conserva su acceso -- quítelo del grupo de permisos para revocarlo.",
+    "confirm_delete": "¿Eliminar la invitación \"{label}\"? Quien ya se haya unido a través de ella conserva su acceso — quítelo del grupo de permisos para revocarlo.",
     "confirm_delete_title": "Eliminar invitación",
     "editor": {
       "title": "Nuevo enlace de invitación",
@@ -723,7 +774,7 @@
       "group_empty": "Ningún grupo de permisos coincide.",
       "new_group_help": "Esto crea un grupo de permisos real, de modo que el acceso concedido se puede revisar y revocar en la página Grupos de permisos como cualquier otro.",
       "new_group_name": "Nombre del grupo",
-      "new_group_name_placeholder": "Asistencia -- solo lectura",
+      "new_group_name_placeholder": "Asistencia — solo lectura",
       "limits": "Límites",
       "max_uses": "Número de usos",
       "max_uses_help": "Cuántas personas distintas admite este enlace. Uno es una invitación de un solo uso.",
@@ -925,7 +976,7 @@
       },
       "manage_group_policy": {
         "label": "Gestionar directivas de grupo",
-        "description": "Crear, editar y eliminar objetos de directiva de grupo, vincularlos al árbol de equipos y bloquear la herencia en un nodo. Sensible para la seguridad: una directiva puede escribir cualquier valor bajo HKLM\\SOFTWARE\\Policies en los PC a los que llega, incluidas las directivas de Windows Defender y del firewall, así que permite debilitar la protección de un PC sin «Emitir comandos». Concédala con ese mismo cuidado. Una directiva también puede cambiar ajustes del hub en sus PC, y una que ejecuta un script necesita además «Emitir comandos». Cada PC al que pueda llegar un cambio debe estar en el ámbito propio. Para leer directivas y el conjunto resultante de un PC basta con «Ver»."
+        "description": "Crear, editar y eliminar objetos de directiva de grupo, vincularlos al árbol de equipos y bloquear la herencia en un nodo. Sensible para la seguridad: una directiva puede escribir cualquier valor bajo SOFTWARE\\Policies en los PC a los que llega, en HKLM y, para todos los usuarios que inician sesión, en HKCU, incluidas las directivas de Windows Defender y del firewall, así que permite debilitar la protección de un PC sin «Emitir comandos». Concédala con ese mismo cuidado. Una directiva también puede cambiar ajustes del hub en sus PC, y una que ejecuta un script necesita además «Emitir comandos». Cada PC al que pueda llegar un cambio debe estar en el ámbito propio. Para leer directivas y el conjunto resultante de un PC basta con «Ver»."
       },
       "locate_device": {
         "label": "Localizar un dispositivo",
@@ -937,7 +988,7 @@
       },
       "wipe_device": {
         "label": "Bloquear y borrar un dispositivo",
-        "description": "Bloquear la pantalla de un dispositivo gestionado y borrarlo. Es un permiso propio y no parte de 'Emitir comandos': el argumento que mantiene a los demás comandos bajo ese permiso -- menos peligroso que el shell SYSTEM que ya concede -- vale para un reinicio y no para un restablecimiento de fábrica. Borrar exige además escribir el nombre de la máquina, queda registrado en la auditoría antes de enviar el comando, y no se puede guardar como favorito ni emitir desde una regla. Para ver que un dispositivo fue bloqueado o borrado basta con 'Ver' más la máquina en el ámbito."
+        "description": "Bloquear la pantalla de un dispositivo gestionado y borrarlo. Es un permiso propio y no parte de 'Emitir comandos': el argumento que mantiene a los demás comandos bajo ese permiso — menos peligroso que el shell SYSTEM que ya concede — vale para un reinicio y no para un restablecimiento de fábrica. Borrar exige además escribir el nombre de la máquina, queda registrado en la auditoría antes de enviar el comando, y no se puede guardar como favorito ni emitir desde una regla. Para ver que un dispositivo fue bloqueado o borrado basta con 'Ver' más la máquina en el ámbito."
       },
       "read_recovery_keys": {
         "label": "Leer claves de recuperación",
@@ -1089,6 +1140,10 @@
         "label": "Registrar la potencia de CPU y GPU",
         "help": "Grafica el consumo del paquete en vatios. Sin efecto en equipos cuyos chips no informan de ningún sensor de potencia."
       },
+      "metrics.collect_battery": {
+        "label": "Registrar la carga de la batería",
+        "help": "Grafica el nivel de carga de las baterías de portátiles y dispositivos Android. Sin efecto en equipos sin batería."
+      },
       "metrics.report_interval_seconds": {
         "label": "Enviar lecturas cada",
         "help": "Con qué frecuencia cada equipo envía una lectura. Más lento significa un gráfico más grueso, no un equipo que aparece desconectado: la disponibilidad va por un latido aparte. Sin efecto mientras alguien tiene abierta la página de un equipo. Los agentes anteriores a esta opción siguen informando cada 5 segundos."
@@ -1127,6 +1182,10 @@
       },
       "metrics.retention_days_power": {
         "label": "Conservar el historial de potencia durante",
+        "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
+      },
+      "metrics.retention_days_battery": {
+        "label": "Conservar el historial de batería durante",
         "help": "0 sigue la ventana global en Datos y Retención. Una ventana más corta ELIMINA DE FORMA PERMANENTE el historial antiguo de esta métrica y conserva el resto de cada lectura. Más larga que la ventana global se ignora: en ese punto se elimina la lectura entera."
       },
       "fleet.dashboard_online_window_seconds": {
@@ -1177,6 +1236,10 @@
         "label": "Copiar cada",
         "help": "Con qué frecuencia se toma una instantánea de la base de datos del hub."
       },
+      "backup.hub_schedule": {
+        "label": "Copia de seguridad a las",
+        "help": "Horas fijas para la copia de seguridad de la base de datos del hub, definidas con el selector de la página Copias de seguridad. Reemplaza el intervalo mientras está definido; un horario perdido mientras el hub estaba apagado se ejecuta una vez al volver."
+      },
       "backup.hub_keep_generations": {
         "label": "Conservar este número de copias",
         "help": "Las generaciones más antiguas se eliminan del destino tras cada copia correcta. 14 = dos semanas con la cadencia diaria predeterminada."
@@ -1200,6 +1263,10 @@
       "backup.files_interval_hours": {
         "label": "Copiar los archivos de los PC cada",
         "help": "Con qué frecuencia se pide a cada equipo que ejecute una copia de archivos."
+      },
+      "backup.files_schedule": {
+        "label": "Copia de archivos de los PC a las",
+        "help": "Horas fijas para la copia de seguridad de archivos por PC, definidas con el selector de la página Copias de seguridad. Reemplaza el intervalo mientras está definido; un PC apagado a esa hora se copia una vez cuando vuelve."
       },
       "backup.files_full_every": {
         "label": "Hacer una copia completa cada",
@@ -1455,7 +1522,7 @@
       },
       "sharing.enabled": {
         "label": "Compartir equipos con otros concentradores",
-        "help": "Permite que este concentrador responda a las peticiones de los concentradores emparejados y que haga peticiones a los que le han compartido un equipo. Desactivado significa que ninguna dirección funciona, aunque ya haya emparejamientos -- lo emparejado sigue visible para que pueda revocarlo."
+        "help": "Permite que este concentrador responda a las peticiones de los concentradores emparejados y que haga peticiones a los que le han compartido un equipo. Desactivado significa que ninguna dirección funciona, aunque ya haya emparejamientos — lo emparejado sigue visible para que pueda revocarlo."
       },
       "sharing.hub_label": {
         "label": "Nombre de este concentrador",
@@ -1464,7 +1531,7 @@
       },
       "sharing.peer_lifetime_days": {
         "label": "Vigencia del enlace entre concentradores",
-        "help": "Cuánto tiempo siguen siendo válidas las credenciales de un concentrador emparejado; el plazo se renueva con cada uso. Esto limita el enlace, no una compartición -- una compartición puede tener su propia caducidad, o ninguna. Cada emparejamiento conserva la vigencia que estaba en vigor cuando se creó."
+        "help": "Cuánto tiempo siguen siendo válidas las credenciales de un concentrador emparejado; el plazo se renueva con cada uso. Esto limita el enlace, no una compartición — una compartición puede tener su propia caducidad, o ninguna. Cada emparejamiento conserva la vigencia que estaba en vigor cuando se creó."
       },
       "ai": {
         "enabled": {
@@ -1513,6 +1580,10 @@
           "label": "Pasos del asistente por mensaje",
           "help": "Cuántas veces puede el asistente llamar a una herramienta y volver a preguntar al proveedor por un mensaje. Cada paso es una solicitud al proveedor. No hay límite superior: un valor muy grande permite que un modelo que nunca concluye siga preguntando, y generando costes, hasta que alguien pulse Detener."
         },
+        "assistant_max_wait_minutes": {
+          "label": "Espera máxima del asistente",
+          "help": "Cuánto tiempo puede pausar al asistente una sola espera, cuando se le pide esperar o cuando espera un reinicio o una instalación antes de volver a comprobar. Una espera más larga se recorta a este valor y el asistente lo indica. Cada conversación en espera ocupa uno de los cuatro trabajadores del asistente hasta que termina, así que las preguntas de otros operadores esperan detrás de las esperas largas. Detener termina una espera al instante."
+        },
         "assistant_result_chars": {
           "label": "Tamaño de resultado del asistente",
           "help": "Cuántos caracteres de una respuesta de herramienta lee el asistente, unos cuatro por token. Más le permite ver a la vez una parte mayor de una lista larga o de la salida de un comando, pero cada paso posterior la reenvía, así que cada solicitud es más lenta y cuesta más, y la ventana de contexto de un modelo pequeño puede desbordarse. La respuesta indica cuándo se recorta el contenido."
@@ -1548,12 +1619,16 @@
         "default_timeout_seconds": {
           "label": "Tiempo que el dispositivo dedica a buscar",
           "help": "Cuánto intenta un dispositivo obtener una posición nueva antes de responder con la última conocida. Una fijación por satélite en frío tarda decenas de segundos al aire libre y no llega nunca en interiores, así que este es el punto en el que el dispositivo se detiene en lugar de dejar a alguien mirando un indicador de carga."
+        },
+        "live_interval_seconds": {
+          "label": "Actualización del mapa en vivo",
+          "help": "Con el mapa de dispositivos abierto y «En vivo» activado, cada cuánto se vuelve a pedir su posición a cada dispositivo en línea. El intervalo es por dispositivo, así que varias personas mirando el mapa no consultan más a menudo. Cada consulta usa la ubicación del dispositivo hasta el tiempo indicado arriba y muestra un aviso en él."
         }
       },
       "data": {
         "location_retention_days": {
           "label": "Conservar el historial de ubicación",
-          "help": "Cuánto tiempo se conservan las posiciones registradas antes de borrarse. Es un control de privacidad y no de espacio en disco -- la tabla es diminuta --, así que está pensado para bajarlo. Borrar una máquina elimina su historial de ubicación de inmediato, independientemente de esto."
+          "help": "Cuánto tiempo se conservan las posiciones registradas antes de borrarse. Es un control de privacidad y no de espacio en disco — la tabla es diminuta --, así que está pensado para bajarlo. Borrar una máquina elimina su historial de ubicación de inmediato, independientemente de esto."
         },
         "usage_retention_days": {
           "label": "Conservar el uso de apps",
@@ -2120,7 +2195,7 @@
       "tally": "{status}: {count}",
       "active": {
         "title": "En espera o en curso",
-        "intro": "Cada equipo con el que un despliegue aún no ha terminado, de cualquier despliegue por antiguo que sea -- la cifra que el panel muestra como despliegues en curso. Los que más esperan, primero.",
+        "intro": "Cada equipo con el que un despliegue aún no ha terminado, de cualquier despliegue por antiguo que sea — la cifra que el panel muestra como despliegues en curso. Los que más esperan, primero.",
         "col": {
           "machine": "Equipo",
           "package": "Paquete",
@@ -2237,7 +2312,9 @@
       "choose_destination": "Elige un destino…",
       "interval": "Copiar cada (horas)",
       "keep": "Conservar este número de copias",
-      "rotation_note": "Las copias más antiguas que excedan ese número se eliminan del destino tras cada subida correcta."
+      "rotation_note": "Las copias más antiguas que excedan ese número se eliminan del destino tras cada subida correcta.",
+      "when": "Cuándo hacer la copia de seguridad",
+      "use_interval": "Cada N horas (el intervalo de arriba)"
     },
     "runs": {
       "title": "Copias recientes",
@@ -2288,7 +2365,8 @@
       "exclude_placeholder": "p. ej. *.tmp o **\\node_modules\\**",
       "add": "Añadir",
       "remove": "Quitar {value}",
-      "tokens": "Tokens disponibles"
+      "tokens": "Tokens disponibles",
+      "when": "Cuándo copiar los archivos de los PC"
     },
     "fleet_run": {
       "title": "Copiar ahora",
@@ -2402,7 +2480,7 @@
     },
     "tab": {
       "policy": "Política de copia",
-      "follow_on": "Sigue la política de la flota: este equipo SÍ se copia.",
+      "follow_on": "Sigue la política de la flota: este equipo se incluye en las copias.",
       "follow_off": "Sigue la política de la flota: no se copia nada de este equipo.",
       "override_on": "Anulado: este equipo se copia aunque la política de la flota esté desactivada.",
       "override_off": "Anulado: este equipo NO se copia, aunque la política de la flota esté activada.",
@@ -2411,7 +2489,7 @@
       "mode_on": "Copiar siempre",
       "mode_off": "No copiar nunca",
       "extra_include": "Carpetas adicionales de este equipo",
-      "extra_include_help": "Se AÑADEN a la lista de la flota de abajo, no la reemplazan. Úsalo para algo que solo tenga este PC: una carpeta de proyecto local, un directorio de datos de una aplicación de negocio.",
+      "extra_include_help": "Se añaden a la lista de la flota de abajo, sin reemplazarla. Úsalo para algo que solo tenga este PC: una carpeta de proyecto local, un directorio de datos de una aplicación de negocio.",
       "extra_include_placeholder": "p. ej. D:\\Finanzas o %User%\\Scripts",
       "extra_exclude": "Exclusiones adicionales de este equipo",
       "extra_exclude_help": "También se añaden a las exclusiones de la flota.",
@@ -2485,6 +2563,37 @@
     "restore_to": "{machine} → {dir}",
     "unknown": "—"
   },
+  "schedule": {
+    "mode": {
+      "none": "Sin programar",
+      "weekly": "A horas fijas",
+      "interval": "Cada…",
+      "window": "Entre horas fijas",
+      "cron": "Expresión cron (avanzado)"
+    },
+    "day": {
+      "mon": "Lun",
+      "tue": "Mar",
+      "wed": "Mié",
+      "thu": "Jue",
+      "fri": "Vie",
+      "sat": "Sáb",
+      "sun": "Dom"
+    },
+    "at": "a las",
+    "add_time": "Agregar una hora",
+    "remove_time": "Quitar esta hora",
+    "every": "Cada",
+    "unit": {
+      "minutes": "minutos",
+      "hours": "horas"
+    },
+    "from": "desde",
+    "until": "hasta",
+    "cron_help": "Cinco campos: minuto, hora, día del mes, mes, día de la semana (0 o 7 = domingo). Si ambos campos de día están definidos, basta con uno. Se ejecuta en la hora del hub.",
+    "next_runs": "Próximas ejecuciones ({zone}, hora del hub): {runs}",
+    "next_openings": "Próximas aperturas ({zone}, hora del hub): {runs}"
+  },
   "machine": {
     "live_temp": "Temperatura en vivo",
     "uptime": "Tiempo activo",
@@ -2496,7 +2605,7 @@
     "gpu_load": "Carga: {value}",
     "gpu_clock": "Frecuencia: {value}",
     "gpu_power": "Potencia: {value}",
-    "companion_version": "Versión de Companion",
+    "companion_version": "Versión del agente",
     "identity": "Identidad",
     "manufacturer": "Fabricante: {value}",
     "model": "Modelo: {value}",
@@ -2635,10 +2744,10 @@
       "hint": "Intro ejecuta · Mayús+Intro nueva línea · ↑/↓ historial · Ctrl+L limpia. Los scripts se ejecutan como SYSTEM. cd y las variables se mantienen; ajusta arriba el tiempo de espera por ejecución.",
       "hint_old_streaming": "Este equipo informa del agente v{version}. La salida en vivo y run_script necesitan la v{required}: rechazará los scripts hasta que se actualice solo. {base}",
       "hint_old_interactive": "Este equipo informa del agente v{version}. Una shell persistente (mantener cd, responder a preguntas) necesita la v{required}; hasta que se actualice solo, cada comando se ejecuta en un proceso nuevo. {base}",
-      "hint_linux": "Equipo Linux: los scripts se ejecutan como root con bash (sh si no hay bash), un proceso por comando -- cd y las variables no se conservan y no hay stdin. Enter ejecuta · Mayús+Enter para una línea nueva · ↑/↓ historial · Ctrl+L limpia.",
-      "hint_linux_legacy": "Este equipo Linux ejecuta el agente v{version}, demasiado antiguo para informar su plataforma o actualizarse solo -- vuelve a ejecutar install.sh en él para pasar al agente Linux actual. Los scripts igual se ejecutan aquí como root con bash (sh si no hay bash), un proceso por comando: cd y las variables no se conservan y no hay stdin.",
+      "hint_linux": "Equipo Linux: los scripts se ejecutan como root con bash (sh si no hay bash), un proceso por comando — cd y las variables no se conservan y no hay stdin. Enter ejecuta · Mayús+Enter para una línea nueva · ↑/↓ historial · Ctrl+L limpia. Con el agente Linux 0.4.0 o posterior, este equipo tiene una terminal interactiva real.",
+      "hint_linux_legacy": "Este equipo Linux ejecuta el agente v{version}, demasiado antiguo para informar su plataforma o actualizarse solo — vuelve a ejecutar install.sh en él para pasar al agente Linux actual. Los scripts igual se ejecutan aquí como root con bash (sh si no hay bash), un proceso por comando: cd y las variables no se conservan y no hay stdin.",
       "hint_no_scripts": "Este equipo informa que no puede ejecutar scripts. Es un límite de su plataforma, no de la versión del agente, así que una actualización no lo cambiará.",
-      "hint_no_scripts_android": "Los dispositivos Android no pueden ejecutar scripts -- no hay un shell en el que una app pueda ejecutarlos. Es un límite de la plataforma, no de la versión del agente, así que una actualización no lo cambiará.",
+      "hint_no_scripts_android": "Los dispositivos Android no pueden ejecutar scripts — no hay un shell en el que una app pueda ejecutarlos. Es un límite de la plataforma, no de la versión del agente, así que una actualización no lo cambiará.",
       "running_favorite": "[ejecutando el favorito «{name}» ({type})]",
       "favorite_queued": "En cola: el agente lo recoge en unos 10 s. Este tipo de comando no informa de ninguna salida aquí.",
       "loaded_favorite": "[favorito «{name}» cargado: revísalo y pulsa Intro]",
@@ -2882,6 +2991,7 @@
       "fan_rpm": "Ventilador más rápido",
       "cpu_power": "Potencia de CPU",
       "gpu_power": "Potencia de GPU",
+      "battery": "Batería",
       "temp": "Temperatura"
     },
     "memory_with_total": "Memoria ({total} GB)",
@@ -2931,6 +3041,7 @@
       "favorite_pasted": "[favorito «{name}»: {lines} líneas pegadas, las primeras {ran} se ejecutaron al llegar; la última espera a Intro]",
       "favorite_loaded": "[favorito «{name}» cargado: revísalo y pulsa Intro]",
       "hint": "Consolas reales en el equipo, ejecutándose como SYSTEM. Intro, Ctrl-C, el completado con Tab y las preguntas interactivas funcionan. Ctrl+Mayús+C / Ctrl+Mayús+V copian y pegan (Ctrl-C se pasa a la shell). «+» abre otra consola (hasta {max}); «×» o un clic central en la pestaña cierra una. Las sesiones sobreviven a salir de esta página y aparecen en cualquier equipo desde el que inicies sesión: vuelve y tus shells, directorios de trabajo e historial siguen ahí.",
+      "hint_linux": "Terminales reales en el equipo, ejecutándose como root con bash (sh si no hay bash). Intro, Ctrl-C, el completado con Tab, programas a pantalla completa como top y vim y las preguntas interactivas funcionan. Ctrl+Mayús+C / Ctrl+Mayús+V copian y pegan (Ctrl-C se pasa a la shell). «+» abre otra terminal (hasta {max}); «×» o un clic central en la pestaña cierra una. Las sesiones sobreviven a salir de esta página y aparecen en cualquier equipo desde el que inicies sesión: vuelve y tus shells, directorios de trabajo e historial siguen ahí.",
       "clear_title": "Limpiar el historial de la consola en primer plano",
       "save_fav_title": "Guardar un script como favorito (el texto seleccionado se usa como punto de partida)",
       "shell_title": "Shell que se usa al abrir otra consola con +"
@@ -3010,7 +3121,8 @@
         "relay": "Enviado por",
         "requested_by": "Solicitado por",
         "detail": "Detalle"
-      }
+      },
+      "no_answer_note": "Se envió el paquete mágico y el PC no se ha comunicado desde entonces."
     },
     "fold": {
       "stats": "De un vistazo"
@@ -3179,7 +3291,7 @@
       "session_ended": "la sesión remota terminó",
       "helper_restarted": "la sesión remota se reinició en el equipo y retiró el aviso",
       "badge_failed": "el equipo no pudo mostrar el aviso de grabación",
-      "badge_timeout": "el equipo no confirmó el aviso de grabación -- o su agente es anterior a la 3.43.0, o la confirmación nunca llegó al hub (compruebe que el hub esté en marcha y funcione bien)",
+      "badge_timeout": "el equipo no confirmó el aviso de grabación — o su agente es anterior a la 3.43.0, o la confirmación nunca llegó al hub (compruebe que el hub esté en marcha y funcione bien)",
       "stream_changed": "la imagen cambió (un cambio de sesión en el equipo o el paso al relé del hub)",
       "size_limit": "la grabación alcanzó su límite de tamaño"
     },
@@ -3359,7 +3471,7 @@
     "description": "Descripción",
     "empty": "Aún no hay reglas.",
     "empty_hint": "Una regla es una condición, los PC a los que se aplica y qué ocurre cuando se cumple.",
-    "matching": "coincidiendo ahora",
+    "matching": "Coincidiendo ahora",
     "targets": "PC seleccionados",
     "confirm_delete": "¿Eliminar esta regla y su historial?",
     "confirm_delete_title": "Eliminar regla",
@@ -3491,7 +3603,7 @@
         "description": "Archiva el equipo en la carpeta que elijas, o lo saca de todas las carpetas. Una carpeta puede conceder acceso, así que esto cambia quién puede llegar al equipo. Requiere el permiso Gestionar árbol de equipos."
       }
     },
-    "action_folder_none": "(sin carpeta) -- sacarlo de todas las carpetas",
+    "action_folder_none": "(sin carpeta) — sacarlo de todas las carpetas",
     "command": {
       "gpupdate": {
         "label": "Actualizar directivas de grupo",
@@ -3692,6 +3804,9 @@
       "metric.net_tx_bps": {
         "label": "Red enviada"
       },
+      "metric.battery_pct": {
+        "label": "Carga de la batería"
+      },
       "disk.count": {
         "label": "Número de unidades"
       },
@@ -3770,7 +3885,7 @@
       },
       "os.release": {
         "label": "Versión principal del sistema operativo",
-        "description": "windows_11, windows_10, windows_server, windows_legacy, linux o android -- los mismos grupos que cuenta el panel."
+        "description": "windows_11, windows_10, windows_server, windows_legacy, linux o android — los mismos grupos que cuenta el panel."
       },
       "os.version": {
         "label": "Versión del sistema operativo"
@@ -3806,7 +3921,9 @@
     "command_one_of": "Rellene uno de estos: {params}.",
     "no_scripts": "Aún no hay scripts. Cree uno primero en la pestaña Scripts.",
     "script_disabled": "desactivado",
-    "script_reads": "Lee: {variables}"
+    "script_reads": "Lee: {variables}",
+    "enable": "Activar",
+    "disable": "Desactivar"
   },
   "watchdogs": {
     "heading": "Vigilantes de autorreparación",
@@ -3845,7 +3962,7 @@
     "delete_confirm": "¿Eliminar el vigilante «{name}»? Las máquinas dejarán de vigilar en su próximo latido.",
     "delete_confirm_title": "Eliminar watchdog",
     "show_state": "Máquinas",
-    "state_title": "{name} -- {service}",
+    "state_title": "{name} ({service})",
     "state_help": "Lo último que informó cada máquina. Una máquina alcanzada que no aparezca aquí aún no ha recogido el vigilante.",
     "state_empty": "Ninguna máquina ha informado todavía sobre este vigilante.",
     "machine": "Máquina",
@@ -3867,7 +3984,7 @@
   },
   "ai": {
     "drafter_title": "Describe una regla",
-    "drafter_intro": "Di lo que quieres en lenguaje normal. Lo que vuelve es un borrador, comprobado contra las variables y acciones que este concentrador tiene de verdad. Una petición que escala produce una regla por etapa -- el motor no tiene programación, así que dos umbrales son dos reglas -- y cada una se crea por separado. No se guarda nada hasta que la crees, y una regla creada arranca desactivada.",
+    "drafter_intro": "Di lo que quieres en lenguaje normal. Lo que vuelve es un borrador, comprobado contra las variables y acciones que este concentrador tiene de verdad. Una petición que escala produce una regla por etapa — el motor no tiene programación, así que dos umbrales son dos reglas — y cada una se crea por separado. No se guarda nada hasta que la crees, y una regla creada arranca desactivada.",
     "placeholder": "Avisa tras 5 días encendido y fuerza un reinicio tras 10",
     "draft": "Redactar",
     "drafting": "Un momento...",
@@ -3936,7 +4053,9 @@
     "off": "El asistente no está disponible: {reason}",
     "thinking": "Pensando...",
     "using_tool": "Leyendo {tool}...",
+    "waiting": "Esperando {duration}, hasta las {until}...",
     "tools_used": "Usado: {tools}",
+    "worked_for": "Trabajó durante {duration}",
     "action_title": "Esperando su confirmación",
     "action_title_machine": "Esperando su confirmación en {machine}",
     "state": {
@@ -3971,9 +4090,9 @@
       "auto_desc": "La IA evalúa cada acción: las rutinarias se ejecutan al instante, las críticas siguen preguntando.",
       "bypass_desc": "Toda acción que usted puede hacer se ejecuta al instante. Solo el borrado de un equipo sigue preguntando.",
       "warn_title": "¿Dejar que la IA actúe sin preguntar?",
-      "warn_auto": "En modo Auto la IA decide qué acciones son rutinarias y las ejecuta al instante, sin tarjeta -- por ejemplo una consulta al registro, un gpupdate o un script que considere inofensivo. Las acciones que considere críticas siguen esperando su confirmación.",
+      "warn_auto": "En modo Auto la IA decide qué acciones son rutinarias y las ejecuta al instante, sin tarjeta — por ejemplo una consulta al registro, un gpupdate o un script que considere inofensivo. Las acciones que considere críticas siguen esperando su confirmación.",
       "warn_bypass": "En modo Sin confirmar toda acción que usted puede hacer se ejecuta al instante: reinicios, apagados, scripts, despliegues, cambios de configuración y de permisos. Solo el borrado de un equipo sigue preguntando, con el nombre del equipo.",
-      "warn_common": "La IA puede equivocarse, y el texto de los equipos que lee -- nombres, alertas, salida de comandos -- puede intentar dirigirla. Todo lo que ejecuta queda registrado a su nombre en el registro de auditoría. Esto se aplica solo a esta conversación; las nuevas empiezan en Preguntar.",
+      "warn_common": "La IA puede equivocarse, y el texto de los equipos que lee — nombres, alertas, salida de comandos — puede intentar dirigirla. Todo lo que ejecuta queda registrado a su nombre en el registro de auditoría. Esto se aplica solo a esta conversación; las nuevas empiezan en Preguntar.",
       "warn_accept": "Cambiar a {mode}"
     },
     "risk": {
@@ -4143,7 +4262,7 @@
     "sizes_from_scan": "Los tamaños de carpeta proceden del análisis diario del equipo del {when}.",
     "sizes_not_scanned": "Los tamaños de carpeta aparecen tras el primer análisis diario del disco del equipo. «Analizar ahora» inicia uno en menos de un minuto.",
     "sizes_need_agent": "Este equipo ejecuta el agente {version}; los tamaños de carpeta necesitan {needed} o posterior.",
-    "size_unknown": "No estaba en el último análisis -- creada desde entonces, o una carpeta que el análisis no pudo ubicar.",
+    "size_unknown": "No estaba en el último análisis — creada desde entonces, o una carpeta que el análisis no pudo ubicar.",
     "size_detail": "{size} en {files} archivos, {on_disk} en disco.",
     "forecast": {
       "full_in": {
@@ -4278,7 +4397,16 @@
       "managed_elsewhere": "{machine}: Windows Update está configurado por directiva de grupo o Intune, así que FleetHub no lo toca.",
       "not_reported": "{machine}: esperando el informe de su agente. Tomar el control de Windows Update requiere el agente 3.47.0 o posterior.",
       "pending": "{machine}: tomando el control de Windows Update.",
-      "outside_install": "{machine}: {title} se instaló fuera de FleetHub."
+      "outside_install": "{machine}: {title} se instaló fuera de FleetHub.",
+      "outside_installs": {
+        "one": "{machine}: se instaló {count} actualización fuera de FleetHub ({titles}).",
+        "other": "{machine}: se instalaron {count} actualizaciones fuera de FleetHub ({titles})."
+      },
+      "show_all": {
+        "one": "Mostrar las {count}",
+        "other": "Mostrar las {count}"
+      },
+      "show_fewer": "Mostrar menos"
     },
     "request_failed": "No se pudo contactar con el hub.",
     "approve": "Aprobar",
@@ -4578,7 +4706,9 @@
       "secret_note": "El código lleva el secreto de inscripción de esta flota, de modo que un escaneo aprovisiona e inscribe el dispositivo. Trate una fotografía suya como trataría el propio secreto.",
       "unreachable": "El hub no respondió.",
       "failed": "No se pudieron construir los datos de aprovisionamiento.",
-      "too_large": "Los datos no caben en un código QR. Acorta la dirección pública de este hub."
+      "too_large": "Los datos no caben en un código QR. Acorta la dirección pública de este hub.",
+      "show": "Mostrar código",
+      "reveal_help": "El código lleva el secreto de inscripción de esta flota, así que permanece oculto hasta que lo pida. Mostrarlo queda anotado en el registro de auditoría."
     },
     "unconfigured": {
       "help": "Sube arriba el APK firmado del agente. El hub lee de él la suma de comprobación de la firma y sirve el archivo a los dispositivos que se provisionan, así que no hay nada que rellenar en Ajustes."
@@ -4666,7 +4796,7 @@
       "last_known": "Última posición, {when}",
       "unlocated_heading": "Aún sin ubicar",
       "never_asked": "Nadie ha preguntado todavía dónde está este dispositivo.",
-      "pending": "Ubicando -- esperando la respuesta del dispositivo.",
+      "pending": "Ubicando. Esperando la respuesta del dispositivo.",
       "unavailable": "El dispositivo respondió sin posición.",
       "unavailable_detail": "Sin posición: {detail}",
       "no_answer": "El dispositivo no respondió a la última solicitud.",
@@ -4675,14 +4805,17 @@
     },
     "map": {
       "heading": "Mapa de dispositivos",
-      "intro": "Dónde estaba cada dispositivo la última vez que alguien lo pidió. Nada de esto es en vivo, y ningún dispositivo es rastreado: un punto existe porque un operador lo solicitó.",
+      "intro": "Dónde estaba cada dispositivo la última vez que respondió. Con «En vivo» activado, cada dispositivo en línea que usted puede localizar se consulta de nuevo mientras esta página está abierta, y cada uno muestra un aviso con quién lo pidió. No se consulta nada con la página cerrada, oculta o en pausa.",
       "filter": "Filtrar dispositivos",
       "count": "{count} mostrados",
       "none": "Ningún dispositivo que pueda ver se ha localizado nunca.",
       "no_match": "Ningún dispositivo coincide con ese filtro.",
       "unreachable": "El hub no respondió.",
       "count_with_unlocated": "{count} mostrados, {unlocated} aún sin ubicar",
-      "none_yet": "Ningún dispositivo tiene posición todavía. {count} se pueden ubicar -- aparecen junto al mapa con lo último que respondió cada uno."
+      "none_yet": "Ningún dispositivo tiene posición todavía. {count} se pueden ubicar — aparecen junto al mapa con lo último que respondió cada uno.",
+      "live": "En vivo",
+      "live_on": "Consultando de nuevo los dispositivos en línea cada {seconds} s.",
+      "live_paused": "Las actualizaciones en vivo están en pausa."
     }
   },
   "apps": {
@@ -4724,7 +4857,10 @@
     },
     "targets": {
       "fleet": "Todos los dispositivos",
-      "machines": "{count} dispositivo(s)",
+      "machines": {
+        "one": "{count} dispositivo",
+        "other": "{count} dispositivos"
+      },
       "hidden": "(+{count} que no puede ver)"
     },
     "name": "Nombre de la política",
@@ -4753,8 +4889,14 @@
     "failed": "No se pudo guardar.",
     "unreachable": "El hub no respondió.",
     "preview": {
-      "summary": "Afectaría a {machines} de {total} dispositivo(s).",
-      "hidden": "{count} dispositivo(s) afectados quedan fuera de lo que usted puede ver.",
+      "summary": {
+        "one": "Afectaría a {machines} de {total} dispositivo.",
+        "other": "Afectaría a {machines} de {total} dispositivos."
+      },
+      "hidden": {
+        "one": "{count} dispositivo afectado queda fuera de lo que usted puede ver.",
+        "other": "{count} dispositivos afectados quedan fuera de lo que usted puede ver."
+      },
       "nothing": "Ningún dispositivo se vería afectado. En ninguno están instaladas las apps elegidas.",
       "dropped": "Estas apps no pueden pausarse nunca y se han omitido: {packages}",
       "machine": "Dispositivo",
@@ -5201,6 +5343,11 @@
       "code_label": "Código de incorporación",
       "continue": "Continuar",
       "install_for": "El código «{label}» es válido.",
+      "os_label": "Sistema operativo del equipo que está configurando",
+      "os_windows": "Windows",
+      "os_linux": "Linux",
+      "linux_intro": "En el equipo Linux, pegue este comando en una terminal. Pide su contraseña y luego instala el agente y registra el equipo:",
+      "linux_hint": "Si su cuenta no puede usar sudo, algo habitual en OpenMediaVault, ejecute primero su - y pegue el comando sin la palabra sudo del final. El instalador necesita systemd y un equipo de 64 bits con procesador Intel o AMD.",
       "install_intro": "Descargue el instalador y ábralo. Windows pedirá permisos de administrador; permítalo. La ventana muestra cada paso y termina con una línea de éxito.",
       "download": "Descargar instalador",
       "download_hint": "Si Windows avisa de que el archivo no es reconocido, elija Más información y luego Ejecutar de todas formas.",

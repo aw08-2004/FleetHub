@@ -44,7 +44,7 @@ public static class AgentConfig
     /// Rejected alternative, and it is worth keeping: starting at 3.35.0 to "match" the
     /// Windows agent. That reads to the hub as a fully-featured agent on somebody else's
     /// train, and every one of those gates would pass on a lie.</summary>
-    public const string Version = "0.3.0";
+    public const string Version = "0.4.0";
 
     /// <summary>Reads a FLEETHUB_* setting. No TEMP_MONITOR_* fallback, unlike the Windows
     /// agent: that fallback exists for machines installed before the FleetHub rename, and
@@ -81,6 +81,7 @@ public static class AgentConfig
     /// must reuse its seq.</summary>
     public static string CommandOutputUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/output";
+
 
     /// <summary>
     /// Does <paramref name="url"/> actually address OUR hub?
@@ -151,6 +152,7 @@ public static class AgentConfig
 
     /// <summary>Default per-command timeout when the console does not send one.</summary>
     public const int DefaultCommandTimeoutSeconds = 600;
+
 
     // --- Live output streaming ---------------------------------------------
     // The Windows agent's three constants, unchanged and for the same reasons. They are sized

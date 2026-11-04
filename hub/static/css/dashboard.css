@@ -167,3 +167,9 @@ a.tile--link:focus-visible {
     color: var(--muted);
     white-space: nowrap;
 }
+
+/* Two classes, to out-rank the muted colour above whichever file loads last. */
+.attention-list__value.temp--hot {
+    color: var(--danger);
+    font-weight: 600;
+}

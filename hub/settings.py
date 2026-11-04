@@ -60,7 +60,7 @@ import ai
 Setting = namedtuple("Setting", [
     "key",       # "data.retention_days" -- the section is the prefix, by convention
     "section",   # "computer" | "hub" | "data" | "fleet"
-    "type",      # "int"|"float"|"bool"|"str"|"enum"|"str_list"|"path_list"|"url_list"
+    "type",      # "int"|"float"|"bool"|"str"|"enum"|"str_list"|"path_list"|"url_list"|"schedule"
     "default",   # MUST equal the constant this replaced
     "minimum",   # numeric bounds; None for non-numeric types
     "maximum",
@@ -318,6 +318,9 @@ REGISTRY = (
     # are unaffected by collect_fans -- the toggle governs what goes into HISTORY.
     _s("metrics.collect_fans", "metrics", "bool", True),
     _s("metrics.collect_power", "metrics", "bool", True),
+    # Battery charge. Recorded only where a battery reports one (laptops, Android devices);
+    # a desktop stores NULL either way, so the toggle costs nothing on a fleet without them.
+    _s("metrics.collect_battery", "metrics", "bool", True),
 
     # ---------------- How often a machine samples and reports (roadmap #3) ----------------
     # The two telemetry cadences, previously compiled into the agent as AgentConfig
@@ -377,6 +380,8 @@ REGISTRY = (
     _s("metrics.retention_days_fans", "metrics", "int", 0, minimum=0, maximum=3650,
        unit="days"),
     _s("metrics.retention_days_power", "metrics", "int", 0, minimum=0, maximum=3650,
+       unit="days"),
+    _s("metrics.retention_days_battery", "metrics", "int", 0, minimum=0, maximum=3650,
        unit="days"),
 
     # ---------------- Fleet: liveness and command timings ----------------
@@ -463,6 +468,12 @@ REGISTRY = (
     _s("backup.hub_destination", "backup", "str", ""),
     _s("backup.hub_interval_hours", "backup", "int", 24, minimum=1, maximum=720,
        unit="hours"),
+    # A fixed-time schedule ("daily at 02:00") that REPLACES the interval when set. None,
+    # the default, keeps the interval -- so a hub that never touches this behaves exactly as
+    # before it existed. Two keys rather than turning the interval into a spec: the interval
+    # has been an int in every settings table in the field since 1.28.0, and a migration that
+    # rewrote it would be one more thing to get wrong on a hub nobody is watching.
+    _s("backup.hub_schedule", "backup", "schedule", None),
     _s("backup.hub_keep_generations", "backup", "int", 14, minimum=1, maximum=365,
        unit="generations"),
 
@@ -480,6 +491,7 @@ REGISTRY = (
         "**\\node_modules\\**", "**\\.git\\**", "*.iso", "*.vhdx", "*.vmdk"]),
     _s("backup.files_interval_hours", "backup", "int", 24, minimum=1, maximum=720,
        unit="hours"),
+    _s("backup.files_schedule", "backup", "schedule", None),
     _s("backup.files_full_every", "backup", "int", 7, minimum=1, maximum=90, unit="runs"),
     _s("backup.files_keep_chains", "backup", "int", 4, minimum=1, maximum=52, unit="chains"),
     _s("backup.files_max_file_mb", "backup", "int", 2048, minimum=1, maximum=102400,
@@ -667,6 +679,13 @@ REGISTRY = (
     # settable: the device is the only thing that knows what it actually has.
     _s("location.default_timeout_seconds", "location", "int", 45, minimum=5, maximum=300,
        unit="seconds"),
+    # How often the open fleet map asks every online device again (location_web.
+    # locate_fleet). Spaced per DEVICE on the hub, not per viewer, so two operators with the
+    # map open do not double it. The floor is a battery one: each ask holds a wake lock and
+    # the GPS for up to the timeout above, and below a quarter-minute a phone on an open map
+    # would be locating more or less continuously.
+    _s("location.live_interval_seconds", "location", "int", 60, minimum=15, maximum=3600,
+       unit="seconds"),
 
     # ---------------- Map: where the console gets its tiles (roadmap #23) ----------------
     # **The one thing in the console that is fetched from a third party at page load**, and
@@ -816,6 +835,13 @@ REGISTRY = (
     # Provider calls per operator message. Each tool step is one call; eight covers "find the
     # hot ones, read the worst, check its processes, answer" with room for a retry.
     _s("ai.assistant_max_steps", "ai", "int", 8, minimum=1),
+    # The longest one `wait` call may pause a turn (hub 1.171.0). A wait holds one of the
+    # assistant's four workers for its whole length -- assistant.WAIT_TOOL says why, and what
+    # was rejected instead -- so this is what keeps one operator's "wait for the overnight
+    # install" from queuing everybody else's questions. A floor and **no maximum**, like every
+    # other ai.* number (hub 1.137.0, owner's decision): the help text says what a large
+    # value costs, and the admin decides.
+    _s("ai.assistant_max_wait_minutes", "ai", "int", 60, minimum=1, unit="minutes"),
     # Characters of ONE tool result the model reads (hub 1.135.6). 12,000 is about 3,000 tokens
     # and suits a small local model; a large hosted one can take far more, and an operator
     # whose answers keep arriving cut can raise it here. The floor keeps one machine's report
@@ -1147,6 +1173,24 @@ def coerce_and_validate(setting, raw, lang=None):
             return backup_paths.validate_patterns(raw, kind=kind)
         except ValueError as e:
             raise ValueError(f"{label}: {e}")
+
+    if setting.type == "schedule":
+        # A schedule_spec "fire" spec, or None for "not scheduled -- use the interval". The
+        # spec module is the only validator, so a setting and a rule can never disagree
+        # about what "0 3 * * 0" means. A JSON string is accepted for the same transport
+        # reason numbers arrive as "85". Imported lazily like backup_paths above.
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            return None
+        import schedule_spec
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                raise ValueError(f"{label}: A schedule must be an object.")
+        error, spec = schedule_spec.validate(raw, schedule_spec.PURPOSE_FIRE)
+        if error:
+            raise ValueError(f"{label}: {error}")
+        return spec
 
     raise bad("unsupported_type", type=repr(setting.type))
 

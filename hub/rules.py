@@ -196,6 +196,8 @@ STATIC_VARIABLES = (
     Var("metric.fan_rpm", KIND_NUMBER, GROUP_METRIC, AGE_LIVE),
     Var("metric.net_rx_bps", KIND_NUMBER, GROUP_METRIC, AGE_LIVE),
     Var("metric.net_tx_bps", KIND_NUMBER, GROUP_METRIC, AGE_LIVE),
+    # UNKNOWN on a machine without a battery, so "battery below N%" never fires on a desktop.
+    Var("metric.battery_pct", KIND_NUMBER, GROUP_METRIC, AGE_LIVE),
     # -- disk: aggregates. Per-volume disk.<letter>.* are added dynamically -------------
     # The aggregates matter more than they look. "any drive is nearly full" is the rule
     # people actually want, and writing it per drive letter means a rule that silently
@@ -1027,7 +1029,7 @@ def resolve_machine_vars(db_path, machine, *, now=None, diagnostics=None, live=N
     _put(out, STATIC_BY_NAME["metric.cpu_temp"], _num(temp), live_age)
     for name in ("cpu_load_pct", "cpu_power_w", "gpu_temp", "gpu_load_pct", "gpu_power_w",
                  "memory_load_pct", "mem_used_gb", "mem_total_gb", "disk_load_pct",
-                 "fan_rpm", "net_rx_bps", "net_tx_bps"):
+                 "fan_rpm", "net_rx_bps", "net_tx_bps", "battery_pct"):
         _put(out, STATIC_BY_NAME[f"metric.{name}"], _num(diag.get(name)), live_age)
 
     _resolve_disks(out, diag, live_age)

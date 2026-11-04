@@ -6,7 +6,10 @@ Agents send telemetry to `POST /api/report`. Every console page requires OIDC si
 plus a permission group (see [Sign-in and permissions](access.md)). The sidebar has three
 sections: **Fleet** (Dashboard, Devices, Map, Alerts), **Operate** (Remote, Packages,
 Patches, Fleet tasks, Rules, Device policy) and **Administration** (Audit log, Settings,
-Permission groups, Users and others). **Ctrl+K** finds a device or a page by name.
+Permission groups, Users and others). **Ctrl+K** finds a device or a page by name; on a
+device, ←/→ picks Overview, Terminal, Files, Network or **Remote** before Enter. Remote opens
+the Remote page already connecting to that PC. It is offered only with `remote_control`, and
+not on Linux or Android devices.
 
 - **Dashboard** (`/`) -- fleet-wide counts, OS mix, live aggregates and attention lists.
 - **Devices** (`/inventory`) -- one row per machine, with filters, bulk actions (wake,
@@ -14,7 +17,7 @@ Permission groups, Users and others). **Ctrl+K** finds a device or a page by nam
 - **Machine page** (`/machine/<name>`) -- one device's workspace, with Overview, Terminal,
   Backup, Firmware, Network, Files and Report tabs. Overview shows live status, the
   Storage and Cooling cards, history charts (CPU, memory, disk, network, GPU, fans, power,
-  temperature) and an **All sensors** section with the full LibreHardwareMonitor tree.
+  battery, temperature) and an **All sensors** section with the full LibreHardwareMonitor tree.
   Cards for hardware a machine does not have are hidden.
 - **Alerts** (`/alerts`) -- machines running hot, duplicate machines, and other
   conditions that want attention (see below).
@@ -123,13 +126,27 @@ time.
 **How long each metric is kept** -- *History Metrics*. `data.retention_days` (30) still bounds
 the whole readings table, and each metric now has its own window beside its collection toggle:
 `metrics.retention_days_network`, `..._disk_io`, `..._gpu` and so on. **0 means "follow the
-fleet-wide window"**, which is the default for all eight, so an untouched hub prunes exactly as
+fleet-wide window"**, which is the default for all nine, so an untouched hub prunes exactly as
 it always did. A shorter window blanks that metric's columns on older readings while the
 reading itself -- and its temperature -- stays; a metric aged out is indistinguishable from one
 whose collection toggle is off, which is the point, because in both cases the honest answer is
 "not recorded". A window **longer** than `data.retention_days` is ignored: the whole row is
 deleted there, so there is nothing to keep. Like `data.retention_days` this deletes permanently
 and is audited.
+
+### Battery charge
+
+Laptops and Android devices report their battery's charge level, and the hub exposes it as
+`metric.battery_pct` (0–100). The machine page charts it, and a rule can test it -- for
+example `metric.battery_pct < 70` for a laptop that should stay plugged in. Nothing needs an
+agent update: the Windows agent already sends LibreHardwareMonitor's battery sensors, and the
+Android agent already sends the charge level.
+
+On a machine **without a battery** the variable is *unknown*, so a battery rule never fires on
+a desktop. Only the sensor named *Charge Level* counts. The battery's *Degradation Level*,
+which LibreHardwareMonitor reports beside it as the same kind of reading, is never used as the
+charge. If a laptop shows no Battery chart, look in its **All sensors** section: no battery
+hardware there means the agent's sensor library did not find the battery on that model.
 
 ### Temperature alerts
 
@@ -191,7 +208,21 @@ Your conversations are listed on the left of the Assistant page (fold the column
 panel button), and behind the clock button when it is pinned. A conversation keeps answering if
 you switch to another one; it shows a spinner in the list until it is done. Each conversation is
 named after what you asked for in its first message; rename it with the pencil beside it, and
-your name is kept. Every message and answer has a copy button underneath.
+your name is kept. Every message and answer has a copy button underneath, next to the time it
+was written; the assistant's working steps ("checking the deployments...") carry their time on
+the left, so you can see when it checked what. Times are in your browser's time zone; point at
+one for the full date. While it works, the line at the bottom counts how long it has been at
+it, and a finished answer ends with **Worked for 2m 14s** -- the time from your message to its
+last word, including any wait. A follow-up after you confirm an action gets its own line.
+
+**Waiting.** Ask it to wait ("restart PC-12, wait ten minutes, then check it came back") and it
+pauses for that long, showing *Waiting 10m 00s, until 14:32* with the timer still running, then
+carries on. It also waits on its own when something needs time, such as a reboot or an install.
+One wait is at most *Longest assistant wait* (Settings → AI, 60 minutes); a longer one is cut
+to that and the assistant tells you. **Stop** ends a wait at once. A waiting
+conversation holds one of the assistant's four workers, so long waits make other operators'
+questions queue, which is why the limit exists. A hub restart ends the wait along with the rest
+of that answer.
 
 It can read anything you can see and links every machine it names -- click a link and the page
 opens beside the panel. It can also act, with exactly your permissions:
