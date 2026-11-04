@@ -313,7 +313,11 @@ def main():
 
         print("\n== Revoking a spent code ==")
         CURRENT_USER = "tech@x.com"
-        code_id = c.get("/api/onboarding/codes").get_json()["codes"][0]["code_id"]
+        # By label, not codes[0]: the list is newest-first on a one-second created_at, and the
+        # "DC again" code above is usually minted in the same second as this one -- so [0] was
+        # a coin toss, and on the wrong side of it this revoked a code whose agent is not `cred`.
+        code_id = next(row["code_id"] for row in c.get("/api/onboarding/codes").get_json()["codes"]
+                       if row["label"] == "Reception PC")
         rv = c.post(f"/api/onboarding/codes/{code_id}/revoke", json={})
         check("revoke answers 200", rv.status_code == 200 and rv.get_json()["status"] == "revoked")
         check("...and the agent it minted is revoked too",
