@@ -89,18 +89,39 @@ internal static class FolderStreamFormat
                 using var resp = await http.PostAsync(url, content, ct);
                 if ((int)resp.StatusCode < 500) return;
             }
-            catch (Exception e) when (e is HttpRequestException or TaskCanceledException
-                                        && !ct.IsCancellationRequested)
+            catch (Exception e) when (IsNetworkFailure(e, ct))
             {
+                // Swallowed on purpose: the delay below is the retry.
             }
             await Task.Delay(TimeSpan.FromSeconds(2 * (attempt + 1)), ct);
         }
+    }
+
+    /// <summary>A failure of the link rather than of the copy: worth retrying. A cancellation
+    /// of our OWN token is not one -- that is the service stopping.</summary>
+    internal static bool IsNetworkFailure(Exception e, CancellationToken ct) =>
+        e is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested;
+
+    /// <summary>Wait before the next attempt after a network failure, or give up once there
+    /// have been MaxNetworkFailures of them in a row.</summary>
+    internal static Task BackoffAsync(int failures, Exception e, CancellationToken ct)
+    {
+        if (failures >= MaxNetworkFailures)
+            throw new IOException($"Lost the connection to the hub: {e.Message}");
+        return Task.Delay(TimeSpan.FromSeconds(Math.Min(10, 2 * failures)), ct);
+    }
+
+    internal static async Task<IOException> RefusalAsync(HttpResponseMessage resp,
+                                                         CancellationToken ct)
+    {
+        var text = await resp.Content.ReadAsStringAsync(ct);
+        return new IOException($"The hub refused a chunk: HTTP {(int)resp.StatusCode} {text}".Trim());
     }
 }
 
 /// <summary>The copy is over on the hub's side -- cancelled, timed out, or the hub restarted.
 /// Not an error in this agent; the reason is already on the console.</summary>
-internal sealed class RelayGoneException(string message) : Exception(message);
+public sealed class RelayGoneException(string message) : Exception(message);
 
 /// <summary>
 /// The sender's half of the relay: buffers what the executor writes and PUTs it to the hub as
@@ -143,37 +164,37 @@ internal sealed class RelayChunkWriter(HttpClient http, string baseUrl)
             ct.ThrowIfCancellationRequested();
             try
             {
-                using var content = new ByteArrayContent(_buffer, 0, _length);
-                content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-                using var resp = await http.PutAsync($"{baseUrl}/chunk/{_sequence}", content, ct);
-                switch (resp.StatusCode)
+                if (await PutOnceAsync(ct))
                 {
-                    case HttpStatusCode.OK:
-                        // 200 covers "stored" and "duplicate" alike: a retried chunk whose
-                        // first answer was lost is already there, which is success.
-                        BytesSent += _length;
-                        _sequence++;
-                        _length = 0;
-                        return;
-                    case HttpStatusCode.ServiceUnavailable:
-                        failures = 0;   // the hub answered; the receiver is just behind
-                        continue;
-                    case HttpStatusCode.Gone:
-                        throw new RelayGoneException("The hub ended this copy.");
-                    default:
-                        var text = await resp.Content.ReadAsStringAsync(ct);
-                        throw new IOException(
-                            $"The hub refused a chunk: HTTP {(int)resp.StatusCode} {text}".Trim());
+                    BytesSent += _length;
+                    _sequence++;
+                    _length = 0;
+                    return;
                 }
+                failures = 0;   // the hub answered; the receiver is just behind
             }
-            catch (Exception e) when (e is HttpRequestException or TaskCanceledException
-                                        && !ct.IsCancellationRequested)
+            catch (Exception e) when (FolderStreamFormat.IsNetworkFailure(e, ct))
             {
-                if (++failures >= FolderStreamFormat.MaxNetworkFailures)
-                    throw new IOException($"Lost the connection to the hub: {e.Message}");
-                await Task.Delay(TimeSpan.FromSeconds(Math.Min(10, 2 * failures)), ct);
+                await FolderStreamFormat.BackoffAsync(++failures, e, ct);
             }
         }
+    }
+
+    /// <summary>One PUT of the buffered chunk. True when the hub has it -- 200 covers "stored"
+    /// and "duplicate" alike, since a retried chunk whose first answer was lost is already
+    /// there -- and false when the window is full and the same chunk must be sent again.</summary>
+    private async Task<bool> PutOnceAsync(CancellationToken ct)
+    {
+        using var content = new ByteArrayContent(_buffer, 0, _length);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        using var resp = await http.PutAsync($"{baseUrl}/chunk/{_sequence}", content, ct);
+        return resp.StatusCode switch
+        {
+            HttpStatusCode.OK => true,
+            HttpStatusCode.ServiceUnavailable => false,
+            HttpStatusCode.Gone => throw new RelayGoneException("The hub ended this copy."),
+            _ => throw await FolderStreamFormat.RefusalAsync(resp, ct),
+        };
     }
 }
 
@@ -184,6 +205,8 @@ internal sealed class RelayChunkWriter(HttpClient http, string baseUrl)
 /// </summary>
 internal sealed class RelayChunkReader(HttpClient http, string baseUrl)
 {
+    private enum Answer { Data, NotYet, End }
+
     private byte[] _current = [];
     private int _position;
     private long _sequence;
@@ -219,49 +242,47 @@ internal sealed class RelayChunkReader(HttpClient http, string baseUrl)
 
     private async Task<bool> FillAsync(CancellationToken ct)
     {
-        if (_ended) return false;
         var failures = 0;
-        while (true)
+        while (!_ended)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                using var resp = await http.GetAsync($"{baseUrl}/chunk/{_sequence}",
-                                                     HttpCompletionOption.ResponseContentRead, ct);
-                if (resp.StatusCode == HttpStatusCode.NoContent)
-                {
-                    failures = 0;   // nothing yet; the hub already waited, ask again
-                    continue;
-                }
-                if (resp.StatusCode == HttpStatusCode.Gone)
-                    throw new RelayGoneException("The hub ended this copy.");
-                if (resp.StatusCode != HttpStatusCode.OK)
-                {
-                    var text = await resp.Content.ReadAsStringAsync(ct);
-                    throw new IOException(
-                        $"The hub refused a chunk: HTTP {(int)resp.StatusCode} {text}".Trim());
-                }
-                if (resp.Headers.Contains("X-Stream-End"))
+                var (answer, bytes) = await GetOnceAsync(ct);
+                failures = 0;
+                if (answer == Answer.End)
                 {
                     _ended = true;
-                    return false;
                 }
-                var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-                _sequence++;
-                if (bytes.Length == 0) continue;
-                _current = bytes;
-                _position = 0;
-                BytesReceived += bytes.Length;
-                return true;
+                else if (answer == Answer.Data)
+                {
+                    _sequence++;
+                    if (bytes.Length == 0) continue;
+                    _current = bytes;
+                    _position = 0;
+                    BytesReceived += bytes.Length;
+                    return true;
+                }
+                // NotYet: the hub already waited for it; ask again.
             }
-            catch (Exception e) when (e is HttpRequestException or TaskCanceledException
-                                        && !ct.IsCancellationRequested)
+            catch (Exception e) when (FolderStreamFormat.IsNetworkFailure(e, ct))
             {
-                if (++failures >= FolderStreamFormat.MaxNetworkFailures)
-                    throw new IOException($"Lost the connection to the hub: {e.Message}");
-                await Task.Delay(TimeSpan.FromSeconds(Math.Min(10, 2 * failures)), ct);
+                await FolderStreamFormat.BackoffAsync(++failures, e, ct);
             }
         }
+        return false;
+    }
+
+    private async Task<(Answer, byte[])> GetOnceAsync(CancellationToken ct)
+    {
+        using var resp = await http.GetAsync($"{baseUrl}/chunk/{_sequence}",
+                                             HttpCompletionOption.ResponseContentRead, ct);
+        if (resp.StatusCode == HttpStatusCode.NoContent) return (Answer.NotYet, []);
+        if (resp.StatusCode == HttpStatusCode.Gone)
+            throw new RelayGoneException("The hub ended this copy.");
+        if (resp.StatusCode != HttpStatusCode.OK) throw await FolderStreamFormat.RefusalAsync(resp, ct);
+        if (resp.Headers.Contains("X-Stream-End")) return (Answer.End, []);
+        return (Answer.Data, await resp.Content.ReadAsByteArrayAsync(ct));
     }
 }
 
@@ -287,6 +308,14 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
 {
     public string Type => "stream_send";
 
+    /// <summary>What one send counted, carried through the walk instead of six locals.</summary>
+    private sealed class Tally
+    {
+        public long Files;
+        public long Folders;
+        public readonly List<string> Unreadable = [];
+    }
+
     public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput,
                                                   CancellationToken ct)
     {
@@ -307,19 +336,8 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
                                                         Action<string>? onOutput,
                                                         ILogger log, CancellationToken ct)
     {
-        var roots = new List<string>();
-        foreach (var node in paths ?? [])
-        {
-            var raw = node?.GetValue<string>() ?? "";
-            var refusal = PathRules.Reject(raw);
-            if (refusal is not null) return await FailAsync(http, baseUrl, refusal, ct);
-            var path = PathRules.Normalize(raw);
-            if (!Directory.Exists(path))
-                return await FailAsync(http, baseUrl, $"{path} is not a folder.", ct);
-            roots.Add(path);
-        }
-        if (roots.Count == 0)
-            return await FailAsync(http, baseUrl, "No folders were named.", ct);
+        var (roots, refusal) = ResolveRoots(paths);
+        if (refusal is not null) return await FailAsync(http, baseUrl, refusal, ct);
 
         // Measured first, for the console's progress bar. Cheap next to the copy, and a
         // measurement that fails is only a missing percentage.
@@ -333,65 +351,14 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
         onOutput?.Invoke($"[files] sending {totalFiles} file(s), {Mb(totalBytes)}\n");
 
         var writer = new RelayChunkWriter(http, baseUrl);
-        var block = new byte[FolderStreamFormat.MaxBlockBytes];
-        long files = 0, folders = 0;
-        var unreadable = new List<string>();
+        var tally = new Tally();
         try
         {
             await writer.WriteAsync(FolderStreamFormat.Magic, ct);
-            foreach (var root in roots)
-            {
-                var name = Path.GetFileName(root);
-                await WriteFolderAsync(writer, name, ct);
-                folders++;
-                var stack = new Stack<(DirectoryInfo Dir, string Rel)>();
-                stack.Push((new DirectoryInfo(root), name));
-                while (stack.Count > 0)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    var (dir, rel) = stack.Pop();
-                    FileInfo[] dirFiles;
-                    DirectoryInfo[] subs;
-                    try
-                    {
-                        dirFiles = dir.GetFiles();
-                        subs = dir.GetDirectories();
-                    }
-                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                    {
-                        unreadable.Add($"{dir.FullName}\\ ({e.Message})");
-                        continue;
-                    }
-                    foreach (var file in dirFiles)
-                    {
-                        if (file.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
-                        var problem = await WriteFileAsync(writer, $"{rel}/{file.Name}", file,
-                                                           block, ct);
-                        if (problem is null) files++;
-                        else unreadable.Add($"{file.FullName} ({problem})");
-                    }
-                    foreach (var sub in subs)
-                    {
-                        if (sub.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
-                        var subRel = $"{rel}/{sub.Name}";
-                        await WriteFolderAsync(writer, subRel, ct);
-                        folders++;
-                        stack.Push((sub, subRel));
-                    }
-                }
-            }
-
-            var end = new byte[17];
-            end[0] = FolderStreamFormat.KindEnd;
-            BinaryPrimitives.WriteInt64BigEndian(end.AsSpan(1), files);
-            BinaryPrimitives.WriteInt64BigEndian(end.AsSpan(9), folders);
-            await writer.WriteAsync(end, ct);
-            await writer.FlushAsync(ct);
+            var block = new byte[FolderStreamFormat.MaxBlockBytes];
+            foreach (var root in roots) await WriteTreeAsync(writer, root, block, tally, ct);
+            await WriteEndAsync(writer, tally, ct);
             await FolderStreamFormat.PostJsonAsync(http, $"{baseUrl}/end", new JsonObject(), ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
         }
         catch (RelayGoneException e)
         {
@@ -402,16 +369,92 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
             log.LogWarning(e, "stream_send to {Url} failed", baseUrl);
             return await FailAsync(http, baseUrl, e.Message, ct);
         }
+        return CommandResult.Ok(Summary(tally, writer.BytesSent));
+    }
 
+    /// <summary>The folders to send, each checked by PathRules, or the reason there are none.</summary>
+    private static (List<string> Roots, string? Refusal) ResolveRoots(JsonArray? paths)
+    {
+        var roots = new List<string>();
+        foreach (var node in paths ?? [])
+        {
+            var raw = node?.GetValue<string>() ?? "";
+            var refusal = PathRules.Reject(raw);
+            if (refusal is not null) return (roots, refusal);
+            var path = PathRules.Normalize(raw);
+            if (!Directory.Exists(path)) return (roots, $"{path} is not a folder.");
+            roots.Add(path);
+        }
+        return roots.Count == 0 ? (roots, "No folders were named.") : (roots, null);
+    }
+
+    /// <summary>One selected folder and everything under it, depth first, junctions skipped.</summary>
+    private static async Task WriteTreeAsync(RelayChunkWriter writer, string root, byte[] block,
+                                             Tally tally, CancellationToken ct)
+    {
+        var name = Path.GetFileName(root);
+        await WriteFolderAsync(writer, name, ct);
+        tally.Folders++;
+        var stack = new Stack<(DirectoryInfo Dir, string Rel)>();
+        stack.Push((new DirectoryInfo(root), name));
+        while (stack.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            var (dir, rel) = stack.Pop();
+            FileInfo[] files;
+            DirectoryInfo[] subs;
+            try
+            {
+                files = dir.GetFiles();
+                subs = dir.GetDirectories();
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                tally.Unreadable.Add($"{dir.FullName}\\ ({e.Message})");
+                continue;
+            }
+            foreach (var file in files.Where(f => !IsLink(f)))
+            {
+                var problem = await WriteFileAsync(writer, $"{rel}/{file.Name}", file, block, ct);
+                if (problem is null) tally.Files++;
+                else tally.Unreadable.Add($"{file.FullName} ({problem})");
+            }
+            foreach (var sub in subs.Where(d => !IsLink(d)))
+            {
+                var subRel = $"{rel}/{sub.Name}";
+                await WriteFolderAsync(writer, subRel, ct);
+                tally.Folders++;
+                stack.Push((sub, subRel));
+            }
+        }
+    }
+
+    private static bool IsLink(FileSystemInfo info) =>
+        info.Attributes.HasFlag(FileAttributes.ReparsePoint);
+
+    private static async Task WriteEndAsync(RelayChunkWriter writer, Tally tally,
+                                            CancellationToken ct)
+    {
+        var end = new byte[17];
+        end[0] = FolderStreamFormat.KindEnd;
+        BinaryPrimitives.WriteInt64BigEndian(end.AsSpan(1), tally.Files);
+        BinaryPrimitives.WriteInt64BigEndian(end.AsSpan(9), tally.Folders);
+        await writer.WriteAsync(end, ct);
+        await writer.FlushAsync(ct);
+    }
+
+    private static string Summary(Tally tally, long bytesSent)
+    {
         var summary = new StringBuilder(
-            $"[files] sent {files} file(s) in {folders} folder(s), {Mb(writer.BytesSent)} on the wire");
+            $"[files] sent {tally.Files} file(s) in {tally.Folders} folder(s), {Mb(bytesSent)} on the wire");
+        var unreadable = tally.Unreadable;
         if (unreadable.Count > 0)
         {
             summary.Append($"; {unreadable.Count} could not be read:");
             foreach (var line in unreadable.Take(50)) summary.Append("\n  ").Append(line);
             if (unreadable.Count > 50) summary.Append($"\n  ... and {unreadable.Count - 50} more");
         }
-        return CommandResult.Ok(summary.ToString());
+        return summary.ToString();
     }
 
     private static async Task WriteFolderAsync(RelayChunkWriter writer, string rel,
@@ -498,14 +541,13 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
             var dir = stack.Pop();
             try
             {
-                foreach (var file in dir.EnumerateFiles())
+                foreach (var file in dir.EnumerateFiles().Where(f => !IsLink(f)))
                 {
-                    if (file.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
                     bytes += file.Length;
                     count++;
                 }
-                foreach (var sub in dir.EnumerateDirectories())
-                    if (!sub.Attributes.HasFlag(FileAttributes.ReparsePoint)) stack.Push(sub);
+                foreach (var sub in dir.EnumerateDirectories().Where(d => !IsLink(d)))
+                    stack.Push(sub);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
@@ -551,8 +593,28 @@ public sealed class StreamReceiveExecutor(ILogger<StreamReceiveExecutor> log, Fl
     : ICommandExecutor
 {
     private const string PartSuffix = ".fhpart";
+    private const string Corrupt = "The copy stream is corrupt.";
 
     public string Type => "stream_receive";
+
+    /// <summary>One receive's state: where it writes, what it has counted, and the part file
+    /// in flight -- the one thing a failure must clean up.</summary>
+    private sealed class Receiving(RelayChunkReader reader, string root, bool overwrite)
+    {
+        public RelayChunkReader Reader { get; } = reader;
+        public string Root { get; } = root;
+        public bool Overwrite { get; } = overwrite;
+        public byte[] Block { get; } = new byte[FolderStreamFormat.MaxBlockBytes];
+        public HashSet<string> SafeDirs { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public string? PartPath;
+        public long Written, Kept, Rejected, Incomplete, Folders;
+
+        public void DiscardPart()
+        {
+            if (PartPath is not null) TryDelete(PartPath);
+            PartPath = null;
+        }
+    }
 
     public async Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput,
                                                   CancellationToken ct)
@@ -577,145 +639,182 @@ public sealed class StreamReceiveExecutor(ILogger<StreamReceiveExecutor> log, Fl
         if (refusal is not null) return await FailAsync(http, baseUrl, refusal, ct);
         destination = PathRules.Normalize(destination);
 
-        string root;
+        var (root, problem) = PrepareRoot(destination);
+        if (root is null) return await FailAsync(http, baseUrl, problem!, ct);
+
+        var state = new Receiving(new RelayChunkReader(http, baseUrl), root, overwrite);
         try
         {
-            Directory.CreateDirectory(destination);
-            if (new DirectoryInfo(destination).Attributes.HasFlag(FileAttributes.ReparsePoint))
-                return await FailAsync(http, baseUrl,
-                    $"{destination} is a link to somewhere else; pick a real folder.", ct);
-            root = Path.GetFullPath(destination);
-            if (!root.EndsWith('\\')) root += "\\";
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException
-                                    or NotSupportedException or ArgumentException)
-        {
-            return await FailAsync(http, baseUrl, e.Message, ct);
-        }
-
-        var reader = new RelayChunkReader(http, baseUrl);
-        var block = new byte[FolderStreamFormat.MaxBlockBytes];
-        var safeDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        long written = 0, kept = 0, rejected = 0, incomplete = 0, folders = 0;
-        string? partPath = null;
-        try
-        {
-            var magic = new byte[FolderStreamFormat.Magic.Length];
-            await reader.ReadExactlyAsync(magic, ct);
-            if (!magic.AsSpan().SequenceEqual(FolderStreamFormat.Magic))
-                throw new InvalidDataException("That is not a folder copy stream.");
-
-            var ended = false;
-            var number = new byte[8];
-            while (!ended)
-            {
-                var kind = await reader.ReadByteAsync(ct);
-                switch (kind)
-                {
-                    case FolderStreamFormat.KindFolder:
-                    {
-                        var target = Resolve(root, await ReadPathAsync(reader, ct), safeDirs);
-                        if (target is null) { rejected++; break; }
-                        Directory.CreateDirectory(target);
-                        folders++;
-                        break;
-                    }
-                    case FolderStreamFormat.KindFile:
-                    {
-                        var rel = await ReadPathAsync(reader, ct);
-                        await reader.ReadExactlyAsync(number, ct);
-                        var mtime = BinaryPrimitives.ReadInt64BigEndian(number);
-                        var target = Resolve(root, rel, safeDirs);
-
-                        FileStream? sink = null;
-                        if (target is null)
-                            rejected++;
-                        else if (Directory.Exists(target) || (File.Exists(target) && !overwrite))
-                            kept++;
-                        else
-                        {
-                            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                            partPath = target + PartSuffix;
-                            sink = new FileStream(partPath, FileMode.Create, FileAccess.Write,
-                                                  FileShare.None, FolderStreamFormat.MaxBlockBytes,
-                                                  useAsync: true);
-                        }
-
-                        // The bytes are read whether or not they are kept: the stream has to be
-                        // consumed to reach the next record.
-                        var prefix = new byte[4];
-                        await using (sink)
-                        {
-                            while (true)
-                            {
-                                await reader.ReadExactlyAsync(prefix, ct);
-                                var length = BinaryPrimitives.ReadUInt32BigEndian(prefix);
-                                if (length == 0) break;
-                                if (length > FolderStreamFormat.MaxBlockBytes)
-                                    throw new InvalidDataException("The copy stream is corrupt.");
-                                await reader.ReadExactlyAsync(block.AsMemory(0, (int)length), ct);
-                                if (sink is not null)
-                                    await sink.WriteAsync(block.AsMemory(0, (int)length), ct);
-                            }
-                        }
-                        var status = await reader.ReadByteAsync(ct);
-                        if (sink is null) break;
-                        if (status == FolderStreamFormat.StatusComplete)
-                        {
-                            File.Move(partPath!, target!, overwrite);
-                            try { File.SetLastWriteTimeUtc(target!, new DateTime(mtime, DateTimeKind.Utc)); }
-                            catch (Exception e) when (e is IOException or ArgumentException
-                                                        or UnauthorizedAccessException) { }
-                            written++;
-                        }
-                        else
-                        {
-                            TryDelete(partPath!);
-                            incomplete++;
-                        }
-                        partPath = null;
-                        break;
-                    }
-                    case FolderStreamFormat.KindEnd:
-                        await reader.ReadExactlyAsync(number, ct);
-                        await reader.ReadExactlyAsync(number, ct);
-                        ended = true;
-                        break;
-                    default:
-                        throw new InvalidDataException("The copy stream is corrupt.");
-                }
-            }
-            if (!await reader.AtEndAsync(ct))
-                throw new InvalidDataException("The copy stream carried data past its end.");
+            await ReadStreamAsync(state, ct);
         }
         catch (OperationCanceledException)
         {
-            if (partPath is not null) TryDelete(partPath);
+            state.DiscardPart();
             throw;
         }
         catch (RelayGoneException e)
         {
-            if (partPath is not null) TryDelete(partPath);
-            return CommandResult.Fail($"[files] {e.Message} {written} file(s) had been written.");
+            state.DiscardPart();
+            return CommandResult.Fail($"[files] {e.Message} {state.Written} file(s) had been written.");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException
                                     or InvalidDataException or NotSupportedException)
         {
-            if (partPath is not null) TryDelete(partPath);
+            state.DiscardPart();
             log.LogWarning(e, "stream_receive from {Url} failed", baseUrl);
             return await FailAsync(http, baseUrl,
-                $"{e.Message} {written} file(s) had been written to {destination}.", ct);
+                $"{e.Message} {state.Written} file(s) had been written to {destination}.", ct);
         }
 
-        var summary = $"Wrote {written} file(s) in {folders} folder(s) to {destination}"
-                      + $" ({reader.BytesReceived / 1024.0 / 1024.0:F1} MB received)."
-                      + (kept > 0 ? $" Kept {kept} existing file(s) that were already there." : "")
-                      + (incomplete > 0 ? $" {incomplete} file(s) could not be read on the source." : "")
-                      + (rejected > 0 ? $" Refused {rejected} unsafe path(s)." : "");
+        var summary = Summary(state, destination);
         await FolderStreamFormat.PostJsonAsync(http, $"{baseUrl}/result",
                                                new JsonObject { ["summary"] = summary }, ct);
         onOutput?.Invoke($"[files] {summary}\n");
         return CommandResult.Ok($"[files] {summary}");
+    }
+
+    /// <summary>The destination as an absolute root ending in a separator, created if need be,
+    /// or the reason it cannot be one.</summary>
+    private static (string? Root, string? Problem) PrepareRoot(string destination)
+    {
+        try
+        {
+            Directory.CreateDirectory(destination);
+            if (new DirectoryInfo(destination).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                return (null, $"{destination} is a link to somewhere else; pick a real folder.");
+            var root = Path.GetFullPath(destination);
+            return (root.EndsWith('\\') ? root : root + "\\", null);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException
+                                    or NotSupportedException or ArgumentException)
+        {
+            return (null, e.Message);
+        }
+    }
+
+    private static async Task ReadStreamAsync(Receiving state, CancellationToken ct)
+    {
+        var reader = state.Reader;
+        var magic = new byte[FolderStreamFormat.Magic.Length];
+        await reader.ReadExactlyAsync(magic, ct);
+        if (!magic.AsSpan().SequenceEqual(FolderStreamFormat.Magic))
+            throw new InvalidDataException("That is not a folder copy stream.");
+
+        while (true)
+        {
+            var kind = await reader.ReadByteAsync(ct);
+            if (kind == FolderStreamFormat.KindEnd) break;
+            if (kind == FolderStreamFormat.KindFolder) await ReadFolderAsync(state, ct);
+            else if (kind == FolderStreamFormat.KindFile) await ReadFileAsync(state, ct);
+            else throw new InvalidDataException(Corrupt);
+        }
+        // The end record's two counts; read to consume them, not trusted for anything.
+        await reader.ReadExactlyAsync(new byte[16], ct);
+        if (!await reader.AtEndAsync(ct))
+            throw new InvalidDataException("The copy stream carried data past its end.");
+    }
+
+    private static async Task ReadFolderAsync(Receiving state, CancellationToken ct)
+    {
+        var target = Resolve(state.Root, await ReadPathAsync(state.Reader, ct), state.SafeDirs);
+        if (target is null)
+        {
+            state.Rejected++;
+            return;
+        }
+        Directory.CreateDirectory(target);
+        state.Folders++;
+    }
+
+    private static async Task ReadFileAsync(Receiving state, CancellationToken ct)
+    {
+        var reader = state.Reader;
+        var rel = await ReadPathAsync(reader, ct);
+        var number = new byte[8];
+        await reader.ReadExactlyAsync(number, ct);
+        var mtime = BinaryPrimitives.ReadInt64BigEndian(number);
+        var target = Resolve(state.Root, rel, state.SafeDirs);
+
+        FileStream? sink = OpenSink(state, target);
+        // The bytes are read whether or not they are kept: the stream has to be consumed to
+        // reach the next record.
+        await using (sink)
+        {
+            await CopyBlocksAsync(state, sink, ct);
+        }
+        var status = await reader.ReadByteAsync(ct);
+        if (sink is null) return;
+        if (status == FolderStreamFormat.StatusComplete)
+        {
+            File.Move(state.PartPath!, target!, state.Overwrite);
+            state.PartPath = null;
+            StampTime(target!, mtime);
+            state.Written++;
+        }
+        else
+        {
+            state.DiscardPart();
+            state.Incomplete++;
+        }
+    }
+
+    /// <summary>The part file to write this entry into, or null when the entry is to be read
+    /// and dropped -- an unsafe path, or something already in the way.</summary>
+    private static FileStream? OpenSink(Receiving state, string? target)
+    {
+        if (target is null)
+        {
+            state.Rejected++;
+            return null;
+        }
+        if (Directory.Exists(target) || (File.Exists(target) && !state.Overwrite))
+        {
+            state.Kept++;
+            return null;
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        state.PartPath = target + PartSuffix;
+        return new FileStream(state.PartPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                              FolderStreamFormat.MaxBlockBytes, useAsync: true);
+    }
+
+    private static async Task CopyBlocksAsync(Receiving state, FileStream? sink, CancellationToken ct)
+    {
+        var prefix = new byte[4];
+        while (true)
+        {
+            await state.Reader.ReadExactlyAsync(prefix, ct);
+            var length = BinaryPrimitives.ReadUInt32BigEndian(prefix);
+            if (length == 0) return;
+            if (length > FolderStreamFormat.MaxBlockBytes) throw new InvalidDataException(Corrupt);
+            var block = state.Block.AsMemory(0, (int)length);
+            await state.Reader.ReadExactlyAsync(block, ct);
+            if (sink is not null) await sink.WriteAsync(block, ct);
+        }
+    }
+
+    private static void StampTime(string target, long ticks)
+    {
+        try
+        {
+            File.SetLastWriteTimeUtc(target, new DateTime(ticks, DateTimeKind.Utc));
+        }
+        catch (Exception e) when (e is IOException or ArgumentException
+                                    or UnauthorizedAccessException)
+        {
+            // The file is whole; a timestamp that could not be set is not worth failing it.
+        }
+    }
+
+    private static string Summary(Receiving state, string destination)
+    {
+        var summary = new StringBuilder(
+            $"Wrote {state.Written} file(s) in {state.Folders} folder(s) to {destination}"
+            + $" ({state.Reader.BytesReceived / 1024.0 / 1024.0:F1} MB received).");
+        if (state.Kept > 0) summary.Append($" Kept {state.Kept} existing file(s) that were already there.");
+        if (state.Incomplete > 0) summary.Append($" {state.Incomplete} file(s) could not be read on the source.");
+        if (state.Rejected > 0) summary.Append($" Refused {state.Rejected} unsafe path(s).");
+        return summary.ToString();
     }
 
     private static async Task<string> ReadPathAsync(RelayChunkReader reader, CancellationToken ct)
@@ -724,7 +823,7 @@ public sealed class StreamReceiveExecutor(ILogger<StreamReceiveExecutor> log, Fl
         await reader.ReadExactlyAsync(length, ct);
         var count = BinaryPrimitives.ReadUInt16BigEndian(length);
         if (count == 0 || count > FolderStreamFormat.MaxPathBytes)
-            throw new InvalidDataException("The copy stream is corrupt.");
+            throw new InvalidDataException(Corrupt);
         var bytes = new byte[count];
         await reader.ReadExactlyAsync(bytes, ct);
         return Encoding.UTF8.GetString(bytes);
@@ -735,8 +834,7 @@ public sealed class StreamReceiveExecutor(ILogger<StreamReceiveExecutor> log, Fl
     private static string? Resolve(string root, string rel, HashSet<string> safeDirs)
     {
         var segments = rel.Split('/');
-        foreach (var segment in segments)
-            if (PathRules.RejectName(segment) is not null) return null;
+        if (segments.Any(segment => PathRules.RejectName(segment) is not null)) return null;
         string full;
         try
         {
@@ -750,31 +848,40 @@ public sealed class StreamReceiveExecutor(ILogger<StreamReceiveExecutor> log, Fl
         if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
             || full.Length > PathRules.MaxPathChars)
             return null;
+        var folders = segments.Length - 1 + (Directory.Exists(full) ? 1 : 0);
+        return NoLinkOnTheWay(root, segments, folders, safeDirs) ? full : null;
+    }
 
-        // Every existing folder between the destination and this entry must be a real folder.
-        var current = root.TrimEnd('\\');
-        for (var i = 0; i < segments.Length - 1 + (Directory.Exists(full) ? 1 : 0); i++)
+    /// <summary>True when none of the first <paramref name="count"/> folders below the root is
+    /// an existing reparse point. Stops at the first folder that does not exist yet: nothing
+    /// below it can be a link. Folders already checked are remembered for the next entry.</summary>
+    private static bool NoLinkOnTheWay(string root, string[] segments, int count,
+                                       HashSet<string> safeDirs)
+    {
+        var current = root;
+        for (var i = 0; i < count; i++)
         {
-            current = current + "\\" + segments[i];
+            current = Path.Combine(current, segments[i]);
             if (safeDirs.Contains(current)) continue;
-            if (Directory.Exists(current))
-            {
-                if (new DirectoryInfo(current).Attributes.HasFlag(FileAttributes.ReparsePoint))
-                    return null;
-                safeDirs.Add(current);
-            }
-            else
-            {
-                break;   // nothing below a folder that does not exist yet can be a link
-            }
+            if (!Directory.Exists(current)) return true;
+            if (new DirectoryInfo(current).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                return false;
+            safeDirs.Add(current);
         }
-        return full;
+        return true;
     }
 
     private static void TryDelete(string path)
     {
-        try { if (File.Exists(path)) File.Delete(path); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Best effort. A part file left behind is named *.fhpart, never mistaken for the
+            // real file, and the copy has already been reported as failed.
+        }
     }
 
     private static async Task<CommandResult> FailAsync(HttpClient http, string baseUrl,

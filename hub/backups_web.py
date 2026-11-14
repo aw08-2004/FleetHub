@@ -51,6 +51,10 @@ import settings
 _bearer_agent = auth_helpers.bearer_agent
 
 
+#: Said wherever a backup cannot run for want of a key. One sentence, so the Backup tab's
+#: banner and both run routes cannot drift into three wordings of the same fact.
+NO_KEY_YET = "No backup encryption key exists yet. Create one first."
+
 def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                              hub_version="", hub_url="", machine_roster=None):
     """Build the backups Blueprint.
@@ -88,7 +92,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             return None, refusals.refuse(e)
         if key is None:
             return None, (jsonify({
-                "error": "No backup encryption key exists yet. Create one first."
+                "error": NO_KEY_YET
             }), 409)
         return key, None
 
@@ -201,7 +205,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         if not effective["include"]:
             return "No paths are selected to back up."
         if backups.machine_key_for(machine) is None:
-            return "No backup encryption key exists yet. Create one first."
+            return NO_KEY_YET
         return None
 
     def _why_selection_not_runnable(machine):
@@ -212,7 +216,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         if not effective["destination_id"]:
             return "No backup destination is set for this machine."
         if backups.machine_key_for(machine) is None:
-            return "No backup encryption key exists yet. Create one first."
+            return NO_KEY_YET
         return None
 
     # What `_key_state` says when BACKUP_MASTER_KEY is present but unusable -- truncated,

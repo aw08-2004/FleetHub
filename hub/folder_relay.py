@@ -244,34 +244,45 @@ class FolderRelay:
         with self._lock:
             while True:
                 t = self._transfers.get(transfer_id)
-                if t is None or t.state in ENDED:
-                    return GONE
-                if machine != t.source:
-                    return FORBIDDEN
-                if t.send_done:
-                    # A chunk after the sender's own end is a broken client, and storing it
-                    # would hand the receiver bytes past a point it was told was final.
-                    return OUT_OF_ORDER
-                if seq < t.next_in:
-                    return DUPLICATE
-                if seq > t.next_in:
-                    return OUT_OF_ORDER
+                verdict = self._put_verdict_locked(t, machine, seq)
+                if verdict is not None:
+                    return verdict
                 # An empty window always takes one chunk, so a chunk bigger than the spare
                 # room cannot wedge the transfer forever.
                 if t.buffered == 0 or t.buffered + len(data) <= MAX_BUFFER_BYTES:
-                    t.chunks[seq] = bytes(data)
-                    t.buffered += len(data)
-                    t.next_in += 1
-                    t.bytes_in += len(data)
-                    t.touched = self._clock()
-                    if t.state == WAITING:
-                        t.state = COPYING
-                    self._changed.notify_all()
+                    self._store_locked(t, seq, data)
                     return STORED
                 remaining = deadline - self._clock()
                 if remaining <= 0:
                     return FULL
                 self._changed.wait(remaining)
+
+    @staticmethod
+    def _put_verdict_locked(t, machine, seq):
+        """Why chunk `seq` from `machine` cannot be stored, or None when it is the next one."""
+        if t is None or t.state in ENDED:
+            return GONE
+        if machine != t.source:
+            return FORBIDDEN
+        if t.send_done:
+            # A chunk after the sender's own end is a broken client, and storing it would
+            # hand the receiver bytes past a point it was told was final.
+            return OUT_OF_ORDER
+        if seq < t.next_in:
+            return DUPLICATE
+        if seq > t.next_in:
+            return OUT_OF_ORDER
+        return None
+
+    def _store_locked(self, t, seq, data):
+        t.chunks[seq] = bytes(data)
+        t.buffered += len(data)
+        t.next_in += 1
+        t.bytes_in += len(data)
+        t.touched = self._clock()
+        if t.state == WAITING:
+            t.state = COPYING
+        self._changed.notify_all()
 
     def finish_send(self, transfer_id, machine, error=None):
         """The source has sent everything (or has failed, with `error`)."""
@@ -362,12 +373,15 @@ class FolderRelay:
 
     def _prune_locked(self):
         now = self._clock()
-        for transfer_id, t in list(self._transfers.items()):
+        for t in self._transfers.values():
             if t.state not in ENDED and now - t.touched > IDLE_SECONDS:
                 self._end_locked(t, FAILED, "Nothing moved for 15 minutes -- one of the two "
                                             "computers is offline or stopped answering.")
-            if t.state in ENDED and now - t.ended_at > KEEP_FINISHED_SECONDS:
-                del self._transfers[transfer_id]
+        # Collected first, deleted after: the dict cannot change size while it is iterated.
+        forgotten = [transfer_id for transfer_id, t in self._transfers.items()
+                     if t.state in ENDED and now - t.ended_at > KEEP_FINISHED_SECONDS]
+        for transfer_id in forgotten:
+            del self._transfers[transfer_id]
 
     def prune(self):
         """Fail idle transfers and forget old finished ones. Called on every open/status;

@@ -84,7 +84,7 @@
     // Where a sent folder lands unless the operator says otherwise. A folder of its own on
     // the system drive, never the target user's profile: a copy that lands on a Desktop is a
     // copy the user finds before the technician has finished checking it.
-    const DEFAULT_SEND_DESTINATION = 'C:\\Incoming';
+    const DEFAULT_SEND_DESTINATION = String.raw`C:\Incoming`;
 
     // A preview is pulled into the browser's memory whole, so this is a ceiling on what the
     // console will try rather than on what it can fetch: a 300 MB log downloads fine through
@@ -1480,8 +1480,10 @@
             const started = await post(`${base()}/send`,
                                        { paths: sendPaths, target, destination });
             sendDialog.close();
-            watchSend({ id: started.transfer_id, machine, target },
-                      started.poll_interval || pollSeconds);
+            // Not awaited: the watcher runs for as long as the copy does, and the dialog is
+            // already closed. It reports its own end, failures included.
+            void watchSend({ id: started.transfer_id, machine, target },
+                           started.poll_interval || pollSeconds);
         } catch (e) {
             // Kept in the dialog: the operator can fix the path or pick another PC
             // without re-selecting the folders.
@@ -1523,29 +1525,36 @@
                 }
                 continue;
             }
-            if (status.state === 'done') {
-                finishSend(mine, [t('files.send_done', { target: job.target }), status.summary]
-                    .filter(Boolean).join(' '), false);
-                return;
-            }
-            if (status.state === 'failed') {
-                finishSend(mine, t('files.send_failed', { target: job.target, error: status.error || '' }), true);
-                return;
-            }
-            if (status.state === 'cancelled') {
-                finishSend(mine, t('files.send_cancelled', { target: job.target }), true);
-                return;
-            }
-            const done = status.bytes_received || 0;
-            if (status.total_bytes) {
-                const percent = Math.min(100, Math.floor(done * 100 / status.total_bytes));
-                showSend(t('files.send_progress', { target: job.target, done: formatSize(done),
-                                                    total: formatSize(status.total_bytes), percent }));
-            } else if (status.state === 'copying') {
-                showSend(t('files.send_progress_unknown', { target: job.target,
-                                                            done: formatSize(done) }));
-            }
+            if (drawSend(mine, job, status)) return;
         }
+    }
+
+    /** Draw one status answer. True when the copy has ended and the watcher should stop. */
+    function drawSend(mine, job, status) {
+        const target = job.target;
+        if (status.state === 'done') {
+            finishSend(mine, [t('files.send_done', { target }), status.summary]
+                .filter(Boolean).join(' '), false);
+            return true;
+        }
+        if (status.state === 'failed') {
+            finishSend(mine, t('files.send_failed', { target, error: status.error || '' }), true);
+            return true;
+        }
+        if (status.state === 'cancelled') {
+            finishSend(mine, t('files.send_cancelled', { target }), true);
+            return true;
+        }
+        const received = status.bytes_received || 0;
+        const done = formatSize(received);
+        if (status.total_bytes) {
+            const percent = Math.min(100, Math.floor(received * 100 / status.total_bytes));
+            showSend(t('files.send_progress', { target, done,
+                                                total: formatSize(status.total_bytes), percent }));
+        } else if (status.state === 'copying') {
+            showSend(t('files.send_progress_unknown', { target, done }));
+        }
+        return false;
     }
 
     function finishSend(mine, text, failed) {
@@ -1596,7 +1605,7 @@
                     { paths: backupPaths });
                 backupDialog.close();
                 showError('');
-                showNote(result && result.status === 'queued'
+                showNote(result?.status === 'queued'
                     ? t('files.backup_queued', { message: result.message || '' })
                     : t('files.backup_started'));
             } catch (e) {
@@ -1682,7 +1691,9 @@
     });
 
     onMenu(item.send, (picked) => {
-        if (picked.length && picked.every((e) => e.directory)) askSend(picked);
+        // Not awaited: menu handlers are fire-and-forget, and askSend reports its own
+        // failures inside the dialog.
+        if (picked.length && picked.every((e) => e.directory)) void askSend(picked);
     });
     if (item.backup) {
         onMenu(item.backup, (picked) => {
@@ -1818,7 +1829,7 @@
         if (openDialog.open) openDialog.close();
         if (previewDialog.open) previewDialog.close();
         if (sendDialog.open) sendDialog.close();
-        if (backupDialog && backupDialog.open) backupDialog.close();
+        if (backupDialog?.open) backupDialog.close();
         // A copy keeps running on the hub; this panel just stops drawing it, because its
         // progress line would otherwise sit under the next PC's files claiming to be theirs.
         sendGen++;
