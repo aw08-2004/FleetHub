@@ -611,7 +611,15 @@ public sealed class StreamReceiveExecutor(ILogger<StreamReceiveExecutor> log, Fl
 
         public void DiscardPart()
         {
-            if (PartPath is not null) TryDelete(PartPath);
+            try
+            {
+                if (PartPath is not null && File.Exists(PartPath)) File.Delete(PartPath);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Best effort. A part file left behind is named *.fhpart, never mistaken for
+                // the real file, and the copy has already been reported as failed.
+            }
             PartPath = null;
         }
     }
@@ -869,19 +877,6 @@ public sealed class StreamReceiveExecutor(ILogger<StreamReceiveExecutor> log, Fl
             safeDirs.Add(current);
         }
         return true;
-    }
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            if (File.Exists(path)) File.Delete(path);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            // Best effort. A part file left behind is named *.fhpart, never mistaken for the
-            // real file, and the copy has already been reported as failed.
-        }
     }
 
     private static async Task<CommandResult> FailAsync(HttpClient http, string baseUrl,
