@@ -76,6 +76,9 @@ BLUEPRINT_TOPICS = {
     "disk_usage": "disk_usage",
     "events": "events",
     "files": "files",
+    # The live folder copy between two PCs. Only the console's start and cancel mark it;
+    # the agents' per-chunk traffic is in UNMARKED_RULES below.
+    "folder_relay": "files",
     "fleet": "commands",
     "gpo": "gpo",
     "invites": "invites",
@@ -202,6 +205,11 @@ UNMARKED_RULES = frozenset({
     "/api/remote/recordings/<recording_id>/chunks/<int:seq>",
     "/api/agent/backups/upload/<run_id>",
     "/api/agent/files/transfer/<transfer_id>",
+    # The live folder copy's chunk traffic (folder_relay_web.py): one request per megabyte
+    # each way, for the length of a copy that can run an hour. The console polls the
+    # transfer's own status route; nobody else's page shows a chunk.
+    "/api/agent/files/stream/<transfer_id>/chunk/<int:seq>",
+    "/api/agent/files/stream/<transfer_id>/meta",
     "/api/language",
     "/api/hub/update",
     # Not a stream but not a change either: a calculator over the request body (the

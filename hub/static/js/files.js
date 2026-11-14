@@ -75,6 +75,16 @@
     // need no agent change at all -- the hub builds them from the volume sensors every agent
     // since 3.10.0 already sends -- so an older machine still gets "full in about 40 days".
     const MIN_DISKUSAGE_AGENT = '3.40.0';
+    // The live folder copy to another PC (hub/folder_relay.py). Both ends need it, so it is
+    // checked against THIS machine here and against each candidate target in the Send
+    // dialog's list. Mirrors folder_relay.MIN_AGENT_VERSION, which is the copy that refuses;
+    // this one only explains. A compatibility API, not trivia: lowering it offers a copy no
+    // machine below it can answer.
+    const MIN_STREAM_AGENT = '3.51.0';
+    // Where a sent folder lands unless the operator says otherwise. A folder of its own on
+    // the system drive, never the target user's profile: a copy that lands on a Desktop is a
+    // copy the user finds before the technician has finished checking it.
+    const DEFAULT_SEND_DESTINATION = 'C:\\Incoming';
 
     // A preview is pulled into the browser's memory whole, so this is a ceiling on what the
     // console will try rather than on what it can fetch: a 300 MB log downloads fine through
@@ -127,7 +137,10 @@
         paste: document.getElementById('files-menu-paste'),
         rename: document.getElementById('files-menu-rename'),
         newFolder: document.getElementById('files-menu-new-folder'),
-        remove: document.getElementById('files-menu-delete')
+        remove: document.getElementById('files-menu-delete'),
+        send: document.getElementById('files-menu-send'),
+        // Null for an operator without manage_backups: the template leaves it out.
+        backup: document.getElementById('files-menu-backup')
     };
     // The scroll box around THE file list, found from the table rather than as "the first
     // .table-scroll in the pane". The History panel (hub 1.138.0) put three more of those
@@ -140,6 +153,8 @@
     const uploadDialog = document.getElementById('files-upload-dialog');
     const openDialog = document.getElementById('files-open-dialog');
     const previewDialog = document.getElementById('files-preview-dialog');
+    const sendDialog = document.getElementById('files-send-dialog');
+    const backupDialog = document.getElementById('files-backup-dialog');   // may be null
 
     // ---- state ----
     let path = null;                // null means the drive list
@@ -160,6 +175,11 @@
     // A past day the History panel is comparing with: {day, path, entries} where `entries`
     // maps a lower-cased name to that day's entry, or is null while it loads.
     let compare = null;
+    // {id, machine, target} while a live copy started from this panel is running. One at a
+    // time per panel: the hub carries several, but one progress line is what an operator can
+    // follow, and a second copy of the same folders is far more often a double click.
+    let sendJob = null;
+    let sendGen = 0;                // bumped to orphan a copy's watcher when the machine changes
 
     // ================================================================
     // plumbing
@@ -275,6 +295,7 @@
     // ================================================================
     let tooOld = null;
     let openTooOld = null;      // the same question asked against MIN_OPEN_AGENT
+    let streamTooOld = null;    // ... and against MIN_STREAM_AGENT, for Send
     let scanTooOld = null;      // ...and against MIN_DISKUSAGE_AGENT
 
     async function checkAgentVersion() {
@@ -285,10 +306,12 @@
             tooOld = (version && versionLess(version, MIN_FILES_AGENT)) ? version : false;
             openTooOld = (version && versionLess(version, MIN_OPEN_AGENT)) ? version : false;
             scanTooOld = (version && versionLess(version, MIN_DISKUSAGE_AGENT)) ? version : false;
+            streamTooOld = (version && versionLess(version, MIN_STREAM_AGENT)) ? version : false;
         } catch (e) {
             tooOld = false;      // unknown is not "too old"; let the command answer for itself
             openTooOld = false;
             scanTooOld = false;
+            streamTooOld = false;
         }
     }
 
@@ -751,6 +774,12 @@
         item.rename.disabled = !idle || picked.length !== 1;
         item.newFolder.disabled = !idle || !inFolder;
         item.remove.disabled = !idle || picked.length === 0;
+        // Send and Back up take folders and nothing else -- one or many, never a file or a
+        // drive. Send is NOT greyed on an agent too old for it, for the reason Open on that PC
+        // is not: the click is answered with the version it is waiting for.
+        const folders = inFolder && picked.length > 0 && picked.every((e) => e.directory);
+        item.send.disabled = !idle || !folders || !!sendJob;
+        if (item.backup) item.backup.disabled = !idle || !folders;
         selectAll.disabled = !idle || !inFolder;
     }
 
@@ -1370,6 +1399,214 @@
     window.addEventListener('blur', () => closeMenu(false));
 
     // ================================================================
+    // send to another computer (live copy, hub/folder_relay.py)
+    // ================================================================
+    const sendHelp = document.getElementById('files-send-help');
+    const sendList = document.getElementById('files-send-list');
+    const sendTarget = document.getElementById('files-send-target');
+    const sendDestination = document.getElementById('files-send-destination');
+    const sendError = document.getElementById('files-send-error');
+    const sendStatus = document.getElementById('files-send-status');
+    const sendText = document.getElementById('files-send-text');
+    const sendCancel = document.getElementById('files-send-cancel');
+    let sendPaths = [];
+
+    async function askSend(picked) {
+        if (streamTooOld) {
+            showError(t('files.send_need_agent', { version: streamTooOld, needed: MIN_STREAM_AGENT }));
+            return;
+        }
+        sendPaths = picked.map(entryPath);
+        sendHelp.textContent = tPlural('files.send_help', sendPaths.length);
+        sendList.replaceChildren();
+        sendPaths.forEach((p) => sendList.appendChild(el('li', null, p)));
+        sendDestination.value = DEFAULT_SEND_DESTINATION;
+        sendError.hidden = true;
+        sendTarget.replaceChildren();
+        sendDialog.showModal();
+
+        let machines = [];
+        try {
+            machines = await api('/api/machines');
+        } catch (e) {
+            sendError.textContent = e.message;
+            sendError.hidden = false;
+            return;
+        }
+        const here = currentMachine();
+        let usable = 0;
+        machines
+            .filter((m) => m.machine && m.machine !== here && m.enrolled !== false)
+            .forEach((m) => {
+                const option = el('option', null, m.machine);
+                option.value = m.machine;
+                // Listed but not choosable when its agent cannot receive -- the list answers
+                // "why is that PC not offered" by itself.
+                if (!m.companion_version || versionLess(m.companion_version, MIN_STREAM_AGENT)) {
+                    option.disabled = true;
+                    option.textContent = t('files.send_target_old', {
+                        name: m.machine, version: m.companion_version || '?',
+                        needed: MIN_STREAM_AGENT
+                    });
+                } else {
+                    usable++;
+                }
+                sendTarget.appendChild(option);
+            });
+        if (!usable) {
+            sendError.textContent = t('files.send_no_targets', { needed: MIN_STREAM_AGENT });
+            sendError.hidden = false;
+        }
+        const first = Array.from(sendTarget.options).find((o) => !o.disabled);
+        if (first) sendTarget.value = first.value;
+    }
+
+    document.getElementById('files-send-close').addEventListener('click', () => sendDialog.close());
+    document.getElementById('files-send-ok').addEventListener('click', async () => {
+        const target = sendTarget.value;
+        const destination = sendDestination.value.trim();
+        if (!target) {
+            sendError.textContent = t('files.send_pick_target');
+            sendError.hidden = false;
+            return;
+        }
+        if (!destination) {
+            sendError.textContent = t('files.name_required');
+            sendError.hidden = false;
+            return;
+        }
+        const machine = currentMachine();
+        try {
+            const started = await post(`${base()}/send`,
+                                       { paths: sendPaths, target, destination });
+            sendDialog.close();
+            watchSend({ id: started.transfer_id, machine, target },
+                      started.poll_interval || pollSeconds);
+        } catch (e) {
+            // Kept in the dialog: the operator can fix the path or pick another PC
+            // without re-selecting the folders.
+            sendError.textContent = e.message;
+            sendError.hidden = false;
+        }
+    });
+
+    function showSend(text) {
+        sendText.textContent = text;
+        sendStatus.hidden = false;
+    }
+
+    /** Poll one copy until it ends, drawing progress on its own line. Independent of the
+     *  panel's `busy` and `generation`: browsing carries on while a profile copies. */
+    async function watchSend(job, interval) {
+        const mine = ++sendGen;
+        sendJob = job;
+        sendCancel.hidden = false;
+        renderActions();
+        showSend(t('files.send_waiting', { target: job.target }));
+        const url = `/api/machines/${encodeURIComponent(job.machine)}/files/send/${encodeURIComponent(job.id)}`;
+        let misses = 0;
+        while (mine === sendGen) {
+            await new Promise((resolve) => { setTimeout(resolve, interval * 1000); });
+            if (mine !== sendGen) return;
+            let status;
+            try {
+                status = await api(url);
+                misses = 0;
+            } catch (e) {
+                // A 404 is the hub having forgotten the copy (it keeps them in memory, so a
+                // restart does that); anything else is one failed poll, and a few of those
+                // in a row are not worth ending a copy's progress line over.
+                if (/unknown transfer/.test(e.message) || ++misses > 10) {
+                    finishSend(mine, t('files.send_failed', { target: job.target,
+                                                              error: t('files.send_lost') }), true);
+                    return;
+                }
+                continue;
+            }
+            if (status.state === 'done') {
+                finishSend(mine, [t('files.send_done', { target: job.target }), status.summary]
+                    .filter(Boolean).join(' '), false);
+                return;
+            }
+            if (status.state === 'failed') {
+                finishSend(mine, t('files.send_failed', { target: job.target, error: status.error || '' }), true);
+                return;
+            }
+            if (status.state === 'cancelled') {
+                finishSend(mine, t('files.send_cancelled', { target: job.target }), true);
+                return;
+            }
+            const done = status.bytes_received || 0;
+            if (status.total_bytes) {
+                const percent = Math.min(100, Math.floor(done * 100 / status.total_bytes));
+                showSend(t('files.send_progress', { target: job.target, done: formatSize(done),
+                                                    total: formatSize(status.total_bytes), percent }));
+            } else if (status.state === 'copying') {
+                showSend(t('files.send_progress_unknown', { target: job.target,
+                                                            done: formatSize(done) }));
+            }
+        }
+    }
+
+    function finishSend(mine, text, failed) {
+        if (mine !== sendGen) return;
+        sendJob = null;
+        sendCancel.hidden = true;
+        showSend(text);
+        sendText.classList.toggle('setting__error', !!failed);
+        renderActions();
+    }
+
+    sendCancel.addEventListener('click', async () => {
+        if (!sendJob) return;
+        try {
+            await post(`/api/machines/${encodeURIComponent(sendJob.machine)}/files/send/${encodeURIComponent(sendJob.id)}/cancel`);
+        } catch (e) {
+            showError(e.message);
+        }
+        // The watcher sees `cancelled` on its next poll and says so; nothing to draw here.
+    });
+
+    // ================================================================
+    // back up (one-off, to the backup destination)
+    // ================================================================
+    let backupPaths = [];
+    function askBackup(picked) {
+        if (!backupDialog) return;
+        backupPaths = picked.map(entryPath);
+        document.getElementById('files-backup-help').textContent =
+            tPlural('files.backup_help', backupPaths.length);
+        const list = document.getElementById('files-backup-list');
+        list.replaceChildren();
+        backupPaths.forEach((p) => list.appendChild(el('li', null, p)));
+        document.getElementById('files-backup-error').hidden = true;
+        backupDialog.showModal();
+    }
+
+    if (backupDialog) {
+        document.getElementById('files-backup-cancel')
+            .addEventListener('click', () => backupDialog.close());
+        document.getElementById('files-backup-ok').addEventListener('click', async () => {
+            const errorBox = document.getElementById('files-backup-error');
+            try {
+                // The Backup tab's own "Back up now" route, with paths: same request slot,
+                // same dispatcher, same cancel -- see backups_web.run_machine_backup.
+                const result = await post(
+                    `/api/backups/machines/${encodeURIComponent(currentMachine())}/run`,
+                    { paths: backupPaths });
+                backupDialog.close();
+                showError('');
+                showNote(result && result.status === 'queued'
+                    ? t('files.backup_queued', { message: result.message || '' })
+                    : t('files.backup_started'));
+            } catch (e) {
+                errorBox.textContent = e.message;
+                errorBox.hidden = false;
+            }
+        });
+    }
+
+    // ================================================================
     // wiring
     // ================================================================
     /** Every menu entry does the same two things first: read the selection it was opened
@@ -1443,6 +1680,15 @@
                 (value) => runOperation({ op: 'new_folder', destination: path,
                                           new_name: value }));
     });
+
+    onMenu(item.send, (picked) => {
+        if (picked.length && picked.every((e) => e.directory)) askSend(picked);
+    });
+    if (item.backup) {
+        onMenu(item.backup, (picked) => {
+            if (picked.length && picked.every((e) => e.directory)) askBackup(picked);
+        });
+    }
 
     onMenu(item.remove, (picked) => {
         if (!picked.length) return;
@@ -1571,9 +1817,18 @@
         // about a path on the PC the operator just left.
         if (openDialog.open) openDialog.close();
         if (previewDialog.open) previewDialog.close();
+        if (sendDialog.open) sendDialog.close();
+        if (backupDialog && backupDialog.open) backupDialog.close();
+        // A copy keeps running on the hub; this panel just stops drawing it, because its
+        // progress line would otherwise sit under the next PC's files claiming to be theirs.
+        sendGen++;
+        sendJob = null;
+        sendStatus.hidden = true;
+        sendText.classList.remove('setting__error');
         releasePreviewUrl();
         tooOld = null;
         openTooOld = null;
+        streamTooOld = null;
         scanTooOld = null;
         diskSummary = null;
         sortBySize = false;

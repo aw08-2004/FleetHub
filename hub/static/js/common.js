@@ -514,6 +514,47 @@ function initAlertBadge() {
     if (window.FleetLive) window.FleetLive.watch(['alerts'], refreshAlertBadge);
 }
 
+// ============ Open-ticket badge ============
+// The Tickets link's count (roadmap #31), kept current the same way as the alerts badge and
+// for the same reasons. Deliberately a second small copy rather than a generalised "badge"
+// helper over both: the two read different routes, wake on different topics and are gated
+// on different capabilities, and a shared helper would have to be told all three each time.
+// Only rendered for operators with view_tickets, so on every other account this is one
+// null check.
+function ticketBadgeEl() {
+    const own = document.getElementById('tickets-badge');
+    if (own) return own;
+    try {
+        if (window.parent && window.parent !== window) {
+            return window.parent.document.getElementById('tickets-badge');
+        }
+    } catch (e) { /* cross-origin parent: not our chrome */ }
+    return null;
+}
+
+function setTicketBadge(count) {
+    const el = ticketBadgeEl();
+    if (!el) return;
+    el.textContent = count ? String(count) : '';
+    el.hidden = !count;
+}
+
+async function refreshTicketBadge() {
+    try {
+        const resp = await fetch('/api/tickets/count');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (typeof data.count === 'number') setTicketBadge(data.count);
+    } catch (e) { /* offline or mid-deploy: keep the last number, don't blank it */ }
+}
+
+function initTicketBadge() {
+    if (!document.getElementById('tickets-badge')) return;
+    // `tickets` covers the blueprint's own ticket_new / ticket_updated pushes too
+    // (fleet-live.js maps them onto it), so a status change anywhere moves the number.
+    if (window.FleetLive) window.FleetLive.watch(['tickets'], refreshTicketBadge);
+}
+
 // ============ Hub update notice ============
 // Bottom-of-sidebar notice for "main has a newer hub than this one, and this hub is not
 // going to install it by itself". The server does the comparing (hub_update_watcher polls
@@ -756,6 +797,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initPageIntro();
     initTopbarMore();
     initAlertBadge();
+    initTicketBadge();
     initHubUpdate();
 });
 

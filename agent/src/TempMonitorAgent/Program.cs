@@ -183,6 +183,10 @@ try
     builder.Services.AddSingleton<ICommandExecutor, FileOperationExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, FetchFileExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, PushFileExecutor>();
+    // The live folder copy between two PCs (hub/folder_relay.py). A pair, because each end
+    // is its own command on its own machine; the hub relays the bytes between them.
+    builder.Services.AddSingleton<ICommandExecutor, StreamSendExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, StreamReceiveExecutor>();
     // Opening is the one file command that does not touch the disk: it starts something,
     // either as the signed-in user on their own desktop or as SYSTEM with no desktop at all.
     // The operator names which; see OpenItemExecutor for why that is not a default.

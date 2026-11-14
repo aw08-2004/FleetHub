@@ -511,6 +511,20 @@ def list_tickets(db_path, *, status=None, machine=None, open_only=False, limit=5
     return tickets
 
 
+def open_ticket_machines(db_path):
+    """The machine of every ticket that is not resolved or closed, one entry per ticket.
+
+    What the sidebar's Tickets badge counts. It returns machine names rather than a COUNT(*)
+    because the count has to be narrowed to the caller's scope, and scope is a question this
+    module does not answer (see list_tickets) -- a bare count would show an HR technician the
+    size of the Hospital queue. **"Open" means the same as list_tickets(open_only=True)**, so
+    the badge and the queue's open filter cannot disagree about which tickets are waiting.
+    """
+    with get_conn(db_path) as conn:
+        return [r["machine"] for r in conn.execute(
+            "SELECT machine FROM tickets WHERE status NOT IN (?, ?)", DONE_STATUSES)]
+
+
 def tickets_for_reporter(db_path, machine, reporter_sid, limit=50):
     """What the tray's "My tickets" shows (phase D): this person's tickets on this PC, with
     the operator's replies and NONE of the internal notes.

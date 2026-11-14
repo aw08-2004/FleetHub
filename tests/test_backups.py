@@ -1300,6 +1300,106 @@ def main():
                   now=T1 + 50, **off_policy) == 1)
 
         # ============================================================
+        print("\n== One-off selection backup (Files tab): kept apart from the schedule ==")
+        # ============================================================
+        # The silent failure: a selection run is a FULL of a few folders under a fresh
+        # chain. Counted as the machine's newest chain, the next scheduled incremental
+        # would extend it, the schedule would slip a whole interval, and rotation would
+        # delete a real generation to keep it. None of that would show as an error.
+        Ts = T1 + 10_000
+        check("a scheduled run happens first",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "LAB", "online": True}],
+                  now=Ts, **off_policy) == 1)
+        sched_run = backups.list_runs(off_db, limit=1, kind=backups.BACKUP_MACHINE_FILES,
+                                      machine="LAB")[0]
+        backups.record_file_set(off_db, run_id=sched_run["id"], machine="LAB",
+                                chain_id=sched_run["chain_id"], sequence=0,
+                                object_key=sched_run["object_key"], stored_bytes=10,
+                                files=[{"path": "C:\\Users\\a\\Desktop\\x.txt", "size": 1}])
+        backups.complete_file_run(off_db, sched_run["id"], stored_bytes=10, file_count=1)
+        due_before = backups.files_due_at(off_db, "LAB", 24)
+
+        check("a relative path is refused as a selection",
+              raises(ValueError, backups.request_file_run, off_db, "LAB",
+                     actor="op@x.com", paths=["Projects"]))
+        backups.request_file_run(off_db, "LAB", actor="op@x.com", now=Ts + 5,
+                                 paths=["D:\\Projects\\Alpha", "D:\\Projects\\Beta"])
+        check("the selection is stored with the request",
+              backups.get_machine_config(off_db, "LAB")["run_requested_paths"]
+              == ["D:\\Projects\\Alpha", "D:\\Projects\\Beta"])
+        check("the selection dispatches straight away",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "LAB", "online": True}],
+                  now=Ts + 10, **off_policy) == 1)
+        sel_run = backups.list_runs(off_db, limit=1, kind=backups.BACKUP_MACHINE_FILES,
+                                    machine="LAB")[0]
+        # Read through the run's own command: command_params picks the newest by a
+        # one-second timestamp, and the scheduled command above shares that second.
+        sel_params = fleet.get_command(off_db, sel_run["command_id"])["params"]
+        check("...labelled a selection", sel_run["trigger"] == backups.TRIGGER_SELECTION)
+        check("...backing up only the picked folders",
+              sel_params["include"] == ["D:\\Projects\\Alpha", "D:\\Projects\\Beta"])
+        check("...still honouring the policy's excludes", sel_params["exclude"] == ["*.tmp"])
+        check("...as a full in a chain of its own",
+              sel_params["full"] is True and sel_params["sequence"] == 0
+              and sel_params["chain_id"] != sched_run["chain_id"])
+        check("...and the request, paths included, is cleared",
+              backups.get_machine_config(off_db, "LAB")["run_requested_paths"] is None)
+        backups.record_file_set(off_db, run_id=sel_run["id"], machine="LAB",
+                                chain_id=sel_run["chain_id"], sequence=0,
+                                object_key=sel_run["object_key"], stored_bytes=5,
+                                files=[{"path": "D:\\Projects\\Alpha\\a.txt", "size": 1}])
+        backups.complete_file_run(off_db, sel_run["id"], stored_bytes=5, file_count=1)
+
+        check("the next incremental extends the SCHEDULED chain, not the selection",
+              backups.plan_next_run(off_db, "LAB", 3)
+              == {"chain_id": sched_run["chain_id"], "sequence": 1, "full": False})
+        check("the selection did not move the schedule",
+              backups.files_due_at(off_db, "LAB", 24) == due_before)
+        check("the selection's files are restorable like any others",
+              any(r["path"].lower() == "d:\\projects\\alpha\\a.txt"
+                  for r in backups.current_manifest(off_db, "LAB")))
+
+        # Rotation: two pools, each keeping keep_chains.
+        class DeleteLog:
+            def __init__(self):
+                self.deleted = []
+
+            def delete(self, key):
+                self.deleted.append(key)
+        backups.request_file_run(off_db, "LAB", actor="op@x.com", now=Ts + 20,
+                                 paths=["D:\\Projects\\Gamma"])
+        backups.files_dispatch_once(off_db, off_log, machines=[{"machine": "LAB", "online": True}],
+                                    now=Ts + 30, **off_policy)
+        sel2 = backups.list_runs(off_db, limit=1, kind=backups.BACKUP_MACHINE_FILES,
+                                 machine="LAB")[0]
+        backups.record_file_set(off_db, run_id=sel2["id"], machine="LAB",
+                                chain_id=sel2["chain_id"], sequence=0,
+                                object_key=sel2["object_key"], stored_bytes=5, files=[])
+        backups.complete_file_run(off_db, sel2["id"], stored_bytes=5, file_count=0)
+        bucket = DeleteLog()
+        backups.rotate_chains(bucket, "", "LAB", 1, off_db)
+        check("rotation drops the older SELECTION chain only",
+              bucket.deleted == [sel_run["object_key"]])
+        check("...keeping the one scheduled chain, though it is older than both",
+              [c["chain_id"] for c in backups.machine_chains(off_db, "LAB")
+               if not c["selection"]] == [sched_run["chain_id"]])
+
+        # A selection needs a destination, not a switched-on schedule.
+        backups.request_file_run(off_db, "LAB2", actor="op@x.com", now=Ts,
+                                 paths=["E:\\Share"])
+        check("a selection runs even with the fleet schedule off",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "LAB2", "online": True}],
+                  now=Ts + 1, **dict(off_policy, fleet_enabled=False)) == 1)
+        backups.request_file_run(off_db, "LAB3", actor="op@x.com", now=Ts)
+        check("...while a plain Back up now still respects it",
+              backups.files_dispatch_once(
+                  off_db, off_log, machines=[{"machine": "LAB3", "online": True}],
+                  now=Ts + 1, **dict(off_policy, fleet_enabled=False)) == 0)
+
+        # ============================================================
         print("\n== Catch-up throttle ==")
         # ============================================================
         # Catch-up creates the herd this guards against: a fleet of laptops that were off

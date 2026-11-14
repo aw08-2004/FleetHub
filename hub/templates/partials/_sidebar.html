@@ -193,6 +193,9 @@
         <a class="sidebar__link {{ 'sidebar__link--active' if request.endpoint in ('tickets.tickets_page', 'tickets.ticket_page') else '' }}" data-nav-prefix="/tickets" href="{{ url_for('tickets.tickets_page') }}">
             <svg class="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4V8z"/><path d="M9 6v12" stroke-dasharray="2 2"/></svg>
             <span class="sidebar__link-label">{{ t('nav.tickets') }}</span>
+            {# Open tickets in the caller's scope, the same badge as Alerts and for the same
+               reason always in the DOM: common.js keeps it current from the `tickets` notice. #}
+            <span class="sidebar__badge" id="tickets-badge" {% if not open_ticket_count %}hidden{% endif %}>{{ open_ticket_count or '' }}</span>
         </a>
         {% endif %}
         {# Device groups (hub 1.114.0): the saved filters Rules, Packages and Devices aim at.

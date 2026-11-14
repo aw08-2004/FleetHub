@@ -116,6 +116,7 @@ from disk_usage_web import create_disk_usage_blueprint
 from wipe_web import create_wipe_blueprint
 from processes_web import create_processes_blueprint
 from files_web import create_files_blueprint
+from folder_relay_web import create_folder_relay_blueprint
 from ai_web import create_ai_blueprint
 from assistant_web import RouteDispatcher, create_assistant_blueprint
 from webfetch_web import create_webfetch_blueprint
@@ -174,7 +175,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.178.1"
+HUB_VERSION = "1.179.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2793,6 +2794,10 @@ app.register_blueprint(create_processes_blueprint(DB_PATH, login_required, acces
 # whatever Host header reached this process.
 app.register_blueprint(create_files_blueprint(DB_PATH, FILE_SPOOL_DIR, login_required,
                                               access, hub_url=HUB_URL))
+# Live folder copy between two PCs (Files tab, roadmap #13). Its own blueprint rather than
+# more routes on files_web: it holds in-memory state (the relay window) and checks TWO
+# machines' scope, neither of which the spool-based transfers above do.
+app.register_blueprint(create_folder_relay_blueprint(DB_PATH, login_required, access))
 # The rules engine. resolve_rule_vars and _rules_config are handed in for the same reason
 # the evaluator thread takes them: rules.py stays free of Flask, settings and sensor parsing.
 # Wrapped in lambdas because both are defined further down this file than blueprints are
@@ -7600,6 +7605,12 @@ def inject_nav_context():
         context["user_capabilities"] = current["capabilities"]
         context["is_superuser"] = current["superuser"]
         context["open_alert_count"] = _scoped_open_alert_count()
+        # First paint for the Tickets badge (roadmap #31), counted exactly as
+        # /api/tickets/count counts it so the number does not jump on the first refresh.
+        # Only for callers who see the Tickets link at all.
+        if permissions.VIEW_TICKETS in current["capabilities"]:
+            context["open_ticket_count"] = len(access.filter_machines(
+                tickets.open_ticket_machines(DB_PATH)))
         # Whether this page opens the live socket (static/js/fleet-live.js). The same test
         # handle_socket_connect applies, so a page never opens a socket the hub will refuse.
         context["live_enabled"] = permissions.has_capability(current, permissions.VIEW)

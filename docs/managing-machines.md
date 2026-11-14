@@ -212,6 +212,35 @@ are deliberately refused by the generic `POST /api/fleet/commands` endpoint and 
 saved as favorites: the guards above live on the dedicated route, and a saved PID is a
 different process by tomorrow.
 
+### Sending folders to another PC, and backing them up, from the Files tab
+
+Tick one or more **folders** (not files, not a drive) and right-click:
+
+- **Send to another computer…** copies them, live, to another PC you manage. Pick the PC
+  and a folder on it (default `C:\Incoming`); each folder lands inside it under its own
+  name. The copy streams through the hub, which only ever holds a few megabytes of it, so
+  there is no size limit -- a 40 GB profile copies at the speed of the slower PC. A line
+  under the file list shows progress and has **Cancel copy**; you can keep browsing while it
+  runs.
+  - Nothing on the source PC changes. It is a copy, not a move.
+  - Files already on the target are **kept**, not replaced, and the result counts them.
+  - A file the source cannot read -- one held open exclusively, such as an Outlook .pst in
+    use -- is skipped and named in the command output; the rest still copies.
+  - A file cut off mid-copy is thrown away on the target (it is written as `*.fhpart` and
+    renamed only when complete), so the target never holds a truncated file.
+  - **Both PCs need agent 3.51.0 or newer.** Older PCs appear in the list greyed out, with
+    their version. A copy with no progress for 15 minutes (a PC went offline) is failed.
+  - Needs `issue_commands` on **both** PCs: the target list only holds PCs in your scope.
+- **Back up…** takes a one-off backup of the selected folders to the backup destination --
+  see [Backups](backups.md#one-off-backup-of-picked-folders). Needs `manage_backups`; the
+  menu entry is not shown without it.
+
+**Endpoints:** `POST /api/machines/<source>/files/send` with
+`{"paths": [...], "target": "<pc>", "destination": "D:\Incoming"}` (`issue_commands` +
+scope on the source and on the target), then `GET .../files/send/<id>` for progress and
+`POST .../files/send/<id>/cancel`. The agents talk to `/api/agent/files/stream/<id>/*`. The
+two commands, `stream_send` and `stream_receive`, are refused by the generic command endpoint.
+
 ### Disk usage in the Files tab (folder sizes, what changed, when it is full)
 
 Every Windows agent from **3.40.0** reads each fixed NTFS volume's Master File Table once a day.
@@ -455,6 +484,11 @@ lands on the hub's **Tickets** page next to the machine's facts as they were at 
 moment (roadmap #31). Replies go both ways: an operator's reply, unless it is marked
 internal, appears under **My tickets** in the same icon with a notification, and the
 person can answer there.
+
+**The sidebar count.** *Tickets* in the sidebar carries the number of open tickets -- *new*,
+*open* or *waiting*, not *resolved* or *closed* -- on the PCs you can see, the same way
+*Alerts* does, and it updates live as tickets arrive or change status. It is hidden at zero
+and for operators without `view_tickets`. `GET /api/tickets/count`.
 
 **Turning it on.** Settings -> Tickets -> *Keep the ticket tray running on PCs*. Off by
 default. Within one heartbeat of switching it on, every Windows agent newer than 3.44.0

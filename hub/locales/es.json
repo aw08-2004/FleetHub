@@ -4237,7 +4237,9 @@
         "one": "{count} elemento seleccionado",
         "other": "{count} elementos seleccionados"
       },
-      "size_history": "Historial de tamaño"
+      "size_history": "Historial de tamaño",
+      "send": "Enviar a otro equipo…",
+      "backup": "Hacer copia de seguridad…"
     },
     "open_title": "Abrir en ese PC",
     "open_help": "Iniciar {name} en ese PC.",
@@ -4328,7 +4330,36 @@
       "col": "El {date}",
       "not_there": "no estaba",
       "gone": "eliminado desde entonces"
-    }
+    },
+    "send_title": "Enviar a otro equipo",
+    "send_help": {
+      "one": "Copiar esta carpeta a otro equipo, en directo. En este equipo no cambia nada.",
+      "other": "Copiar estas {count} carpetas a otro equipo, en directo. En este equipo no cambia nada."
+    },
+    "send_target": "Equipo",
+    "send_destination": "En esta carpeta del otro equipo",
+    "send_destination_help": "Cada carpeta se coloca dentro con su propio nombre. Los archivos que ya existan se conservan, no se reemplazan.",
+    "send_ok": "Enviar",
+    "send_pick_target": "Elija un equipo de destino.",
+    "send_no_targets": "Ningún otro equipo que usted administre puede recibir aún una copia en directo. Necesita el agente {needed} o posterior.",
+    "send_target_old": "{name} (agente {version}, necesita {needed})",
+    "send_need_agent": "Este PC tiene el agente {version}; una copia en directo necesita {needed} o posterior.",
+    "send_waiting": "Copia a {target}: esperando a ambos equipos…",
+    "send_progress": "Copia a {target}: {done} de {total} ({percent} %)",
+    "send_progress_unknown": "Copia a {target}: {done} enviados",
+    "send_done": "La copia a {target} ha terminado.",
+    "send_failed": "La copia a {target} ha fallado: {error}",
+    "send_cancelled": "La copia a {target} se ha cancelado.",
+    "send_lost": "El hub ha perdido el rastro de esta copia (puede que se haya reiniciado).",
+    "send_cancel": "Cancelar copia",
+    "backup_title": "Hacer copia de seguridad de estas carpetas",
+    "backup_help": {
+      "one": "Una copia de seguridad puntual de esta carpeta en el destino de copias, separada de las copias programadas.",
+      "other": "Una copia de seguridad puntual de estas {count} carpetas en el destino de copias, separada de las copias programadas."
+    },
+    "backup_ok": "Hacer copia",
+    "backup_started": "Copia de seguridad iniciada. Siga su progreso en la pestaña Copia de seguridad.",
+    "backup_queued": "Copia de seguridad en cola: {message}"
   },
   "patches": {
     "classification": {
