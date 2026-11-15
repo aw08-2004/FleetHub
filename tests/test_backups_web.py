@@ -504,6 +504,11 @@ def main():
         r = c.post("/api/backups/machines/HOSPITAL-1/run",
                    json={"paths": ["D:\\Shared\\Finance"]})
         check("a selection is accepted", r.status_code == 202)
+        r = c.post("/api/backups/machines/HOSPITAL-1/run",
+                   json={"paths": ["D:\\Shared\\Finance\\budget.xlsx"]})
+        check("a selection naming a file is accepted too", r.status_code == 202)
+        r = c.post("/api/backups/machines/HOSPITAL-1/run",
+                   json={"paths": ["D:\\Shared\\Finance"]})
         check("...and the folders wait with the request",
               backups.get_machine_config(db_path, "HOSPITAL-1")["run_requested_paths"]
               == ["D:\\Shared\\Finance"])

@@ -134,6 +134,39 @@ public class FolderStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task AFileAndAFolder_ArriveSideBySide()
+    {
+        // A picked file lands directly in the destination; a picked folder lands under its
+        // own name. The receiver is the 3.51.0 one -- files needed no change on that side.
+        var report = new byte[300_000];
+        Random.Shared.NextBytes(report);
+        var file = Make(@"src\Report.xlsx", report);
+        Make(@"src\Docs\a.txt", "a"u8.ToArray());
+        var dest = Path.Combine(_root, "dest");
+
+        var relay = new FakeRelay();
+        var (sent, received) = await CopyAsync(relay, dest, file, Path.Combine(_root, @"src\Docs"));
+
+        Assert.True(sent.Success, sent.Output);
+        Assert.True(received.Success, received.Output);
+        Assert.Equal(report, File.ReadAllBytes(Path.Combine(dest, "Report.xlsx")));
+        Assert.Equal("a", File.ReadAllText(Path.Combine(dest, @"Docs\a.txt")));
+        Assert.Contains("sent 2 file(s)", sent.Output);
+    }
+
+    [Fact]
+    public async Task APickedFileThatIsGone_FailsTheCopyByName()
+    {
+        // Left out quietly, the copy would report success without the one thing asked for.
+        var missing = Path.Combine(_root, @"src\gone.txt");
+        var relay = new FakeRelay();
+        var (sent, received) = await CopyAsync(relay, Path.Combine(_root, "dest"), missing);
+        Assert.False(sent.Success);
+        Assert.Contains("gone.txt", sent.Output);
+        Assert.False(received.Success);
+    }
+
+    [Fact]
     public async Task AnExistingFile_IsKeptNotReplaced()
     {
         Make(@"src\Docs\x.txt", "new"u8.ToArray());

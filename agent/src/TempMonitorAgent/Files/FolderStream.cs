@@ -287,7 +287,15 @@ internal sealed class RelayChunkReader(HttpClient http, string baseUrl)
 }
 
 /// <summary>
-/// stream_send: read one or more folders and stream them, live, to another PC through the hub.
+/// stream_send: read the files and folders an operator picked and stream them, live, to another
+/// PC through the hub.
+///
+/// <b>Files as well as folders since 3.52.0.</b> A picked file goes across as one file record at
+/// the top of the stream, so it lands directly in the destination folder; a picked folder goes
+/// across whole, as before. The receiver needed no change for this -- a 3.51.0 receiver writes a
+/// top-level file record like any other -- so only the SENDER's version gates it (MIN_STREAM_
+/// FILES_AGENT in static/js/files.js). A 3.51.0 sender given a file refuses the whole copy with
+/// "is not a file or a folder" rather than leaving it out.
 ///
 /// <b>Nothing on this machine changes.</b> It is a copy; the owner rejected "move" for the
 /// first version (2026-11-14) because the delete would run on the strength of a target that
@@ -372,7 +380,9 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
         return CommandResult.Ok(Summary(tally, writer.BytesSent));
     }
 
-    /// <summary>The folders to send, each checked by PathRules, or the reason there are none.</summary>
+    /// <summary>The files and folders to send, each checked by PathRules, or the reason there
+    /// are none. Every one must exist now: a picked item that has gone since the listing is
+    /// refused by name rather than quietly left out of a copy that then reports success.</summary>
     private static (List<string> Roots, string? Refusal) ResolveRoots(JsonArray? paths)
     {
         var roots = new List<string>();
@@ -382,17 +392,28 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
             var refusal = PathRules.Reject(raw);
             if (refusal is not null) return (roots, refusal);
             var path = PathRules.Normalize(raw);
-            if (!Directory.Exists(path)) return (roots, $"{path} is not a folder.");
+            if (!Directory.Exists(path) && !File.Exists(path))
+                return (roots, $"{path} is not a file or a folder on this PC.");
             roots.Add(path);
         }
-        return roots.Count == 0 ? (roots, "No folders were named.") : (roots, null);
+        return roots.Count == 0 ? (roots, "Nothing was named to send.") : (roots, null);
     }
 
-    /// <summary>One selected folder and everything under it, depth first, junctions skipped.</summary>
+    /// <summary>One selected item: a file as a single record, a folder and everything under
+    /// it depth first, junctions skipped either way.</summary>
     private static async Task WriteTreeAsync(RelayChunkWriter writer, string root, byte[] block,
                                              Tally tally, CancellationToken ct)
     {
         var name = Path.GetFileName(root);
+        if (File.Exists(root))
+        {
+            var file = new FileInfo(root);
+            if (IsLink(file)) return;
+            var problem = await WriteFileAsync(writer, name, file, block, ct);
+            if (problem is null) tally.Files++;
+            else tally.Unreadable.Add($"{file.FullName} ({problem})");
+            return;
+        }
         await WriteFolderAsync(writer, name, ct);
         tally.Folders++;
         var stack = new Stack<(DirectoryInfo Dir, string Rel)>();
@@ -446,7 +467,7 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
     private static string Summary(Tally tally, long bytesSent)
     {
         var summary = new StringBuilder(
-            $"[files] sent {tally.Files} file(s) in {tally.Folders} folder(s), {Mb(bytesSent)} on the wire");
+            $"[files] sent {tally.Files} file(s) and {tally.Folders} folder(s), {Mb(bytesSent)} on the wire");
         var unreadable = tally.Unreadable;
         if (unreadable.Count > 0)
         {
@@ -533,6 +554,12 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
 
     private static void Measure(string root, ref long bytes, ref long count, CancellationToken ct)
     {
+        if (File.Exists(root))
+        {
+            bytes += new FileInfo(root).Length;
+            count++;
+            return;
+        }
         var stack = new Stack<DirectoryInfo>();
         stack.Push(new DirectoryInfo(root));
         while (stack.Count > 0)

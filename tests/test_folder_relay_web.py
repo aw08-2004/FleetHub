@@ -136,6 +136,13 @@ def main():
         check("a relative destination is refused", r.status_code == 400)
         r = c.post("/api/machines/PC-1/files/send", json=dict(body, paths=[]))
         check("no folders is refused", r.status_code == 400)
+        # Files as well as folders: the hub has only paths, and must not refuse one for
+        # looking like a file. Which it is is the source agent's to find out.
+        r = c.post("/api/machines/PC-1/files/send",
+                   json=dict(body, paths=["C:\\Users\\bob\\Report.xlsx",
+                                          "C:\\Users\\bob\\Documents"]))
+        check("a file and a folder together are accepted", r.status_code == 201)
+        relay.cancel(r.get_json()["transfer_id"])
 
         print("\n== Both ends' agents must be new enough ==")
         set_version(db_path, "PC-2", "3.50.0")

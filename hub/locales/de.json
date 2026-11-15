@@ -4333,12 +4333,12 @@
     },
     "send_title": "An anderen Computer senden",
     "send_help": {
-      "one": "Diesen Ordner live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts.",
-      "other": "Diese {count} Ordner live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts."
+      "one": "Dieses Objekt live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts.",
+      "other": "Diese {count} Objekte live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts."
     },
     "send_target": "Computer",
     "send_destination": "In diesen Ordner auf dem anderen Computer",
-    "send_destination_help": "Jeder Ordner landet darin unter seinem eigenen Namen. Bereits vorhandene Dateien bleiben erhalten und werden nicht ersetzt.",
+    "send_destination_help": "Jede Datei und jeder Ordner landet darin unter dem eigenen Namen. Bereits vorhandene Dateien bleiben erhalten und werden nicht ersetzt.",
     "send_ok": "Senden",
     "send_pick_target": "Wählen Sie einen Zielcomputer.",
     "send_no_targets": "Kein anderer von Ihnen verwalteter Computer kann bisher eine Live-Kopie empfangen. Dafür ist Agent {needed} oder neuer nötig.",
@@ -4352,14 +4352,15 @@
     "send_cancelled": "Kopie nach {target} wurde abgebrochen.",
     "send_lost": "Der Hub hat diese Kopie aus den Augen verloren (möglicherweise wurde er neu gestartet).",
     "send_cancel": "Kopie abbrechen",
-    "backup_title": "Diese Ordner sichern",
+    "backup_title": "Diese Objekte sichern",
     "backup_help": {
-      "one": "Eine einmalige Sicherung dieses Ordners am Sicherungsziel, getrennt von den geplanten Sicherungen.",
-      "other": "Eine einmalige Sicherung dieser {count} Ordner am Sicherungsziel, getrennt von den geplanten Sicherungen."
+      "one": "Eine einmalige Sicherung dieses Objekts am Sicherungsziel, getrennt von den geplanten Sicherungen.",
+      "other": "Eine einmalige Sicherung dieser {count} Objekte am Sicherungsziel, getrennt von den geplanten Sicherungen."
     },
     "backup_ok": "Sichern",
     "backup_started": "Sicherung gestartet. Den Fortschritt sehen Sie im Tab Sicherung.",
-    "backup_queued": "Sicherung eingereiht: {message}"
+    "backup_queued": "Sicherung eingereiht: {message}",
+    "files_need_agent": "Dieser PC hat Agent {version}; zum Senden oder Sichern einer Datei ist {needed} oder neuer nötig. Ordner funktionieren schon jetzt: Wählen Sie die Dateien ab oder aktualisieren Sie den Agent."
   },
   "patches": {
     "classification": {

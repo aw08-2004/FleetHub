@@ -224,10 +224,10 @@ and reports which files it could not read, rather than failing.
 **Junctions are never followed.** A Windows profile contains junctions pointing at their
 own ancestors; following them is an infinite walk.
 
-### One-off backup of picked folders
+### One-off backup of picked files and folders
 
-In a PC's **Files** tab, tick one or more folders, right-click and choose **Back up…**. That
-queues one backup of just those folders to the PC's backup destination -- the same request
+In a PC's **Files** tab, tick any files and folders, right-click and choose **Back up…**. That
+queues one backup of just those to the PC's backup destination -- the same request
 as **Back up now**, so it waits for an offline PC, respects the concurrency limit and can be
 cancelled from the Backup tab. It shows in the run list with the trigger **selection**.
 

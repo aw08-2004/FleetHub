@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` and `beta` are both at hub **1.179.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.179.0**; `beta` is at **1.180.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -686,6 +686,19 @@ greys *Send to another computer* out on anything older. Deploy the hub first.
 - [ ] **Tickets badge.** With open tickets on a PC in scope, *Tickets* in the sidebar shows
   their number; closing one in another tab drops it without a reload. A scoped operator's
   number counts only their PCs; an operator without *view_tickets* sees no badge.
+
+**Hub 1.180.0 + agent 3.52.0 (beta) -- Send and Back up take files as well as folders**
+Needs agent **3.52.0** cut with `-Channel beta` on the PC the files are on; the receiving PC
+only needs 3.51.0. Deploy the hub first.
+- [ ] **Mixed send.** In the Files tab of a 3.52.0 PC, tick a file and a folder, *Send to
+  another computer…*. On the target the file sits directly in the destination folder and the
+  folder under its own name, both complete.
+- [ ] **A file that has gone.** Tick a file, delete it on the PC, then send: the copy fails
+  and the error names the file.
+- [ ] **Backup of a file.** Tick one file, *Back up…*. The run on the Backup tab lists that
+  one file and it restores. Tick a file the backup excludes (a `*.tmp`, say): it is left out.
+- [ ] **Old agent.** On a PC still on 3.51.0, tick a file: *Send* and *Back up* say the PC
+  needs 3.52.0 for files. Tick only folders: both work as before.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -4470,6 +4483,16 @@ other (a zip's directory is at its end, so nothing lands until the last byte doe
 read with `FileShare.ReadWrite | Delete` and no shadow copy, so an exclusively-open file is
 skipped and named rather than failing the copy -- a VSS snapshot was rejected as minutes of
 setup and gigabytes of diff area for what is usually a handful of folders.
+
+**Files as well as folders (hub 1.180.0 + agent 3.52.0).** The first version took folders only,
+which was read too literally from the request; an operator migrating a PC wants the odd file
+too. A picked file is one file record at the top of the stream, so the RECEIVER needed no
+change and stays at 3.51.0, and the hub needed none either -- it only ever had paths. What did
+need the source agent: the sender refused anything that was not a folder, and the backup walk
+skipped a file root as "does not exist" while the run went green, which is why the console
+gates a selection holding a file on MIN_PICKED_FILES_AGENT (3.52.0) for the SOURCE PC.
+Rejected: making the hub tell files from folders so it could gate server-side -- it would
+need a listing per request, and a path can change kind between the listing and the copy.
 
 **One-off folder backup (hub 1.179.0, no agent change).** *Back up…* in the same menu is the
 Backup tab's "Back up now" with `paths`: the same request slot, dispatcher, throttle and

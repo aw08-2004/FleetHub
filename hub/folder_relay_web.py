@@ -82,23 +82,24 @@ def _agent_refused():
 
 
 def _clean_paths(raw_paths):
-    """The folders to send, validated, or _RelayRefusal. Each must be a folder below a drive
+    """The files and folders to send, validated, or _RelayRefusal. Each must be below a drive
     root, and no two may share a name -- they would land in the same place on the target and
-    the second would be merged into the first without anybody asking."""
+    the second would be merged into the first without anybody asking. Whether each is a file
+    or a folder is the source agent's to find out: the hub has only the path."""
     if not isinstance(raw_paths, list) or not raw_paths:
-        raise _RelayRefusal("Pick at least one folder to send.")
+        raise _RelayRefusal("Pick at least one file or folder to send.")
     if len(raw_paths) > files.MAX_OPERATION_PATHS:
-        raise _RelayRefusal(f"Send at most {files.MAX_OPERATION_PATHS} folders at a time.")
+        raise _RelayRefusal(f"Send at most {files.MAX_OPERATION_PATHS} items at a time.")
     paths, names = [], set()
     for raw in raw_paths:
         path = files.validate_path(raw)
         if files.parent_path(path) is None:
             # A drive root has no name to land under, and "send C:\" is a request for a
             # whole disk, which is not what the menu item means.
-            raise _RelayRefusal("Pick folders, not a whole drive.")
+            raise _RelayRefusal("Pick files or folders, not a whole drive.")
         name = path.rsplit("\\", 1)[-1].lower()
         if name in names:
-            raise _RelayRefusal("Two of those folders have the same name.")
+            raise _RelayRefusal("Two of those items have the same name.")
         names.add(name)
         paths.append(path)
     return paths
@@ -139,10 +140,10 @@ class _RelayRoutes:
 
     # ---------------- console ----------------
     def send_folders(self, machine):
-        """Copy one or more folders from this machine into a folder on another.
+        """Copy files and folders from this machine into a folder on another.
 
         Body: `{"paths": [...], "target": "<machine>", "destination": "D:\\\\Incoming"}`.
-        Each folder lands as `<destination>\\<its own name>`; nothing on the source changes.
+        Each item lands as `<destination>\\<its own name>`; nothing on the source changes.
         """
         # Restated at the route for the reason files_web._require_json gives: this is the
         # control that stops a cross-site form from starting a copy.

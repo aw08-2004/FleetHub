@@ -1903,7 +1903,7 @@ def request_file_run(db_path, machine, actor="system", now=None, paths=None):
     if paths is not None:
         clean = backup_paths.validate_patterns(paths, kind="include")
         if not clean:
-            raise ValueError("Pick at least one folder to back up.")
+            raise ValueError("Pick at least one file or folder to back up.")
         paths_json = json.dumps(clean)
     now = int(time.time() if now is None else now)
     with get_conn(db_path) as conn:

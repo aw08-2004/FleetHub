@@ -1008,7 +1008,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         data = request.get_json(silent=True) or {}
         paths = data.get("paths")
         if paths is not None and (not isinstance(paths, list) or not paths):
-            return jsonify({"error": "Pick at least one folder to back up."}), 400
+            return jsonify({"error": "Pick at least one file or folder to back up."}), 400
         problem = (_why_selection_not_runnable(machine) if paths is not None
                    else _why_not_runnable(machine))
         if problem:
