@@ -51,6 +51,10 @@ import settings
 _bearer_agent = auth_helpers.bearer_agent
 
 
+#: Said wherever a backup cannot run for want of a key. One sentence, so the Backup tab's
+#: banner and both run routes cannot drift into three wordings of the same fact.
+NO_KEY_YET = "No backup encryption key exists yet. Create one first."
+
 def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                              hub_version="", hub_url="", machine_roster=None):
     """Build the backups Blueprint.
@@ -88,7 +92,7 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
             return None, refusals.refuse(e)
         if key is None:
             return None, (jsonify({
-                "error": "No backup encryption key exists yet. Create one first."
+                "error": NO_KEY_YET
             }), 409)
         return key, None
 
@@ -201,7 +205,18 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         if not effective["include"]:
             return "No paths are selected to back up."
         if backups.machine_key_for(machine) is None:
-            return "No backup encryption key exists yet. Create one first."
+            return NO_KEY_YET
+        return None
+
+    def _why_selection_not_runnable(machine):
+        """The one-off selection backup's version of _why_not_runnable: a destination and a
+        key, and nothing about the schedule -- see backups.TRIGGER_SELECTION."""
+        effective = backups.effective_file_config(db_path, machine,
+                                                  **_fleet_file_defaults())
+        if not effective["destination_id"]:
+            return "No backup destination is set for this machine."
+        if backups.machine_key_for(machine) is None:
+            return NO_KEY_YET
         return None
 
     # What `_key_state` says when BACKUP_MASTER_KEY is present but unusable -- truncated,
@@ -979,19 +994,36 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
     @login_required
     @access.require_machine(permissions.MANAGE_BACKUPS)
     def run_machine_backup(machine):
-        """Back up one PC now, or as soon as it is reachable."""
+        """Back up one PC now, or as soon as it is reachable.
+
+        With `paths` in the body it is a one-off backup of just those folders -- the Files
+        tab's "Back up" (backups.TRIGGER_SELECTION). Same request slot, same dispatcher,
+        same throttle and cancel; what differs is that it needs only a destination and a
+        key, not a switched-on schedule with paths of its own, and that its chain is kept
+        apart from the scheduled ones.
+        """
         bad = _require_json()
         if bad:
             return bad
-        problem = _why_not_runnable(machine)
+        data = request.get_json(silent=True) or {}
+        paths = data.get("paths")
+        if paths is not None and (not isinstance(paths, list) or not paths):
+            return jsonify({"error": "Pick at least one folder to back up."}), 400
+        problem = (_why_selection_not_runnable(machine) if paths is not None
+                   else _why_not_runnable(machine))
         if problem:
             return jsonify({"error": problem}), 400
 
         online = next((backups.roster_entry(e)[1] for e in _roster([machine])), False)
-        backups.request_file_run(db_path, machine, actor=_current_email())
-        fleet.audit(db_path, actor=_current_email(), action="backup_files_run",
-                    level=fleet.LEVEL_NOTICE,
-                    target=machine, detail={"online": online})
+        try:
+            backups.request_file_run(db_path, machine, actor=_current_email(), paths=paths)
+        except ValueError as e:
+            return refusals.refuse(e)
+        fleet.audit(db_path, actor=_current_email(),
+                    action="backup_files_run" if paths is None else "backup_files_selection",
+                    level=fleet.LEVEL_NOTICE, target=machine,
+                    detail={"online": online} if paths is None
+                    else {"online": online, "paths": list(paths)[:50]})
         _dispatch_files([machine])
         status, message = _run_state(machine, online)
         payload = _machine_backup_payload(machine)

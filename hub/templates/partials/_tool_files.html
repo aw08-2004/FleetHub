@@ -56,6 +56,13 @@
         <p class="stat-card__meta" id="files-clipboard" hidden></p>
         <p class="setting__error" id="files-error" hidden></p>
         <p class="stat-card__meta" id="files-note" hidden></p>
+        {# A running live copy. Its own line rather than the status pill: a copy of a profile
+           can take an hour, and the operator keeps browsing meanwhile -- the pill belongs to
+           whatever folder they are looking at now. #}
+        <div class="files-send-status" id="files-send-status" hidden>
+            <p class="stat-card__meta" id="files-send-text"></p>
+            <button type="button" class="btn btn--ghost" id="files-send-cancel">{{ t('files.send_cancel') }}</button>
+        </div>
         {# Where the folder sizes came from, and how old they are. Said every time, because a
            size from this morning's scan beside a folder somebody emptied an hour ago looks
            like a bug unless the page says when it was measured. #}
@@ -202,6 +209,16 @@
                     class="files-menu__item">{{ t('files.download') }}</button>
             <button type="button" role="menuitem" id="files-menu-upload"
                     class="files-menu__item">{{ t('files.menu.upload') }}</button>
+            {# Folders only, one or many: a live copy to another PC (hub/folder_relay.py), and a
+               one-off backup to the backup destination. Back up is the one entry here that is
+               OMITTED rather than greyed: it needs manage_backups, which the rest of this panel
+               does not, and a permanently grey entry an operator can never use is noise. #}
+            <button type="button" role="menuitem" id="files-menu-send"
+                    class="files-menu__item">{{ t('files.menu.send') }}</button>
+            {% if cap.MANAGE_BACKUPS in user_capabilities %}
+            <button type="button" role="menuitem" id="files-menu-backup"
+                    class="files-menu__item">{{ t('files.menu.backup') }}</button>
+            {% endif %}
             <span class="files-menu__sep" role="separator"></span>
             <button type="button" role="menuitem" id="files-menu-copy"
                     class="files-menu__item">{{ t('files.copy') }}</button>

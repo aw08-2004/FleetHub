@@ -4237,7 +4237,9 @@
         "one": "{count} Objekt ausgewählt",
         "other": "{count} Objekte ausgewählt"
       },
-      "size_history": "Größenverlauf"
+      "size_history": "Größenverlauf",
+      "send": "An anderen Computer senden…",
+      "backup": "Sichern…"
     },
     "open_title": "Auf diesem PC öffnen",
     "open_help": "{name} auf diesem PC starten.",
@@ -4328,7 +4330,36 @@
       "col": "Am {date}",
       "not_there": "nicht vorhanden",
       "gone": "seitdem entfernt"
-    }
+    },
+    "send_title": "An anderen Computer senden",
+    "send_help": {
+      "one": "Diesen Ordner live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts.",
+      "other": "Diese {count} Ordner live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts."
+    },
+    "send_target": "Computer",
+    "send_destination": "In diesen Ordner auf dem anderen Computer",
+    "send_destination_help": "Jeder Ordner landet darin unter seinem eigenen Namen. Bereits vorhandene Dateien bleiben erhalten und werden nicht ersetzt.",
+    "send_ok": "Senden",
+    "send_pick_target": "Wählen Sie einen Zielcomputer.",
+    "send_no_targets": "Kein anderer von Ihnen verwalteter Computer kann bisher eine Live-Kopie empfangen. Dafür ist Agent {needed} oder neuer nötig.",
+    "send_target_old": "{name} (Agent {version}, benötigt {needed})",
+    "send_need_agent": "Dieser PC hat Agent {version}; eine Live-Kopie benötigt {needed} oder neuer.",
+    "send_waiting": "Kopie nach {target}: warte auf beide Computer…",
+    "send_progress": "Kopie nach {target}: {done} von {total} ({percent} %)",
+    "send_progress_unknown": "Kopie nach {target}: {done} gesendet",
+    "send_done": "Kopie nach {target} abgeschlossen.",
+    "send_failed": "Kopie nach {target} fehlgeschlagen: {error}",
+    "send_cancelled": "Kopie nach {target} wurde abgebrochen.",
+    "send_lost": "Der Hub hat diese Kopie aus den Augen verloren (möglicherweise wurde er neu gestartet).",
+    "send_cancel": "Kopie abbrechen",
+    "backup_title": "Diese Ordner sichern",
+    "backup_help": {
+      "one": "Eine einmalige Sicherung dieses Ordners am Sicherungsziel, getrennt von den geplanten Sicherungen.",
+      "other": "Eine einmalige Sicherung dieser {count} Ordner am Sicherungsziel, getrennt von den geplanten Sicherungen."
+    },
+    "backup_ok": "Sichern",
+    "backup_started": "Sicherung gestartet. Den Fortschritt sehen Sie im Tab Sicherung.",
+    "backup_queued": "Sicherung eingereiht: {message}"
   },
   "patches": {
     "classification": {

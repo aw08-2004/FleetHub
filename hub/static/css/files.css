@@ -363,3 +363,15 @@ button.files-name:focus-visible {
         display: none;
     }
 }
+
+/* A running live copy to another PC (files.js, watchSend). One line of progress and its
+   Cancel, kept apart from the status pill -- see the note in _tool_files.html. */
+.files-send-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+.files-send-status[hidden] {
+    display: none;
+}
