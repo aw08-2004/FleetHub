@@ -536,6 +536,12 @@ def main():
         r = c.post("/api/backups/machines/HOSPITAL-1/run",
                    json={"paths": [shared + "\\Finance"]})
         check("a folder a listing confirms is accepted on 3.51.0", r.status_code == 202)
+        # A token-led pattern is valid for a backup but is no path a listing can show. It
+        # used to raise out of the gate as a 500 (review on #211).
+        r = c.post("/api/backups/machines/HOSPITAL-1/run",
+                   json={"paths": ["%Users%\\Documents"]})
+        check("a token path on a 3.51.0 agent is refused, not a 500", r.status_code == 409)
+        check("...saying it uses a token", "token" in r.get_json()["error"])
         set_version(db_path, "HOSPITAL-1", "3.52.0")
         r = c.post("/api/backups/machines/HOSPITAL-1/run",
                    json={"paths": ["D:\\Shared\\Finance"]})

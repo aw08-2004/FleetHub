@@ -731,6 +731,9 @@ def agent_version(db_path, machine):
 KIND_FOLDER = "folder"
 KIND_NOT_FOLDER = "not_folder"
 KIND_UNLISTED = "unlisted"
+#: Not a plain path at all -- a backup token such as `%Users%\Documents`, which only the agent
+#: expands. No listing can ever vouch for one, so it is neither "refresh" nor "a file".
+KIND_UNCHECKABLE = "uncheckable"
 
 
 def listed_kinds(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
@@ -746,7 +749,13 @@ def listed_kinds(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
     kinds = dict.fromkeys(paths, KIND_UNLISTED)
     by_parent = {}
     for path in paths:
-        parent = parent_path(path)
+        try:
+            parent = parent_path(path)
+        except ValueError:
+            # The backup route takes token-led patterns, which validate_path refuses. Found
+            # by review on #211: this raised out of the route as a 500.
+            kinds[path] = KIND_UNCHECKABLE
+            continue
         if parent is not None:
             by_parent.setdefault(parent.lower(), []).append(path)
     try:
@@ -806,6 +815,13 @@ def picked_files_refusal(db_path, machine, paths, now=None):
         return (f"{files_[0]} is a file, and {machine} needs agent {need} or newer to send or "
                 "back up a file. Folders work on its agent now: untick the files, or update "
                 "the agent.")
+    tokens = [p for p in paths if kinds[p] == KIND_UNCHECKABLE]
+    if tokens:
+        # Refused, not waved through: a token can name a file as easily as a folder, and on
+        # this agent a file is the silent failure the whole check exists for.
+        return (f"{tokens[0]} uses a token, so the hub cannot check whether it is a file or a "
+                f"folder, and {machine} needs agent {need} or newer before it can be given a "
+                "file. Name the folder in full, or update the agent.")
     unlisted = [p for p in paths if kinds[p] == KIND_UNLISTED]
     if unlisted:
         return (f"The hub cannot tell whether {unlisted[0]} is a file or a folder: the folder "
