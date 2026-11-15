@@ -293,9 +293,10 @@ internal sealed class RelayChunkReader(HttpClient http, string baseUrl)
 /// <b>Files as well as folders since 3.52.0.</b> A picked file goes across as one file record at
 /// the top of the stream, so it lands directly in the destination folder; a picked folder goes
 /// across whole, as before. The receiver needed no change for this -- a 3.51.0 receiver writes a
-/// top-level file record like any other -- so only the SENDER's version gates it (MIN_STREAM_
-/// FILES_AGENT in static/js/files.js). A 3.51.0 sender given a file refuses the whole copy with
-/// "is not a file or a folder" rather than leaving it out.
+/// top-level file record like any other -- so only the SENDER's version gates it
+/// (MIN_PICKED_FILES_AGENT in static/js/files.js, and files.MIN_PICKED_FILES_AGENT on
+/// the hub). A 3.51.0 sender given a file refuses the whole copy ("... is not a folder.")
+/// rather than leaving it out.
 ///
 /// <b>Nothing on this machine changes.</b> It is a copy; the owner rejected "move" for the
 /// first version (2026-11-14) because the delete would run on the strength of a target that
@@ -408,10 +409,7 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
         if (File.Exists(root))
         {
             var file = new FileInfo(root);
-            if (IsLink(file)) return;
-            var problem = await WriteFileAsync(writer, name, file, block, ct);
-            if (problem is null) tally.Files++;
-            else tally.Unreadable.Add($"{file.FullName} ({problem})");
+            if (!IsLink(file)) await WriteCountedFileAsync(writer, name, file, block, tally, ct);
             return;
         }
         await WriteFolderAsync(writer, name, ct);
@@ -435,11 +433,7 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
                 continue;
             }
             foreach (var file in files.Where(f => !IsLink(f)))
-            {
-                var problem = await WriteFileAsync(writer, $"{rel}/{file.Name}", file, block, ct);
-                if (problem is null) tally.Files++;
-                else tally.Unreadable.Add($"{file.FullName} ({problem})");
-            }
+                await WriteCountedFileAsync(writer, $"{rel}/{file.Name}", file, block, tally, ct);
             foreach (var sub in subs.Where(d => !IsLink(d)))
             {
                 var subRel = $"{rel}/{sub.Name}";
@@ -448,6 +442,17 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
                 stack.Push((sub, subRel));
             }
         }
+    }
+
+    /// <summary>One file record, counted as sent or as unreadable -- the same two outcomes for
+    /// a picked file and for a file found inside a picked folder.</summary>
+    private static async Task WriteCountedFileAsync(RelayChunkWriter writer, string rel,
+                                                    FileInfo file, byte[] block, Tally tally,
+                                                    CancellationToken ct)
+    {
+        var problem = await WriteFileAsync(writer, rel, file, block, ct);
+        if (problem is null) tally.Files++;
+        else tally.Unreadable.Add($"{file.FullName} ({problem})");
     }
 
     private static bool IsLink(FileSystemInfo info) =>

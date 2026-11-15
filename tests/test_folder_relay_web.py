@@ -63,6 +63,13 @@ def set_version(db_path, machine, version):
                      (machine, version))
 
 
+def seed_listing(db_path, machine, folder, entries):
+    """Store a ready listing of `folder`, as the Files tab leaves behind when an operator
+    opens it. What the hub's file-or-folder check reads (files.confirmed_folders)."""
+    request_id, _clean = files.create_listing(db_path, machine, folder)
+    files.record_listing(db_path, request_id, machine, {"entries": entries, "path": folder})
+
+
 def main():
     global CURRENT_USER
     db_fd, db_path = tempfile.mkstemp(suffix=".db")
@@ -95,7 +102,7 @@ def main():
         for name in ("PC-1", "PC-2", "PC-3"):
             agent_id, token = fleet.enroll_agent(db_path, name, SECRET, SECRET)
             ids[name] = {"Authorization": f"Bearer {agent_id}:{token}"}
-            set_version(db_path, name, "3.51.0")
+            set_version(db_path, name, "3.52.0")
 
         relay = folder_relay.FolderRelay()
         app.register_blueprint(create_folder_relay_blueprint(
@@ -143,6 +150,27 @@ def main():
                                           "C:\\Users\\bob\\Documents"]))
         check("a file and a folder together are accepted", r.status_code == 201)
         relay.cancel(r.get_json()["transfer_id"])
+
+        print("\n== A picked file needs agent 3.52.0 on the source ==")
+        # The silent failure upstream: an older agent drops a file from a BACKUP and reports
+        # success. The send route applies the same rule so the two never disagree.
+        set_version(db_path, "PC-1", "3.51.0")
+        docs = "C:" + "\\Users" + "\\bob"
+        r = c.post("/api/machines/PC-1/files/send",
+                   json=dict(body, paths=[docs + "\\Report.xlsx"]))
+        check("an unlisted path on a 3.51.0 source is refused", r.status_code == 409)
+        check("...naming the path", "Report.xlsx" in r.get_json()["error"])
+        seed_listing(db_path, "PC-1", docs, [
+            {"name": "Documents", "directory": True},
+            {"name": "Pictures", "directory": True},
+            {"name": "Report.xlsx", "directory": False}])
+        r = c.post("/api/machines/PC-1/files/send",
+                   json=dict(body, paths=[docs + "\\Report.xlsx"]))
+        check("a path a listing shows is a FILE is still refused", r.status_code == 409)
+        r = c.post("/api/machines/PC-1/files/send", json=body)
+        check("folders a listing confirms go through on 3.51.0", r.status_code == 201)
+        relay.cancel(r.get_json()["transfer_id"])
+        set_version(db_path, "PC-1", "3.52.0")
 
         print("\n== Both ends' agents must be new enough ==")
         set_version(db_path, "PC-2", "3.50.0")

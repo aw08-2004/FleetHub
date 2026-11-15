@@ -84,8 +84,8 @@
     // Files, not just folders, in Send and Back up. Gates only a selection that HOLDS a file,
     // and only on THIS (the source) PC: a 3.51.0 receiver already writes a top-level file.
     // Below it a send of a file fails outright ("is not a file or a folder"), but a backup of
-    // one is worse -- the agent skips it as missing and reports a green run -- so this is the
-    // one place standing between an operator and a backup that silently left out the file.
+    // one is worse -- the agent skips it as missing and reports a green run. The hub refuses
+    // that itself (files.picked_files_refusal); this copy only explains it before the click.
     const MIN_PICKED_FILES_AGENT = '3.52.0';
     // Where a sent folder lands unless the operator says otherwise. A folder of its own on
     // the system drive, never the target user's profile: a copy that lands on a Desktop is a

@@ -327,7 +327,7 @@ public sealed class BackupFilesExecutor : ICommandExecutor
     /// exist; skipping" -- a run that reported success while leaving out exactly what was
     /// asked for. A file root still answers to the excludes and is never a link, the same two
     /// rules every file found by the walk answers to.</summary>
-    private static IEnumerable<(string Original, string ReadPath)> RootEntries(
+    internal static IEnumerable<(string Original, string ReadPath)> RootEntries(
         string root, string readRoot, PathExpander.ExcludeMatcher matcher,
         Action<string> say, CancellationToken ct)
     {

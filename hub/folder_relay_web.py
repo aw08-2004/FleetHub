@@ -159,6 +159,10 @@ class _RelayRoutes:
             paths = _clean_paths(data.get("paths"))
             destination = files.validate_path(data.get("destination"))
             self._check_agents(source, target)
+            # A picked FILE needs a newer source agent than a folder does; see files.py.
+            refusal = files.picked_files_refusal(self.db_path, source, paths)
+            if refusal:
+                raise _RelayRefusal(refusal, 409)
             transfer_id = self.relay.open(source, target, paths, destination,
                                           permissions_web.current_actor())
         except folder_relay.RelayRefused as e:

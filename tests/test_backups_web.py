@@ -30,6 +30,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import backups
+import files
 import fleet
 import i18n
 import permissions
@@ -105,6 +106,22 @@ class FakeDestination:
                 f"&X-Amz-Expires={int(expires_seconds)}")
 
 
+def seed_listing(db_path, machine, folder, entries):
+    """Store a ready listing of `folder`, as the Files tab leaves behind when an operator
+    opens it. What the hub's file-or-folder check reads (files.confirmed_folders)."""
+    request_id, _clean = files.create_listing(db_path, machine, folder)
+    files.record_listing(db_path, request_id, machine, {"entries": entries, "path": folder})
+
+
+def set_version(db_path, machine, version):
+    with fleet.get_conn(db_path) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS machine_info("
+                     "machine TEXT PRIMARY KEY, companion_version TEXT)")
+        conn.execute("INSERT INTO machine_info(machine, companion_version) VALUES (?, ?) "
+                     "ON CONFLICT(machine) DO UPDATE SET "
+                     "companion_version = excluded.companion_version", (machine, version))
+
+
 def audit_actions(db_path):
     with fleet.get_conn(db_path) as conn:
         return [r["action"] for r in conn.execute("SELECT action FROM audit_log")]
@@ -141,6 +158,7 @@ def main():
         settings.init_settings_db(db_path)
         settings.invalidate()
         backups.init_backups_db(db_path)
+        files.init_files_db(db_path)
         permissions.init_permissions_db(db_path)
         permissions.invalidate()
 
@@ -361,13 +379,13 @@ def main():
             "backup.files_exclude": ["*.tmp", "**\\node_modules\\**"],
         })
         check("per-PC settings save through the same capability", r.status_code == 200)
-        files = r.get_json()["files"]
+        file_policy = r.get_json()["files"]
         check("include list reads back in the case it was typed",
-              files["include"] == ["%Desktop%", "%Documents%",
-                                   "C:\\Users\\%Users%\\Projects"])
+              file_policy["include"] == ["%Desktop%", "%Documents%",
+                                         "C:\\Users\\%Users%\\Projects"])
         check("...which is the point of path_list over str_list",
-              "%Users%" in files["include"][2])
-        check("exclude list reads back", files["exclude"][0] == "*.tmp")
+              "%Users%" in file_policy["include"][2])
+        check("exclude list reads back", file_policy["exclude"][0] == "*.tmp")
 
         check("a typo'd token is refused rather than silently matching nothing",
               c.put("/api/backups/schedule",
@@ -493,6 +511,7 @@ def main():
                      ).status_code == 415)
 
         print("\n== Back up picked folders (the Files tab's Back up) ==")
+        set_version(db_path, "HOSPITAL-1", "3.52.0")
         backups.clear_file_run_request(db_path, "HOSPITAL-1")
         check("an empty selection is refused",
               c.post("/api/backups/machines/HOSPITAL-1/run",
@@ -507,6 +526,17 @@ def main():
         r = c.post("/api/backups/machines/HOSPITAL-1/run",
                    json={"paths": ["D:\\Shared\\Finance\\budget.xlsx"]})
         check("a selection naming a file is accepted too", r.status_code == 202)
+        # An older agent skips a picked file as missing and reports success -- refused.
+        set_version(db_path, "HOSPITAL-1", "3.51.0")
+        shared = "D:" + "\\Shared"
+        r = c.post("/api/backups/machines/HOSPITAL-1/run",
+                   json={"paths": [shared + "\\Finance" + "\\budget.xlsx"]})
+        check("an unlisted path on a 3.51.0 agent is refused", r.status_code == 409)
+        seed_listing(db_path, "HOSPITAL-1", shared, [{"name": "Finance", "directory": True}])
+        r = c.post("/api/backups/machines/HOSPITAL-1/run",
+                   json={"paths": [shared + "\\Finance"]})
+        check("a folder a listing confirms is accepted on 3.51.0", r.status_code == 202)
+        set_version(db_path, "HOSPITAL-1", "3.52.0")
         r = c.post("/api/backups/machines/HOSPITAL-1/run",
                    json={"paths": ["D:\\Shared\\Finance"]})
         check("...and the folders wait with the request",

@@ -4490,9 +4490,12 @@ too. A picked file is one file record at the top of the stream, so the RECEIVER 
 change and stays at 3.51.0, and the hub needed none either -- it only ever had paths. What did
 need the source agent: the sender refused anything that was not a folder, and the backup walk
 skipped a file root as "does not exist" while the run went green, which is why the console
-gates a selection holding a file on MIN_PICKED_FILES_AGENT (3.52.0) for the SOURCE PC.
-Rejected: making the hub tell files from folders so it could gate server-side -- it would
-need a listing per request, and a path can change kind between the listing and the copy.
+gates a selection holding a file on MIN_PICKED_FILES_AGENT (3.52.0) for the SOURCE PC -- and
+so does the hub (files.picked_files_refusal), because a console-only gate leaves the silent
+backup failure open to any other client. The hub cannot tell a file from a folder by its path,
+so on an older agent it accepts only paths that the folder listing it served minutes ago shows
+as folders. Rejected: requiring 3.52.0 for every selection, which would take the folder backup
+away from the whole stable fleet to protect a case only a file hits.
 
 **One-off folder backup (hub 1.179.0, no agent change).** *Back up…* in the same menu is the
 Backup tab's "Back up now" with `paths`: the same request slot, dispatcher, throttle and

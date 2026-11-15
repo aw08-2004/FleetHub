@@ -701,6 +701,84 @@ def get_listing(db_path, request_id, machine=None):
     return payload
 
 
+#: The agent that can send and back up a picked FILE, not only a folder (hub 1.180.0). The hub
+#: copy of static/js/files.js's MIN_PICKED_FILES_AGENT, and the one that refuses: the console's
+#: only explains. **Below it a backup of a file is skipped as missing while the run reports
+#: success**, which is the silent failure picked_files_refusal exists to stop.
+MIN_PICKED_FILES_AGENT = (3, 52, 0)
+
+
+def version_at_least(version, minimum):
+    """True when a MAJOR.MINOR.PATCH string is at least `minimum`. Unknown is False."""
+    match = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", str(version or ""))
+    return bool(match) and tuple(int(p) for p in match.groups()) >= tuple(minimum)
+
+
+def agent_version(db_path, machine):
+    """The agent version `machine` last reported, or None. machine_info belongs to app.py; a
+    database without it (a test, a fresh hub) has no version to report."""
+    try:
+        with get_conn(db_path) as conn:
+            row = conn.execute("SELECT companion_version FROM machine_info WHERE machine = ?",
+                               (machine,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row["companion_version"] if row else None
+
+
+def confirmed_folders(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
+    """The subset of `paths` that a recent listing of their parent showed as FOLDERS.
+
+    The hub has only paths, and `D:\\Data\\notes` may be either; but the operator picked
+    them from a listing this module stored minutes ago, and that listing says. A path no
+    recent listing vouches for is not assumed to be a folder.
+    """
+    now = int(time.time() if now is None else now)
+    confirmed = set()
+    by_parent = {}
+    for path in paths:
+        parent = parent_path(path)
+        if parent is not None:
+            by_parent.setdefault(parent.lower(), []).append(path)
+    try:
+        with get_conn(db_path) as conn:
+            for parent, children in by_parent.items():
+                row = conn.execute(
+                    "SELECT payload_json FROM file_listings WHERE machine = ? "
+                    "AND lower(path) = ? AND status = ? AND created_at >= ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (machine, parent, READY, now - int(ttl))).fetchone()
+                if not row or not row["payload_json"]:
+                    continue
+                folders = {str(e.get("name") or "").lower()
+                           for e in json.loads(row["payload_json"]).get("entries") or []
+                           if e.get("directory")}
+                confirmed.update(p for p in children
+                                 if p.rsplit("\\", 1)[-1].lower() in folders)
+    except sqlite3.OperationalError:
+        return set()
+    return confirmed
+
+
+def picked_files_refusal(db_path, machine, paths, now=None):
+    """Why `machine` cannot be asked to send or back up `paths`, or None when it can.
+
+    Shared by the live copy (folder_relay_web) and the one-off backup (backups_web), so the
+    two cannot disagree about what an old agent may be given. Folders picked from the Files
+    tab pass on any agent; anything else needs MIN_PICKED_FILES_AGENT. **Gating the whole
+    selection on 3.52.0 was rejected**: it would take the folder backup away from every PC
+    still on an older agent -- the whole stable fleet -- to protect a case only a file hits.
+    """
+    if version_at_least(agent_version(db_path, machine), MIN_PICKED_FILES_AGENT):
+        return None
+    unconfirmed = [p for p in paths if p not in confirmed_folders(db_path, machine, paths, now)]
+    if not unconfirmed:
+        return None
+    need = ".".join(str(p) for p in MIN_PICKED_FILES_AGENT)
+    return (f"{unconfirmed[0]} looks like a file, and {machine} needs agent {need} or newer "
+            "to send or back up a file. Folders picked in the Files tab work on its agent now.")
+
+
 def prune_listings(db_path, now=None, ttl=LISTING_TTL_SECONDS):
     """Drop listing rows past their TTL. Returns rows removed.
 

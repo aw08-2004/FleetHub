@@ -40,6 +40,7 @@ from flask import Blueprint, Response, jsonify, redirect, request, url_for
 import auth_helpers
 import backup_paths
 import backups
+import files
 import fleet
 import i18n
 import permissions
@@ -1013,6 +1014,17 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
                    else _why_not_runnable(machine))
         if problem:
             return jsonify({"error": problem}), 400
+        if paths is not None:
+            # Validated first, so a malformed path is refused for being malformed rather than
+            # for the agent's age. Then: an older agent skips a picked FILE as missing and
+            # reports success, so it is refused unless a listing shows every path is a folder.
+            try:
+                clean = backup_paths.validate_patterns(paths, kind="include")
+            except ValueError as e:
+                return refusals.refuse(e)
+            refusal = files.picked_files_refusal(db_path, machine, clean)
+            if refusal:
+                return jsonify({"error": refusal}), 409
 
         online = next((backups.roster_entry(e)[1] for e in _roster([machine])), False)
         try:
