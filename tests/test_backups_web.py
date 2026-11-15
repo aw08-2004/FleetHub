@@ -492,6 +492,30 @@ def main():
                      content_type="application/x-www-form-urlencoded"
                      ).status_code == 415)
 
+        print("\n== Back up picked folders (the Files tab's Back up) ==")
+        backups.clear_file_run_request(db_path, "HOSPITAL-1")
+        check("an empty selection is refused",
+              c.post("/api/backups/machines/HOSPITAL-1/run",
+                     json={"paths": []}).status_code == 400)
+        check("a relative path is refused with a sentence",
+              c.post("/api/backups/machines/HOSPITAL-1/run",
+                     json={"paths": ["Docs"]}).status_code == 400)
+        roster["HOSPITAL-1"] = False
+        r = c.post("/api/backups/machines/HOSPITAL-1/run",
+                   json={"paths": ["D:\\Shared\\Finance"]})
+        check("a selection is accepted", r.status_code == 202)
+        check("...and the folders wait with the request",
+              backups.get_machine_config(db_path, "HOSPITAL-1")["run_requested_paths"]
+              == ["D:\\Shared\\Finance"])
+        check("...audited as a selection, naming the folders",
+              "backup_files_selection" in audit_actions(db_path))
+        roster["HOSPITAL-1"] = True
+        CURRENT_USER = "viewer@x.com"
+        check("a viewer cannot back up a selection either",
+              c.post("/api/backups/machines/HOSPITAL-1/run",
+                     json={"paths": ["D:\\Shared"]}).status_code == 403)
+        CURRENT_USER = "backup@x.com"
+
         print("\n== Back up the whole fleet now ==")
         backups.clear_file_run_request(db_path, "HOSPITAL-1")
         backups.set_machine_config(db_path, "HOSPITAL-2", enabled=False,

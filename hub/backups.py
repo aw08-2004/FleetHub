@@ -134,6 +134,14 @@ RUN_STATUSES = (RUN_RUNNING, RUN_SUCCEEDED, RUN_FAILED, RUN_CANCELLED)
 # outage, a failing manual run is usually someone testing a new destination.
 TRIGGER_SCHEDULE = "schedule"
 TRIGGER_MANUAL = "manual"
+#: A one-off backup of folders picked in the Files tab (roadmap #13 / #1b). **Its chains are
+#: kept apart from the scheduled ones** -- see selection_run_ids -- because a selection run is
+#: a FULL of a few folders under a fresh chain id, and three things would quietly go wrong if
+#: it counted as the machine's newest chain: the next scheduled incremental would extend it
+#: (an "incremental" of the whole profile on top of a base that holds three folders), the
+#: next scheduled run would be pushed back a whole interval (files_due_at), and rotation
+#: would delete a real generation to keep it.
+TRIGGER_SELECTION = "selection"
 
 # `backup_state` keys. Bookkeeping that is neither a setting (operators don't set it) nor
 # a run (it outlives any single one).
@@ -296,6 +304,10 @@ def init_backups_db(db_path):
         for column, ddl in (
             ("run_requested_at", "INTEGER"),
             ("run_requested_by", "TEXT"),
+            # Added in hub 1.179.0: the folders of a pending one-off selection backup, as a
+            # JSON list, or NULL for an ordinary "Back up now". In the same single-request
+            # slot on purpose -- see request_file_run.
+            ("run_requested_paths", "TEXT"),
         ):
             if column not in config_columns:
                 conn.execute(
@@ -1749,7 +1761,9 @@ def _machine_config_row(row, machine):
             "updated_by": None,
             "run_requested_at": None,
             "run_requested_by": None,
+            "run_requested_paths": None,
         }
+    paths_json = row["run_requested_paths"] if "run_requested_paths" in row.keys() else None
     return {
         "machine": row["machine"],
         "enabled": None if row["enabled"] is None else bool(row["enabled"]),
@@ -1762,6 +1776,7 @@ def _machine_config_row(row, machine):
         "updated_by": row["updated_by"],
         "run_requested_at": row["run_requested_at"],
         "run_requested_by": row["run_requested_by"],
+        "run_requested_paths": json.loads(paths_json) if paths_json else None,
     }
 
 
@@ -1858,7 +1873,7 @@ def set_machine_config(db_path, machine, *, enabled=None, destination_id=None,
     return get_machine_config(db_path, machine)
 
 
-def request_file_run(db_path, machine, actor="system", now=None):
+def request_file_run(db_path, machine, actor="system", now=None, paths=None):
     """Queue a manual "Back up now" for one machine. Returns the stored epoch.
 
     This does NOT talk to the machine. It records the intent, and the next dispatch pass
@@ -1873,19 +1888,33 @@ def request_file_run(db_path, machine, actor="system", now=None):
 
     Like record_profiles, this touches a row without creating an override: a machine that
     has been asked to back up now has not been configured differently from the fleet.
+
+    `paths` makes it a one-off SELECTION backup (TRIGGER_SELECTION): just those folders,
+    validated as include patterns, as a fresh full in a chain of its own. It shares the one
+    request slot with "Back up now" rather than getting a queue of its own, and **the newer
+    request replaces the older one** -- the same idempotence as above, and the route says
+    which one is now pending. Two queues would mean two backups racing for the one-run-per-
+    machine rule, with the operator unable to tell which they were waiting for.
     """
     machine = str(machine or "").strip()
     if not machine:
         raise ValueError("A machine name is required.")
+    paths_json = None
+    if paths is not None:
+        clean = backup_paths.validate_patterns(paths, kind="include")
+        if not clean:
+            raise ValueError("Pick at least one folder to back up.")
+        paths_json = json.dumps(clean)
     now = int(time.time() if now is None else now)
     with get_conn(db_path) as conn:
         conn.execute(
             "INSERT INTO backup_machine_config(machine, run_requested_at, "
-            "run_requested_by) VALUES (?, ?, ?) "
+            "run_requested_by, run_requested_paths) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(machine) DO UPDATE SET "
             "run_requested_at = excluded.run_requested_at, "
-            "run_requested_by = excluded.run_requested_by",
-            (machine, now, actor),
+            "run_requested_by = excluded.run_requested_by, "
+            "run_requested_paths = excluded.run_requested_paths",
+            (machine, now, actor, paths_json),
         )
     return now
 
@@ -1895,7 +1924,8 @@ def clear_file_run_request(db_path, machine):
     with get_conn(db_path) as conn:
         conn.execute(
             "UPDATE backup_machine_config SET run_requested_at = NULL, "
-            "run_requested_by = NULL WHERE machine = ?", (machine,))
+            "run_requested_by = NULL, run_requested_paths = NULL WHERE machine = ?",
+            (machine,))
 
 
 def current_running_file_run(db_path, machine):
@@ -2416,9 +2446,14 @@ def machine_chains(db_path, machine):
         })
         chain["sets"].append(row)
         chain["started_at"] = min(chain["started_at"], row["created_at"])
+    selections = selection_run_ids(db_path, machine)
     out = []
     for chain in chains.values():
         chain["sets"].sort(key=lambda s: s["sequence"])
+        # A chain is a selection chain when its first archive came from a selection run.
+        # Only that one is asked: an incremental is never planned onto a selection chain
+        # (see latest_chain), so a chain's kind is decided by how it started.
+        chain["selection"] = chain["sets"][0]["run_id"] in selections
         # A chain missing its sequence-0 full cannot be restored from. record_file_set
         # refuses to create that state, so this is a consistency check rather than an
         # expected case -- but rotation must know about it either way, since deleting the
@@ -2432,9 +2467,21 @@ def machine_chains(db_path, machine):
     return out
 
 
+def selection_run_ids(db_path, machine):
+    """The ids of this machine's one-off selection runs (TRIGGER_SELECTION)."""
+    with get_conn(db_path) as conn:
+        return {r["id"] for r in conn.execute(
+            "SELECT id FROM backup_runs WHERE kind = ? AND machine = ? AND trigger = ?",
+            (BACKUP_MACHINE_FILES, machine, TRIGGER_SELECTION))}
+
+
 def latest_chain(db_path, machine):
-    """The chain a new incremental would extend, or None if a full is needed."""
-    chains = machine_chains(db_path, machine)
+    """The chain a new incremental would extend, or None if a full is needed.
+
+    Scheduled chains only: a one-off selection backup holds a few folders, and extending it
+    with an incremental of the whole profile would make every file outside those folders
+    look new while the chain claimed to be a continuation."""
+    chains = [c for c in machine_chains(db_path, machine) if not c["selection"]]
     return chains[0] if chains and chains[0]["complete"] else None
 
 
@@ -2728,7 +2775,13 @@ def rotate_chains(client, prefix, machine, keep_chains, db_path):
     if keep_chains < 1:
         raise ValueError("Keep at least one backup chain.")
     chains = machine_chains(db_path, machine)
-    doomed = chains[keep_chains:]
+    # Scheduled and selection chains are rotated as two separate pools, each keeping
+    # `keep_chains`. One pool would let three quick selection backups push the machine's
+    # real scheduled generations out of storage -- the backups somebody restores a whole PC
+    # from -- in exchange for copies of a few folders.
+    scheduled = [c for c in chains if not c["selection"]]
+    selected = [c for c in chains if c["selection"]]
+    doomed = scheduled[keep_chains:] + selected[keep_chains:]
     if not doomed:
         return []
 
@@ -2807,8 +2860,8 @@ def files_due_at(db_path, machine, interval_hours, schedule=None):
     with get_conn(db_path) as conn:
         row = conn.execute(
             "SELECT MAX(started_at) AS last FROM backup_runs "
-            "WHERE kind = ? AND machine = ?",
-            (BACKUP_MACHINE_FILES, machine)).fetchone()
+            "WHERE kind = ? AND machine = ? AND trigger != ?",
+            (BACKUP_MACHINE_FILES, machine, TRIGGER_SELECTION)).fetchone()
     last = row["last"] if row else None
     return 0 if not last else _due_after(int(last), interval_hours, schedule)
 
@@ -3027,9 +3080,19 @@ def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
                 db_path, machine, fleet_enabled=fleet_enabled,
                 fleet_destination=fleet_destination, fleet_include=fleet_include,
                 fleet_exclude=fleet_exclude)
-            if not config["enabled"] or not config["destination_id"]:
+            stored = get_machine_config(db_path, machine)
+            selection = stored["run_requested_paths"] if stored["run_requested_at"] else None
+            if selection:
+                # A one-off of picked folders needs somewhere to go and nothing else: it
+                # is not the machine's schedule, so the schedule being switched off or
+                # empty is no reason to refuse it. The policy's EXCLUDES still apply --
+                # "never back up *.pst" is a rule about storage, not about schedules.
+                config = dict(config, include=list(selection))
+                if not config["destination_id"]:
+                    continue
+            elif not config["enabled"] or not config["destination_id"]:
                 continue
-            if not config["include"]:
+            elif not config["include"]:
                 continue        # nothing selected: not a failure, just nothing to do
             # One backup per machine at a time. Without this a manual request that lands
             # while a run is in flight would dispatch a SECOND concurrent backup -- the
@@ -3039,7 +3102,6 @@ def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
             # finishes (or is cancelled), which the next tick picks up.
             if current_running_file_run(db_path, machine):
                 continue
-            stored = get_machine_config(db_path, machine)
             requested = stored["run_requested_at"]
             if not requested and now < files_due_at(db_path, machine, interval_hours,
                                                      schedule):
@@ -3066,11 +3128,17 @@ def files_dispatch_once(db_path, log_dir, *, fleet_enabled, fleet_destination,
                 continue        # no master key yet; the console already says so loudly
 
             manual = bool(stored["run_requested_at"])
-            plan = plan_next_run(db_path, machine, full_every)
+            selection = manual and bool(stored["run_requested_paths"])
+            if selection:
+                # Always a full in a chain of its own -- see TRIGGER_SELECTION.
+                plan = {"chain_id": new_chain_id(), "sequence": 0, "full": True}
+                trigger = TRIGGER_SELECTION
+            else:
+                plan = plan_next_run(db_path, machine, full_every)
+                trigger = TRIGGER_MANUAL if manual else TRIGGER_SCHEDULE
             object_key = object_key_for_machine(destination, machine, plan, now)
             run_id = start_file_run(
-                db_path, machine, config["destination_id"], plan,
-                TRIGGER_MANUAL if manual else TRIGGER_SCHEDULE,
+                db_path, machine, config["destination_id"], plan, trigger,
                 (stored["run_requested_by"] or "operator") if manual else "scheduler",
                 now, object_key=object_key)
             upload = mint_upload(db_path, log_dir, config["destination_id"], object_key,

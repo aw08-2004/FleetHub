@@ -224,6 +224,27 @@ and reports which files it could not read, rather than failing.
 **Junctions are never followed.** A Windows profile contains junctions pointing at their
 own ancestors; following them is an infinite walk.
 
+### One-off backup of picked folders
+
+In a PC's **Files** tab, tick one or more folders, right-click and choose **Back up…**. That
+queues one backup of just those folders to the PC's backup destination -- the same request
+as **Back up now**, so it waits for an offline PC, respects the concurrency limit and can be
+cancelled from the Backup tab. It shows in the run list with the trigger **selection**.
+
+It is kept apart from the schedule on purpose:
+
+- it is always a **full** backup in a chain of its own, and the next scheduled backup does
+  **not** build on it;
+- it does **not** move the next scheduled run;
+- rotation keeps `backup.files_keep_chains` selection chains **and** that many scheduled
+  chains, so selections never push a scheduled generation out of storage.
+
+It needs a destination and an encryption key, but not a switched-on schedule or any
+configured paths. The policy's **excludes** still apply. Its files restore like any other.
+A pending **Back up now** and a pending selection share one slot per PC: the newer request
+replaces the older. `POST /api/backups/machines/<machine>/run` with `{"paths": [...]}`
+(`manage_backups` + scope).
+
 ### Restoring a PC's files
 
 The **Backup** tab on a machine's page browses what that machine has backed up — a folder

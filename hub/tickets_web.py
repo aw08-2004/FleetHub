@@ -250,6 +250,18 @@ class _TicketRoutes:
             "can_manage": self.access.can(permissions.MANAGE_TICKETS),
         }), 200
 
+    def count_open(self):
+        """Just the sidebar badge's number: open tickets on machines in the caller's scope.
+
+        Narrowed with the same access.filter_machines the queue's filter_rows uses, so the
+        badge never counts a ticket the list would hide. Never an error to the caller -- a
+        badge is not worth one, the same posture as /api/alerts/count."""
+        try:
+            machines = tickets.open_ticket_machines(self.db_path)
+            return jsonify({"count": len(self.access.filter_machines(machines))}), 200
+        except Exception:
+            return jsonify({"count": 0}), 200
+
     def list_machine(self, machine):
         return jsonify({"tickets": tickets.list_tickets(
             self.db_path, machine=str(machine).strip())}), 200
@@ -423,6 +435,7 @@ def create_tickets_blueprint(db_path, attachment_root, login_required, access, *
         ("/tickets", "tickets_page", ["GET"], (login_required, view)),
         ("/tickets/<int:ticket_id>", "ticket_page", ["GET"], (login_required, view)),
         ("/api/tickets", "list_all", ["GET"], (login_required, view)),
+        ("/api/tickets/count", "count_open", ["GET"], (login_required, view)),
         ("/api/tickets/machines/<machine>", "list_machine", ["GET"],
          (login_required, access.require_machine(permissions.VIEW_TICKETS))),
         (ticket, "get_one", ["GET"], (login_required, view)),

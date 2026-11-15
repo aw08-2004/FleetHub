@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.166.0**; `beta` is at **1.178.1**. The `beta` → `main` PR of 2026-10-22 carried
+`main` and `beta` are both at hub **1.179.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -139,6 +139,15 @@ still on `HUB_TAG=latest` follows whichever channel is newer once that workflow 
 same PR syncs `.github/workflows/hub-image.yml` on `beta` to `main`'s bytes, because `main` had
 taken workflow-only fixes (#196 and after) that `beta` never got, and the release would
 otherwise have stopped on a conflict in that file.
+
+**2026-11-15: hub 1.179.0 and agent 3.51.0's beta manifest sent to `main` unconfirmed, on the
+owner's call.** Every box still open below -- all of 1.179.0's among them -- is now owed on the
+production hub (or the named agent), the same footing as the 2026-11-03 release. The stable
+agent manifest is unchanged at 3.50.0, so no stable PC updates. The only conflict was the agent
+version pair, 3.50.0 on `main` against 3.51.0 on `beta`, kept at 3.51.0 because a version never
+goes backwards. *Move the Docker hosts first* is still open but did not block this one: with
+`main` and `beta` on the same hub version, a host on `HUB_TAG=latest` gets 1.179.0 whichever
+channel it follows. It blocks the next release in which `beta` runs ahead of `main` again.
 
 **Hub 1.159.0 — Group Policy, waiting on agent 3.48.0** (#163)
 - [x] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
@@ -652,6 +661,31 @@ dialog says *whole fleet* instead.
   Value control is the same width; an old *applied* change is a single grey line, not a green
   card; and after changing a setting far down the list, the Apply/Discard bar is pinned to the
   bottom of the window. Also check a *Failed* BIOS update reads as a row with no bullet.
+
+**Hub 1.179.0 + agent 3.51.0 (beta) -- send folders to another PC, one-off folder backup, Tickets badge**
+Needs agent **3.51.0** cut with `-Channel beta` on the source and the target PC; the hub half
+greys *Send to another computer* out on anything older. Deploy the hub first.
+- [ ] **Live copy.** In the Files tab of a beta PC, tick two folders, right-click, *Send to
+  another computer…*, pick a second beta PC, keep `C:\Incoming`. The progress line under the
+  list counts up with a percentage; at the end both folders are under `C:\Incoming` on the
+  target with the same file count and sizes, and the source is unchanged.
+- [ ] **Bigger than 2 GiB.** Repeat with a folder over 2 GiB (a VM image folder will do). It
+  completes; the hub's memory stays flat (`docker stats` / Task Manager) during the copy.
+- [ ] **Existing files are kept.** Send the same folder again: the result says it kept N
+  existing files and nothing on the target changed.
+- [ ] **A locked file is named, not fatal.** With Outlook open on the source, send the folder
+  holding its .ost/.pst: the copy finishes and the command output names that file as unreadable.
+- [ ] **Cut off mid-copy.** Start a large copy and restart the target PC (or stop
+  `FleetHubAgent`). Within 15 minutes the line says *failed*, and the target holds no
+  `*.fhpart` file and no truncated file. *Cancel copy* on another run says *cancelled* at once.
+- [ ] **Scope.** As an operator scoped to one site, the target list holds only that site's
+  PCs, and a hand-made POST naming another site's PC as `target` is a 403.
+- [ ] **One-off backup.** Tick a folder, *Back up…*. A run labelled *selection* appears on the
+  Backup tab and its files restore. The next scheduled run is still at its usual time and is
+  an incremental of the scheduled chain, not of the selection.
+- [ ] **Tickets badge.** With open tickets on a PC in scope, *Tickets* in the sidebar shows
+  their number; closing one in another tab drops it without a reload. A scoped operator's
+  number counts only their PCs; an operator without *view_tickets* sees no badge.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -4419,6 +4453,34 @@ upload, no editing in the console (preview only, and only for the allowlisted ty
 no search within a folder, and no progress bar for a transfer in flight — the panel says
 which stage it is at, not how far through. The 2,000-entry listing cap is counted and
 admitted in the UI rather than silently applied.
+
+**Send folders to another PC, live (hub 1.179.0 + agent 3.51.0).** One or more folders,
+right-click, *Send to another computer…*: the source agent streams them in numbered 1 MiB
+chunks to the hub (`folder_relay.py`), the target agent long-polls the same chunks back out
+and writes each file in place as it completes. The hub keeps a 24 MiB window per copy and
+makes a sender that gets ahead wait, so there is **no size cap** and nothing is spooled to
+the hub's disk. The two ends are separate commands (`stream_send`, `stream_receive`), queued
+only by the send route, which checks scope on BOTH machines -- the target arrives in the body,
+where `require_machine` cannot see it. **Copy only**, on the owner's call (2026-11-14): a move
+is a copy plus a delete, and the delete would run on the strength of a target that only
+thinks it finished. Rejected: spooling the whole folder on the hub (2x disk, reintroduces the
+2 GiB cap); agent to agent (agents only dial out); one long streaming response (a TLS
+terminator may buffer it -- the remote relay found the same); zip on one side, unzip on the
+other (a zip's directory is at its end, so nothing lands until the last byte does). Files are
+read with `FileShare.ReadWrite | Delete` and no shadow copy, so an exclusively-open file is
+skipped and named rather than failing the copy -- a VSS snapshot was rejected as minutes of
+setup and gigabytes of diff area for what is usually a handful of folders.
+
+**One-off folder backup (hub 1.179.0, no agent change).** *Back up…* in the same menu is the
+Backup tab's "Back up now" with `paths`: the same request slot, dispatcher, throttle and
+cancel, as trigger `selection`. It is always a full in a chain of its own, and **selection
+chains are kept apart from the schedule** -- `latest_chain` skips them, `files_due_at` ignores
+them, and rotation keeps `keep_chains` of each kind -- because a selection counted as the
+machine's newest chain would have the next incremental extend it, slip the schedule a whole
+interval, and rotate a real generation out to keep it. It needs only a destination and a key,
+not a switched-on schedule. Rejected: a separate request queue (two backups racing for the
+one-run-per-machine rule), and zipping to a path on the same PC (not off-machine, so not a
+backup).
 
 ---
 

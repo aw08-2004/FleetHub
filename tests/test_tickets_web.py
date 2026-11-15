@@ -240,6 +240,23 @@ def test_console_gates(pc1_ticket, shot_id, pc2):
     check("an unrestricted operator sees both",
           {pc1_ticket, pc2_ticket} <= {t["id"] for t in root.get("/api/tickets").get_json()["tickets"]})
 
+    # The sidebar badge. Its silent failure is counting what the list hides: a bare COUNT(*)
+    # would show an HR technician the size of the Hospital queue.
+    def open_in(client):
+        return sum(1 for t in client.get("/api/tickets").get_json()["tickets"]
+                   if t["status"] not in tickets.DONE_STATUSES)
+    check("the badge count needs view_tickets", viewer.get("/api/tickets/count").status_code == 403)
+    reader_count = reader.get("/api/tickets/count").get_json()["count"]
+    check("the badge counts the reader's open tickets, scoped like the list",
+          reader_count == open_in(reader) and reader_count >= 1)
+    check("...which is fewer than an unrestricted operator's",
+          root.get("/api/tickets/count").get_json()["count"] == open_in(root) > reader_count)
+    page = reader.get("/").data
+    check("the badge is rendered beside the Tickets link",
+          b'id="tickets-badge"' in page and f">{reader_count}</span>".encode() in page)
+    check("...and not for someone who cannot see tickets",
+          b'id="tickets-badge"' not in viewer.get("/").data)
+
 
 def test_phase_d(pc1, pc2, ticket_id):
     print("\n-- phase D: the heartbeat marker and the reporter's reply --")

@@ -122,3 +122,49 @@
         <button type="button" id="files-preview-close" class="btn btn--primary">{{ t('common.close') }}</button>
     </div>
 </dialog>
+
+{# Send to another computer. Two questions -- which PC, and where on it -- because the menu
+   entry already answered "which folders". The destination is pre-filled but never remembered
+   from last time: a copy aimed at yesterday's path on a different PC is the wrong copy. The
+   target list holds only PCs in the operator's scope; one whose agent is too old is listed
+   but disabled, so "why is Reception-2 not here" has its answer in the list itself. #}
+<dialog class="modal" id="files-send-dialog" aria-labelledby="files-send-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="files-send-title">{{ t('files.send_title') }}</h2>
+    </div>
+    <div class="modal__body">
+        <p id="files-send-help"></p>
+        <ul class="files-confirm-list" id="files-send-list"></ul>
+        <label class="setting__label" for="files-send-target" style="margin-top: var(--space-4);">{{ t('files.send_target') }}</label>
+        <select class="input" id="files-send-target" style="width: 100%;"></select>
+        <label class="setting__label" for="files-send-destination" style="margin-top: var(--space-4);">{{ t('files.send_destination') }}</label>
+        <input class="input" type="text" id="files-send-destination" autocomplete="off"
+               spellcheck="false" style="width: 100%;">
+        <p class="stat-card__meta">{{ t('files.send_destination_help') }}</p>
+        <p class="setting__error" id="files-send-error" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="files-send-close" class="btn btn--ghost">{{ t('common.cancel') }}</button>
+        <button type="button" id="files-send-ok" class="btn btn--primary">{{ t('files.send_ok') }}</button>
+    </div>
+</dialog>
+
+{# Back up. A confirmation that lists the folders, for the same reason Delete does: the
+   console says what it is about to act on rather than counting it. Rendered only for
+   operators who hold manage_backups, matching the menu entry and the route. #}
+{% if cap.MANAGE_BACKUPS in user_capabilities %}
+<dialog class="modal" id="files-backup-dialog" aria-labelledby="files-backup-title">
+    <div class="modal__head">
+        <h2 class="modal__title" id="files-backup-title">{{ t('files.backup_title') }}</h2>
+    </div>
+    <div class="modal__body">
+        <p id="files-backup-help"></p>
+        <ul class="files-confirm-list" id="files-backup-list"></ul>
+        <p class="setting__error" id="files-backup-error" hidden></p>
+    </div>
+    <div class="modal__foot">
+        <button type="button" id="files-backup-cancel" class="btn btn--ghost">{{ t('common.cancel') }}</button>
+        <button type="button" id="files-backup-ok" class="btn btn--primary">{{ t('files.backup_ok') }}</button>
+    </div>
+</dialog>
+{% endif %}

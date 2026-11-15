@@ -323,6 +323,12 @@ FILE_COMMANDS = frozenset({
     "fetch_file",
     "push_file",
     "open_item",
+    # The live folder copy between two PCs (folder_relay.py). A pair, one per end, and both
+    # carry the relay's one-shot transfer id -- so, like the transfers above, they are only
+    # ever queued by folder_relay_web.py's send route, which checks BOTH machines' scope.
+    # Accepting them through /api/fleet/commands would skip the target's scope check.
+    "stream_send",
+    "stream_receive",
 })
 
 # Folder sizes (roadmap #27, see disk_usage.py). One command, and NOT a file command: it names
