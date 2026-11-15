@@ -742,8 +742,8 @@ def listed_kinds(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
     expired while the Files tab sat open is a reason to refresh, not to upgrade an agent, and
     the refusal says which.
     """
-    now = int(time.time() if now is None else now)
-    kinds = {path: KIND_UNLISTED for path in paths}
+    since = int(time.time() if now is None else now) - int(ttl)
+    kinds = dict.fromkeys(paths, KIND_UNLISTED)
     by_parent = {}
     for path in paths:
         parent = parent_path(path)
@@ -752,22 +752,30 @@ def listed_kinds(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
     try:
         with get_conn(db_path) as conn:
             for parent, children in by_parent.items():
-                row = conn.execute(
-                    "SELECT payload_json FROM file_listings WHERE machine = ? "
-                    "AND lower(path) = ? AND status = ? AND created_at >= ? "
-                    "ORDER BY created_at DESC LIMIT 1",
-                    (machine, parent, READY, now - int(ttl))).fetchone()
-                if not row or not row["payload_json"]:
+                folders = _listed_folder_names(conn, machine, parent, since)
+                if folders is None:
                     continue
-                folders = {str(e.get("name") or "").lower()
-                           for e in json.loads(row["payload_json"]).get("entries") or []
-                           if e.get("directory")}
                 for child in children:
                     name = child.rsplit("\\", 1)[-1].lower()
                     kinds[child] = KIND_FOLDER if name in folders else KIND_NOT_FOLDER
     except sqlite3.OperationalError:
-        pass
+        pass    # no listings table: every path stays KIND_UNLISTED, which fails closed
     return kinds
+
+
+def _listed_folder_names(conn, machine, parent, since):
+    """Lower-cased names of the folders in the newest ready listing of `parent` taken at or
+    after `since`, or None when there is no such listing."""
+    row = conn.execute(
+        "SELECT payload_json FROM file_listings WHERE machine = ? "
+        "AND lower(path) = ? AND status = ? AND created_at >= ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (machine, parent, READY, since)).fetchone()
+    if not row or not row["payload_json"]:
+        return None
+    return {str(e.get("name") or "").lower()
+            for e in json.loads(row["payload_json"]).get("entries") or []
+            if e.get("directory")}
 
 
 def confirmed_folders(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):

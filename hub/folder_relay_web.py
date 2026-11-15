@@ -122,15 +122,9 @@ class _RelayRoutes:
             issued_by=permissions_web.current_actor(),
             ttl_seconds=settings.get_int(self.db_path, "fleet.command_ttl_seconds"))
 
-    def _agent_version(self, machine):
-        with files.get_conn(self.db_path) as conn:
-            row = conn.execute("SELECT companion_version FROM machine_info WHERE machine = ?",
-                               (machine,)).fetchone()
-        return row["companion_version"] if row else None
-
     def _check_agents(self, *machines):
         for end in machines:
-            if not folder_relay.agent_supports_stream(self._agent_version(end)):
+            if not folder_relay.agent_supports_stream(files.agent_version(self.db_path, end)):
                 need = ".".join(str(p) for p in folder_relay.MIN_AGENT_VERSION)
                 raise _RelayRefusal(f"{end} needs agent {need} or newer for a live copy.", 409)
 
