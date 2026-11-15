@@ -334,7 +334,18 @@ public sealed class BackupFilesExecutor : ICommandExecutor
         if (Directory.Exists(readRoot)) return Walk(root, readRoot, matcher, say, ct);
         if (File.Exists(readRoot))
         {
-            if (matcher.Matches(root) || IsLink(readRoot)) return [];
+            // Both are said aloud: an operator who picked this one file is owed the reason it
+            // is not in the backup (review on #211), where a file the walk skips is one of many.
+            if (matcher.Matches(root))
+            {
+                say($"[backup] note: {root} matches an exclude; skipping");
+                return [];
+            }
+            if (IsLink(readRoot))
+            {
+                say($"[backup] note: {root} is a link; not followed");
+                return [];
+            }
             return [(root, readRoot)];
         }
         say($"[backup] note: {root} does not exist; skipping");

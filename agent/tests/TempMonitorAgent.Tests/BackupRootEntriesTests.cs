@@ -42,7 +42,10 @@ public class BackupRootEntriesTests : IDisposable
     {
         var file = Path.Combine(_root, "scratch.tmp");
         File.WriteAllText(file, "x");
-        Assert.Empty(Entries(file, ["*.tmp"]));
+        var said = new List<string>();
+        Assert.Empty(Entries(file, ["*.tmp"], said));
+        // Said aloud: the operator picked this one file and is owed the reason it is missing.
+        Assert.Contains(said, line => line.Contains("matches an exclude"));
     }
 
     [Fact]
@@ -82,6 +85,8 @@ public class BackupRootEntriesTests : IDisposable
             // either there is no link to test with, which is not a failure of the code.
             return;
         }
-        Assert.Empty(Entries(link, []));
+        var said = new List<string>();
+        Assert.Empty(Entries(link, [], said));
+        Assert.Contains(said, line => line.Contains("is a link"));
     }
 }

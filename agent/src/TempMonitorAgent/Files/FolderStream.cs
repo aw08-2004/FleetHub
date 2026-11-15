@@ -401,15 +401,25 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
     }
 
     /// <summary>One selected item: a file as a single record, a folder and everything under
-    /// it depth first, junctions skipped either way.</summary>
+    /// it depth first, junctions skipped either way.
+    ///
+    /// <b>A picked item that is itself a link is named, not followed and not dropped.</b> It
+    /// goes into the summary's could-not-be-read list, the same place an unreadable file goes,
+    /// so the operator sees why it is missing. Dropping it without a word left a copy that
+    /// reported success without the one thing asked for (review on #211).</summary>
     private static async Task WriteTreeAsync(RelayChunkWriter writer, string root, byte[] block,
                                              Tally tally, CancellationToken ct)
     {
         var name = Path.GetFileName(root);
-        if (File.Exists(root))
+        FileSystemInfo picked = File.Exists(root) ? new FileInfo(root) : new DirectoryInfo(root);
+        if (IsLink(picked))
         {
-            var file = new FileInfo(root);
-            if (!IsLink(file)) await WriteCountedFileAsync(writer, name, file, block, tally, ct);
+            tally.Unreadable.Add($"{root} (a link; not followed)");
+            return;
+        }
+        if (picked is FileInfo pickedFile)
+        {
+            await WriteCountedFileAsync(writer, name, pickedFile, block, tally, ct);
             return;
         }
         await WriteFolderAsync(writer, name, ct);
@@ -559,9 +569,11 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
 
     private static void Measure(string root, ref long bytes, ref long count, CancellationToken ct)
     {
-        if (File.Exists(root))
+        FileSystemInfo picked = File.Exists(root) ? new FileInfo(root) : new DirectoryInfo(root);
+        if (IsLink(picked)) return;     // not sent, so not counted towards the progress bar
+        if (picked is FileInfo pickedFile)
         {
-            bytes += new FileInfo(root).Length;
+            bytes += pickedFile.Length;
             count++;
             return;
         }
