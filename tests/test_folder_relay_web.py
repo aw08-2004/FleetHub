@@ -23,6 +23,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import files
@@ -160,6 +161,8 @@ def main():
                    json=dict(body, paths=[docs + "\\Report.xlsx"]))
         check("an unlisted path on a 3.51.0 source is refused", r.status_code == 409)
         check("...naming the path", "Report.xlsx" in r.get_json()["error"])
+        check("...and, with no listing to go by, saying to refresh rather than upgrade",
+              "Refresh" in r.get_json()["error"])
         seed_listing(db_path, "PC-1", docs, [
             {"name": "Documents", "directory": True},
             {"name": "Pictures", "directory": True},
@@ -167,8 +170,16 @@ def main():
         r = c.post("/api/machines/PC-1/files/send",
                    json=dict(body, paths=[docs + "\\Report.xlsx"]))
         check("a path a listing shows is a FILE is still refused", r.status_code == 409)
+        check("...saying it is a file, which the agent is what fixes",
+              "is a file" in r.get_json()["error"] and "Refresh" not in r.get_json()["error"])
         r = c.post("/api/machines/PC-1/files/send", json=body)
         check("folders a listing confirms go through on 3.51.0", r.status_code == 201)
+        # The Files tab left open past the listing's TTL: the same folder is now unknown, and
+        # the refusal must point at Refresh, not at the agent.
+        later = int(time.time()) + files.LISTING_TTL_SECONDS + 60
+        stale = files.picked_files_refusal(db_path, "PC-1", body["paths"], now=later)
+        check("an expired listing no longer vouches for the folder", stale is not None)
+        check("...and the refusal says to refresh", stale and "Refresh" in stale)
         relay.cancel(r.get_json()["transfer_id"])
         set_version(db_path, "PC-1", "3.52.0")
 

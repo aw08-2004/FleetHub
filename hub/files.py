@@ -726,15 +726,24 @@ def agent_version(db_path, machine):
     return row["companion_version"] if row else None
 
 
-def confirmed_folders(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
-    """The subset of `paths` that a recent listing of their parent showed as FOLDERS.
+#: What a recent listing says about one picked path: shown as a folder, shown as something
+#: else, or not shown at all because no recent listing of its parent exists.
+KIND_FOLDER = "folder"
+KIND_NOT_FOLDER = "not_folder"
+KIND_UNLISTED = "unlisted"
+
+
+def listed_kinds(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
+    """For each of `paths`, what the newest recent listing of its parent says it is.
 
     The hub has only paths, and `D:\\Data\\notes` may be either; but the operator picked
-    them from a listing this module stored minutes ago, and that listing says. A path no
-    recent listing vouches for is not assumed to be a folder.
+    them from a listing this module stored minutes ago, and that listing says. The third
+    answer, KIND_UNLISTED, is kept apart from "not a folder" on purpose: a listing that
+    expired while the Files tab sat open is a reason to refresh, not to upgrade an agent, and
+    the refusal says which.
     """
     now = int(time.time() if now is None else now)
-    confirmed = set()
+    kinds = {path: KIND_UNLISTED for path in paths}
     by_parent = {}
     for path in paths:
         parent = parent_path(path)
@@ -753,11 +762,19 @@ def confirmed_folders(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS
                 folders = {str(e.get("name") or "").lower()
                            for e in json.loads(row["payload_json"]).get("entries") or []
                            if e.get("directory")}
-                confirmed.update(p for p in children
-                                 if p.rsplit("\\", 1)[-1].lower() in folders)
+                for child in children:
+                    name = child.rsplit("\\", 1)[-1].lower()
+                    kinds[child] = KIND_FOLDER if name in folders else KIND_NOT_FOLDER
     except sqlite3.OperationalError:
-        return set()
-    return confirmed
+        pass
+    return kinds
+
+
+def confirmed_folders(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
+    """The subset of `paths` that a recent listing of their parent showed as FOLDERS. A path
+    no recent listing vouches for is not assumed to be a folder."""
+    return {p for p, kind in listed_kinds(db_path, machine, paths, now, ttl).items()
+            if kind == KIND_FOLDER}
 
 
 def picked_files_refusal(db_path, machine, paths, now=None):
@@ -768,15 +785,27 @@ def picked_files_refusal(db_path, machine, paths, now=None):
     tab pass on any agent; anything else needs MIN_PICKED_FILES_AGENT. **Gating the whole
     selection on 3.52.0 was rejected**: it would take the folder backup away from every PC
     still on an older agent -- the whole stable fleet -- to protect a case only a file hits.
+
+    It fails closed either way, and says which way: "that is a file" sends the operator to
+    the agent, "the listing is too old to tell" sends them to Refresh.
     """
     if version_at_least(agent_version(db_path, machine), MIN_PICKED_FILES_AGENT):
         return None
-    unconfirmed = [p for p in paths if p not in confirmed_folders(db_path, machine, paths, now)]
-    if not unconfirmed:
-        return None
+    kinds = listed_kinds(db_path, machine, paths, now)
     need = ".".join(str(p) for p in MIN_PICKED_FILES_AGENT)
-    return (f"{unconfirmed[0]} looks like a file, and {machine} needs agent {need} or newer "
-            "to send or back up a file. Folders picked in the Files tab work on its agent now.")
+    files_ = [p for p in paths if kinds[p] == KIND_NOT_FOLDER]
+    if files_:
+        return (f"{files_[0]} is a file, and {machine} needs agent {need} or newer to send or "
+                "back up a file. Folders work on its agent now: untick the files, or update "
+                "the agent.")
+    unlisted = [p for p in paths if kinds[p] == KIND_UNLISTED]
+    if unlisted:
+        return (f"The hub cannot tell whether {unlisted[0]} is a file or a folder: the folder "
+                f"listing it came from is more than {LISTING_TTL_SECONDS // 60} minutes old. "
+                "Refresh the folder in the "
+                f"Files tab and try again. ({machine} runs an agent older than {need}, which "
+                "can take folders but not files.)")
+    return None
 
 
 def prune_listings(db_path, now=None, ttl=LISTING_TTL_SECONDS):
