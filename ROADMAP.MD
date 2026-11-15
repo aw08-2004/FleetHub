@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.166.0**; `beta` is at **1.179.0**. The `beta` → `main` PR of 2026-10-22 carried
+`main` and `beta` are both at hub **1.179.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -139,6 +139,15 @@ still on `HUB_TAG=latest` follows whichever channel is newer once that workflow 
 same PR syncs `.github/workflows/hub-image.yml` on `beta` to `main`'s bytes, because `main` had
 taken workflow-only fixes (#196 and after) that `beta` never got, and the release would
 otherwise have stopped on a conflict in that file.
+
+**2026-11-15: hub 1.179.0 and agent 3.51.0's beta manifest sent to `main` unconfirmed, on the
+owner's call.** Every box still open below -- all of 1.179.0's among them -- is now owed on the
+production hub (or the named agent), the same footing as the 2026-11-03 release. The stable
+agent manifest is unchanged at 3.50.0, so no stable PC updates. The only conflict was the agent
+version pair, 3.50.0 on `main` against 3.51.0 on `beta`, kept at 3.51.0 because a version never
+goes backwards. *Move the Docker hosts first* is still open but did not block this one: with
+`main` and `beta` on the same hub version, a host on `HUB_TAG=latest` gets 1.179.0 whichever
+channel it follows. It blocks the next release in which `beta` runs ahead of `main` again.
 
 **Hub 1.159.0 — Group Policy, waiting on agent 3.48.0** (#163)
 - [x] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
