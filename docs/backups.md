@@ -245,6 +245,18 @@ A pending **Back up now** and a pending selection share one slot per PC: the new
 replaces the older. `POST /api/backups/machines/<machine>/run` with `{"paths": [...]}`
 (`manage_backups` + scope).
 
+**On a PC whose agent is older than 3.52.0**, a picked file would be skipped while the run
+still reported success, so the hub refuses anything it cannot confirm is a folder, with a
+409 that says which case it is:
+
+- **a file** -- untick it, or update the agent;
+- **a folder whose listing is over 15 minutes old** (the Files tab was left open) -- refresh
+  the folder in the Files tab and try again;
+- **a token path** such as `%Users%\Documents`, sent through the API -- name the folder in
+  full, or update the agent.
+
+From agent 3.52.0 on, none of these is refused.
+
 ### Restoring a PC's files
 
 The **Backup** tab on a machine's page browses what that machine has backed up — a folder
