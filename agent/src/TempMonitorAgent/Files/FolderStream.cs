@@ -411,7 +411,8 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
                                              Tally tally, CancellationToken ct)
     {
         var name = Path.GetFileName(root);
-        FileSystemInfo picked = File.Exists(root) ? new FileInfo(root) : new DirectoryInfo(root);
+        var picked = Picked(root)
+            ?? throw new IOException($"{root} is not a file or a folder on this PC any more.");
         if (IsLink(picked))
         {
             tally.Unreadable.Add($"{root} (a link; not followed)");
@@ -463,6 +464,16 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
         var problem = await WriteFileAsync(writer, rel, file, block, ct);
         if (problem is null) tally.Files++;
         else tally.Unreadable.Add($"{file.FullName} ({problem})");
+    }
+
+    /// <summary>The picked path as a file or a folder, or null when it is neither any more --
+    /// it can go between ResolveRoots and the walk. Reading Attributes on a path that has gone
+    /// throws on .NET, so every caller asks this first (review on #211).</summary>
+    private static FileSystemInfo? Picked(string root)
+    {
+        if (File.Exists(root)) return new FileInfo(root);
+        if (Directory.Exists(root)) return new DirectoryInfo(root);
+        return null;
     }
 
     private static bool IsLink(FileSystemInfo info) =>
@@ -569,8 +580,11 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
 
     private static void Measure(string root, ref long bytes, ref long count, CancellationToken ct)
     {
-        FileSystemInfo picked = File.Exists(root) ? new FileInfo(root) : new DirectoryInfo(root);
-        if (IsLink(picked)) return;     // not sent, so not counted towards the progress bar
+        var picked = Picked(root);
+        // Gone since ResolveRoots: nothing to count. The walk then fails the copy by name.
+        // Measure runs before the send's error handling, so a throw from here would end the
+        // command without telling the hub, and the receiver would wait out the idle timeout.
+        if (picked is null || IsLink(picked)) return;   // a link is not sent, so not counted
         if (picked is FileInfo pickedFile)
         {
             bytes += pickedFile.Length;
