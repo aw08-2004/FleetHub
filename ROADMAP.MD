@@ -699,6 +699,12 @@ only needs 3.51.0. Deploy the hub first.
   one file and it restores. Tick a file the backup excludes (a `*.tmp`, say): it is left out.
 - [ ] **Old agent.** On a PC still on 3.51.0, tick a file: *Send* and *Back up* say the PC
   needs 3.52.0 for files. Tick only folders: both work as before.
+- [ ] **A picked link is named, not followed.** On a 3.52.0 PC, make a symlink to a file
+  (`mklink link.txt real.txt` in an elevated prompt) and a junction to a folder (`mklink /J`).
+  Tick both and *Send*: the command output lists each as "a link; not followed", and neither
+  arrives. Tick the symlinked file alone and *Back up…*: the run log says it is a link. This
+  is the one check here no test runs, because creating a symlink needs Developer Mode or an
+  elevated prompt, and the agent tests have neither.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
