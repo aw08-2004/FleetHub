@@ -4333,12 +4333,12 @@
     },
     "send_title": "Enviar a otro equipo",
     "send_help": {
-      "one": "Copiar esta carpeta a otro equipo, en directo. En este equipo no cambia nada.",
-      "other": "Copiar estas {count} carpetas a otro equipo, en directo. En este equipo no cambia nada."
+      "one": "Copiar este elemento a otro equipo, en directo. En este equipo no cambia nada.",
+      "other": "Copiar estos {count} elementos a otro equipo, en directo. En este equipo no cambia nada."
     },
     "send_target": "Equipo",
     "send_destination": "En esta carpeta del otro equipo",
-    "send_destination_help": "Cada carpeta se coloca dentro con su propio nombre. Los archivos que ya existan se conservan, no se reemplazan.",
+    "send_destination_help": "Cada archivo y carpeta se coloca dentro con su propio nombre. Los archivos que ya existan se conservan, no se reemplazan.",
     "send_ok": "Enviar",
     "send_pick_target": "Elija un equipo de destino.",
     "send_no_targets": "Ningún otro equipo que usted administre puede recibir aún una copia en directo. Necesita el agente {needed} o posterior.",
@@ -4352,14 +4352,15 @@
     "send_cancelled": "La copia a {target} se ha cancelado.",
     "send_lost": "El hub ha perdido el rastro de esta copia (puede que se haya reiniciado).",
     "send_cancel": "Cancelar copia",
-    "backup_title": "Hacer copia de seguridad de estas carpetas",
+    "backup_title": "Hacer copia de seguridad de estos elementos",
     "backup_help": {
-      "one": "Una copia de seguridad puntual de esta carpeta en el destino de copias, separada de las copias programadas.",
-      "other": "Una copia de seguridad puntual de estas {count} carpetas en el destino de copias, separada de las copias programadas."
+      "one": "Una copia de seguridad puntual de este elemento en el destino de copias, separada de las copias programadas.",
+      "other": "Una copia de seguridad puntual de estos {count} elementos en el destino de copias, separada de las copias programadas."
     },
     "backup_ok": "Hacer copia",
     "backup_started": "Copia de seguridad iniciada. Siga su progreso en la pestaña Copia de seguridad.",
-    "backup_queued": "Copia de seguridad en cola: {message}"
+    "backup_queued": "Copia de seguridad en cola: {message}",
+    "files_need_agent": "Este PC tiene el agente {version}; enviar o hacer copia de un archivo necesita {needed} o posterior. Las carpetas ya funcionan: desmarque los archivos o actualice el agente."
   },
   "patches": {
     "classification": {

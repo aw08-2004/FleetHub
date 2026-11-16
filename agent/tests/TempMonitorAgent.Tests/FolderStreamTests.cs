@@ -27,7 +27,8 @@ public class FolderStreamTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
+        try { Directory.Delete(_root, recursive: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     /// <summary>The hub's relay, reduced to what the agents can observe: numbered chunks in,
@@ -131,6 +132,74 @@ public class FolderStreamTests : IDisposable
         Assert.Equal([1, 2, 3], File.ReadAllBytes(Path.Combine(dest, @"Pics\a.jpg")));
         Assert.Empty(Directory.GetFiles(dest, "*.fhpart", SearchOption.AllDirectories));
         Assert.Contains("Wrote 4 file(s)", relay.Result?["summary"]?.ToString());
+    }
+
+    [Fact]
+    public async Task AFileAndAFolder_ArriveSideBySide()
+    {
+        // A picked file lands directly in the destination; a picked folder lands under its
+        // own name. The receiver is the 3.51.0 one -- files needed no change on that side.
+        var report = new byte[300_000];
+        Random.Shared.NextBytes(report);
+        var file = Make(@"src\Report.xlsx", report);
+        Make(@"src\Docs\a.txt", "a"u8.ToArray());
+        var dest = Path.Combine(_root, "dest");
+
+        var relay = new FakeRelay();
+        var (sent, received) = await CopyAsync(relay, dest, file, Path.Combine(_root, @"src\Docs"));
+
+        Assert.True(sent.Success, sent.Output);
+        Assert.True(received.Success, received.Output);
+        Assert.Equal(report, File.ReadAllBytes(Path.Combine(dest, "Report.xlsx")));
+        Assert.Equal("a", File.ReadAllText(Path.Combine(dest, @"Docs\a.txt")));
+        Assert.Contains("sent 2 file(s)", sent.Output);
+    }
+
+    [Fact]
+    public async Task APickedFileThatIsGone_FailsTheCopyByName()
+    {
+        // Left out quietly, the copy would report success without the one thing asked for.
+        var missing = Path.Combine(_root, @"src\gone.txt");
+        var relay = new FakeRelay();
+        var (sent, received) = await CopyAsync(relay, Path.Combine(_root, "dest"), missing);
+        Assert.False(sent.Success);
+        Assert.Contains("gone.txt", sent.Output);
+        Assert.False(received.Success);
+    }
+
+    /// <summary>A junction needs no special rights to create, unlike a symlink, so this test
+    /// runs on any developer's machine. `mklink /J` is cmd's own; .NET has no junction API.</summary>
+    private static bool TryMakeJunction(string link, string target)
+    {
+        using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            "cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
+        { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true });
+        p!.WaitForExit();
+        return p.ExitCode == 0 && Directory.Exists(link);
+    }
+
+    [Fact]
+    public async Task APickedLink_IsNamedNotFollowedNotDropped()
+    {
+        // Review on #211: a picked link used to be skipped without a word, and the copy
+        // reported success with nothing sent.
+        var real = Path.Combine(_root, @"src\Real");
+        Make(@"src\Real\secret.txt", "s"u8.ToArray());
+        var link = Path.Combine(_root, @"src\Linked");
+        if (!TryMakeJunction(link, real)) return;
+        var dest = Path.Combine(_root, "dest");
+
+        var relay = new FakeRelay();
+        var (sent, received) = await CopyAsync(relay, dest, link);
+        // Removed here, non-recursively, which removes the junction and never its target: a
+        // recursive delete of the temp tree refuses a junction with "access denied".
+        Directory.Delete(link);
+
+        Assert.True(sent.Success, sent.Output);
+        Assert.True(received.Success, received.Output);
+        Assert.Contains("Linked (a link; not followed)", sent.Output);
+        Assert.False(Directory.Exists(Path.Combine(dest, "Linked")));
+        Assert.False(File.Exists(Path.Combine(dest, @"Linked\secret.txt")));
     }
 
     [Fact]

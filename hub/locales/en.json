@@ -4456,12 +4456,12 @@
     },
     "send_title": "Send to another computer",
     "send_help": {
-      "one": "Copy this folder to another computer, live. Nothing on this computer changes.",
-      "other": "Copy these {count} folders to another computer, live. Nothing on this computer changes."
+      "one": "Copy this item to another computer, live. Nothing on this computer changes.",
+      "other": "Copy these {count} items to another computer, live. Nothing on this computer changes."
     },
     "send_target": "Computer",
     "send_destination": "Into this folder on that computer",
-    "send_destination_help": "Each folder lands inside it under its own name. Files already there are kept, not replaced.",
+    "send_destination_help": "Each file and folder lands inside it under its own name. Files already there are kept, not replaced.",
     "send_ok": "Send",
     "send_pick_target": "Pick a computer to send to.",
     "send_no_targets": "No other computer you manage can take a live copy yet. It needs agent {needed} or newer.",
@@ -4475,14 +4475,15 @@
     "send_cancelled": "Copy to {target} was cancelled.",
     "send_lost": "The hub lost track of this copy (it may have restarted).",
     "send_cancel": "Cancel copy",
-    "backup_title": "Back up these folders",
+    "backup_title": "Back up these items",
     "backup_help": {
-      "one": "One backup of this folder to the backup destination, kept apart from the scheduled backups.",
-      "other": "One backup of these {count} folders to the backup destination, kept apart from the scheduled backups."
+      "one": "One backup of this item to the backup destination, kept apart from the scheduled backups.",
+      "other": "One backup of these {count} items to the backup destination, kept apart from the scheduled backups."
     },
     "backup_ok": "Back up",
     "backup_started": "Backup started. Follow it on the Backup tab.",
-    "backup_queued": "Backup queued: {message}"
+    "backup_queued": "Backup queued: {message}",
+    "files_need_agent": "This PC runs agent {version}; sending or backing up a file needs {needed} or newer. Folders work now, so untick the files or update the agent."
   },
   "patches": {
     "classification": {

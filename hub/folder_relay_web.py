@@ -82,23 +82,24 @@ def _agent_refused():
 
 
 def _clean_paths(raw_paths):
-    """The folders to send, validated, or _RelayRefusal. Each must be a folder below a drive
+    """The files and folders to send, validated, or _RelayRefusal. Each must be below a drive
     root, and no two may share a name -- they would land in the same place on the target and
-    the second would be merged into the first without anybody asking."""
+    the second would be merged into the first without anybody asking. Whether each is a file
+    or a folder is the source agent's to find out: the hub has only the path."""
     if not isinstance(raw_paths, list) or not raw_paths:
-        raise _RelayRefusal("Pick at least one folder to send.")
+        raise _RelayRefusal("Pick at least one file or folder to send.")
     if len(raw_paths) > files.MAX_OPERATION_PATHS:
-        raise _RelayRefusal(f"Send at most {files.MAX_OPERATION_PATHS} folders at a time.")
+        raise _RelayRefusal(f"Send at most {files.MAX_OPERATION_PATHS} items at a time.")
     paths, names = [], set()
     for raw in raw_paths:
         path = files.validate_path(raw)
         if files.parent_path(path) is None:
             # A drive root has no name to land under, and "send C:\" is a request for a
             # whole disk, which is not what the menu item means.
-            raise _RelayRefusal("Pick folders, not a whole drive.")
+            raise _RelayRefusal("Pick files or folders, not a whole drive.")
         name = path.rsplit("\\", 1)[-1].lower()
         if name in names:
-            raise _RelayRefusal("Two of those folders have the same name.")
+            raise _RelayRefusal("Two of those items have the same name.")
         names.add(name)
         paths.append(path)
     return paths
@@ -121,15 +122,9 @@ class _RelayRoutes:
             issued_by=permissions_web.current_actor(),
             ttl_seconds=settings.get_int(self.db_path, "fleet.command_ttl_seconds"))
 
-    def _agent_version(self, machine):
-        with files.get_conn(self.db_path) as conn:
-            row = conn.execute("SELECT companion_version FROM machine_info WHERE machine = ?",
-                               (machine,)).fetchone()
-        return row["companion_version"] if row else None
-
     def _check_agents(self, *machines):
         for end in machines:
-            if not folder_relay.agent_supports_stream(self._agent_version(end)):
+            if not folder_relay.agent_supports_stream(files.agent_version(self.db_path, end)):
                 need = ".".join(str(p) for p in folder_relay.MIN_AGENT_VERSION)
                 raise _RelayRefusal(f"{end} needs agent {need} or newer for a live copy.", 409)
 
@@ -139,10 +134,10 @@ class _RelayRoutes:
 
     # ---------------- console ----------------
     def send_folders(self, machine):
-        """Copy one or more folders from this machine into a folder on another.
+        """Copy files and folders from this machine into a folder on another.
 
         Body: `{"paths": [...], "target": "<machine>", "destination": "D:\\\\Incoming"}`.
-        Each folder lands as `<destination>\\<its own name>`; nothing on the source changes.
+        Each item lands as `<destination>\\<its own name>`; nothing on the source changes.
         """
         # Restated at the route for the reason files_web._require_json gives: this is the
         # control that stops a cross-site form from starting a copy.
@@ -158,6 +153,10 @@ class _RelayRoutes:
             paths = _clean_paths(data.get("paths"))
             destination = files.validate_path(data.get("destination"))
             self._check_agents(source, target)
+            # A picked FILE needs a newer source agent than a folder does; see files.py.
+            refusal = files.picked_files_refusal(self.db_path, source, paths)
+            if refusal:
+                raise _RelayRefusal(refusal, 409)
             transfer_id = self.relay.open(source, target, paths, destination,
                                           permissions_web.current_actor())
         except folder_relay.RelayRefused as e:

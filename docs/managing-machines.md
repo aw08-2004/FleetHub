@@ -212,13 +212,13 @@ are deliberately refused by the generic `POST /api/fleet/commands` endpoint and 
 saved as favorites: the guards above live on the dedicated route, and a saved PID is a
 different process by tomorrow.
 
-### Sending folders to another PC, and backing them up, from the Files tab
+### Sending files and folders to another PC, and backing them up, from the Files tab
 
-Tick one or more **folders** (not files, not a drive) and right-click:
+Tick any mix of **files and folders** in a folder (not a drive) and right-click:
 
 - **Send to another computer…** copies them, live, to another PC you manage. Pick the PC
-  and a folder on it (default `C:\Incoming`); each folder lands inside it under its own
-  name. The copy streams through the hub, which only ever holds a few megabytes of it, so
+  and a folder on it (default `C:\Incoming`); a file lands directly inside it, a folder
+  inside it under its own name. The copy streams through the hub, which only ever holds a few megabytes of it, so
   there is no size limit -- a 40 GB profile copies at the speed of the slower PC. A line
   under the file list shows progress and has **Cancel copy**; you can keep browsing while it
   runs.
@@ -228,11 +228,13 @@ Tick one or more **folders** (not files, not a drive) and right-click:
     use -- is skipped and named in the command output; the rest still copies.
   - A file cut off mid-copy is thrown away on the target (it is written as `*.fhpart` and
     renamed only when complete), so the target never holds a truncated file.
-  - **Both PCs need agent 3.51.0 or newer.** Older PCs appear in the list greyed out, with
-    their version. A copy with no progress for 15 minutes (a PC went offline) is failed.
+  - **Both PCs need agent 3.51.0 or newer**, and the PC a picked **file** is on needs
+    **3.52.0** (folders only need 3.51.0). Older target PCs appear in the list greyed out,
+    with their version; a source too old for files says so when you pick one. A copy with no progress for 15 minutes (a PC went offline) is failed.
   - Needs `issue_commands` on **both** PCs: the target list only holds PCs in your scope.
-- **Back up…** takes a one-off backup of the selected folders to the backup destination --
-  see [Backups](backups.md#one-off-backup-of-picked-folders). Needs `manage_backups`; the
+- **Back up…** takes a one-off backup of the selection to the backup destination -- see
+  [Backups](backups.md#one-off-backup-of-picked-files-and-folders). A picked file needs
+  agent 3.52.0 on that PC. Needs `manage_backups`; the
   menu entry is not shown without it.
 
 **Endpoints:** `POST /api/machines/<source>/files/send` with

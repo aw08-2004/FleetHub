@@ -701,6 +701,137 @@ def get_listing(db_path, request_id, machine=None):
     return payload
 
 
+#: The agent that can send and back up a picked FILE, not only a folder (hub 1.180.0). The hub
+#: copy of static/js/files.js's MIN_PICKED_FILES_AGENT, and the one that refuses: the console's
+#: only explains. **Below it a backup of a file is skipped as missing while the run reports
+#: success**, which is the silent failure picked_files_refusal exists to stop.
+MIN_PICKED_FILES_AGENT = (3, 52, 0)
+
+
+def version_at_least(version, minimum):
+    """True when a MAJOR.MINOR.PATCH string is at least `minimum`. Unknown is False."""
+    match = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", str(version or ""))
+    return bool(match) and tuple(int(p) for p in match.groups()) >= tuple(minimum)
+
+
+def agent_version(db_path, machine):
+    """The agent version `machine` last reported, or None. machine_info belongs to app.py; a
+    database without it (a test, a fresh hub) has no version to report."""
+    try:
+        with get_conn(db_path) as conn:
+            row = conn.execute("SELECT companion_version FROM machine_info WHERE machine = ?",
+                               (machine,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row["companion_version"] if row else None
+
+
+#: What a recent listing says about one picked path: shown as a folder, shown as something
+#: else, or not shown at all because no recent listing of its parent exists.
+KIND_FOLDER = "folder"
+KIND_NOT_FOLDER = "not_folder"
+KIND_UNLISTED = "unlisted"
+#: Not a plain path at all -- a backup token such as `%Users%\Documents`, which only the agent
+#: expands. No listing can ever vouch for one, so it is neither "refresh" nor "a file".
+KIND_UNCHECKABLE = "uncheckable"
+
+
+def listed_kinds(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
+    """For each of `paths`, what the newest recent listing of its parent says it is.
+
+    The hub has only paths, and `D:\\Data\\notes` may be either; but the operator picked
+    them from a listing this module stored minutes ago, and that listing says. The third
+    answer, KIND_UNLISTED, is kept apart from "not a folder" on purpose: a listing that
+    expired while the Files tab sat open is a reason to refresh, not to upgrade an agent, and
+    the refusal says which.
+    """
+    since = int(time.time() if now is None else now) - int(ttl)
+    kinds = dict.fromkeys(paths, KIND_UNLISTED)
+    by_parent = {}
+    for path in paths:
+        try:
+            parent = parent_path(path)
+        except ValueError:
+            # The backup route takes token-led patterns, which validate_path refuses. Found
+            # by review on #211: this raised out of the route as a 500.
+            kinds[path] = KIND_UNCHECKABLE
+            continue
+        if parent is not None:
+            by_parent.setdefault(parent.lower(), []).append(path)
+    try:
+        with get_conn(db_path) as conn:
+            for parent, children in by_parent.items():
+                folders = _listed_folder_names(conn, machine, parent, since)
+                if folders is None:
+                    continue
+                for child in children:
+                    name = child.rsplit("\\", 1)[-1].lower()
+                    kinds[child] = KIND_FOLDER if name in folders else KIND_NOT_FOLDER
+    except sqlite3.OperationalError:
+        pass    # no listings table: every path stays KIND_UNLISTED, which fails closed
+    return kinds
+
+
+def _listed_folder_names(conn, machine, parent, since):
+    """Lower-cased names of the folders in the newest ready listing of `parent` taken at or
+    after `since`, or None when there is no such listing."""
+    row = conn.execute(
+        "SELECT payload_json FROM file_listings WHERE machine = ? "
+        "AND lower(path) = ? AND status = ? AND created_at >= ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (machine, parent, READY, since)).fetchone()
+    if not row or not row["payload_json"]:
+        return None
+    return {str(e.get("name") or "").lower()
+            for e in json.loads(row["payload_json"]).get("entries") or []
+            if e.get("directory")}
+
+
+def confirmed_folders(db_path, machine, paths, now=None, ttl=LISTING_TTL_SECONDS):
+    """The subset of `paths` that a recent listing of their parent showed as FOLDERS. A path
+    no recent listing vouches for is not assumed to be a folder."""
+    return {p for p, kind in listed_kinds(db_path, machine, paths, now, ttl).items()
+            if kind == KIND_FOLDER}
+
+
+def picked_files_refusal(db_path, machine, paths, now=None):
+    """Why `machine` cannot be asked to send or back up `paths`, or None when it can.
+
+    Shared by the live copy (folder_relay_web) and the one-off backup (backups_web), so the
+    two cannot disagree about what an old agent may be given. Folders picked from the Files
+    tab pass on any agent; anything else needs MIN_PICKED_FILES_AGENT. **Gating the whole
+    selection on 3.52.0 was rejected**: it would take the folder backup away from every PC
+    still on an older agent -- the whole stable fleet -- to protect a case only a file hits.
+
+    It fails closed either way, and says which way: "that is a file" sends the operator to
+    the agent, "the listing is too old to tell" sends them to Refresh.
+    """
+    if version_at_least(agent_version(db_path, machine), MIN_PICKED_FILES_AGENT):
+        return None
+    kinds = listed_kinds(db_path, machine, paths, now)
+    need = ".".join(str(p) for p in MIN_PICKED_FILES_AGENT)
+    files_ = [p for p in paths if kinds[p] == KIND_NOT_FOLDER]
+    if files_:
+        return (f"{files_[0]} is a file, and {machine} needs agent {need} or newer to send or "
+                "back up a file. Folders work on its agent now: untick the files, or update "
+                "the agent.")
+    tokens = [p for p in paths if kinds[p] == KIND_UNCHECKABLE]
+    if tokens:
+        # Refused, not waved through: a token can name a file as easily as a folder, and on
+        # this agent a file is the silent failure the whole check exists for.
+        return (f"{tokens[0]} uses a token, so the hub cannot check whether it is a file or a "
+                f"folder, and {machine} needs agent {need} or newer before it can be given a "
+                "file. Name the folder in full, or update the agent.")
+    unlisted = [p for p in paths if kinds[p] == KIND_UNLISTED]
+    if unlisted:
+        return (f"The hub cannot tell whether {unlisted[0]} is a file or a folder: the folder "
+                f"listing it came from is more than {LISTING_TTL_SECONDS // 60} minutes old. "
+                "Refresh the folder in the "
+                f"Files tab and try again. ({machine} runs an agent older than {need}, which "
+                "can take folders but not files.)")
+    return None
+
+
 def prune_listings(db_path, now=None, ttl=LISTING_TTL_SECONDS):
     """Drop listing rows past their TTL. Returns rows removed.
 

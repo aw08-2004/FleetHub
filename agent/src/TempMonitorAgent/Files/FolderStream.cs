@@ -287,7 +287,16 @@ internal sealed class RelayChunkReader(HttpClient http, string baseUrl)
 }
 
 /// <summary>
-/// stream_send: read one or more folders and stream them, live, to another PC through the hub.
+/// stream_send: read the files and folders an operator picked and stream them, live, to another
+/// PC through the hub.
+///
+/// <b>Files as well as folders since 3.52.0.</b> A picked file goes across as one file record at
+/// the top of the stream, so it lands directly in the destination folder; a picked folder goes
+/// across whole, as before. The receiver needed no change for this -- a 3.51.0 receiver writes a
+/// top-level file record like any other -- so only the SENDER's version gates it
+/// (MIN_PICKED_FILES_AGENT in static/js/files.js, and files.MIN_PICKED_FILES_AGENT on
+/// the hub). A 3.51.0 sender given a file refuses the whole copy ("... is not a folder.")
+/// rather than leaving it out.
 ///
 /// <b>Nothing on this machine changes.</b> It is a copy; the owner rejected "move" for the
 /// first version (2026-11-14) because the delete would run on the strength of a target that
@@ -372,7 +381,9 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
         return CommandResult.Ok(Summary(tally, writer.BytesSent));
     }
 
-    /// <summary>The folders to send, each checked by PathRules, or the reason there are none.</summary>
+    /// <summary>The files and folders to send, each checked by PathRules, or the reason there
+    /// are none. Every one must exist now: a picked item that has gone since the listing is
+    /// refused by name rather than quietly left out of a copy that then reports success.</summary>
     private static (List<string> Roots, string? Refusal) ResolveRoots(JsonArray? paths)
     {
         var roots = new List<string>();
@@ -382,17 +393,36 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
             var refusal = PathRules.Reject(raw);
             if (refusal is not null) return (roots, refusal);
             var path = PathRules.Normalize(raw);
-            if (!Directory.Exists(path)) return (roots, $"{path} is not a folder.");
+            if (!Directory.Exists(path) && !File.Exists(path))
+                return (roots, $"{path} is not a file or a folder on this PC.");
             roots.Add(path);
         }
-        return roots.Count == 0 ? (roots, "No folders were named.") : (roots, null);
+        return roots.Count == 0 ? (roots, "Nothing was named to send.") : (roots, null);
     }
 
-    /// <summary>One selected folder and everything under it, depth first, junctions skipped.</summary>
+    /// <summary>One selected item: a file as a single record, a folder and everything under
+    /// it depth first, junctions skipped either way.
+    ///
+    /// <b>A picked item that is itself a link is named, not followed and not dropped.</b> It
+    /// goes into the summary's could-not-be-read list, the same place an unreadable file goes,
+    /// so the operator sees why it is missing. Dropping it without a word left a copy that
+    /// reported success without the one thing asked for (review on #211).</summary>
     private static async Task WriteTreeAsync(RelayChunkWriter writer, string root, byte[] block,
                                              Tally tally, CancellationToken ct)
     {
         var name = Path.GetFileName(root);
+        var picked = Picked(root)
+            ?? throw new IOException($"{root} is not a file or a folder on this PC any more.");
+        if (IsLink(picked))
+        {
+            tally.Unreadable.Add($"{root} (a link; not followed)");
+            return;
+        }
+        if (picked is FileInfo pickedFile)
+        {
+            await WriteCountedFileAsync(writer, name, pickedFile, block, tally, ct);
+            return;
+        }
         await WriteFolderAsync(writer, name, ct);
         tally.Folders++;
         var stack = new Stack<(DirectoryInfo Dir, string Rel)>();
@@ -414,11 +444,7 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
                 continue;
             }
             foreach (var file in files.Where(f => !IsLink(f)))
-            {
-                var problem = await WriteFileAsync(writer, $"{rel}/{file.Name}", file, block, ct);
-                if (problem is null) tally.Files++;
-                else tally.Unreadable.Add($"{file.FullName} ({problem})");
-            }
+                await WriteCountedFileAsync(writer, $"{rel}/{file.Name}", file, block, tally, ct);
             foreach (var sub in subs.Where(d => !IsLink(d)))
             {
                 var subRel = $"{rel}/{sub.Name}";
@@ -427,6 +453,27 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
                 stack.Push((sub, subRel));
             }
         }
+    }
+
+    /// <summary>One file record, counted as sent or as unreadable -- the same two outcomes for
+    /// a picked file and for a file found inside a picked folder.</summary>
+    private static async Task WriteCountedFileAsync(RelayChunkWriter writer, string rel,
+                                                    FileInfo file, byte[] block, Tally tally,
+                                                    CancellationToken ct)
+    {
+        var problem = await WriteFileAsync(writer, rel, file, block, ct);
+        if (problem is null) tally.Files++;
+        else tally.Unreadable.Add($"{file.FullName} ({problem})");
+    }
+
+    /// <summary>The picked path as a file or a folder, or null when it is neither any more --
+    /// it can go between ResolveRoots and the walk. Reading Attributes on a path that has gone
+    /// throws on .NET, so every caller asks this first (review on #211).</summary>
+    private static FileSystemInfo? Picked(string root)
+    {
+        if (File.Exists(root)) return new FileInfo(root);
+        if (Directory.Exists(root)) return new DirectoryInfo(root);
+        return null;
     }
 
     private static bool IsLink(FileSystemInfo info) =>
@@ -446,7 +493,7 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
     private static string Summary(Tally tally, long bytesSent)
     {
         var summary = new StringBuilder(
-            $"[files] sent {tally.Files} file(s) in {tally.Folders} folder(s), {Mb(bytesSent)} on the wire");
+            $"[files] sent {tally.Files} file(s) and {tally.Folders} folder(s), {Mb(bytesSent)} on the wire");
         var unreadable = tally.Unreadable;
         if (unreadable.Count > 0)
         {
@@ -533,6 +580,17 @@ public sealed class StreamSendExecutor(ILogger<StreamSendExecutor> log, FleetCli
 
     private static void Measure(string root, ref long bytes, ref long count, CancellationToken ct)
     {
+        var picked = Picked(root);
+        // Gone since ResolveRoots: nothing to count. The walk then fails the copy by name.
+        // Measure runs before the send's error handling, so a throw from here would end the
+        // command without telling the hub, and the receiver would wait out the idle timeout.
+        if (picked is null || IsLink(picked)) return;   // a link is not sent, so not counted
+        if (picked is FileInfo pickedFile)
+        {
+            bytes += pickedFile.Length;
+            count++;
+            return;
+        }
         var stack = new Stack<DirectoryInfo>();
         stack.Push(new DirectoryInfo(root));
         while (stack.Count > 0)
