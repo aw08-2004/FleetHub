@@ -30,6 +30,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HUB = os.path.join(os.path.dirname(HERE), "hub")
@@ -1563,12 +1564,8 @@ def test_a_package_card_that_cannot_succeed_is_not_queued():
     check("call_endpoint on /api/packages is refused by the same gate, body sent as text",
           generic.get("ok") is False and "payload" in generic.get("error", "")
           and len(assistant.list_actions(DB, chat_id)) == before)
-    real = packages.check_definition
-    packages.check_definition = lambda **kw: (_ for _ in ()).throw(TypeError("surprise"))
-    try:
+    with mock.patch.object(packages, "check_definition", side_effect=TypeError("surprise")):
         surprise = assistant_tools.precheck("POST", "/api/packages", {"name": "x"})
-    finally:
-        packages.check_definition = real
     check("a validator surprise comes back as a sentence, not an exception",
           "wrong type" in (surprise or ""))
 
