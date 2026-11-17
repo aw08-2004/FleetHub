@@ -223,6 +223,11 @@ _MACHINE = {"type": "string", "description": "The machine's name exactly as the 
                                             "the `machine` field of list_machines."}
 
 
+# The packages route is named by three tables below (the read, the create and the precheck).
+# One constant, so they cannot name two different routes after a rename.
+_PACKAGES_ROUTE = "/api/packages"
+
+
 def _params(required=(), **props):
     return {"type": "object", "properties": props, "required": list(required)}
 
@@ -303,7 +308,7 @@ CURATED = (
      "GET", "/api/deployments/<deployment_id>",
      _params(["deployment_id"], deployment_id={"type": "string"})),
     ("list_packages", "The software packages that can be deployed.",
-     "GET", "/api/packages", _params()),
+     "GET", _PACKAGES_ROUTE, _params()),
     ("get_package", "One package's full recipe: sources, steps, command, detection.",
      "GET", "/api/packages/<package_id>",
      _params(["package_id"], package_id={"type": "string"})),
@@ -357,7 +362,7 @@ CURATED = (
      "\"<DisplayName in Programs and Features>\", \"min_version\": \"1.2.3\"}, or "
      "{\"kind\": \"file_exists\", \"path\": \"C:\\Program Files\\...\\app.exe\"}, or "
      "registry_value {root, key, name, equals}. Needs the operator's confirmation.",
-     "POST", "/api/packages",
+     "POST", _PACKAGES_ROUTE,
      _params(["name"], name={"type": "string"}, description={"type": "string"},
              version={"type": "string"},
              sources={"type": "array", "items": {"type": "object"},
@@ -910,7 +915,7 @@ def _precheck_package(body):
 # Confirm-tier routes whose body can be judged without running them. A card for a body that
 # is certain to be refused is a click that can only fail, and an operator who confirms it
 # gets the same 400 the model never saw coming (hub 1.180.1). Keyed by (method, route rule).
-PRECHECKS = {("POST", "/api/packages"): _precheck_package}
+PRECHECKS = {("POST", _PACKAGES_ROUTE): _precheck_package}
 
 
 def precheck(method, rule, body):

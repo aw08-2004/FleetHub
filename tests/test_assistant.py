@@ -1513,7 +1513,7 @@ def test_a_package_card_that_cannot_succeed_is_not_queued():
             "sources": [{"kind": "upload", "file_name": "setup.exe", "file_size": 128,
                          "sha256": "cd" * 32}],
             "steps": [{"kind": "run", "command": "{file}", "args": "/configure x"}],
-            "detection": {"kind": "file_exists", "path": "C:\a.exe"},
+            "detection": {"kind": "file_exists", "path": r"C:\a.exe"},
             "risk": "critical", "impact": "Defines a package; installs nothing."}
 
     def cards():
@@ -1527,8 +1527,7 @@ def test_a_package_card_that_cannot_succeed_is_not_queued():
     check("a name-and-version-only call is refused in the tool result",
           refused.get("ok") is False and "payload" in refused.get("error", ""))
     check("...naming the only fields it carried, so the model can see what it dropped",
-          "name, risk" not in refused["error"] and "name" in refused["error"]
-          and "version" in refused["error"])
+          "fields: name, version" in refused["error"])
     check("...and no card was queued", cards() == [])
 
     SCRIPT[:] = [raw_call("create_package", full), raw_call("create_package", full),
