@@ -121,3 +121,69 @@ body.login-body {
     padding: var(--space-1) var(--space-3);
     font-size: var(--text-sm);
 }
+
+/* ---------------------------------------------------------------- Active Directory form
+   The one sign-in that is a form rather than a link to an identity provider (roadmap #4).
+   Styled here rather than with components.css's .input: this page loads only tokens, base
+   and this file, deliberately, so the page every signed-out visitor reaches stays small. */
+.login-ldap {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    text-align: left;
+}
+
+.login-ldap__divider {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    margin: var(--space-2) 0;
+}
+
+.login-ldap__divider::before,
+.login-ldap__divider::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--card-border);
+}
+
+.login-ldap__label {
+    font-size: var(--text-sm);
+    color: var(--muted);
+}
+
+.login-ldap__input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--card-border);
+    background: var(--control-bg, #1b1b20);
+    color: var(--text);
+    font: inherit;
+}
+
+.login-ldap__input:focus {
+    outline: 2px solid var(--accent, #60a5fa);
+    outline-offset: 1px;
+}
+
+.login-ldap__submit {
+    justify-content: center;
+    margin-top: var(--space-2);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+}
+
+/* One sentence for every refusal -- see ldapauth_web.py for why it never says which part
+   was wrong. */
+.login-ldap__error {
+    color: var(--danger, #f87171);
+    background: var(--danger-bg, #3a1418);
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+}
