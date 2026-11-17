@@ -905,6 +905,14 @@ def _precheck_package(body):
             timeout_seconds=body.get("timeout_seconds", 900),
             success_exit_codes=body.get("success_exit_codes"),
             detection=body.get("detection"))
+    except (TypeError, AttributeError, KeyError) as error:
+        # Not a verdict, a shape the validators did not expect. A fuzz of every field with
+        # lists, numbers, booleans and nested junk found none that gets here, but the route
+        # has no model in front of it and this path does: a surprise has to come back as a
+        # sentence the model can act on, not as an exception out of the tool loop.
+        return (f"no card was queued: the definition has a field of the wrong type "
+                f"({type(error).__name__}). Send name as text, sources and steps as lists "
+                "of objects and detection as an object")
     except ValueError as error:
         return (f"no card was queued: {error}. The call carried only these fields: "
                 f"{', '.join(sorted(body)) or 'none'}. Send the whole definition in ONE call "

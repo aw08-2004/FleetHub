@@ -47,6 +47,7 @@ import assistant_guide
 import assistant_tools
 import console_session
 import fleet
+import packages
 import permissions
 import settings
 
@@ -1551,6 +1552,25 @@ def test_a_package_card_that_cannot_succeed_is_not_queued():
           and assistant_tools.precheck("POST", "/api/packages", full) is None)
     check("a route with no precheck is untouched",
           assistant_tools.precheck("POST", "/api/deployments", {}) is None)
+    # The same gate through the generic tool: the PRECHECKS key is the route's own rule, so
+    # call_endpoint reaches it only while the two stay spelled alike.
+    before = len(assistant.list_actions(DB, chat_id))
+    SCRIPT[:] = [call("call_endpoint", method="POST", path="/api/packages",
+                      body='{"name": "Office", "version": "1"}', risk="critical",
+                      impact="Defines a package."), say("stopped")]
+    converse(admin, chat_id, "make it with the generic tool")
+    generic = json.loads(tool_messages(chat_id)[-1]["content"])
+    check("call_endpoint on /api/packages is refused by the same gate, body sent as text",
+          generic.get("ok") is False and "payload" in generic.get("error", "")
+          and len(assistant.list_actions(DB, chat_id)) == before)
+    real = packages.check_definition
+    packages.check_definition = lambda **kw: (_ for _ in ()).throw(TypeError("surprise"))
+    try:
+        surprise = assistant_tools.precheck("POST", "/api/packages", {"name": "x"})
+    finally:
+        packages.check_definition = real
+    check("a validator surprise comes back as a sentence, not an exception",
+          "wrong type" in (surprise or ""))
 
 
 def test_call_endpoint_body_is_never_silently_dropped():
