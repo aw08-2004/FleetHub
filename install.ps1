@@ -492,15 +492,24 @@ function Get-PythonCandidates {
     # would send the operator away for a reboot they don't need.
     # Program Files (x86) is deliberately not searched: only 32-bit builds install there, and
     # the bitness check would refuse every one of them anyway.
-    # Every match, not just the newest: Python312-32 sorts above Python312 by name, and
-    # stopping at the first would let a 32-bit side-by-side install hide the 64-bit one.
+    # Every match, not just the newest: stopping at the first would let a 32-bit side-by-side
+    # install (Python312-32) hide the 64-bit one beside it.
     # Sorted WITHIN each root, never across them: machine-wide first, because the service runs
     # as LocalSystem and is baked to this path, and one sort across roots would rank a per-user
     # interpreter under C:\Users above Program Files purely because "U" sorts after "P".
+    # Within a root, by the version NUMBER in the folder name, newest first, then the 64-bit
+    # build before its "-32" twin. Not by the name as text, which this once was, for two
+    # reasons: "Python39" sorts above "Python312" as text, so a box with both picked 3.9; and
+    # the text order is culture-aware and differs by host -- Windows PowerShell 5.1 put
+    # Python312-32 above Python312 and PowerShell 7 put it below, so the installer's choice
+    # depended on which shell ran it. Integer and boolean keys compare the same everywhere.
     foreach ($glob in @("$env:ProgramFiles\Python3*\python.exe",
                         "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
                         "$env:SystemDrive\Python3*\python.exe")) {
-        Get-ChildItem $glob -ErrorAction SilentlyContinue | Sort-Object FullName -Descending |
+        Get-ChildItem $glob -ErrorAction SilentlyContinue |
+            Sort-Object @{ Expression = { if ($_.Directory.Name -match '^Python3(\d+)') { [int]$Matches[1] } else { -1 } }; Descending = $true },
+                        @{ Expression = { $_.Directory.Name -match '-32$' }; Descending = $false },
+                        @{ Expression = { $_.FullName }; Descending = $false } |
             ForEach-Object { @{ Exe = $_.FullName; Args = $null; Label = $_.FullName } }
     }
 }

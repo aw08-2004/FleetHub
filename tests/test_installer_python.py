@@ -183,10 +183,13 @@ $b = Get-PythonBits 'C:\\nope\\python.exe' $null
     # PATH lookups stubbed out. The per-user root is named to sort ABOVE the machine-wide one,
     # so a single sort across roots (which this once did) puts it first and fails.
     pf, lad, sysd = (os.path.join(work, n) for n in ("Z_pf", "A_lad", "M_sys"))
+    # Python39 sits beside Python312 because, sorted as text, "Python39" ranks above
+    # "Python312" and the installer once picked 3.9 on a box with both.
     exes = [os.path.join(pf, "Python312", "python.exe"),
             os.path.join(pf, "Python312-32", "python.exe"),
             os.path.join(lad, "Programs", "Python", "Python313", "python.exe"),
-            os.path.join(sysd, "Python311", "python.exe")]
+            os.path.join(sysd, "Python311", "python.exe"),
+            os.path.join(pf, "Python39", "python.exe")]
     for exe in exes:
         os.makedirs(os.path.dirname(exe), exist_ok=True)
         open(exe, "w").close()
@@ -196,8 +199,15 @@ $env:ProgramFiles = '{pf}'; $env:LOCALAPPDATA = '{lad}'; $env:SystemDrive = '{sy
 Get-PythonCandidates | ForEach-Object {{ "CAND: $($_.Exe)" }}
 """, fakes=False)
     got = [ln[len("CAND: "):].strip() for ln in out.splitlines() if ln.startswith("CAND: ")]
+    # The exact order, under every shell: this once depended on whether 5.1 or 7 ran the
+    # installer, because the sort was culture-aware text and the two hosts disagree on where
+    # "-" ranks. Version number first, then the 64-bit build before its -32 twin.
     check(f"{tag}: candidates keep machine-wide, per-user, drive-root order",
-          got == [exes[1], exes[0], exes[2], exes[3]])
+          got == [exes[0], exes[1], exes[4], exes[2], exes[3]])
+    check(f"{tag}: ...newest by version NUMBER, so Python312 ranks above Python39",
+          exes[0] in got and exes[4] in got and got.index(exes[0]) < got.index(exes[4]))
+    check(f"{tag}: ...and the 64-bit build ranks above its -32 twin",
+          exes[0] in got and exes[1] in got and got.index(exes[0]) < got.index(exes[1]))
     check(f"{tag}: ...and every match in a root, so Python312-32 can't hide Python312",
           exes[0] in got and exes[1] in got)
 
