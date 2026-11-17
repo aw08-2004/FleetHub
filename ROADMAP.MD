@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.179.0**; `beta` is at **1.180.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.179.0**; `beta` is at **1.180.1** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -705,6 +705,26 @@ only needs 3.51.0. Deploy the hub first.
   arrives. Tick the symlinked file alone and *Back up…*: the run log says it is a link. This
   is the one check here no test runs, because creating a symlink needs Developer Mode or an
   elevated prompt, and the agent tests have neither.
+
+**Hub 1.180.1 -- the assistant stops queueing package cards that cannot succeed** (#26)
+Hub only, no agent. Found in the chat *Create Spanish Office 365 installer* on the production
+hub: after the first, complete card expired, the model (`xiaomi/mimo-v2.6-flash` through
+OpenRouter) re-sent `create_package` with only a name and a version, the operator confirmed
+four of the cards and got the same 400 each time, and the model queued fifteen more while
+telling the operator the hub was stripping the payload. The hub was not: it stores and sends
+exactly the arguments it receives. Whether the model or the provider shortened the call cannot
+be told from here, because the raw call is not kept. *Rejected:* keeping the raw model output
+on every action row, which would put whole prompts-worth of text in the database to settle a
+question the gate below makes mostly moot; and a retry cap per chat, which punishes a
+legitimate second attempt as hard as a broken one.
+- [ ] **A broken package card is answered to the model.** In an Ask-mode chat on the beta hub,
+  ask the assistant to build any package, with a model that has been sending short calls if you
+  have one. A `create_package` with no payload and no steps must come back in the chat as a
+  refusal naming the fields it carried, and **no card** appears. A complete call still gives
+  one card, and confirming it creates the package.
+- [ ] **A repeat of an open card is refused.** With a card waiting, ask the assistant to make
+  the same package again: it must point at the open card instead of adding a second. Decline the
+  card, ask again, and a new one appears.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 

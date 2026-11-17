@@ -1448,7 +1448,9 @@ def test_package_building_follows_the_modes():
                  # By hand: call()'s own first parameter is `name`, which create_package takes.
                  {"content": "", "tool_calls": [{"id": "pkg", "name": "create_package",
                                                  "arguments": json.dumps({
-                     "name": "App", "sources": [{"kind": "upload"}],
+                     "name": "App",
+                     "sources": [{"kind": "upload", "file_name": "app.exe", "file_size": 128,
+                                  "sha256": "ab" * 32}],
                      "install_command": "{file}", "install_args": "/S", "risk": "critical",
                      "impact": "Defines a package; installs nothing."})}]},
                  say("built")]
@@ -1489,6 +1491,93 @@ def test_package_building_follows_the_modes():
           and "%ProgramData%\\TempMonitorAgent" in prompt)
     settings.set_many(DB, {"ai.assistant_web_enabled": False}, "test")
     settings.invalidate()
+
+
+def raw_call(tool, arguments):
+    """call() cannot name create_package's own `name` argument, so this one takes a dict."""
+    return {"content": "", "tool_calls": [{"id": f"r{len(CALLS)}", "name": tool,
+                                           "arguments": arguments if isinstance(
+                                               arguments, str) else json.dumps(arguments)}]}
+
+
+def test_a_package_card_that_cannot_succeed_is_not_queued():
+    """Hub 1.180.1. The silent failure: a small model re-issued create_package with only a
+    name and a version, the hub queued a card for it anyway, the operator confirmed four of
+    them and got the same 400 each time, and the model -- never told -- queued fifteen more
+    while blaming the hub for 'stripping the payload'. The refusal has to reach the MODEL, in
+    the tool result, before any card exists."""
+    print("\n-- a package card the route would refuse is answered to the model, not queued --")
+    admin = client_for("tester@example.com")
+    chat_id = new_chat(admin)
+    full = {"name": "Office es-es", "version": "1",
+            "sources": [{"kind": "upload", "file_name": "setup.exe", "file_size": 128,
+                         "sha256": "cd" * 32}],
+            "steps": [{"kind": "run", "command": "{file}", "args": "/configure x"}],
+            "detection": {"kind": "file_exists", "path": "C:\a.exe"},
+            "risk": "critical", "impact": "Defines a package; installs nothing."}
+
+    def cards():
+        return [a for a in assistant.list_actions(DB, chat_id) if a["tool"] == "create_package"]
+
+    SCRIPT[:] = [raw_call("create_package", {"name": "Office es-es", "version": "1",
+                                              "risk": "critical", "impact": "Defines one."}),
+                 say("stopped")]
+    converse(admin, chat_id, "make the package")
+    refused = json.loads(tool_messages(chat_id)[-1]["content"])
+    check("a name-and-version-only call is refused in the tool result",
+          refused.get("ok") is False and "payload" in refused.get("error", ""))
+    check("...naming the only fields it carried, so the model can see what it dropped",
+          "name, risk" not in refused["error"] and "name" in refused["error"]
+          and "version" in refused["error"])
+    check("...and no card was queued", cards() == [])
+
+    SCRIPT[:] = [raw_call("create_package", full), raw_call("create_package", full),
+                 say("waiting")]
+    converse(admin, chat_id, "now the whole thing")
+    first, second = [json.loads(m["content"]) for m in tool_messages(chat_id)[-2:]]
+    check("the complete definition becomes one card",
+          first.get("status") == "pending_confirmation" and len(cards()) == 1)
+    check("the same call again is refused while that card is open, pointing at it",
+          second.get("ok") is False and "already waiting" in second.get("error", "")
+          and str(cards()[0]["id"]) in second["error"])
+    check("...and still no second card", len(cards()) == 1)
+    admin.post(f"/api/assistant/actions/{cards()[0]['id']}/reject", json={})
+    SCRIPT[:] = [raw_call("create_package", full), say("again")]
+    converse(admin, chat_id, "ask again after I declined")
+    check("once the first card is decided, the same call is allowed again",
+          json.loads(tool_messages(chat_id)[-1]["content"]).get("status")
+          == "pending_confirmation" and len(cards()) == 2)
+    check("the gate and the route share one validator (same sentence either way)",
+          assistant_tools.precheck("POST", "/api/packages", {"name": "x"})
+          and assistant_tools.precheck("POST", "/api/packages", full) is None)
+    check("a route with no precheck is untouched",
+          assistant_tools.precheck("POST", "/api/deployments", {}) is None)
+
+
+def test_call_endpoint_body_is_never_silently_dropped():
+    """Hub 1.180.1. `body` used to be kept only if it was already a dict, so a body sent as
+    JSON text arrived as NO body and the route blamed a missing name -- a misleading answer
+    that sent a model hunting for a bug in the hub."""
+    print("\n-- call_endpoint: a body is read, or refused by name, never dropped --")
+    check("a dict is kept", assistant_tools.coerce_body({"a": 1}) == (None, {"a": 1}))
+    check("JSON text holding an object is read as that object",
+          assistant_tools.coerce_body('{"a": 1}') == (None, {"a": 1}))
+    check("nothing at all is fine (a GET, an empty POST)",
+          assistant_tools.coerce_body(None) == (None, None)
+          and assistant_tools.coerce_body("") == (None, None))
+    for bad in ('[1, 2]', "not json", [1], 7):
+        error, body = assistant_tools.coerce_body(bad)
+        check(f"{bad!r} is refused with a sentence about the shape", body is None and
+              "JSON object" in (error or ""))
+    admin = client_for("tester@example.com")
+    chat_id = new_chat(admin)
+    SCRIPT[:] = [call("call_endpoint", method="POST", path="/api/packages", body="[1]",
+                      risk="critical", impact="Defines a package."), say("done")]
+    converse(admin, chat_id, "post a list")
+    result = json.loads(tool_messages(chat_id)[-1]["content"])
+    check("through the app: a list body is an error answer, not a card",
+          result.get("ok") is False and "JSON object" in result.get("error", "")
+          and not assistant.list_actions(DB, chat_id))
 
 
 def test_absolute_links_to_this_hub():
@@ -1685,6 +1774,8 @@ def main():
     test_modes_decide_what_runs_unasked()
     test_a_confirmed_action_is_followed_up()
     test_package_building_follows_the_modes()
+    test_a_package_card_that_cannot_succeed_is_not_queued()
+    test_call_endpoint_body_is_never_silently_dropped()
     test_absolute_links_to_this_hub()
     test_the_last_machine_by_name_is_found()
     test_wait_arguments()

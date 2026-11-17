@@ -327,7 +327,9 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                 if error:
                     return {"ok": False, "error": error}
                 query = args.get("query") if isinstance(args.get("query"), dict) else None
-                body = args.get("body") if isinstance(args.get("body"), dict) else None
+                error, body = assistant_tools.coerce_body(args.get("body"))
+                if error:
+                    return {"ok": False, "error": error}
             elif name in assistant_tools.CURATED_BY_NAME:
                 args, local = assistant_tools.split_local(name, args)
                 error, method, path, query, body = assistant_tools.build_request(name, args)
@@ -347,20 +349,37 @@ def create_assistant_blueprint(db_path, login_required, access, ai_config, *, ap
                         "error": "the assistant may not use this route; the operator can "
                                  "do it in the console"}
             if tier == assistant_tools.TIER_CONFIRM:
+                # Before a card exists (hub 1.180.1): a definition the route is certain to
+                # refuse, and a repeat of a card still open, are answered to the MODEL, who
+                # can fix the first and stop sending the second. Neither is the operator's
+                # job to click through.
+                refusal = assistant_tools.precheck(method, rule, body)
+                if refusal:
+                    return {"ok": False, "tier": tier, "error": refusal}
                 # The conversation's mode, read NOW rather than when the turn began: an
                 # operator who switches back to Ask mid-answer is obeyed from the next action.
                 chat_now = assistant.get_chat(db_path, chat_id, owner) or {}
                 mode = chat_now.get("mode", assistant.MODE_ASK)
                 risk = str(local.get("risk") or "").lower()
                 typed = assistant_tools.needs_typed_name(method, rule)
+                # A wipe keeps its card and its typed name in every mode (owner's decision).
+                run_now = not typed and (mode == assistant.MODE_BYPASS or (
+                    mode == assistant.MODE_AUTO and risk == assistant.RISK_ROUTINE))
+                # Only a call that would become a CARD is checked for a repeat: one that
+                # runs now is not a pile-up, and an operator who switched from Ask to Auto
+                # with a card still open means the model's next try to run.
+                waiting = None if run_now else assistant.find_pending_duplicate(
+                    db_path, chat_id, owner, method, path, query, body)
+                if waiting:
+                    return {"ok": False, "tier": tier,
+                            "error": f"an identical card (action {waiting['id']}) is already "
+                                     "waiting for the operator. Do not queue it again: tell "
+                                     "them to confirm it, or change what you are asking for"}
                 action = assistant.create_action(
                     db_path, chat_id=chat_id, owner=owner, tool=name, method=method,
                     path=path, rule=rule, query=query, body=body, machine=machine,
                     typed_name=typed, risk=risk, impact=str(local.get("impact") or ""),
                     mode=mode, auto=False)
-                # A wipe keeps its card and its typed name in every mode (owner's decision).
-                run_now = not typed and (mode == assistant.MODE_BYPASS or (
-                    mode == assistant.MODE_AUTO and risk == assistant.RISK_ROUTINE))
                 if not run_now:
                     return {"ok": True, "tier": tier, "status": "pending_confirmation",
                             "action": _public_action(action),

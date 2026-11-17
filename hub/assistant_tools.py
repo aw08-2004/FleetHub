@@ -41,6 +41,8 @@ import json
 import re
 from urllib.parse import quote
 
+import packages
+
 TIER_READ = "read"
 TIER_WRITE = "write"
 TIER_CONFIRM = "confirm"
@@ -858,6 +860,63 @@ def build_request(name, args):
     if method == "GET":
         return None, method, path, {k: v for k, v in args.items() if v is not None}, None
     return None, method, path, None, args
+
+
+def coerce_body(value):
+    """`call_endpoint`'s `body` as (error, dict-or-None). Hub 1.180.1.
+
+    Before this a body that was not a JSON object became NO body, silently: the route then
+    answered "a package name is required" about a request whose name the model had written,
+    and a model that is told the wrong thing blames the wrong layer (it told the operator
+    the hub was "stripping the payload"). A small model often sends a nested argument as a
+    JSON *string*, so a string holding an object is accepted as that object; anything else
+    is refused by name, so the next attempt can fix the shape instead of repeating it."""
+    if value is None or value == "" or value == {}:
+        return None, None
+    if isinstance(value, dict):
+        return None, value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return None, parsed
+    return ("`body` must be a JSON object, not " + type(value).__name__ + ": send the fields "
+            "as an object, not as text and not as a list"), None
+
+
+def _precheck_package(body):
+    """The route's own verdict on a package definition, before a card exists for it."""
+    body = body if isinstance(body, dict) else {}
+    try:
+        packages.check_definition(
+            name=body.get("name"),
+            sources=body.get("sources") if body.get("sources") is not None
+            else body.get("source"),
+            steps=body.get("steps"),
+            install_command=body.get("install_command"),
+            install_args=body.get("install_args"),
+            timeout_seconds=body.get("timeout_seconds", 900),
+            success_exit_codes=body.get("success_exit_codes"),
+            detection=body.get("detection"))
+    except ValueError as error:
+        return (f"no card was queued: {error}. The call carried only these fields: "
+                f"{', '.join(sorted(body)) or 'none'}. Send the whole definition in ONE call "
+                "(name, sources and/or steps, detection)")
+    return None
+
+
+# Confirm-tier routes whose body can be judged without running them. A card for a body that
+# is certain to be refused is a click that can only fail, and an operator who confirms it
+# gets the same 400 the model never saw coming (hub 1.180.1). Keyed by (method, route rule).
+PRECHECKS = {("POST", "/api/packages"): _precheck_package}
+
+
+def precheck(method, rule, body):
+    """An error sentence if this call would certainly be refused, else None."""
+    check = PRECHECKS.get((method, rule))
+    return check(body) if check else None
 
 
 def check_path(path):
