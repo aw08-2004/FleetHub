@@ -79,9 +79,16 @@ def create_auth_blueprint(db_path, login_required, access, env_path, reconfigure
             # A line break in a client id, secret or issuer url -- a second line in .env is a
             # change to ALLOWED_EMAILS made through a sign-in form -- or a `${NAME}` that .env
             # would expand into another variable's value. envfile refuses both before writing
-            # anything, so nothing was saved and there is nothing to roll back. Its messages
-            # name the KEY and never the value, so passing them on cannot echo a secret.
-            return jsonify({"error": f"Sign-in settings were not saved: {e}."}), 400
+            # anything, so nothing was saved and there is nothing to roll back.
+            #
+            # A fixed sentence naming every cause, not `{e}`: an exception's text reaching the
+            # browser is what CodeQL's stack-trace rule flags, and although envfile's messages
+            # name only the key, the next ValueError raised under this `try` might not. The
+            # specific key goes to the hub log instead.
+            print(f"[auth] sign-in settings not saved: {e}")
+            return jsonify({"error": "Sign-in settings were not saved: a value contains a line "
+                                     "break, another control character, or '${' followed by "
+                                     "a name and '}', which a .env file cannot hold."}), 400
         try:
             reconfigure(after)
         except Exception as e:

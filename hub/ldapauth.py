@@ -154,16 +154,17 @@ def escape_filter_value(value):
 
     Without it a user name of `*` matches every account in the login group, and
     `x)(sAMAccountName=*` rewrites the filter -- LDAP injection, here on a page anyone on the
-    internet can reach. Done by hand rather than with ldap3's helper so the pure half of this
-    module, and its tests, do not need ldap3 at all.
+    internet can reach.
+
+    ldap3's own escaper, imported here rather than at the top so a hub with this provider off
+    still never imports ldap3. The first version escaped by hand to keep the pure half free of
+    ldap3; the output was identical, but CodeQL recognises only the library's sanitiser, and
+    an "LDAP injection" alert on a sign-in page that is a false positive is still an alert
+    every reviewer has to re-prove harmless. ldap3 is in requirements.txt and the image, and
+    this is only reached on the sign-in path.
     """
-    out = []
-    for char in str(value):
-        if char in "\\*()\x00":
-            out.append("\\%02x" % ord(char))
-        else:
-            out.append(char)
-    return "".join(out)
+    from ldap3.utils.conv import escape_filter_chars
+    return escape_filter_chars(str(value))
 
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
