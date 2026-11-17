@@ -641,6 +641,27 @@ def get_action(db_path, action_id, owner):
     return _action_row(row) if row else None
 
 
+def find_pending_duplicate(db_path, chat_id, owner, method, path, query, body, now=None):
+    """The card still waiting for the operator that asks for exactly this call, or None.
+
+    Hub 1.180.1. A model whose call keeps coming back wrong has nothing to say about it, so
+    it re-sends it: one chat queued fifteen identical cards for a single package, and the
+    operator was left to decline them one by one. Refusing the repeat while the first is
+    open costs a legitimate caller nothing -- the answer says which card to use."""
+    now = float(now or time.time())
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM assistant_actions WHERE chat_id = ? AND owner = ? AND state = ? "
+            "AND expires_at > ? AND method = ? AND path = ? ORDER BY id",
+            (str(chat_id), str(owner), ACTION_PENDING, now, str(method), str(path))
+        ).fetchall()
+    for row in rows:
+        action = _action_row(row)
+        if (action["query"] or None) == (query or None) and action["body"] == body:
+            return action
+    return None
+
+
 def list_actions(db_path, chat_id):
     with get_conn(db_path) as conn:
         rows = conn.execute("SELECT * FROM assistant_actions WHERE chat_id = ? ORDER BY id",

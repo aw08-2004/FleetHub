@@ -1019,6 +1019,34 @@ def get_package(db_path, package_id):
     return _package_row(row, sources.get(str(package_id), ()))
 
 
+def check_definition(*, name, source=None, sources=None, steps=None,
+                     install_command=None, install_args=None, timeout_seconds=900,
+                     success_exit_codes=None, detection=None):
+    """Validate a package definition and return what would be stored. Writes nothing.
+
+    Split out of `create_package` (hub 1.180.1) so the assistant can ask the same question
+    BEFORE it queues a confirmation card. A card for a definition this function rejects is
+    a click that can only fail: in the chat that found this, an operator confirmed four
+    cards that carried just a name and a version, each answered with the same 400, and the
+    model - never told the card was unfixable - queued fifteen more. One function means the
+    card gate and the route cannot drift apart. Raises ValueError with the sentence the
+    route would have answered.
+
+    Returns (name, payloads, plan, command, args, timeout, codes, rule).
+    """
+    name = _clean(name, MAX_NAME_CHARS)
+    if not name:
+        raise ValueError("a package name is required")
+    payloads = validate_sources(sources if sources is not None else source)
+    plan = validate_steps(steps, [s["name"] for s in payloads])
+    command, args, timeout = _validate_recipe(
+        install_command, install_args, payloads, plan, timeout_seconds)
+    codes = validate_exit_codes(success_exit_codes)
+    rule = validate_detection(detection)
+    _validate_platform(payloads, plan, rule)
+    return name, payloads, plan, command, args, timeout, codes, rule
+
+
 def create_package(db_path, *, name, source=None, sources=None, steps=None,
                    install_command=None, install_args=None,
                    description=None, version=None, timeout_seconds=900,
@@ -1032,16 +1060,11 @@ def create_package(db_path, *, name, source=None, sources=None, steps=None,
     leaves a half-created package (or, worse, a source row pointing at a blob nobody
     will ever clean up) behind.
     """
-    name = _clean(name, MAX_NAME_CHARS)
-    if not name:
-        raise ValueError("a package name is required")
-    payloads = validate_sources(sources if sources is not None else source)
-    plan = validate_steps(steps, [s["name"] for s in payloads])
-    command, args, timeout = _validate_recipe(
-        install_command, install_args, payloads, plan, timeout_seconds)
-    codes = validate_exit_codes(success_exit_codes)
-    rule = validate_detection(detection)
-    _validate_platform(payloads, plan, rule)
+    name, payloads, plan, command, args, timeout, codes, rule = check_definition(
+        name=name, source=source, sources=sources, steps=steps,
+        install_command=install_command, install_args=install_args,
+        timeout_seconds=timeout_seconds, success_exit_codes=success_exit_codes,
+        detection=detection)
 
     package_id = uuid.uuid4().hex
     now = int(time.time())
