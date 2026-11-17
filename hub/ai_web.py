@@ -247,6 +247,11 @@ def create_ai_blueprint(db_path, login_required, access, resolve_vars, rules_con
         update = {KEY_ENV: value or None}
         try:
             envfile.set_vars(env_path, update)
+        except ValueError:
+            # Control characters are screened above; what reaches here is a `${NAME}`, which
+            # .env would expand into another variable's value. Without this it was a 500.
+            return jsonify({"error": "an API key cannot contain '${' followed by a name and "
+                                     "'}' -- a .env file would replace it"}), 400
         except OSError:
             # The exception text carries the file path, and this answer goes to a browser.
             return jsonify({"error": _log_generic("writing the AI key to .env")}), 500

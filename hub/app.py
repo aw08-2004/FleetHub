@@ -135,6 +135,7 @@ import admx
 from admx_web import create_admx_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
+from ldapauth_web import create_ldapauth_blueprint
 from apitokens_web import create_apitokens_blueprint
 from push_web import create_push_blueprint
 from sharing_web import create_sharing_blueprint
@@ -175,7 +176,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.180.1"
+HUB_VERSION = "1.181.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2053,6 +2054,18 @@ OIDC_SCOPES = AUTH_CONFIG["oidc_scopes"]
 
 GOOGLE_ENABLED = authconfig.google_enabled(AUTH_CONFIG)
 OIDC_ENABLED = authconfig.oidc_enabled(AUTH_CONFIG)
+# Active Directory over LDAP: a user-name-and-password form checked against a DC, for a
+# domain with no ADFS or Entra in front of it. Read per request from AUTH_CONFIG by
+# ldapauth_web.py; these two names exist for the login page and the boot check.
+LDAP_ENABLED = authconfig.ldap_enabled(AUTH_CONFIG)
+LDAP_DISPLAY_NAME = AUTH_CONFIG["ldap_display_name"]
+# Filled in, but refused by the same checks a console save runs -- a hand-written ldap://, a
+# group name instead of its DN, a CA file that is not there. Off, and said loudly, rather
+# than half-on: the unchecked version of this sent passwords in cleartext.
+LDAP_PROBLEM = authconfig.ldap_problem(AUTH_CONFIG)
+if LDAP_PROBLEM:
+    print(f"[auth] WARNING: Active Directory sign-in is configured but switched OFF: "
+          f"{LDAP_PROBLEM}")
 
 # How many of a session's claimed directory groups the Permission Groups page will offer
 # back to an admin as a "your own sign-in carried these" hint (roadmap #4). Display only;
@@ -2094,10 +2107,18 @@ if not FLASK_SECRET_KEY:
 # At least one way in. Refusing to boot with none is deliberate: a hub that started with no
 # configured provider would serve a login page with no buttons, which looks like a bug in
 # the hub rather than a missing setting.
-if not (GOOGLE_ENABLED or OIDC_ENABLED):
+#
+# The message names the Docker case because that is where this bites a first install: the
+# host .env is told to leave these keys to the volume's .env, and on a new volume that file
+# is empty. docs/installation.md walks through writing the first provider there.
+if not (GOOGLE_ENABLED or OIDC_ENABLED or LDAP_ENABLED):
     raise RuntimeError(
         "No sign-in provider is configured. Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET, "
-        "and/or OIDC_CLIENT_ID + OIDC_CLIENT_SECRET + OIDC_ISSUER -- see README."
+        "and/or OIDC_CLIENT_ID + OIDC_CLIENT_SECRET + OIDC_ISSUER, and/or the LDAP_* keys "
+        f"for Active Directory, in {ENV_PATH} -- see docs/access.md. In Docker that is the "
+        "volume's /state/.env; docs/installation.md shows how to write the first one."
+        + (f" The LDAP_* keys are there but were refused: {LDAP_PROBLEM}"
+           if LDAP_PROBLEM else "")
     )
 if not ALLOWED_EMAILS:
     raise RuntimeError(
@@ -2245,6 +2266,7 @@ def configure_oauth(config=None, announce=True):
     global GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_ENABLED
     global OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_ISSUER, OIDC_METADATA_URL
     global OIDC_DISPLAY_NAME, OIDC_SCOPES, OIDC_ENABLED
+    global LDAP_ENABLED, LDAP_DISPLAY_NAME
 
     config = config or authconfig.load(os.environ)
     new_oauth = OAuth(app)
@@ -2281,11 +2303,14 @@ def configure_oauth(config=None, announce=True):
     OIDC_DISPLAY_NAME = config["oidc_display_name"]
     OIDC_SCOPES = config["oidc_scopes"]
     OIDC_ENABLED = authconfig.oidc_enabled(config)
+    LDAP_ENABLED = authconfig.ldap_enabled(config)
+    LDAP_DISPLAY_NAME = config["ldap_display_name"]
 
     if announce:
         print("[auth] Sign-in providers: " + (", ".join(
             (["Google"] if GOOGLE_ENABLED else []) +
-            ([f"{OIDC_DISPLAY_NAME} ({OIDC_METADATA_URL})"] if OIDC_ENABLED else []))
+            ([f"{OIDC_DISPLAY_NAME} ({OIDC_METADATA_URL})"] if OIDC_ENABLED else []) +
+            ([f"{LDAP_DISPLAY_NAME} ({config['ldap_server']})"] if LDAP_ENABLED else []))
             or "none"))
     return config
 
@@ -2916,12 +2941,39 @@ app.register_blueprint(create_sharing_blueprint(
 def login():
     if session.get("user"):
         return redirect(url_for("index"))
+    return _render_login()
+
+
+def _render_login(error_key=None, status=200, **error_args):
+    """The sign-in page, optionally with a message -- the Active Directory form posts back
+    to /login/ldap and lands here again on a refusal, keeping what it typed out of the URL.
+
+    The form token is minted only when that form is shown: it is the one sign-in that posts
+    to the hub, and the OAuth buttons are plain links that need none.
+    """
     return render_template(
         "login.html",
         google_enabled=GOOGLE_ENABLED,
         oidc_enabled=OIDC_ENABLED,
         oidc_display_name=OIDC_DISPLAY_NAME,
-    )
+        ldap_enabled=LDAP_ENABLED,
+        ldap_display_name=LDAP_DISPLAY_NAME,
+        login_csrf_token=_get_or_create_csrf_token() if LDAP_ENABLED else "",
+        login_error=(i18n.translate(error_key, current_language(), **error_args)
+                     if error_key else ""),
+    ), status
+
+
+def _login_form_token_valid(provided):
+    """The sign-in form's CSRF check. A form field rather than the X-CSRF-Token header
+    login_required reads, because a plain HTML form cannot set a header -- and this page
+    deliberately works without the console's JavaScript."""
+    expected = session.get("csrf_token")
+    if not expected or not provided:
+        return False
+    # Bytes, not str: compare_digest raises TypeError on a non-ASCII str, which would turn a
+    # forged token into a 500 instead of the refusal it is.
+    return hmac.compare_digest(expected.encode("utf-8"), str(provided).encode("utf-8"))
 
 
 def _login_refusal(message):
@@ -3104,6 +3156,17 @@ def auth_oidc_callback():
         except Exception as e:
             print(f"[auth] userinfo lookup failed for the OIDC provider: {e}")
     return _complete_login(user_info, OIDC_DISPLAY_NAME)
+
+
+# Active Directory sign-in (roadmap #4). Registered here, after _complete_login, because it is
+# the success path it hands every sign-in to; the lambda reads AUTH_CONFIG at request time so
+# a change on Settings -> Sign-in applies without a restart, like the OAuth clients.
+app.register_blueprint(create_ldapauth_blueprint(
+    load_config=lambda: AUTH_CONFIG,
+    complete_login=_complete_login,
+    render_login=_render_login,
+    form_token_valid=_login_form_token_valid,
+))
 
 
 @app.route("/logout")

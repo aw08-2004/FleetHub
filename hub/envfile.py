@@ -179,8 +179,10 @@ def read_all(env_path):
     `KEY = value` was read here as " value" while the running hub held "value", making an
     unchanged setting look changed and a matching secret look mismatched.
 
-    Quotes are still NOT stripped, which is a different case and deliberate: everything this
-    module writes is unquoted, so a value somebody quoted by hand is theirs to own.
+    A SINGLE-quoted value is decoded the way python-dotenv decodes it, because set_vars now
+    writes one whenever a value would not survive unquoted (see _encode) -- and read back
+    raw, that value would look changed on every save. Double quotes are still NOT decoded:
+    nothing here writes them, so a value somebody double-quoted by hand is theirs to own.
     """
     values = {}
     if not env_path or not os.path.exists(env_path):
@@ -189,8 +191,48 @@ def read_all(env_path):
         for line in fh.read().splitlines():
             match = _ENV_KEY_RE.match(line)
             if match:
-                values[match.group(1)] = line.split("=", 1)[1].strip()
+                values[match.group(1)] = _decode(line.split("=", 1)[1].strip())
     return values
+
+
+_SINGLE_QUOTE_ESCAPE_RE = re.compile(r"\\([\\'])")
+
+
+def _decode(raw):
+    if len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'":
+        return _SINGLE_QUOTE_ESCAPE_RE.sub(r"\1", raw[1:-1])
+    return raw
+
+
+def _reads_back(key, written):
+    """What python-dotenv -- the reader that actually fills os.environ -- makes of one line."""
+    import io
+    from dotenv import dotenv_values
+    return dotenv_values(stream=io.StringIO(f"{key}={written}\n"), interpolate=True).get(key)
+
+
+def _encode(key, value):
+    """The text to write after `KEY=` so python-dotenv reads `value` back EXACTLY.
+
+    Unquoted when that already works, so every file this module wrote before stays
+    byte-identical. Otherwise single-quoted. **Why this exists:** an unquoted value is cut at
+    ` #` (a comment), loses leading and trailing spaces, and fails to parse at all if it
+    starts with a quote. Generated client secrets never hit that, but the Active Directory
+    service-account password is chosen by a person: `Winter 2026 #1` was saved as typed,
+    worked until the next restart, and then bound as `Winter 2026`. Found in review.
+
+    `${NAME}` cannot be stored at all: python-dotenv expands it even inside single quotes and
+    has no escape for it. Refused by name rather than saved as something else.
+    """
+    text = str(value)
+    if _reads_back(key, text) == text:
+        return text
+    quoted = "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    if _reads_back(key, quoted) == text:
+        return quoted
+    raise ValueError(f"{key} cannot contain '${{' followed by a name and '}}' -- the .env "
+                     f"format replaces that with another variable's value, and has no way "
+                     f"to escape it")
 
 
 # What a key may look like. Keys come from code rather than from an operator, so this is a
@@ -231,6 +273,18 @@ def set_vars(env_path, updates):
             raise ValueError(f"{key!r} is not a name a .env file can hold")
         if value is not None and any(ord(ch) < 32 or ord(ch) == 127 for ch in str(value)):
             raise ValueError(f"{key} cannot contain line breaks or other control characters")
+        # Checked BEFORE the file is opened for writing. open("w") truncates, and a value that
+        # then fails to encode (a lone surrogate from a bad paste) left .env EMPTY -- every
+        # key gone, ALLOWED_EMAILS and FLASK_SECRET_KEY included -- while the caller reported
+        # that nothing had been saved. Found in the second review.
+        if value is not None:
+            try:
+                str(value).encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError(f"{key} contains characters a .env file cannot hold")
+    # Encoded up front too, so a value .env cannot hold is refused before anything is written.
+    encoded = {key: None if value is None else _encode(key, value)
+               for key, value in updates.items()}
 
     before = read_all(env_path)
     lines, seen = [], set()
@@ -243,12 +297,12 @@ def set_vars(env_path, updates):
                     seen.add(key)
                     if updates[key] is None:
                         continue          # drop the line entirely
-                    lines.append(f"{key}={updates[key]}")
+                    lines.append(f"{key}={encoded[key]}")
                 else:
                     lines.append(line)
     for key, value in updates.items():
         if key not in seen and value is not None:
-            lines.append(f"{key}={value}")
+            lines.append(f"{key}={encoded[key]}")
 
     with open(env_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
