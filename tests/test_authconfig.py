@@ -191,6 +191,8 @@ def main():
     check("an unchanged save reports nothing",
           authconfig.describe_changes(current, dict(current)) == [])
 
+    _ldap_checks()
+
     # ================================================================
     # envfile
     # ================================================================
@@ -277,6 +279,142 @@ def main():
 
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     return 1 if FAIL else 0
+
+
+LDAP_ONLY = {
+    "LDAP_SERVER": "ldaps://dc1.corp.local",
+    "LDAP_BIND_DN": "CN=svc-fleethub,OU=Service,DC=corp,DC=local",
+    "LDAP_BIND_PASSWORD": "svc-pass",
+    "LDAP_USER_BASE_DN": "OU=Staff,DC=corp,DC=local",
+    "LDAP_LOGIN_GROUP_DN": "CN=FleetHub Operators,OU=Groups,DC=corp,DC=local",
+}
+
+
+def _ldap_checks():
+    """Active Directory sign-in (roadmap #4). The hub handles operators' passwords on this
+    path, so the refusals that matter are the ones about how the password travels."""
+    print("\n== Active Directory alone is a working provider ==")
+    cfg = authconfig.load(LDAP_ONLY)
+    check("LDAP is enabled with every required part", authconfig.ldap_enabled(cfg))
+    # The boot check: a hub whose only door is AD must start. Before this, app.py refused
+    # anything that was not Google or OIDC.
+    check("...and counts as a way in", authconfig.any_enabled(cfg))
+    check("...and validates", authconfig.validate(cfg) is cfg)
+    check("certificate checking defaults ON", cfg["ldap_tls_verify"] is True)
+    check("plain LDAP defaults OFF", cfg["ldap_allow_insecure"] is False)
+    check("the button label defaults",
+          cfg["ldap_display_name"] == authconfig.DEFAULT_LDAP_DISPLAY_NAME)
+    # A typo must never be what switches certificate checking off.
+    check("an unrecognised LDAP_TLS_VERIFY keeps verifying",
+          authconfig.load({**LDAP_ONLY, "LDAP_TLS_VERIFY": "maybe"})["ldap_tls_verify"])
+    check("LDAP_TLS_VERIFY=0 turns it off",
+          not authconfig.load({**LDAP_ONLY, "LDAP_TLS_VERIFY": "0"})["ldap_tls_verify"])
+
+    print("\n== A half-filled Active Directory provider is refused ==")
+    for key in LDAP_ONLY:
+        partial = {k: v for k, v in LDAP_ONLY.items() if k != key}
+        rejects(f"without {key}", lambda p=partial: authconfig.validate(
+            authconfig.load({**GOOGLE_ONLY, **p})))
+    # The login group is required, not optional: without it the form would test passwords
+    # for every account in the domain. See ldapauth.py.
+    check("a missing login group is named in the message",
+          "login group" in _message(lambda: authconfig.validate(authconfig.load(
+              {k: v for k, v in LDAP_ONLY.items() if k != "LDAP_LOGIN_GROUP_DN"}))))
+
+    print("\n== How the password travels ==")
+    rejects("plain ldap:// is refused by default",
+            lambda: authconfig.validate(authconfig.load(
+                {**LDAP_ONLY, "LDAP_SERVER": "ldap://dc1.corp.local"})))
+    check("...and the message says why",
+          "cleartext" in _message(lambda: authconfig.validate(authconfig.load(
+              {**LDAP_ONLY, "LDAP_SERVER": "ldap://dc1.corp.local"}))))
+    check("...unless an isolated lab allows it explicitly",
+          authconfig.validate(authconfig.load(
+              {**LDAP_ONLY, "LDAP_SERVER": "ldap://dc1.corp.local",
+               "LDAP_ALLOW_INSECURE": "1"})) is not None)
+    rejects("an http:// URL is not a domain controller",
+            lambda: authconfig.validate(authconfig.load(
+                {**LDAP_ONLY, "LDAP_SERVER": "https://dc1.corp.local"})))
+    check("a port is accepted",
+          authconfig.validate(authconfig.load(
+              {**LDAP_ONLY, "LDAP_SERVER": "ldaps://dc1.corp.local:3269"})) is not None)
+    rejects("a CA file that does not exist is refused",
+            lambda: authconfig.validate(authconfig.load(
+                {**LDAP_ONLY, "LDAP_CA_FILE": "/nowhere/ad-ca.pem"})))
+
+    rejects("a port above 65535 is refused", lambda: authconfig.validate(authconfig.load(
+        {**LDAP_ONLY, "LDAP_SERVER": "ldaps://dc1.corp.local:99999"})))
+
+    print("\n== A hand-written .env gets the same checks as a console save ==")
+    # validate() runs only on a Settings save. The first provider on a Docker volume is
+    # written by hand, and the first version used whatever was loaded -- a hand-written
+    # ldap:// booted, showed the form and bound in cleartext. Found in review.
+    for label, override in (("plain ldap://", {"LDAP_SERVER": "ldap://dc1.corp.local"}),
+                            ("a server with no scheme", {"LDAP_SERVER": "dc1.corp.local"}),
+                            ("a group name instead of a DN",
+                             {"LDAP_LOGIN_GROUP_DN": "FleetHub Operators"})):
+        loaded = authconfig.load({**LDAP_ONLY, **override})
+        check(f"{label}: configured", authconfig.ldap_configured(loaded))
+        check(f"{label}: but NOT enabled", not authconfig.ldap_enabled(loaded))
+        check(f"{label}: and the reason is reported", bool(authconfig.ldap_problem(loaded)))
+        check(f"{label}: so it is no way in on its own", not authconfig.any_enabled(loaded))
+    check("a valid config has no problem",
+          authconfig.ldap_problem(authconfig.load(LDAP_ONLY)) is None)
+    check("an unconfigured one has none either", authconfig.ldap_problem({}) is None)
+
+    print("\n== The service-account password is kept exactly as typed ==")
+    spaced = authconfig.load({**LDAP_ONLY, "LDAP_BIND_PASSWORD": " pass word "})
+    check("load() does not strip it", spaced["ldap_bind_password"] == " pass word ")
+    check("merge() does not strip it",
+          authconfig.merge(spaced, {"ldap_bind_password": " new pass "})
+          ["ldap_bind_password"] == " new pass ")
+    check("the placeholder with stray spaces still means 'unchanged'",
+          authconfig.merge(spaced, {"ldap_bind_password": " " + authconfig.UNCHANGED})
+          ["ldap_bind_password"] == " pass word ")
+
+    print("\n== The login group must be a DN, not a name ==")
+    # Pasting the group's name is the commonest mistake, and a bare name never matches the
+    # memberOf filter -- every sign-in would be refused with nothing to say why.
+    rejects("a bare group name", lambda: authconfig.validate(authconfig.load(
+        {**LDAP_ONLY, "LDAP_LOGIN_GROUP_DN": "FleetHub Operators"})))
+    rejects("an OU instead of a group", lambda: authconfig.validate(authconfig.load(
+        {**LDAP_ONLY, "LDAP_LOGIN_GROUP_DN": "OU=Groups,DC=corp,DC=local"})))
+    rejects("a search base with no domain", lambda: authconfig.validate(authconfig.load(
+        {**LDAP_ONLY, "LDAP_USER_BASE_DN": "Staff"})))
+    check("a UPN service account is accepted",
+          authconfig.validate(authconfig.load(
+              {**LDAP_ONLY, "LDAP_BIND_DN": "svc-fleethub@corp.local"})) is not None)
+
+    print("\n== The service-account password is a secret like the others ==")
+    current = authconfig.load(LDAP_ONLY)
+    kept = authconfig.merge(current, {"ldap_bind_password": authconfig.UNCHANGED})
+    check("the placeholder keeps the stored password",
+          kept["ldap_bind_password"] == "svc-pass")
+    view = authconfig.redacted(current)
+    check("the console view never carries it", "svc-pass" not in repr(view))
+    check("...but says one is set", view["ldap_bind_password_set"] is True)
+    check("...and that AD is on", view["ldap_enabled"] is True)
+    changed = authconfig.describe_changes(
+        current, authconfig.merge(current, {"ldap_bind_password": "rotated"}))
+    check("a rotated password is audited by name only",
+          changed == ["ldap_bind_password"] and "rotated" not in repr(changed))
+
+    print("\n== The switches round-trip through the console and .env ==")
+    off = authconfig.merge(current, {"ldap_tls_verify": False})
+    check("the console's JSON false turns verification off", off["ldap_tls_verify"] is False)
+    check("...which .env records as 0", authconfig.to_env(off)["LDAP_TLS_VERIFY"] == "0")
+    check("the default writes nothing, so .env stays clean",
+          authconfig.to_env(current)["LDAP_TLS_VERIFY"] is None
+          and authconfig.to_env(current)["LDAP_ALLOW_INSECURE"] is None)
+    check("a form that does not send a switch leaves it alone",
+          authconfig.merge(off, {"ldap_server": "ldaps://dc2.corp.local"})
+          ["ldap_tls_verify"] is False)
+    cleared = authconfig.merge(current, {key: "" for key in (
+        "ldap_server", "ldap_bind_dn", "ldap_bind_password", "ldap_user_base_dn",
+        "ldap_login_group_dn")})
+    check("clearing every field turns AD off", not authconfig.ldap_enabled(cleared))
+    rejects("...which is refused when it is the only provider",
+            lambda: authconfig.validate(cleared))
 
 
 def _message(fn):

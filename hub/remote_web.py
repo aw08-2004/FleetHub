@@ -112,13 +112,16 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
 
     def _write_env(updates):
         """Write .env and the live environment together (envfile.apply_to_environ says why both).
-        Returns a refusal response, or None on success. Fixed sentences only: the ValueError is a
-        control character in the pasted text, and the OSError names a host path."""
+        Returns a refusal response, or None on success. Fixed sentences only: the ValueError is
+        something .env cannot hold in the pasted text, and the OSError names a host path."""
         try:
             envfile.set_vars(env_path, updates)
         except ValueError:
-            return jsonify({"error": "The value cannot contain line breaks or other control "
-                                     "characters."}), 400
+            # Two causes since envfile learned to quote values: a control character, or a
+            # `${NAME}` that .env would expand into another variable. Name both, so the
+            # message does not blame a line break the value never had.
+            return jsonify({"error": "The value cannot contain line breaks, other control "
+                                     "characters, or '${' followed by a name and '}'."}), 400
         except OSError as e:
             print(f"[remote] could not write .env: {e}")
             return jsonify({"error": "Could not write .env on the hub -- see the hub log."}), 500

@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.179.0**; `beta` is at **1.180.1** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.179.0**; `beta` is at **1.181.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -725,6 +725,38 @@ legitimate second attempt as hard as a broken one.
 - [ ] **A repeat of an open card is refused.** With a card waiting, ask the assistant to make
   the same package again: it must point at the open card instead of adding a second. Decline the
   card, ask again, and a new one appears.
+
+**Hub 1.181.0 -- Active Directory sign-in, and the first provider on a new Docker volume** (#4)
+Hub only, no agent. Needs a domain controller that serves LDAPS (port 636) and a read-only
+service account. Asked for by an operator setting up a Docker demo hub against plain on-prem
+AD, with no ADFS or Entra. None of this has met a real DC: the ldap3 adapter in
+`ldapauth.ldap3_connector` is the untested part, as the sync's was (see #4).
+- [ ] **First provider on a new volume.** On a fresh Docker volume, follow
+  docs/installation.md *The first sign-in provider* with the PowerShell command. The hub
+  starts, and its log shows `[auth] Sign-in providers: Active Directory (ldaps://...)`.
+- [ ] **A member signs in.** With `LDAP_LOGIN_GROUP_DN` set to a test group and a permission
+  group mapping the same DN, a member signs in as `jdoe`, as `CORP\jdoe` and as their UPN.
+  The Permission Groups editor lists the group DNs the sign-in carried.
+- [ ] **Nested membership counts.** A user in a group that is itself a member of the login
+  group signs in.
+- [ ] **Everyone else gets the same sentence.** A wrong password, a user outside the group and
+  a disabled user all show the same message; the hub log names the real reason for each.
+- [ ] **No lockout from the hub.** With the domain's lockout threshold at 5, type one wrong
+  password for a test account at a workstation, then five through the hub. The hub sends only
+  three (the log says *AD's own count leaves 1 attempt(s)*), every refusal shows the same
+  page, and `badPwdCount` on the account stops at 4. This is the first real read of
+  `lockoutThreshold` and `badPwdCount`: check the log shows no *could not read the domain
+  lockout policy* line.
+- [ ] **A hand-written ldap:// is switched off.** Put `LDAP_SERVER=ldap://...` in the volume's
+  .env without `LDAP_ALLOW_INSECURE`: the hub logs *configured but switched OFF* at start and
+  the form does not appear.
+- [ ] **A password with a space and #.** Save a service-account password like `Winter 2026 #1`
+  at Settings -> Sign-in, restart the hub, and sign in: the bind still works.
+- [ ] **TLS.** With the DC's certificate from an internal CA, sign-in fails until
+  `LDAP_CA_FILE` points at the CA's PEM under `/state`, then works. `ldap://` is refused on
+  save at Settings -> Sign-in.
+- [ ] **Settings -> Sign-in.** The Active Directory fields save, the password shows as saved
+  and never reads back, and clearing every provider is refused.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -2643,6 +2675,63 @@ same shape of finding the TURN work produced on first contact with hardware.
 - **Target actions by OU/group.** Once OU/group data is synced, a Permission Group's
   `machine_scope` gains a second resolution mode — "AD OU/group" alongside the v1 explicit
   list — so deploys and commands can target an OU the same way.
+
+**✅ Active Directory sign-in over LDAP -- built (hub 1.181.0).** The login above assumed an
+OIDC issuer in front of AD (Entra or ADFS). A domain with only domain controllers had no way
+in, so the hub now takes a user name and password and checks them with an LDAPS bind
+(`ldapauth.py` + `ldapauth_web.py`). Resolved parameters:
+
+- **The login group is checked before the password, and is required.** A read-only service
+  account searches for the account with `memberOf:1.2.840.113556.1.4.1941:=<group>` (nested
+  membership) and enabled-only in the filter; the user's own bind happens only for an account
+  that search returned. *Rejected:* binding as whoever typed their name and checking the group
+  afterwards, which needs no service account but makes a public page a password oracle and a
+  lockout button for every account in the domain.
+- **Its own LDAP_* keys on Settings -> Sign-in (break-glass), not the `directory.*` sync
+  settings.** Those are `manage_settings`, and the DC that decides who you are is the
+  perimeter. Configured twice on purpose.
+- **The hub must not lock domain accounts -- decided by AD's own count.** Before each user
+  bind the service account reads the domain's `lockoutThreshold` / `lockOutObservationWindow`
+  and the account's `badPwdCount` / `badPasswordTime`, and the hub refuses locally if one more
+  failure (plus any still in flight) could reach the threshold. That covers failures the hub
+  never saw (a phone with an old password), thresholds below 5 (DISA STIG: 3), and a hub
+  restart. The count is per DC, so `LDAP_SERVER` should name one DC. **Backstop** when that
+  read fails or there is no policy: 4 attempts per account (keyed on its DN, so every spelling
+  shares one budget), then nothing until 70 minutes after the LAST one -- AD's reset rule,
+  with 10 minutes' margin over the 60-minute policies it promises to cover, for bind latency
+  and clock drift. Reserved before the bind under a lock, with in-flight attempts counted
+  apart from settled ones, so neither concurrency nor a success landing mid-flight can
+  overshoot. 20 failures per client (IPv4 address or IPv6 /64) in 15 minutes. *Rejected:* a
+  sliding window (the first version) -- a patient attacker refills it one failure at a time
+  while AD's count never resets; a budget per (account, address), which hands a distributed
+  attacker the domain-wide lockout this exists to prevent; and the hub's own count alone (the
+  second version), which a single outside typo or a STIG threshold defeats. *Accepted cost:*
+  anyone who knows a member's user name can keep them out of THIS form by spending the
+  attempts AD has left for them -- on an AD-only hub, the break-glass admins included.
+- **Group DNs go out as the `groups` claim**, so the existing directory-group mapping applies
+  unchanged and `_complete_login` stays the single authorization decision.
+- **One message for every refusal**, the per-account block included, and never faster than
+  0.75 s, so neither the page nor its timing tells an anonymous client which names are
+  members. AD's sub-code (`data 52e`, `775`) goes to the log only.
+- **Hand-written settings get the console's checks.** `authconfig.ldap_problem` runs at boot
+  and per request, and `ldap3_connector` refuses a non-ldaps:// URL on its own as well: the
+  first version validated only on a console save, so a hand-written `LDAP_SERVER=ldap://...`
+  on a new Docker volume would have bound in cleartext.
+- **Passwords go to ldap3 as bytes.** Given a str, ldap3 applies SASLprep (NFKC), which AD
+  does not -- a correct password with a micro sign or a superscript digit was refused and
+  counted towards lockout. And `envfile` now single-quotes any value .env cannot hold
+  unquoted (` #`, leading quotes, edge spaces), which a person-chosen service password hits.
+- **ldaps:// only**, with `LDAP_ALLOW_INSECURE` for isolated labs and `LDAP_CA_FILE` for an
+  internal CA. *Rejected:* StartTLS (the same certificate requirement as LDAPS, for a second
+  code path), Kerberos/IWA and NTLM (keytab and SPN, and neither survives the tunnel or proxy
+  in front of most hubs).
+- **The empty-password bind is refused before the DC is asked** -- an LDAP simple bind with a
+  DN and no password is an unauthenticated bind, which many directories answer with success.
+
+Same release: the Docker first-start trap. `example.env` told operators to keep provider keys
+out of the host file, while a new volume's `/state/.env` was empty and the hub refuses to boot
+without a provider -- so following the template produced a crash loop with no documented way
+out. docs/installation.md now has the one-command fix, and the boot error points at it.
 
 **Constraints**: this changes the security perimeter, so the break-glass rule above is
 what prevents a misconfigured mapping from locking everyone out. On-prem LDAP needs

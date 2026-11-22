@@ -57,6 +57,32 @@ if (window.top !== window.self) window.top.location.replace(window.location.href
             {{ t('login.sso', provider=oidc_display_name) }}
         </a>
         {% endif %}
+        {% if ldap_enabled %}
+        {# Active Directory: the one sign-in that posts to the hub, so it carries a form token
+           (ldapauth_web.py says why). A plain form with no script, so it works on the page
+           every unauthenticated visitor reaches whatever else fails to load. The user name
+           comes back after a refusal; the password never does. #}
+        <form class="login-ldap" method="post" action="{{ url_for('ldapauth.login_ldap') }}">
+            {% if (google_enabled or oidc_enabled) %}
+            <div class="login-ldap__divider"><span>{{ t('login.ldap_or') }}</span></div>
+            {% endif %}
+            {% if login_error %}
+            <div class="login-ldap__error" role="alert">{{ login_error }}</div>
+            {% endif %}
+            <input type="hidden" name="csrf_token" value="{{ login_csrf_token }}">
+            <label class="login-ldap__label" for="ldap-username">{{ t('login.ldap_username') }}</label>
+            <input class="input login-ldap__input" id="ldap-username" name="username"
+                   type="text" autocomplete="username" autocapitalize="none" spellcheck="false"
+                   maxlength="256" required placeholder="{{ t('login.ldap_username_hint') }}"
+                   value="{{ request.form.get('username', '') if request.method == 'POST' else '' }}">
+            <label class="login-ldap__label" for="ldap-password">{{ t('login.ldap_password') }}</label>
+            <input class="input login-ldap__input" id="ldap-password" name="password"
+                   type="password" autocomplete="current-password" maxlength="256" required>
+            <button class="google-btn sso-btn login-ldap__submit" type="submit">
+                {{ t('login.ldap_submit', provider=ldap_display_name) }}
+            </button>
+        </form>
+        {% endif %}
         </div>
     </div>
 </body>

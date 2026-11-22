@@ -18,8 +18,9 @@ system administration use cases:
 - **Source Code:** Fully open-source (GPL-3.0), auditable on GitHub
 - **Signed Artifacts:** All agent updates are Ed25519-signed; manifests are verified fail-closed
 - **Audit Trail:** Every RMM command is logged with operator email + full params
-- **Operator Control:** Remote code execution requires an authorized OAuth/OIDC sign-in, or a
-  device token minted by one (see "Device tokens" below)
+- **Operator Control:** Remote code execution requires an authorized sign-in -- OAuth/OIDC, or
+  Active Directory over LDAPS where configured -- or a device token minted by one (see
+  "Device tokens" below)
 - **Signed Releases:** Authenticode-signed executables
 - **HTTPS-only:** All hub-to-agent communication over TLS
 
@@ -39,8 +40,15 @@ This is standard for tools like PDQ Deploy, ConnectWise Manage, Microsoft SCCM, 
 1. **Enrollment:** Agents enroll once, with the shared secret or with a single-use onboarding
    code. Either way, each agent gets its own token, and only enrolled agents accept commands.
    Telemetry is signed with that token too, and the hub can refuse unsigned reports.
-2. **Authentication:** Issuing commands requires a valid OAuth/OIDC sign-in (Google, or any
-   configured OIDC provider) against the email allow-list or a Permission Group
+2. **Authentication:** Issuing commands requires a valid sign-in (Google, any configured OIDC
+   provider, or Active Directory over LDAPS) against the email allow-list or a Permission
+   Group. The Active Directory sign-in is the one path where the hub sees a password: it is
+   checked by a bind to the DC and never stored or logged, only members of one login group
+   have it checked at all, and before each try the hub reads the domain's lockout threshold
+   and the account's own count of wrong passwords, and refuses rather than send the one that
+   would lock the account (with an in-memory limit of 4 as a backstop when that cannot be
+   read). It has no MFA, which is why OIDC is preferred wherever ADFS or Entra ID
+   exists (docs/access.md)
 3. **Audit Log:** Every action recorded: who did what, when, on which machine
 4. **SYSTEM Context:** Commands run as SYSTEM; access to this capability is intentionally powerful and scoped to trusted admins
 5. **Machine Scope:** Operators can be limited to specific machines via Permission Groups.
@@ -315,8 +323,8 @@ service over a local named pipe, and the service files it with its own token.
 ## Device tokens (the native client)
 
 The FleetHub desktop/mobile client authenticates with a **long-lived bearer token** rather
-than a session cookie, because sign-in is OAuth/OIDC only and there is no password for an
-app to hold. This is the largest change to the hub's security perimeter since fleet-command
+than a session cookie, because sign-in goes through the browser -- OAuth/OIDC, or the Active
+Directory form -- and there is no password for an app to hold. This is the largest change to the hub's security perimeter since fleet-command
 signing was removed, so the controls around it are stated here rather than left implicit:
 
 - **A token is minted only by a real sign-in.** Pairing follows RFC 8252's native-app flow:
