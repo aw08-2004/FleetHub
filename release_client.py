@@ -49,6 +49,10 @@ Prerequisites for a Windows build (`flutter doctor` will confirm both):
   * Visual Studio with the "Desktop development with C++" workload.
   * Windows Developer Mode, for the symlink support Flutter plugins need.
 Neither is needed for --set-version or --skip-build.
+
+Code signing (tools/codesign.ps1: signtool, the Artifact Signing dlib, metadata.json, az login)
+is needed for every release INCLUDING --skip-build, because packaging is where the exe and
+DLLs are signed. Only --set-version and --no-codesign do without it.
 """
 import argparse
 import hashlib
