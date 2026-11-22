@@ -296,15 +296,29 @@ def _has_dc(dn):
 def _validate_ldap(config):
     """The Active Directory half of `validate`. Every refusal here is about the one thing
     that makes this provider different from the other two: the hub handles the user's
-    password itself, so how it reaches the DC is part of the perimeter."""
-    parts = [(key, label, bool(config.get(key))) for key, label in LDAP_REQUIRED]
-    if any(present for _, _, present in parts) and not all(present for _, _, present in parts):
-        missing = [label for _, label, present in parts if not present]
-        raise AuthConfigError("Active Directory sign-in is missing its "
-                              + " and ".join(missing) + ".")
+    password itself, so how it reaches the DC is part of the perimeter.
+
+    One helper per thing an admin can get wrong, in the order they bite. Split for that
+    reason, not only to satisfy SonarCloud's complexity gate (which flagged the single
+    function): each refusal now reads on its own, next to the mistake it names."""
+    _check_ldap_complete(config)
     if not ldap_configured(config):
         return
+    _check_ldap_server(config)
+    _check_ldap_names(config)
+    _check_ldap_ca_file(config)
 
+
+def _check_ldap_complete(config):
+    parts = [(label, bool(config.get(key))) for key, label in LDAP_REQUIRED]
+    present = [ok for _, ok in parts]
+    if any(present) and not all(present):
+        missing = [label for label, ok in parts if not ok]
+        raise AuthConfigError("Active Directory sign-in is missing its "
+                              + " and ".join(missing) + ".")
+
+
+def _check_ldap_server(config):
     server = config["ldap_server"]
     match = _LDAP_URL.match(server)
     port = int(match.group(2)[1:]) if match and match.group(2) else None
@@ -320,6 +334,8 @@ def _validate_ldap(config):
             "password across the network in cleartext. Use ldaps:// (port 636), or allow "
             "insecure LDAP explicitly if this is an isolated lab.")
 
+
+def _check_ldap_names(config):
     if not _has_dc(config["ldap_user_base_dn"]):
         raise AuthConfigError(
             "The user search base must be a distinguished name such as "
@@ -338,6 +354,9 @@ def _validate_ldap(config):
             "The service account must be a distinguished name "
             "(CN=svc-fleethub,OU=Service,DC=corp,DC=local) or a user principal name "
             "(svc-fleethub@corp.local).")
+
+
+def _check_ldap_ca_file(config):
     ca_file = config.get("ldap_ca_file")
     if ca_file and not os.path.isfile(ca_file):
         raise AuthConfigError(
@@ -357,58 +376,69 @@ def merge(current, submitted):
     """
     merged = dict(current)
     for key, value in (submitted or {}).items():
-        if key not in merged:
-            continue
-        if key in BOOL_KEYS:
-            merged[key] = _flag(value, merged[key])
-            continue
-        text = str(value or "") if key in RAW_KEYS else _clean(value)
-        if key in SECRET_KEYS and text.strip() == UNCHANGED:
-            continue
-        merged[key] = text
-    # Re-derive so a caller that changed only the issuer gets a matching discovery URL,
-    # rather than keeping one pointing at the previous tenant.
+        if key in merged:
+            _merge_field(merged, key, value)
+    _fill_derived(merged, submitted or {})
+    return merged
+
+
+def _merge_field(merged, key, value):
+    if key in BOOL_KEYS:
+        merged[key] = _flag(value, merged[key])
+        return
+    text = str(value or "") if key in RAW_KEYS else _clean(value)
+    if key in SECRET_KEYS and text.strip() == UNCHANGED:
+        return
+    merged[key] = text
+
+
+def _fill_derived(merged, submitted):
+    """Re-derive what follows from other fields, and put back defaults a blank field left.
+
+    The discovery URL is re-derived so a caller that changed only the issuer gets a matching
+    one, rather than keeping one pointing at the previous tenant."""
     issuer = merged.get("oidc_issuer", "").rstrip("/")
     merged["oidc_issuer"] = issuer
-    submitted_metadata = _clean((submitted or {}).get("oidc_metadata_url"))
-    if issuer and not submitted_metadata:
+    if issuer and not _clean(submitted.get("oidc_metadata_url")):
         merged["oidc_metadata_url"] = issuer + "/.well-known/openid-configuration"
-    if not merged.get("oidc_display_name"):
-        merged["oidc_display_name"] = DEFAULT_OIDC_DISPLAY_NAME
-    if not merged.get("oidc_scopes"):
-        merged["oidc_scopes"] = DEFAULT_OIDC_SCOPES
     merged["ldap_server"] = merged.get("ldap_server", "").rstrip("/")
-    if not merged.get("ldap_display_name"):
-        merged["ldap_display_name"] = DEFAULT_LDAP_DISPLAY_NAME
-    return merged
+    for key, default in (("oidc_display_name", DEFAULT_OIDC_DISPLAY_NAME),
+                         ("oidc_scopes", DEFAULT_OIDC_SCOPES),
+                         ("ldap_display_name", DEFAULT_LDAP_DISPLAY_NAME)):
+        if not merged.get(key):
+            merged[key] = default
+
+# .env key -> config key, for every plain text field. A table rather than one line per key,
+# so adding a field is one row here and to_env cannot drift into special-casing one of them.
+_TEXT_ENV = (
+    ("GOOGLE_CLIENT_ID", "google_client_id"),
+    ("GOOGLE_CLIENT_SECRET", "google_client_secret"),
+    ("OIDC_CLIENT_ID", "oidc_client_id"),
+    ("OIDC_CLIENT_SECRET", "oidc_client_secret"),
+    ("OIDC_ISSUER", "oidc_issuer"),
+    ("OIDC_METADATA_URL", "oidc_metadata_url"),
+    ("OIDC_DISPLAY_NAME", "oidc_display_name"),
+    ("OIDC_SCOPES", "oidc_scopes"),
+    ("LDAP_SERVER", "ldap_server"),
+    ("LDAP_BIND_DN", "ldap_bind_dn"),
+    ("LDAP_BIND_PASSWORD", "ldap_bind_password"),
+    ("LDAP_USER_BASE_DN", "ldap_user_base_dn"),
+    ("LDAP_LOGIN_GROUP_DN", "ldap_login_group_dn"),
+    ("LDAP_DISPLAY_NAME", "ldap_display_name"),
+    ("LDAP_CA_FILE", "ldap_ca_file"),
+)
 
 
 def to_env(config):
     """The .env representation of a config. Empty values become None, i.e. the key is
     REMOVED rather than written blank -- so turning a provider off leaves a file that
     honestly says it is not configured."""
-    return {
-        "GOOGLE_CLIENT_ID": config.get("google_client_id") or None,
-        "GOOGLE_CLIENT_SECRET": config.get("google_client_secret") or None,
-        "OIDC_CLIENT_ID": config.get("oidc_client_id") or None,
-        "OIDC_CLIENT_SECRET": config.get("oidc_client_secret") or None,
-        "OIDC_ISSUER": config.get("oidc_issuer") or None,
-        "OIDC_METADATA_URL": config.get("oidc_metadata_url") or None,
-        "OIDC_DISPLAY_NAME": config.get("oidc_display_name") or None,
-        "OIDC_SCOPES": config.get("oidc_scopes") or None,
-        "LDAP_SERVER": config.get("ldap_server") or None,
-        "LDAP_BIND_DN": config.get("ldap_bind_dn") or None,
-        "LDAP_BIND_PASSWORD": config.get("ldap_bind_password") or None,
-        "LDAP_USER_BASE_DN": config.get("ldap_user_base_dn") or None,
-        "LDAP_LOGIN_GROUP_DN": config.get("ldap_login_group_dn") or None,
-        "LDAP_DISPLAY_NAME": config.get("ldap_display_name") or None,
-        "LDAP_CA_FILE": config.get("ldap_ca_file") or None,
-        # Written only when they differ from the default, so a .env that never touched them
-        # stays free of them -- and an absent LDAP_TLS_VERIFY keeps meaning "verify".
-        "LDAP_TLS_VERIFY": None if config.get("ldap_tls_verify", True) else "0",
-        "LDAP_ALLOW_INSECURE": "1" if config.get("ldap_allow_insecure") else None,
-    }
-
+    env = {name: config.get(key) or None for name, key in _TEXT_ENV}
+    # Written only when they differ from the default, so a .env that never touched them
+    # stays free of them -- and an absent LDAP_TLS_VERIFY keeps meaning "verify".
+    env["LDAP_TLS_VERIFY"] = None if config.get("ldap_tls_verify", True) else "0"
+    env["LDAP_ALLOW_INSECURE"] = "1" if config.get("ldap_allow_insecure") else None
+    return env
 
 def save(env_path, config):
     """Write a validated config to .env AND to os.environ, and report which keys moved.

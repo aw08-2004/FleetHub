@@ -467,7 +467,28 @@ def authenticate(config, username, password, connector, lockout, clock=time.time
     attributes)` and `close()`; it raises BindRejected for wrong credentials and
     DirectoryUnavailable for anything else. Injected, so everything here is tested against
     literals with no DC and no ldap3.
+
+    The steps are separate functions in the order the module docstring gives them, because
+    that ORDER is the security design: find the member, read AD's count, reserve, and only
+    then try the password.
     """
+    login = _usable_login(username, password)
+    service = connector(config["ldap_bind_dn"], config["ldap_bind_password"],
+                        service=True)
+    try:
+        user_dn, attrs = _find_member(service, config, login)
+        headroom = _read_headroom(service, user_dn, attrs, clock)
+        _try_password(connector, lockout, user_dn, password, headroom)
+        groups = _member_groups(service, config["ldap_login_group_dn"], user_dn)
+    finally:
+        try:
+            service.close()
+        except Exception:
+            pass
+    return _claims(attrs, groups)
+
+
+def _usable_login(username, password):
     login = parse_username(username)
     if login is None:
         raise LoginRefused("no usable user name was entered")
@@ -478,183 +499,174 @@ def authenticate(config, username, password, connector, lockout, clock=time.time
         raise LoginRefused("no password was entered")
     if len(password) > MAX_PASSWORD_LENGTH:
         raise LoginRefused("the password is longer than Active Directory allows")
+    return login
 
-    group_dn = config["ldap_login_group_dn"]
-    service = connector(config["ldap_bind_dn"], config["ldap_bind_password"],
-                        service=True)
+
+def _find_member(service, config, login):
+    """The one enabled login-group member answering to `login`, as (dn, attributes)."""
+    base = config["ldap_user_base_dn"]
+    found = service.search(base, user_filter(login, config["ldap_login_group_dn"]),
+                           USER_ATTRIBUTES)
+    if not found:
+        raise LoginRefused(f"no enabled account named {login[1]!r} is in the login group "
+                           f"under {base}")
+    if len(found) > 1:
+        raise LoginRefused(f"{len(found)} accounts answer to {login[1]!r}; refusing "
+                           f"to guess which one was meant")
+    attrs = found[0].get("attributes") or {}
+    user_dn = found[0].get("dn") or _text(attrs.get("distinguishedName"))
+    if not user_dn:
+        raise DirectoryUnavailable("the directory returned an account with no DN")
+    return user_dn, attrs
+
+
+def _read_headroom(service, user_dn, attrs, clock):
+    """AD's own count for this account, read before its password is tried. None (no
+    lockout policy, or unreadable) leaves the decision to LockoutGuard alone; a read that
+    FAILS outright is treated the same, rather than blocking every sign-in on a policy
+    lookup."""
     try:
-        found = service.search(config["ldap_user_base_dn"], user_filter(login, group_dn),
-                               USER_ATTRIBUTES)
-        if not found:
-            raise LoginRefused(
-                f"no enabled account named {login[1]!r} is in the login group under "
-                f"{config['ldap_user_base_dn']}")
-        if len(found) > 1:
-            raise LoginRefused(f"{len(found)} accounts answer to {login[1]!r}; refusing "
-                               f"to guess which one was meant")
-        entry = found[0]
-        attrs = entry.get("attributes") or {}
-        user_dn = entry.get("dn") or _text(attrs.get("distinguishedName"))
-        if not user_dn:
-            raise DirectoryUnavailable("the directory returned an account with no DN")
+        policy = service.search(domain_root(user_dn), "(objectClass=*)", POLICY_ATTRIBUTES,
+                                scope="base")
+    except DirectoryUnavailable as e:
+        print(f"[auth] could not read the domain lockout policy under {user_dn}: {e}")
+        return None
+    policy_attrs = (policy[0].get("attributes") or {}) if policy else {}
+    return ad_lockout_headroom(policy_attrs, attrs, clock())
 
-        # AD's own count for this account, read before its password is tried. None (no
-        # lockout policy, or unreadable) leaves the decision to LockoutGuard alone; a read
-        # that FAILS outright is treated the same, rather than blocking every sign-in on a
-        # policy lookup.
-        headroom = None
-        try:
-            root = domain_root(user_dn)
-            policy = service.search(root, "(objectClass=*)", POLICY_ATTRIBUTES, scope="base")
-            policy_attrs = (policy[0].get("attributes") or {}) if policy else {}
-            headroom = ad_lockout_headroom(policy_attrs, attrs, clock())
-        except DirectoryUnavailable as e:
-            print(f"[auth] could not read the domain lockout policy under {user_dn}: {e}")
 
-        # Reserved BEFORE the bind, atomically -- see THROTTLES.
-        account = user_dn.casefold()
-        wait = lockout.reserve(account, ad_headroom=headroom)
-        if wait:
-            raise LoginRefused(
-                f"{user_dn}: not asking the DC, so the hub cannot lock the account out -- "
-                + (f"AD's own count leaves {headroom} attempt(s) before lockout"
-                   if headroom is not None and headroom <= lockout.limit
-                   else f"the hub's own limit is reached for {wait}s"),
-                throttled_for=wait)
-        try:
-            connector(user_dn, password, service=False).close()
-        except BindRejected as e:
-            lockout.failed(account)
-            raise LoginRefused(f"the DC refused the password for {user_dn}: "
-                               f"{bind_reason(e.detail)}")
-        except DirectoryUnavailable as e:
-            # Counted as a failure: whether the bind reached AD's counter cannot be known.
-            # And answered as a REFUSAL, not "unavailable": only an enabled member of the
-            # login group ever reaches this bind, so a distinct 503 here would tell an
-            # anonymous client which names are members. Found in the second review.
-            lockout.failed(account)
-            raise LoginRefused(f"the bind as {user_dn} did not complete: {e}")
-        except BaseException:
-            lockout.failed(account)
-            raise
-        lockout.succeeded(account)
+def _try_password(connector, lockout, user_dn, password, headroom):
+    """Reserve, bind as the user, and settle the reservation -- every path settles it."""
+    account = user_dn.casefold()
+    # Reserved BEFORE the bind, atomically -- see THROTTLES.
+    wait = lockout.reserve(account, ad_headroom=headroom)
+    if wait:
+        raise LoginRefused(
+            f"{user_dn}: not asking the DC, so the hub cannot lock the account out -- "
+            + (f"AD's own count leaves {headroom} attempt(s) before lockout"
+               if headroom is not None and headroom <= lockout.limit
+               else f"the hub's own limit is reached for {wait}s"),
+            throttled_for=wait)
+    try:
+        connector(user_dn, password, service=False).close()
+    except BindRejected as e:
+        lockout.failed(account)
+        raise LoginRefused(f"the DC refused the password for {user_dn}: "
+                           f"{bind_reason(e.detail)}")
+    except DirectoryUnavailable as e:
+        # Counted as a failure: whether the bind reached AD's counter cannot be known.
+        # And answered as a REFUSAL, not "unavailable": only an enabled member of the
+        # login group ever reaches this bind, so a distinct 503 here would tell an
+        # anonymous client which names are members. Found in the second review.
+        lockout.failed(account)
+        raise LoginRefused(f"the bind as {user_dn} did not complete: {e}")
+    except BaseException:
+        lockout.failed(account)
+        raise
+    lockout.succeeded(account)
 
-        groups = []
-        root = domain_root(group_dn) or domain_root(user_dn)
-        for group in service.search(root, groups_filter(user_dn), ("distinguishedName",)):
-            dn = group.get("dn") or _text((group.get("attributes") or {})
-                                          .get("distinguishedName"))
-            if dn and dn not in groups:
-                groups.append(dn)
-    finally:
-        try:
-            service.close()
-        except Exception:
-            pass
 
+def _member_groups(service, group_dn, user_dn):
+    groups = []
+    root = domain_root(group_dn) or domain_root(user_dn)
+    for group in service.search(root, groups_filter(user_dn), ("distinguishedName",)):
+        dn = group.get("dn") or _text((group.get("attributes") or {})
+                                      .get("distinguishedName"))
+        if dn and dn not in groups:
+            groups.append(dn)
+    return groups
+
+
+def _claims(attrs, groups):
     email = _text(attrs.get("mail")) or _text(attrs.get("userPrincipalName"))
-    return {
-        "email": email,
-        "name": _text(attrs.get("displayName")) or _text(attrs.get("sAMAccountName"))
-                or email,
-        "groups": groups,
-    }
+    name = _text(attrs.get("displayName")) or _text(attrs.get("sAMAccountName")) or email
+    return {"email": email, "name": name, "groups": groups}
 
 
 # ================================
-# THE ONE FUNCTION THAT TALKS TO A NETWORK
+# THE ONE PART THAT TALKS TO A NETWORK
 # ================================
+# Thin on purpose, like directory.fetch_computers: everything with a decision in it is above
+# and tested. What this cannot be tested against is a real DC -- the TLS handshake, AD's bind
+# replies and the paged search are exercised only on first contact. Module-level classes
+# rather than closures inside ldap3_connector, so each piece reads (and is reviewed) alone.
 LDAP_IMPORT_HINT = (
     "Active Directory sign-in needs the 'ldap3' package, which is not installed on this "
     "hub. Install it with:  pip install -r hub/requirements.txt  and restart the hub."
 )
 
 
-def ldap3_connector(config, timeout=10):
-    """Build `connector(dn, password, service)` over ldap3 for `config`.
-
-    Thin on purpose, like directory.fetch_computers: everything with a decision in it is
-    above and tested. What this cannot be tested against is a real DC -- the TLS handshake,
-    AD's bind replies and the paged search are exercised only on first contact.
-    """
+def _load_ldap3():
     try:
         import ldap3
         from ldap3.core.exceptions import LDAPException
     except ImportError:
         raise DirectoryUnavailable(LDAP_IMPORT_HINT)
-    import ssl
+    return ldap3, LDAPException
 
-    url = config["ldap_server"]
-    # Checked again HERE, at the last point before a password leaves the hub, and not only in
-    # authconfig: this is the function that would send it in cleartext, so it refuses to on
-    # its own authority whatever path the config took to get here. ldap3 treats a URL with no
-    # scheme as plain LDAP on 389, so anything that is not ldaps:// counts as plain.
-    if not url.lower().startswith("ldaps://") and not config.get("ldap_allow_insecure"):
-        raise DirectoryUnavailable(
-            f"refusing to bind to {url!r}: not ldaps://, and LDAP_ALLOW_INSECURE is not set, "
-            f"so every password would cross the network in cleartext")
-    try:
-        tls = None
-        if url.lower().startswith("ldaps://"):
-            tls = ldap3.Tls(
-                validate=ssl.CERT_REQUIRED if config.get("ldap_tls_verify", True)
-                else ssl.CERT_NONE,
-                ca_certs_file=config.get("ldap_ca_file") or None,
-            )
-        server = ldap3.Server(url, get_info=ldap3.NONE, tls=tls, connect_timeout=timeout)
-    except LDAPException as e:
-        # A CA file deleted since it was saved, or a port ldap3 will not accept. Without this
-        # the route had no handler for it and every sign-in was a bare 500.
-        raise DirectoryUnavailable(f"cannot set up the connection to {url} "
-                                   f"(CA file {config.get('ldap_ca_file') or 'none'}): {e}")
 
-    class _Session:
-        def __init__(self, conn):
-            self.conn = conn
+def _entry(entry):
+    return {"dn": entry.get("dn"), "attributes": dict(entry.get("attributes") or {})}
 
-        def search(self, base, search_filter, attributes, scope="subtree"):
-            entries = []
-            if scope == "base":
-                # One object -- the domain's lockout policy. Not paged, and never SUBTREE:
-                # a subtree search from the domain root would walk the whole directory.
-                try:
-                    self.conn.search(base, search_filter, search_scope=ldap3.BASE,
-                                     attributes=list(attributes))
-                except LDAPException as e:
-                    raise DirectoryUnavailable(f"LDAP read of {base} failed: {e}")
-                for entry in self.conn.response or []:
-                    if entry.get("type") == "searchResEntry":
-                        entries.append({"dn": entry.get("dn"),
-                                        "attributes": dict(entry.get("attributes") or {})})
-                return entries
-            try:
-                for entry in self.conn.extend.standard.paged_search(
-                        search_base=base, search_filter=search_filter,
-                        search_scope=ldap3.SUBTREE, attributes=list(attributes),
-                        paged_size=500, generator=True):
-                    if entry.get("type") != "searchResEntry":
-                        continue
-                    entries.append({"dn": entry.get("dn"),
-                                    "attributes": dict(entry.get("attributes") or {})})
-            except LDAPException as e:
-                raise DirectoryUnavailable(f"LDAP search under {base} failed: {e}")
-            # With raise_exceptions off a failed search just ends early, and an empty result
-            # would then be logged as "no such account" -- sending an admin to look for a
-            # missing user when the search base is what is wrong.
-            result = self.conn.result or {}
-            if result.get("result") not in (None, 0):
-                raise DirectoryUnavailable(
-                    f"LDAP search under {base} failed: {result.get('description')} "
-                    f"{result.get('message') or ''}".strip())
-            return entries
 
-        def close(self):
-            try:
-                self.conn.unbind()
-            except Exception:
-                pass
+class _Ldap3Session:
+    def __init__(self, conn, ldap3, ldap_exception):
+        self.conn = conn
+        self.ldap3 = ldap3
+        self.ldap_exception = ldap_exception
 
-    def connector(dn, password, service=False):
+    def search(self, base, search_filter, attributes, scope="subtree"):
+        if scope == "base":
+            return self._read_one(base, search_filter, attributes)
+        return self._search_paged(base, search_filter, attributes)
+
+    def _read_one(self, base, search_filter, attributes):
+        # One object -- the domain's lockout policy. Not paged, and never SUBTREE: a subtree
+        # search from the domain root would walk the whole directory.
+        try:
+            self.conn.search(base, search_filter, search_scope=self.ldap3.BASE,
+                             attributes=list(attributes))
+        except self.ldap_exception as e:
+            raise DirectoryUnavailable(f"LDAP read of {base} failed: {e}")
+        return [_entry(e) for e in self.conn.response or []
+                if e.get("type") == "searchResEntry"]
+
+    def _search_paged(self, base, search_filter, attributes):
+        try:
+            entries = [_entry(e) for e in self.conn.extend.standard.paged_search(
+                search_base=base, search_filter=search_filter,
+                search_scope=self.ldap3.SUBTREE, attributes=list(attributes),
+                paged_size=500, generator=True) if e.get("type") == "searchResEntry"]
+        except self.ldap_exception as e:
+            raise DirectoryUnavailable(f"LDAP search under {base} failed: {e}")
+        # With raise_exceptions off a failed search just ends early, and an empty result
+        # would then be logged as "no such account" -- sending an admin to look for a
+        # missing user when the search base is what is wrong.
+        result = self.conn.result or {}
+        if result.get("result") not in (None, 0):
+            raise DirectoryUnavailable(
+                f"LDAP search under {base} failed: {result.get('description')} "
+                f"{result.get('message') or ''}".strip())
+        return entries
+
+    def close(self):
+        try:
+            self.conn.unbind()
+        except Exception:
+            pass
+
+
+class _Ldap3Connector:
+    """`connector(dn, password, service)` over one ldap3 Server."""
+
+    def __init__(self, server, url, timeout, ldap3, ldap_exception):
+        self.server = server
+        self.url = url
+        self.timeout = timeout
+        self.ldap3 = ldap3
+        self.ldap_exception = ldap_exception
+
+    def __call__(self, dn, password, service=False):
         # BYTES, not str. Given a str, ldap3 runs SASLprep on a simple-bind password: NFKC
         # folds the micro sign into Greek mu and a superscript 2 into 2, and a control
         # character raises. AD applies none of that -- it compares the UTF-8 it receives -- so
@@ -663,16 +675,16 @@ def ldap3_connector(config, timeout=10):
         # ldap3 passes bytes through untouched. Found in review.
         if isinstance(password, str):
             password = password.encode("utf-8")
-        conn = ldap3.Connection(server, user=dn, password=password,
-                                authentication=ldap3.SIMPLE, read_only=True,
-                                auto_referrals=False, raise_exceptions=False,
-                                receive_timeout=timeout)
+        conn = self.ldap3.Connection(self.server, user=dn, password=password,
+                                     authentication=self.ldap3.SIMPLE, read_only=True,
+                                     auto_referrals=False, raise_exceptions=False,
+                                     receive_timeout=self.timeout)
         try:
             ok = conn.bind()
-        except LDAPException as e:
-            raise DirectoryUnavailable(f"could not reach {url}: {e}")
+        except self.ldap_exception as e:
+            raise DirectoryUnavailable(f"could not reach {self.url}: {e}")
         if ok:
-            return _Session(conn)
+            return _Ldap3Session(conn, self.ldap3, self.ldap_exception)
         result = conn.result or {}
         try:
             conn.unbind()
@@ -683,7 +695,38 @@ def ldap3_connector(config, timeout=10):
         # The SERVICE account being refused is a configuration problem, not a wrong
         # password from the person signing in, and must not be reported as one.
         raise DirectoryUnavailable(
-            f"bind as {dn} to {url} failed: {result.get('description')} "
+            f"bind as {dn} to {self.url} failed: {result.get('description')} "
             f"({bind_reason(result.get('message'))})")
 
-    return connector
+
+def ldap3_connector(config, timeout=10):
+    """Build `connector(dn, password, service)` over ldap3 for `config`."""
+    ldap3, ldap_exception = _load_ldap3()
+    url = config["ldap_server"]
+    secure = url.lower().startswith("ldaps://")
+    # Checked again HERE, at the last point before a password leaves the hub, and not only in
+    # authconfig: this is the code that would send it in cleartext, so it refuses to on its
+    # own authority whatever path the config took to get here. ldap3 treats a URL with no
+    # scheme as plain LDAP on 389, so anything that is not ldaps:// counts as plain.
+    if not secure and not config.get("ldap_allow_insecure"):
+        raise DirectoryUnavailable(
+            f"refusing to bind to {url!r}: not ldaps://, and LDAP_ALLOW_INSECURE is not set, "
+            f"so every password would cross the network in cleartext")
+    try:
+        server = ldap3.Server(url, get_info=ldap3.NONE,
+                              tls=_tls(ldap3, config) if secure else None,
+                              connect_timeout=timeout)
+    except ldap_exception as e:
+        # A CA file deleted since it was saved, or a port ldap3 will not accept. Without this
+        # the route had no handler for it and every sign-in was a bare 500.
+        raise DirectoryUnavailable(f"cannot set up the connection to {url} "
+                                   f"(CA file {config.get('ldap_ca_file') or 'none'}): {e}")
+    return _Ldap3Connector(server, url, timeout, ldap3, ldap_exception)
+
+
+def _tls(ldap3, config):
+    import ssl
+    return ldap3.Tls(
+        validate=ssl.CERT_REQUIRED if config.get("ldap_tls_verify", True) else ssl.CERT_NONE,
+        ca_certs_file=config.get("ldap_ca_file") or None,
+    )
