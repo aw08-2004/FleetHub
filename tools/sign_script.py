@@ -31,9 +31,11 @@ import sign_release  # noqa: E402  (needs ROOT on the path first)
 
 
 def sign_file(key_path, script):
-    private_key_type, _ = sign_release._ed25519()
+    # The key first: on a PC without it, "no signing key" is the useful answer, not a
+    # missing `cryptography` this machine was never going to sign with anyway.
     if not os.path.exists(key_path):
         sys.exit(f"No signing key at {key_path}. Run: python sign_release.py --genkey")
+    private_key_type, _ = sign_release._ed25519()
     with open(script, "rb") as f:
         data = f.read()
     # A CRLF in a shell script is a broken install (`bash^M`), and signing one would bless it.

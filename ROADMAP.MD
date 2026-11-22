@@ -1227,6 +1227,16 @@ run and tested on the development PC, but the installer's service path was only 
 run: a fresh install on a clean VM, a re-install over a waitress hub, and `-MigrateHubServer`
 with the tunnel switched. Then the *Hub 1.170.0* boxes in the beta list above.
 
+**21. Sign the installers, owed on the machine with the signing key and the Artifact Signing
+account (PR #214).** `tests/test_script_signatures.py` reports NOT SIGNED for `install.ps1`,
+`agent/install/agent-install.ps1` and `agent-linux/install/install.sh.sig` until this is done,
+so the suite is red on `beta` meanwhile -- by design, since a skip would also pass a deleted
+signature. Set up `tools/codesign.ps1 -Check`, then
+`tools\codesign.ps1 -Path install.ps1,agent\install\agent-install.ps1` and
+`python tools/sign_script.py agent-linux/install/install.sh`, and commit the three to `beta`.
+**Must land before the next `beta` → `main` PR**, and stage 2 (the downloaders checking these
+signatures) only after that has reached `main`.
+
 ---
 
 ## 🚧 Schedules -- backups, rules, scripts, reports and discovery at set times   ·   phase 1 (backups) hub 1.171.0   ·   `schedule_spec.py`, `schedules_web.py`, `static/js/schedule-picker.js`
