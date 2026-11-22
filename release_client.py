@@ -431,6 +431,21 @@ def codesign(paths, check=False):
             length += len(path) + 1
 
 
+def preflight_codesign(skip):
+    """Everything signing needs, checked before the build -- which takes minutes -- rather
+    than discovered after it. Its own function so main() stays a list of steps."""
+    if skip:
+        print("!! --no-codesign: this release's exe and DLLs will carry NO Authenticode signature.")
+        return
+    codesign([], check=True)
+    # The same refusal codesign() makes per file, asked of the folder before the build
+    # rather than after it. A comma further down (a file the build names) still meets
+    # codesign()'s own check.
+    if "," in BUILD_DIR:
+        die(f"cannot sign from {BUILD_DIR}: the path contains a comma, which codesign.ps1 "
+            f"uses as its separator -- check the repo out to a folder whose path has none")
+
+
 def package(version, sign_binaries=True):
     """Sign the build's executables, then zip the release directory.
 
@@ -589,17 +604,7 @@ def main():
               "commit them with the manifest.")
 
     print(f"\nReleasing FleetHub client {version}")
-    # Checked before the build, which takes minutes, rather than discovered after it.
-    if args.no_codesign:
-        print("!! --no-codesign: this release's exe and DLLs will carry NO Authenticode signature.")
-    else:
-        codesign([], check=True)
-        # The same refusal codesign() makes per file, asked of the folder before the build
-        # rather than after it. A comma further down (a file the build names) still meets
-        # codesign()'s own check.
-        if "," in BUILD_DIR:
-            die(f"cannot sign from {BUILD_DIR}: the path contains a comma, which codesign.ps1 "
-                f"uses as its separator -- check the repo out to a folder whose path has none")
+    preflight_codesign(args.no_codesign)
 
     if not args.skip_build:
         build(find_flutter(), args.skip_tests)
