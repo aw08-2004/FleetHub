@@ -393,21 +393,34 @@ def build(flutter, skip_tests):
         die("flutter build windows failed")
 
 
+#: Characters of file paths per codesign.ps1 call. Well under Windows' ~32K command-line cap,
+#: leaving room for signtool's own arguments, which codesign.ps1 appends to the same line.
+CODESIGN_ARG_BUDGET = 8000
+
+
 def codesign(paths, check=False):
     """Authenticode-sign through tools/codesign.ps1, the one signer for every release
     (see its description). Files that already carry a valid signature -- the Visual C++
     runtime, signed by Microsoft -- are left as they are."""
-    command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-               "-File", os.path.join(ROOT, "tools", "codesign.ps1")]
+    base = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", os.path.join(ROOT, "tools", "codesign.ps1")]
     if check:
-        command.append("-Check")
-    else:
-        # ONE comma-joined argument: under `powershell -File` a [string[]] parameter takes a
-        # single value, and a second path would bind to -ConfigDir (see codesign.ps1).
-        command += ["-SkipSigned", "-Path", ",".join(paths)]
-    if subprocess.call(command) != 0:
-        die("code signing is not set up (see above); fix it or pass --no-codesign deliberately"
-            if check else "Authenticode signing failed; nothing was packaged")
+        if subprocess.call(base + ["-Check"]) != 0:
+            die("code signing is not set up (see above); fix it or pass --no-codesign deliberately")
+        return
+    # ONE comma-joined argument per call: under `powershell -File` a [string[]] parameter takes
+    # a single value, and a second path would bind to -ConfigDir (see codesign.ps1). In batches,
+    # because that one argument is also one Windows command line, capped near 32K characters --
+    # a build folder that grew past it would fail inside signtool with nothing saying why.
+    batch, length = [], 0
+    for path in list(paths) + [None]:
+        if path is None or (batch and length + len(path) + 1 > CODESIGN_ARG_BUDGET):
+            if batch and subprocess.call(base + ["-SkipSigned", "-Path", ",".join(batch)]) != 0:
+                die("Authenticode signing failed; nothing was packaged")
+            batch, length = [], 0
+        if path is not None:
+            batch.append(path)
+            length += len(path) + 1
 
 
 def package(version, sign_binaries=True):

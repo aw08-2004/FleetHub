@@ -97,6 +97,19 @@ def test_install_sh():
              "re-run tools/sign_script.py"), ok)
 
 
+def test_docs_key():
+    """docs/installation.md prints the fleet key for a by-hand openssl check. A copy that
+    drifted would tell an operator a genuine install.sh is forged -- or, worse, be the key an
+    attacker swapped in a doc nobody re-reads."""
+    with open(os.path.join(ROOT, "docs", "installation.md"), encoding="utf-8") as fh:
+        doc = fh.read()
+    key = fleet_key_hex()
+    check("docs/installation.md's openssl snippet prints install.sh's fleet key",
+          key is not None and key in doc)
+    check("docs/installation.md prints no other 64-hex key",
+          set(re.findall(r"\b[0-9a-f]{64}\b", doc)) <= {key})
+
+
 def test_ps1_blocks():
     for path in PS1_SCRIPTS:
         name = os.path.relpath(path, ROOT).replace("\\", "/")
@@ -154,6 +167,7 @@ def test_ps1_authenticode():
 def main():
     print("== install.sh (Ed25519)")
     test_install_sh()
+    test_docs_key()
     print("== .ps1 signature blocks")
     test_ps1_blocks()
     print("== .ps1 Authenticode")
