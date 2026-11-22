@@ -788,8 +788,8 @@ downloaders read `main`, so a check that shipped first would refuse every instal
 
 - [ ] **Signing is set up on the release PC.** `powershell -File tools\codesign.ps1 -Check`
   prints *Code signing ready*.
-- [ ] **The installers are signed.** `tools\codesign.ps1 -Path install.ps1,
-  agent\install\agent-install.ps1` and `python tools/sign_script.py
+- [ ] **The installers are signed.** `tools\codesign.ps1 -Path install.ps1,agent\install\agent-install.ps1`
+  (one argument: commas, no spaces) and `python tools/sign_script.py
   agent-linux/install/install.sh` were run, and `python tests/test_script_signatures.py` passes
   on Windows. Then **write the publisher it prints into this entry**, because stage 2 pins it.
 - [ ] **The next agent beta is signed.** After `.\release.ps1 -Version x.y.z -Channel beta`,

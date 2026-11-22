@@ -572,7 +572,7 @@ still does that, and a binary is Authenticode-signed *before* it is hashed into 
   all of it.
 - **The installer scripts are signed in the repo.** An edit to either `.ps1` breaks its
   signature, so re-sign in the same commit:
-  `powershell -File tools\codesign.ps1 -Path install.ps1, agent\install\agent-install.ps1`.
+  `powershell -File tools\codesign.ps1 -Path install.ps1,agent\install\agent-install.ps1` (one argument: commas, no spaces).
   Both are pinned `-text` in `.gitattributes` because the signature covers exact bytes.
 
 `agent-linux/install/install.sh` cannot carry Authenticode, so it has a detached Ed25519

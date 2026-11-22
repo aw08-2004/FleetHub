@@ -402,7 +402,9 @@ def codesign(paths, check=False):
     if check:
         command.append("-Check")
     else:
-        command += ["-SkipSigned", "-Path"] + list(paths)
+        # ONE comma-joined argument: under `powershell -File` a [string[]] parameter takes a
+        # single value, and a second path would bind to -ConfigDir (see codesign.ps1).
+        command += ["-SkipSigned", "-Path", ",".join(paths)]
     if subprocess.call(command) != 0:
         die("code signing is not set up (see above); fix it or pass --no-codesign deliberately"
             if check else "Authenticode signing failed; nothing was packaged")

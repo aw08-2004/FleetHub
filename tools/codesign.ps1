@@ -58,8 +58,15 @@
     scripts call this in preflight, before anything is published.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File tools\codesign.ps1 -Path install.ps1, agent\install\agent-install.ps1
+    powershell -ExecutionPolicy Bypass -File tools\codesign.ps1 -Path install.ps1,agent\install\agent-install.ps1
 #>
+# **Several files go in ONE argument, comma-separated with no spaces: `-Path a,b`.** Under
+# `powershell -File` a [string[]] parameter takes exactly one value, and every other spelling
+# misbinds silently -- tested, not assumed: `-Path a b` binds b to -ConfigDir, `-Path a, b`
+# arrives as "a," with b again in -ConfigDir. ValueFromRemainingArguments does not help: once
+# -Path is given by name PowerShell refuses the leftovers outright. So the one argument is
+# split on commas below, and a -ConfigDir that names a file is refused as the misbinding it is.
+# release_client.py joins its build folder's files with commas for this reason.
 param(
     [string[]]$Path,
     [string]$ConfigDir = (Join-Path $HOME '.fleethub_codesign'),
@@ -114,6 +121,11 @@ $dll  = Find-Dlib
 $meta = $Metadata
 if (-not $meta) { $meta = Join-Path $ConfigDir 'metadata.json' }
 
+# See the comment above param(): this is what `-Path a b` or `-Path a, b` turns into.
+if ($ConfigDir -match '\.(ps1|exe|dll|msi|sys)$') {
+    Fail "-ConfigDir is '$ConfigDir', which looks like a file to sign: pass several files as ONE argument, -Path a,b (commas, no spaces)."
+}
+
 $missing = @()
 if (-not $tool) { $missing += 'signtool.exe (install the Windows SDK, 10.0.22621 or newer)' }
 if (-not $dll)  { $missing += "Azure.CodeSigning.Dlib.dll (nuget install Microsoft.ArtifactSigning.Client -OutputDirectory `"$ConfigDir`")" }
@@ -135,7 +147,8 @@ if ($missing.Count -gt 0) {
 }
 if ($Check) { Ok "Code signing ready (signtool, dlib, $meta)"; exit 0 }
 
-if (-not $Path -or $Path.Count -eq 0) { Fail "Nothing to sign: pass -Path." }
+$Path = @($Path | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($Path.Count -eq 0) { Fail "Nothing to sign: pass -Path." }
 $files = foreach ($p in $Path) {
     if (-not (Test-Path -LiteralPath $p)) { Fail "No such file: $p" }
     (Resolve-Path -LiteralPath $p).Path
