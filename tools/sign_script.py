@@ -31,7 +31,7 @@ import sign_release  # noqa: E402  (needs ROOT on the path first)
 
 
 def sign_file(key_path, script):
-    Ed25519PrivateKey, _ = sign_release._ed25519()
+    private_key_type, _ = sign_release._ed25519()
     if not os.path.exists(key_path):
         sys.exit(f"No signing key at {key_path}. Run: python sign_release.py --genkey")
     with open(script, "rb") as f:
@@ -40,7 +40,7 @@ def sign_file(key_path, script):
     if script.endswith(".sh") and b"\r" in data:
         sys.exit(f"{script} contains CR characters; it must be LF-only before it is signed.")
     with open(key_path, "r", encoding="utf-8") as f:
-        priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
+        priv = private_key_type.from_private_bytes(bytes.fromhex(f.read().strip()))
     with open(script + ".sig", "w", encoding="utf-8", newline="") as f:
         f.write(priv.sign(data).hex())
     print(f"Signed  : {script} ({len(data)} bytes)")
