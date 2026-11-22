@@ -40,6 +40,11 @@ Usage
       Sign an already-built package. For re-signing after a manifest edit, or on a machine
       that cannot build.
 
+  python release_client.py --no-codesign
+      Ship the exe and DLLs WITHOUT an Authenticode signature. For a machine with no Trusted
+      Signing setup (tools/codesign.ps1); said loudly, because unsigned looks like signed
+      until somebody opens Properties.
+
 Prerequisites for a Windows build (`flutter doctor` will confirm both):
   * Visual Studio with the "Desktop development with C++" workload.
   * Windows Developer Mode, for the symlink support Flutter plugins need.
@@ -384,12 +389,35 @@ def build(flutter, skip_tests):
         die("flutter build windows failed")
 
 
-def package(version):
-    """Zip the release directory. A zip rather than an installer because there is no
-    code-signing certificate yet -- an unsigned installer is a SmartScreen warning, and an
-    unsigned zip is a folder. Swap this for MSIX when a certificate exists."""
+def codesign(paths, check=False):
+    """Authenticode-sign through tools/codesign.ps1, the one signer for every release
+    (see its description). Files that already carry a valid signature -- the Visual C++
+    runtime, signed by Microsoft -- are left as they are."""
+    command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+               "-File", os.path.join(ROOT, "tools", "codesign.ps1")]
+    if check:
+        command.append("-Check")
+    else:
+        command += ["-SkipSigned", "-Path"] + list(paths)
+    if subprocess.call(command) != 0:
+        die("code signing is not set up (see above); fix it or pass --no-codesign deliberately"
+            if check else "Authenticode signing failed; nothing was packaged")
+
+
+def package(version, sign_binaries=True):
+    """Sign the build's executables, then zip the release directory.
+
+    **Signed before zipping, never after**: the manifest's sha256 is of the zip, so the zip
+    has to hold the signed bytes. Still a zip rather than an installer -- MSIX became
+    possible with the Trusted Signing certificate, and is its own piece of work."""
     if not os.path.isdir(BUILD_DIR):
         die(f"no build output at {BUILD_DIR}. Run without --skip-build first.")
+
+    if sign_binaries:
+        binaries = [os.path.join(dirpath, f)
+                    for dirpath, _dirs, files in os.walk(BUILD_DIR)
+                    for f in files if f.lower().endswith((".exe", ".dll"))]
+        codesign(binaries)
 
     os.makedirs(DIST_DIR, exist_ok=True)
     name = f"FleetHubClient-{version}-windows-x64.zip"
@@ -487,6 +515,8 @@ def main():
                     help="emergency escape hatch; the release is untested")
     ap.add_argument("--upload", action="store_true",
                     help="create the GitHub release and upload the asset with gh")
+    ap.add_argument("--no-codesign", action="store_true",
+                    help="ship WITHOUT an Authenticode signature (no Trusted Signing here)")
     ap.add_argument("--notes", default="", help="release note shown on the download page")
     ap.add_argument("--released-at", default="", help="release date, e.g. 2026-08-04")
     # Release channel (roadmap #21). `beta` writes hub/client.manifest.beta.json instead, so
@@ -532,11 +562,16 @@ def main():
               "commit them with the manifest.")
 
     print(f"\nReleasing FleetHub client {version}")
+    # Checked before the build, which takes minutes, rather than discovered after it.
+    if args.no_codesign:
+        print("!! --no-codesign: this release's exe and DLLs will carry NO Authenticode signature.")
+    else:
+        codesign([], check=True)
 
     if not args.skip_build:
         build(find_flutter(), args.skip_tests)
 
-    package_path = package(version)
+    package_path = package(version, sign_binaries=not args.no_codesign)
     tag, url = sign(version, package_path, args.notes, args.released_at, args.channel)
     # Named rather than hardcoded: a beta writes a different file, and telling an operator to
     # commit the stable one is how a beta gets signed and then never published.
