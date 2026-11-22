@@ -16,7 +16,14 @@ What is pinned:
   * on Windows, Get-AuthenticodeSignature calls both .ps1 Valid, timestamped, and signed by
     one and the same publisher. Elsewhere that half is skipped and says so.
 
-The fix for a failure here is never to edit the test or the .sig by hand: re-sign with
+Every failure names which of two different problems it is, because the fix differs:
+  * NOT SIGNED -- no signature at all. Expected exactly once, before the first signing on the
+    release PC (stage 1 of the code-signing work, ROADMAP *On beta*). Still a failure rather
+    than a skip: a skip would also pass a file whose signature block somebody deleted.
+  * STALE -- a signature that no longer matches the bytes. The file was edited after it was
+    signed; that is the regression this module exists for.
+
+The fix for either is never to edit the test or the .sig by hand: re-sign with
 tools/codesign.ps1 (the .ps1) or tools/sign_script.py (install.sh).
 """
 import json
@@ -69,7 +76,7 @@ def test_install_sh():
     sig_path = INSTALL_SH + ".sig"
     check("install.sh has no CR (a CRLF script fails as bash^M)", b"\r" not in data)
     if not os.path.exists(sig_path):
-        check("install.sh.sig exists -- run: python tools/sign_script.py "
+        check("NOT SIGNED: install.sh.sig is missing -- run: python tools/sign_script.py "
               "agent-linux/install/install.sh", False)
         return
     sig_text = read_bytes(sig_path)
@@ -85,14 +92,19 @@ def test_install_sh():
         ok = True
     except InvalidSignature:
         ok = False
-    check("install.sh.sig verifies against the fleet key over install.sh's exact bytes "
-          "(stale? re-run tools/sign_script.py)", ok)
+    check("install.sh.sig verifies against the fleet key over install.sh's exact bytes"
+          + ("" if ok else " -- STALE: install.sh was edited after signing; "
+             "re-run tools/sign_script.py"), ok)
 
 
 def test_ps1_blocks():
     for path in PS1_SCRIPTS:
         name = os.path.relpath(path, ROOT).replace("\\", "/")
         data = read_bytes(path)
+        if BEGIN not in data:
+            check(f"NOT SIGNED: {name} has no Authenticode signature block -- run: "
+                  f"powershell -File tools\\codesign.ps1 -Path {name}", False)
+            continue
         check(f"{name} carries exactly one Authenticode signature block",
               data.count(BEGIN) == 1 and data.count(END) == 1)
         check(f"{name}: nothing after the signature block",
@@ -124,11 +136,17 @@ def test_ps1_authenticode():
     check("Get-AuthenticodeSignature answered for every script", len(rows) == len(PS1_SCRIPTS))
     for row in rows:
         name = os.path.relpath(row["path"], ROOT).replace("\\", "/")
-        check(f"{name} is Valid (got {row['status']}; stale? re-run tools/codesign.ps1)",
+        if row["status"] == "NotSigned":
+            check(f"NOT SIGNED: {name} (Get-AuthenticodeSignature: NotSigned)", False)
+            continue
+        hint = {"HashMismatch": " -- STALE: edited after signing; re-run tools/codesign.ps1"}
+        check(f"{name} is Valid (got {row['status']}){hint.get(row['status'], '')}",
               row["status"] == "Valid")
         check(f"{name} is timestamped (it would stop validating when the cert expires)",
               row["stamped"])
     subjects = {r["subject"] for r in rows if r["subject"]}
+    if not subjects:
+        return  # nothing signed yet; the NOT SIGNED lines above already say so
     check(f"both installers name one publisher ({' | '.join(sorted(subjects)) or 'none'})",
           len(subjects) == 1)
 
