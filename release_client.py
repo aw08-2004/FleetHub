@@ -594,6 +594,12 @@ def main():
         print("!! --no-codesign: this release's exe and DLLs will carry NO Authenticode signature.")
     else:
         codesign([], check=True)
+        # The same refusal codesign() makes per file, asked of the folder before the build
+        # rather than after it. A comma further down (a file the build names) still meets
+        # codesign()'s own check.
+        if "," in BUILD_DIR:
+            die(f"cannot sign from {BUILD_DIR}: the path contains a comma, which codesign.ps1 "
+                f"uses as its separator -- check the repo out to a folder whose path has none")
 
     if not args.skip_build:
         build(find_flutter(), args.skip_tests)
