@@ -37,7 +37,7 @@
 
     Setup, once per release PC:
       1. Windows SDK (signtool 10.0.22621 or newer).
-      2. The dlib: nuget install Microsoft.Trusted.Signing.Client -OutputDirectory
+      2. The dlib: nuget install Microsoft.ArtifactSigning.Client -OutputDirectory
          $HOME\.fleethub_codesign  (or point -Dlib at Azure.CodeSigning.Dlib.dll).
       3. $HOME\.fleethub_codesign\metadata.json:
            { "Endpoint": "https://eus.codesigning.azure.net/",
@@ -116,7 +116,7 @@ if (-not $meta) { $meta = Join-Path $ConfigDir 'metadata.json' }
 
 $missing = @()
 if (-not $tool) { $missing += 'signtool.exe (install the Windows SDK, 10.0.22621 or newer)' }
-if (-not $dll)  { $missing += "Azure.CodeSigning.Dlib.dll (nuget install Microsoft.Trusted.Signing.Client -OutputDirectory `"$ConfigDir`")" }
+if (-not $dll)  { $missing += "Azure.CodeSigning.Dlib.dll (nuget install Microsoft.ArtifactSigning.Client -OutputDirectory `"$ConfigDir`")" }
 if (-not (Test-Path -LiteralPath $meta)) {
     $missing += "$meta (Endpoint, CodeSigningAccountName, CertificateProfileName)"
 } else {

@@ -565,7 +565,7 @@ still does that, and a binary is Authenticode-signed *before* it is hashed into 
   `agent/release.ps1` and `release_client.py` call it on their own and refuse to run when it
   is not set up. `-NoCodeSign` / `--no-codesign` ship unsigned on purpose, and say so loudly.
 - **Setup, once per release PC:** the Windows SDK (signtool 10.0.22621+), then
-  `nuget install Microsoft.Trusted.Signing.Client -OutputDirectory $HOME\.fleethub_codesign`.
+  `nuget install Microsoft.ArtifactSigning.Client -OutputDirectory $HOME\.fleethub_codesign`.
   Next, write `$HOME\.fleethub_codesign\metadata.json` with `Endpoint`,
   `CodeSigningAccountName` and `CertificateProfileName`. Finally run `az login` as an identity
   holding *Trusted Signing Certificate Profile Signer*. `tools\codesign.ps1 -Check` confirms
