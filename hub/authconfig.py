@@ -286,7 +286,7 @@ def validate(config, *, allow_no_provider=False):
     return config
 
 
-_LDAP_URL = re.compile(r"^(ldaps?)://[A-Za-z0-9.\-]+(:\d{1,5})?$", re.IGNORECASE)
+_LDAP_URL = re.compile(r"^(ldaps?)://[a-z0-9.\-]+(:\d{1,5})?$", re.IGNORECASE)
 
 
 def _has_dc(dn):
