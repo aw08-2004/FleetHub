@@ -122,6 +122,15 @@ def test_ps1_blocks():
               data.count(BEGIN) == 1 and data.count(END) == 1)
         check(f"{name}: nothing after the signature block",
               data.rstrip(b"\r\n").endswith(END))
+        # The shape of a real block, so a truncated one fails here and not only on Windows:
+        # BEGIN before END, and between them nothing but `# <base64>` lines -- a PKCS#7
+        # signature with its certificate chain runs to well over a hundred of them.
+        start, end = data.find(BEGIN), data.rfind(END)
+        body = data[start + len(BEGIN):end].split(b"\n") if 0 <= start < end else []
+        lines = [ln.strip() for ln in body if ln.strip()]
+        check(f"{name}: the block is whole (BEGIN before END, {len(lines)} base64 lines)",
+              len(lines) >= 20
+              and all(re.fullmatch(rb"# [A-Za-z0-9+/=]+", ln) for ln in lines))
 
 
 def powershell():

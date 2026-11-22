@@ -408,6 +408,8 @@ def codesign(paths, check=False):
         if subprocess.call(base + ["-Check"]) != 0:
             die("code signing is not set up (see above); fix it or pass --no-codesign deliberately")
         return
+    # -SkipSigned is also what makes repackaging safe: files are signed in place in BUILD_DIR,
+    # so a --skip-build run finds them already signed and leaves them alone.
     # ONE comma-joined argument per call: under `powershell -File` a [string[]] parameter takes
     # a single value, and a second path would bind to -ConfigDir (see codesign.ps1). In batches,
     # because that one argument is also one Windows command line, capped near 32K characters --
