@@ -414,6 +414,12 @@ def codesign(paths, check=False):
     # a single value, and a second path would bind to -ConfigDir (see codesign.ps1). In batches,
     # because that one argument is also one Windows command line, capped near 32K characters --
     # a build folder that grew past it would fail inside signtool with nothing saying why.
+    # The comma is the separator, so a path that holds one would be cut in two and fail as
+    # "No such file" with neither half recognisable. Said plainly instead, before signing.
+    with_comma = [path for path in paths if "," in path]
+    if with_comma:
+        die(f"cannot sign a path containing a comma (codesign.ps1 splits on commas): "
+            f"{with_comma[0]} -- build from a folder whose path has none")
     batch, length = [], 0
     for path in list(paths) + [None]:
         if path is None or (batch and length + len(path) + 1 > CODESIGN_ARG_BUDGET):
