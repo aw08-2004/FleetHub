@@ -142,9 +142,11 @@ public sealed class RemoteSessionSupervisor : BackgroundService
     /// </summary>
     private void FollowInteractiveSession(string recordPath, LiveSessionRecord record)
     {
-        uint target = record.Auto ? SessionInjector.AutoSelectSession()
-                    : record.FollowSignIn ? SignInTarget(record.WindowsSession, SessionProbe.Enumerate())
-                    : SessionInjector.NoActiveSession;
+        uint target = SessionInjector.NoActiveSession;
+        if (record.Auto)
+            target = SessionInjector.AutoSelectSession();
+        else if (record.FollowSignIn)
+            target = SignInTarget(record.WindowsSession, SessionProbe.Enumerate());
         uint? pending = _pendingMove.TryGetValue(record.SessionId, out uint seen) ? seen : null;
 
         var decision = DecideMove(record.Auto || record.FollowSignIn, record.WindowsSession,

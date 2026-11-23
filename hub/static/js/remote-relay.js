@@ -166,8 +166,8 @@
             // encoder producing another profile than the one before. Reconfiguring costs nothing
             // on a keyframe; feeding it to the old configuration may be a decode error and a
             // wasted round trip for another keyframe.
-            const codec = key
-                ? (opts.codec === 'vp8' ? 'vp8' : h264CodecString(record.payload)) : null;
+            let codec = null;
+            if (key) codec = opts.codec === 'vp8' ? 'vp8' : h264CodecString(record.payload);
             if (key && (!configured || codec !== configuredCodec)) {
                 // optimizeForLatency: no frame reordering buffer. The agent never emits B-frames,
                 // so there is nothing to reorder and every buffered frame is pure delay.

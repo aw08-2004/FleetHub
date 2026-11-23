@@ -727,33 +727,40 @@
             }
             if (!pc) return;
             try {
-                if (sig.kind === 'offer') {
-                    relayCapable = !!sig.payload?.relay;
-                    if (clipboard) clipboard.setCapable(!!sig.payload?.clipboard);
-                    await pc.setRemoteDescription({ type: 'offer', sdp: sig.payload.sdp });
-                    remoteSet = true;
-                    for (const ice of pendingIce) await addRemoteIce(ice);
-                    pendingIce = [];
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    await postSignal('answer', { type: 'answer', sdp: answer.sdp });
-                    armRelayTimer();
-                } else if (sig.kind === 'ice') {
-                    // RTCIceCandidate.type is only populated on candidates WE created, so the
-                    // agent's type is read off the SDP line: "... <ip> <port> typ <type> ...".
-                    const typed = /\btyp\s+(\w+)/.exec(sig.payload.candidate || '');
-                    if (typed) iceTypes.remote.add(typed[1]);
-                    const cand = {
-                        candidate: sig.payload.candidate,
-                        sdpMid: sig.payload.sdpMid,
-                        sdpMLineIndex: sig.payload.sdpMLineIndex,
-                    };
-                    if (remoteSet) await addRemoteIce(cand);
-                    else pendingIce.push(cand);
-                }
+                if (sig.kind === 'offer') await answerOffer(sig);
+                else if (sig.kind === 'ice') await takeAgentIce(sig);
             } catch (e) {
                 hint(t('machine.remote.signaling_error', { error: e.message }));
             }
+        }
+
+        /** The agent's offer, on the WebRTC path: answer it on the current peer. */
+        async function answerOffer(sig) {
+            relayCapable = !!sig.payload?.relay;
+            if (clipboard) clipboard.setCapable(!!sig.payload?.clipboard);
+            await pc.setRemoteDescription({ type: 'offer', sdp: sig.payload.sdp });
+            remoteSet = true;
+            for (const ice of pendingIce) await addRemoteIce(ice);
+            pendingIce = [];
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await postSignal('answer', { type: 'answer', sdp: answer.sdp });
+            armRelayTimer();
+        }
+
+        /** One trickled agent candidate: add it now, or hold it until the offer is set. */
+        async function takeAgentIce(sig) {
+            // RTCIceCandidate.type is only populated on candidates WE created, so the
+            // agent's type is read off the SDP line: "... <ip> <port> typ <type> ...".
+            const typed = /\btyp\s+(\w+)/.exec(sig.payload.candidate || '');
+            if (typed) iceTypes.remote.add(typed[1]);
+            const cand = {
+                candidate: sig.payload.candidate,
+                sdpMid: sig.payload.sdpMid,
+                sdpMLineIndex: sig.payload.sdpMLineIndex,
+            };
+            if (remoteSet) await addRemoteIce(cand);
+            else pendingIce.push(cand);
         }
 
         /** A NEW helper's offer on a session this viewer is already relaying (issue #170).
@@ -780,14 +787,20 @@
             if (clipboard) clipboard.setCapable(!!sig.payload?.clipboard);
             // A few tries rather than postSignal's one: unlike a trickled candidate, nothing
             // else ever re-sends this, and a lost one is the black screen all over again.
-            const id = sessionId;
-            const attempt = (left) => {
-                if (!running || sessionId !== id) return;
-                window.FleetApi.postJson(routes.signal(id),
-                    { kind: 'relay', payload: { reason: 'helper_restarted' } })
-                    .catch(() => { if (left > 0) setTimeout(() => attempt(left - 1), 1000); });
-            };
-            attempt(3);
+            postRelayAgain(sessionId, 3);
+        }
+
+        /** One try at re-sending `relay` for session `id`, then `left` more, 1 s apart. Gives up
+         *  quietly once the viewer has stopped or moved to another session. */
+        function postRelayAgain(id, left) {
+            if (!running || sessionId !== id) return;
+            window.FleetApi.postJson(routes.signal(id),
+                { kind: 'relay', payload: { reason: 'helper_restarted' } })
+                .catch(() => retryRelayAgain(id, left));
+        }
+
+        function retryRelayAgain(id, left) {
+            if (left > 0) setTimeout(postRelayAgain, 1000, id, left - 1);
         }
 
         /** Add one of the agent's candidates. A rejected candidate does not fail the session --
