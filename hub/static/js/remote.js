@@ -721,35 +721,86 @@
 
         async function handleSignal(sig) {
             if (sig.kind === 'bye') { teardown('muted'); return; }
+            if (sig.kind === 'offer' && (relay || relaySwitching)) {
+                rejoinRelay(sig);
+                return;
+            }
             if (!pc) return;
             try {
-                if (sig.kind === 'offer') {
-                    relayCapable = !!sig.payload?.relay;
-                    if (clipboard) clipboard.setCapable(!!sig.payload?.clipboard);
-                    await pc.setRemoteDescription({ type: 'offer', sdp: sig.payload.sdp });
-                    remoteSet = true;
-                    for (const ice of pendingIce) await addRemoteIce(ice);
-                    pendingIce = [];
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    await postSignal('answer', { type: 'answer', sdp: answer.sdp });
-                    armRelayTimer();
-                } else if (sig.kind === 'ice') {
-                    // RTCIceCandidate.type is only populated on candidates WE created, so the
-                    // agent's type is read off the SDP line: "... <ip> <port> typ <type> ...".
-                    const typed = /\btyp\s+(\w+)/.exec(sig.payload.candidate || '');
-                    if (typed) iceTypes.remote.add(typed[1]);
-                    const cand = {
-                        candidate: sig.payload.candidate,
-                        sdpMid: sig.payload.sdpMid,
-                        sdpMLineIndex: sig.payload.sdpMLineIndex,
-                    };
-                    if (remoteSet) await addRemoteIce(cand);
-                    else pendingIce.push(cand);
-                }
+                if (sig.kind === 'offer') await answerOffer(sig);
+                else if (sig.kind === 'ice') await takeAgentIce(sig);
             } catch (e) {
                 hint(t('machine.remote.signaling_error', { error: e.message }));
             }
+        }
+
+        /** The agent's offer, on the WebRTC path: answer it on the current peer. */
+        async function answerOffer(sig) {
+            relayCapable = !!sig.payload?.relay;
+            if (clipboard) clipboard.setCapable(!!sig.payload?.clipboard);
+            await pc.setRemoteDescription({ type: 'offer', sdp: sig.payload.sdp });
+            remoteSet = true;
+            for (const ice of pendingIce) await addRemoteIce(ice);
+            pendingIce = [];
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await postSignal('answer', { type: 'answer', sdp: answer.sdp });
+            armRelayTimer();
+        }
+
+        /** One trickled agent candidate: add it now, or hold it until the offer is set. */
+        async function takeAgentIce(sig) {
+            // RTCIceCandidate.type is only populated on candidates WE created, so the
+            // agent's type is read off the SDP line: "... <ip> <port> typ <type> ...".
+            const typed = /\btyp\s+(\w+)/.exec(sig.payload.candidate || '');
+            if (typed) iceTypes.remote.add(typed[1]);
+            const cand = {
+                candidate: sig.payload.candidate,
+                sdpMid: sig.payload.sdpMid,
+                sdpMLineIndex: sig.payload.sdpMLineIndex,
+            };
+            if (remoteSet) await addRemoteIce(cand);
+            else pendingIce.push(cand);
+        }
+
+        /** A NEW helper's offer on a session this viewer is already relaying (issue #170).
+         *
+         * The agent replaces its helper whenever the Windows session changes under it -- above
+         * all when the operator signs in at the logon screen -- and the replacement posts a
+         * fresh offer. It reads only the signals after that offer, on purpose (RemoteHelper.cs:
+         * an older answer would poison its new peer), so it never sees the `relay` signal this
+         * viewer sent its predecessor: it waits on WebRTC, this viewer has no peer to answer it
+         * with, and the screen sits black under "Live (via hub)" for good. Saying `relay` again
+         * is all the replacement needs -- it switches on any `relay` it reads -- and the hub
+         * takes a second one on an open relay without a second audit row (remote_web
+         * console_signal). Deliberately hub-side, so it reaches every PC without an agent
+         * release. The relay client is kept, not rebuilt: its cursor carries on into the new
+         * helper's frames, and the new helper starts on a keyframe.
+         *
+         * Also sent while the first switch is still in flight (relaySwitching), because which
+         * of the two signals the hub numbered first decides whether the replacement can see the
+         * original one, and a helper already relaying ignores a repeat. Rejected: answering the
+         * offer with a brand-new RTCPeerConnection -- the session fell back to the relay because
+         * WebRTC cannot find a path here, and a new peer would fail the same way after another
+         * RELAY_AFTER_MS of black screen. */
+        function rejoinRelay(sig) {
+            if (clipboard) clipboard.setCapable(!!sig.payload?.clipboard);
+            // A few tries rather than postSignal's one: unlike a trickled candidate, nothing
+            // else ever re-sends this, and a lost one is the black screen all over again.
+            postRelayAgain(sessionId, 3);
+        }
+
+        /** One try at re-sending `relay` for session `id`, then `left` more, 1 s apart. Gives up
+         *  quietly once the viewer has stopped or moved to another session. */
+        function postRelayAgain(id, left) {
+            if (!running || sessionId !== id) return;
+            window.FleetApi.postJson(routes.signal(id),
+                { kind: 'relay', payload: { reason: 'helper_restarted' } })
+                .catch(() => retryRelayAgain(id, left));
+        }
+
+        function retryRelayAgain(id, left) {
+            if (left > 0) setTimeout(postRelayAgain, 1000, id, left - 1);
         }
 
         /** Add one of the agent's candidates. A rejected candidate does not fail the session --

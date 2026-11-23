@@ -39,6 +39,7 @@ wires thin HTTP endpoints on top of these functions.
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import sqlite3
 import threading
@@ -1037,6 +1038,24 @@ def init_fleet_db(db_path):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts_id ON audit_log(ts, id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor_ts ON audit_log(actor, ts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_level_ts ON audit_log(level, ts)")
+        # One-off scrub of the TURN credentials pre-1.176.0 hubs wrote into issue_command rows
+        # (issue #199). Its own savepoint and a swallowed error, because a hub that cannot
+        # boot over a scrub is worse than one that still holds the rows -- read-time redaction
+        # (redact_audit_detail) keeps them off the console either way.
+        try:
+            conn.execute("SAVEPOINT scrub_ice")
+            scrubbed = scrub_audit_ice_credentials(conn)
+            conn.execute("RELEASE scrub_ice")
+            if scrubbed:
+                print(f"[audit] Removed TURN credentials from {scrubbed} issue_command row(s) "
+                      f"(issue #199)")
+        except sqlite3.Error as e:
+            try:
+                conn.execute("ROLLBACK TO scrub_ice")
+                conn.execute("RELEASE scrub_ice")
+            except sqlite3.Error:
+                pass
+            print(f"[audit] TURN credential scrub skipped: {e}")
 
 
 def _normalize_level(level, action):
@@ -1103,6 +1122,9 @@ def _decode_audit_row(row):
         # A row written before a serialization fix, or hand-edited. The audit line itself
         # is still evidence; losing the whole page over its payload would not be.
         d["detail"] = None
+    # Issue #199: a row written before 1.176.0 may still hold a TURN credential if the
+    # startup scrub never ran on this DB. Every reader comes through here.
+    d["detail"] = redact_audit_detail(d["action"], d["detail"])
     return d
 
 
@@ -2370,6 +2392,9 @@ def operator_view(command):
     stored row, because the agent fetches that row and does need the credential. Rejected: refusing the whole command to non-`remote_control`
     callers -- its status and result are what the machine page's command list shows everyone
     with `view`, and only these two fields were ever the problem.
+
+    Also applied by sharing_web's peer command status (a borrowing hub relays it to anyone
+    with `issue_commands`) and, through redact_audit_detail, to every audit row read back.
     """
     params = command.get("params") if command else None
     servers = params.get("ice_servers") if isinstance(params, dict) else None
@@ -2381,6 +2406,100 @@ def operator_view(command):
             server = {k: v for k, v in server.items() if k not in _ICE_SECRET_KEYS}
         redacted.append(server)
     return {**command, "params": {**params, "ice_servers": redacted}}
+
+
+# A `"username": "..."` / `"credential": "..."` pair inside the params TEXT of an audit row, for
+# the one case operator_view cannot reach: params cut at AUDIT_PARAMS_MAX_CHARS mid-object,
+# which no longer parses. The closing quote is optional because the cut can land inside the
+# value itself, and a half-credential is still most of one.
+_ICE_SECRET_TEXT = re.compile(
+    r'"(?:' + "|".join(_ICE_SECRET_KEYS) + r')":\s*"(?:[^"\\]|\\.)*(?:"\s*,?\s*|$)')
+
+
+def redact_audit_detail(action, detail):
+    """An audit row's decoded `detail` as the console may show it: an `issue_command` row's
+    params put through operator_view, so a TURN username and credential never come back out.
+
+    **Why this exists although create_command already redacts (issue #199).** Every
+    `issue_command` row written before hub 1.176.0 holds a start_remote_session's params
+    verbatim, credential included, and is readable by anyone holding `view_security_audit`.
+    scrub_audit_ice_credentials rewrites those rows once at startup; this is the second
+    layer, so that a DB the scrub never ran on -- a restored backup, a scrub that failed and
+    was logged -- still never shows one. Applied in _decode_audit_row, the one place audit rows
+    are turned into what a caller sees, rather than in audit_web, so the assistant's
+    `audit_log` tool and any later reader inherit it without having to remember to.
+
+    `detail["params"]` is a JSON *string*, cut at AUDIT_PARAMS_MAX_CHARS. Whole, it goes
+    through operator_view and back to the same sorted text create_command writes today; cut,
+    it falls back to _ICE_SECRET_TEXT over the part from `ice_servers` on, so a credential
+    that happened to land before the cut is not let through just because the JSON broke.
+    Only from `ice_servers` on: a `username` key elsewhere -- a user-management command's
+    own params -- is not a TURN secret and an audit row that hid it would be lying.
+    Returns `detail` itself (the same object) when there is nothing to redact, which is what
+    lets the scrub tell "changed" from "already clean" without comparing text.
+    """
+    if action != "issue_command" or not isinstance(detail, dict):
+        return detail
+    raw = detail.get("params")
+    if not isinstance(raw, str) or "ice_servers" not in raw:
+        return detail
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        servers = parsed.get("ice_servers")
+        if not isinstance(servers, list) or not any(
+                isinstance(s, dict) and any(k in s for k in _ICE_SECRET_KEYS) for s in servers):
+            return detail
+        cleaned = json.dumps(operator_view({"params": parsed})["params"], sort_keys=True)
+    else:
+        start = raw.index("ice_servers")
+        tail = _ICE_SECRET_TEXT.sub("", raw[start:])
+        if tail == raw[start:]:
+            return detail
+        # A pair removed from the end of an object leaves "..., }" behind; tidy it so what an
+        # operator reads is still recognisably the shape that was stored.
+        cleaned = raw[:start] + re.sub(r",\s*}", "}", tail)
+    return {**detail, "params": cleaned}
+
+
+def scrub_audit_ice_credentials(conn):
+    """Strip TURN usernames and credentials out of the `issue_command` rows written before
+    hub 1.176.0 (issue #199), in place. Returns how many rows were rewritten.
+
+    **The audit log is append-only, and this is the one deliberate exception.** Nothing in it
+    is hash-chained or signed -- there is no prev_hash, no tamper seal -- so rewriting a row's
+    detail breaks no integrity check, and leaving a working relay credential in a table that
+    every `view_security_audit` holder (and every DB backup) can read is the worse outcome.
+    Only the two secret keys go: actor, ts, target, command id, type and the relay URLs all
+    stay, which is the part of the row that is evidence. If the log ever gains a hash chain,
+    this function has to go and redact_audit_detail alone carries the guarantee.
+
+    Idempotent and cheap when there is nothing to do: the LIKE prefilter picks only rows that
+    still mention both `ice_servers` and a secret key, and a scrubbed row no longer matches,
+    so every boot after the first reads no row at all. Rejected: a migration-marker table to
+    skip even the scan -- fleet.db has no such table, and inventing one for a single LIKE over
+    one action was more schema than the problem.
+    """
+    rows = conn.execute(
+        "SELECT id, action, detail_json FROM audit_log WHERE action = 'issue_command' "
+        "AND detail_json LIKE '%ice\\_servers%' ESCAPE '\\' "
+        "AND (detail_json LIKE '%credential%' OR detail_json LIKE '%username%')"
+    ).fetchall()
+    rewritten = 0
+    for row in rows:
+        try:
+            detail = json.loads(row["detail_json"])
+        except (TypeError, ValueError):
+            continue
+        cleaned = redact_audit_detail(row["action"], detail)
+        if cleaned is detail:
+            continue
+        conn.execute("UPDATE audit_log SET detail_json = ? WHERE id = ?",
+                     (json.dumps(cleaned, sort_keys=True), row["id"]))
+        rewritten += 1
+    return rewritten
 
 
 # ================================

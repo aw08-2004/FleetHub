@@ -68,9 +68,15 @@ public sealed class StartRemoteSessionExecutor : ICommandExecutor
         // Track it so the supervisor can bring the helper back if its Windows session goes away
         // -- which is exactly what happens the moment the operator signs in at the logon screen
         // -- and, when the session was auto-selected, follow the interactive session if it moves
-        // to another one (switch user, RDP taking the console).
-        RemoteSessionSupervisor.Track(session.SessionId, session.ToJson(), result.Pid,
-                                      result.SessionId, auto: session.TargetSession is null);
+        // to another one (switch user, RDP taking the console). A session pinned to the console's
+        // logon screen follows the sign-in instead of staying behind on a desktop the sign-in
+        // abandons (issue #170) -- decided here, from where the helper actually landed, because
+        // "no user signed in" is only true until the operator signs in.
+        RemoteSessionSupervisor.Track(
+            session.SessionId, session.ToJson(), result.Pid, result.SessionId,
+            auto: session.TargetSession is null,
+            followSignIn: RemoteSessionSupervisor.FollowsSignIn(
+                session.TargetSession, result.SessionId, SessionProbe.Enumerate()));
 
         _log.LogInformation(
             "start_remote_session {SessionId}: helper launched pid={Pid} in session {Session}",
