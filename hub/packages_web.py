@@ -20,14 +20,6 @@ Three audiences, three gates:
     same as the rest of `/api/agent/*`. The digest must belong to a real package source,
     so this is not a general file host that happens to sit behind agent auth.
 
-  * **Agent, step progress** (`/api/agent/commands/<id>/progress`) -- bearer agent auth,
-    and the command must be a deployment this agent claimed and is still running (see
-    packages.record_step_progress). It lives here rather than in fleet_web.py beside the
-    output stream because what it records is a deployment's, and fleet.py knows nothing
-    of steps. It is in changes.UNMARKED_RULES and marks `deployments` itself, only when a
-    phase actually moved: the agent repeats its current event as a keepalive, and a notice
-    per keepalive would refetch every open progress view every few seconds for nothing.
-
 UPLOADS ARE THE ONE PLACE THIS FILE DEPARTS FROM THE JSON-BODY RULE. Everywhere else,
 reading the body with request.get_json(silent=True) is load-bearing CSRF protection --
 see fleet_web.py's module docstring, which applies here verbatim. A file upload cannot
@@ -72,33 +64,37 @@ def _bearer_agent(db_path):
     return agent_id, machine
 
 
-def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url="",
-                              on_change=None, wake_scheduler=None):
+def scoped_targets(access, machines):
+    """Validate every requested target against the caller's scope.
+
+    Returns (targets, error, status) -- all-or-nothing on purpose, see the module
+    docstring. An empty selection is a 400 (malformed request); an out-of-scope
+    machine is a 403 (well-formed, refused). Shared with deploy_progress_web.py, whose
+    Abort and Retry now take a selection of a deployment's machines the same way.
+    """
+    names = [str(m or "").strip() for m in (machines or [])]
+    names = [n for n in names if n]
+    if not names:
+        return None, "Select at least one machine.", 400
+    denied = [n for n in names if not access.in_scope(n)]
+    if denied:
+        return None, (f"You do not have access to {denied[0]!r}"
+                      + (f" and {len(denied) - 1} other machine(s)."
+                         if len(denied) > 1 else ".")), 403
+    return names, None, 200
+
+
+def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=""):
     """Build the packages Blueprint.
 
     `log_dir` is where the blob store lives (beside the database -- see
     packages.blob_root); `hub_url` is the public base the agent's download URL is built
     from. Both are passed in rather than imported from app.py, to avoid a circular import
     and because the test suite re-points them.
-
-    `on_change(topic, machine)` marks a change-notice topic from a route the after-request
-    hook deliberately skips (the progress POST). `wake_scheduler()` runs the deploy
-    scheduler's next pass now instead of at its interval, so an operator who presses Deploy,
-    Retry or Abort sees it act in a second rather than up to half a minute later. Both are
-    optional and never allowed to fail the request they ride on.
     """
     bp = Blueprint("packages", __name__)
     can_deploy = access.require(permissions.DEPLOY_PACKAGES)
-    can_deploy_on = access.require_machine(permissions.DEPLOY_PACKAGES)
     blob_dir = packages.blob_root(log_dir)
-
-    def _poke():
-        if wake_scheduler is None:
-            return
-        try:
-            wake_scheduler()
-        except Exception as e:                      # noqa: BLE001
-            print(f"[packages] could not wake the deploy scheduler: {e}")
 
     def _current_email():
         """The signed-in operator. ALWAYS from the authenticated identity -- never a
@@ -106,22 +102,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         return permissions_web.current_actor()
 
     def _scoped_targets(machines):
-        """Validate every requested target against the caller's scope.
-
-        Returns (targets, error, status) -- all-or-nothing on purpose, see the module
-        docstring. An empty selection is a 400 (malformed request); an out-of-scope
-        machine is a 403 (well-formed, refused).
-        """
-        names = [str(m or "").strip() for m in (machines or [])]
-        names = [n for n in names if n]
-        if not names:
-            return None, "Select at least one machine.", 400
-        denied = [n for n in names if not access.in_scope(n)]
-        if denied:
-            return None, (f"You do not have access to {denied[0]!r}"
-                          + (f" and {len(denied) - 1} other machine(s)."
-                             if len(denied) > 1 else ".")), 403
-        return names, None, 200
+        return scoped_targets(access, machines)
 
     # ---------------- Pages ----------------
     @bp.route("/packages")
@@ -324,7 +305,6 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
             return jsonify({"error": "unknown package"}), 404
         except ValueError as e:
             return refusals.refuse(e)
-        _poke()
         return jsonify(_visible_deployment(deployment_id)), 201
 
     def _visible_deployment(deployment_id):
@@ -402,101 +382,9 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
                 include_succeeded=include_succeeded)
         except KeyError:
             return jsonify({"error": "unknown deployment"}), 404
-        if requeued:
-            _poke()
         deployment = _visible_deployment(deployment_id)
         deployment["requeued"] = requeued
         return jsonify(deployment), 200
-
-    @bp.route("/api/deployments/<deployment_id>/retry-now", methods=["POST"])
-    @login_required
-    @can_deploy
-    def retry_deployment_now(deployment_id):
-        """Skip the retry backoff for these targets (packages.retry_now)."""
-        data = request.get_json(silent=True) or {}
-        targets, error, status = _scoped_targets(data.get("machines"))
-        if error:
-            return jsonify({"error": error}), status
-        try:
-            moved = packages.retry_now(db_path, deployment_id, targets, actor=_current_email())
-        except KeyError:
-            return jsonify({"error": "unknown deployment"}), 404
-        if moved:
-            _poke()
-        deployment = _visible_deployment(deployment_id)
-        deployment["moved"] = moved
-        return jsonify(deployment), 200
-
-    @bp.route("/api/deployments/<deployment_id>/abort", methods=["POST"])
-    @login_required
-    @can_deploy
-    def abort_deployment_targets(deployment_id):
-        """Stop these targets, running ones included (packages.abort_targets). Answers which
-        were cancelled, which are aborting, and which an older agent cannot be told to stop
-        -- so the console can say so instead of implying they were."""
-        data = request.get_json(silent=True) or {}
-        targets, error, status = _scoped_targets(data.get("machines"))
-        if error:
-            return jsonify({"error": error}), status
-        try:
-            outcome = packages.abort_targets(db_path, deployment_id, targets,
-                                             actor=_current_email())
-        except KeyError:
-            return jsonify({"error": "unknown deployment"}), 404
-        if outcome["aborting"]:
-            _poke()
-        deployment = _visible_deployment(deployment_id)
-        deployment["abort"] = outcome
-        return jsonify(deployment), 200
-
-    @bp.route("/api/deployments/<deployment_id>/targets/<machine>/steps/<phase>/"
-              "<int:ordinal>/output", methods=["GET"])
-    @login_required
-    @can_deploy_on
-    def deployment_step_output(deployment_id, machine, phase, ordinal):
-        """One step's output, PDQ's Output Log (packages.step_output). Gated on
-        `deploy_packages` AND the machine's scope -- not on `view` like the fleet terminal,
-        because this is reached from the deployment view, and an operator who can see a
-        deployment's row must not thereby read a machine they could not otherwise reach."""
-        try:
-            return jsonify(packages.step_output(
-                db_path, deployment_id, machine, phase, ordinal,
-                after_seq=request.args.get("after_seq", -1))), 200
-        except KeyError:
-            return jsonify({"error": "unknown deployment target"}), 404
-        except ValueError as e:
-            return refusals.refuse(e)
-
-    # ---------------- Agent: step progress ----------------
-    @bp.route("/api/agent/commands/<command_id>/progress", methods=["POST"])
-    def agent_command_progress(command_id):
-        """One phase transition of a running deployment -- see the module docstring and
-        packages.record_step_progress. The answer's `cancel` is the abort signal.
-
-        A 403 tells the agent the command is over (or not its own) and it stops reporting,
-        the same contract as the output stream's."""
-        agent_id, machine = _bearer_agent(db_path)
-        if agent_id is None:
-            return jsonify({"error": "agent authentication required"}), 401
-        data = request.get_json(silent=True) or {}
-        try:
-            recorded = packages.record_step_progress(
-                db_path, command_id, agent_id,
-                phase=data.get("phase"), ordinal=data.get("ordinal"),
-                state=data.get("state"), exit_code=data.get("exit_code"),
-                message=data.get("message"), out_seq=data.get("out_seq"))
-        except KeyError:
-            return jsonify({"error": "unknown command"}), 404
-        except PermissionError as e:
-            return refusals.refuse(e, 403)
-        except ValueError as e:
-            return refusals.refuse(e)
-        if recorded["changed"] and on_change is not None:
-            try:
-                on_change("deployments", recorded["machine"])
-            except Exception as e:                  # noqa: BLE001
-                print(f"[packages] could not mark a progress change: {e}")
-        return jsonify({"status": "ok", "cancel": recorded["cancel"]}), 200
 
     # ---------------- Agent: payload download ----------------
     @bp.route("/api/agent/packages/<sha256>", methods=["GET"])

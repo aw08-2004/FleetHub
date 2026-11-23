@@ -33,6 +33,7 @@ import packages
 import permissions
 import settings
 from flask import Flask
+from deploy_progress_web import create_deploy_progress_blueprint
 from packages_web import create_packages_blueprint
 from permissions_web import create_access
 
@@ -425,14 +426,15 @@ def web_tests(workdir):
         capabilities=[permissions.VIEW, permissions.DEPLOY_PACKAGES],
         machines=["HOSPITAL-1"], members=["hospital@x.com"], actor="root@x.com")
 
-    marks, pokes = [], []
+    marks = []
+    access = create_access(db_path, {"root@x.com"})
     app = Flask(__name__)
     app.secret_key = "test"
     app.register_blueprint(create_packages_blueprint(
-        db_path, log_dir, fake_login_required, create_access(db_path, {"root@x.com"}),
-        hub_url="https://hub.example.com",
-        on_change=lambda topic, machine: marks.append((topic, machine)),
-        wake_scheduler=lambda: pokes.append(1)))
+        db_path, log_dir, fake_login_required, access, hub_url="https://hub.example.com"))
+    app.register_blueprint(create_deploy_progress_blueprint(
+        db_path, fake_login_required, access,
+        on_change=lambda topic, machine: marks.append((topic, machine))))
 
     @app.before_request
     def _seed_session():
@@ -442,10 +444,12 @@ def web_tests(workdir):
     c = app.test_client()
     pkg = stepped_package(db_path)
 
-    print("\n== HTTP: deploy, and the scheduler is woken ==")
+    print("\n== HTTP: deploy ==")
     r = c.post("/api/deployments", json={"package_id": pkg, "machines": ["HOSPITAL-1", "HR-1"]})
     dep = r.get_json()["id"]
-    check("creating a deployment wakes the scheduler", r.status_code == 201 and pokes)
+    check("a deployment is created", r.status_code == 201)
+    check("the progress blueprint marks the deployments topic",
+          changes.BLUEPRINT_TOPICS.get("deploy_progress") == "deployments")
     check("a target answers with its stage and steps",
           r.get_json()["targets"][0]["stage"] == "queued"
           and "steps" in r.get_json()["targets"][0])
@@ -519,7 +523,6 @@ def web_tests(workdir):
 
     print("\n== HTTP: abort ==")
     set_version(db_path, "HOSPITAL-1", "3.53.0")
-    pokes.clear()
     r = c.post(f"/api/deployments/{dep}/abort", json={"machines": ["HOSPITAL-1"]})
     check("aborting a pending target answers with the outcome",
           r.status_code == 200 and r.get_json()["abort"]["cancelled"] == ["HOSPITAL-1"])

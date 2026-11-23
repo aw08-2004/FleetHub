@@ -1065,7 +1065,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IProgressSink, IPack
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                                        or JsonException or InvalidOperationException)
         {
-            _log.LogDebug("Progress post for {Id} failed: {Msg}", commandId, ex.Message);
+            _log.LogDebug(ex, "Progress post for {Id} failed", commandId);
             return new ProgressPostResult(Ok: false, Cancel: false, Gone: false);
         }
     }

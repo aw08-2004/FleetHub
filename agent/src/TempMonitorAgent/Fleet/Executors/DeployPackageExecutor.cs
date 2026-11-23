@@ -150,7 +150,8 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             if (multiStep)
             {
                 ran = await PackageStepRunner.RunAllAsync(
-                    steps!, vars, timeout, successCodes, Say, Emit, ct, phases);
+                    steps!, vars, new PackageStepRunner.StepDefaults(timeout, successCodes),
+                    Say, Emit, phases, ct);
             }
             else
             {

@@ -1294,7 +1294,7 @@ function stepStateLabel(state) {
 }
 
 function versionAtLeast(version, minimum) {
-    const parse = (v) => (String(v || '').match(/^\s*(\d+)\.(\d+)\.(\d+)/) || []).slice(1).map(Number);
+    const parse = (v) => (/^\s*(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')) || []).slice(1).map(Number);
     const a = parse(version);
     const b = parse(minimum);
     if (a.length !== 3) return false;
@@ -1430,7 +1430,7 @@ function toggleLog(machine, step) {
         text: '', nextSeq: -1, done: false, expired: false,
     };
     if (progressDeployment) renderProgress(progressDeployment);
-    if (openLog) pollLog();
+    if (openLog) void pollLog();
 }
 
 async function pollLog() {
@@ -1444,7 +1444,7 @@ async function pollLog() {
             + `${log.ordinal}/output?after_seq=${log.nextSeq}`);
         if (log !== openLog) return;      // closed or switched while this was in flight
         log.text += (doc.chunks || []).map((c) => c.text).join('');
-        if (doc.chunks && doc.chunks.length) log.nextSeq = doc.next_seq - 1;
+        if (doc.chunks?.length) log.nextSeq = doc.next_seq - 1;
         log.done = !!doc.done;
         log.expired = !!doc.expired;
         const pre = document.getElementById('pkg-step-log-text');
@@ -1648,7 +1648,7 @@ async function openProgress(deploymentId) {
     progressModal.showModal();
     await refreshProgress();
     // One machine is the common case (a deploy to one PC): open its steps straight away.
-    if (progressDeployment && progressDeployment.targets.length === 1
+    if (progressDeployment?.targets.length === 1
         && !expandedTargets.size) {
         expandedTargets.add(progressDeployment.targets[0].machine);
         renderProgress(progressDeployment);

@@ -93,6 +93,7 @@ from invites_web import create_invites_blueprint
 from onboarding_web import create_onboarding_blueprint
 from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
+from deploy_progress_web import create_deploy_progress_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from recordings_web import create_recordings_blueprint
@@ -2611,9 +2612,14 @@ app.register_blueprint(create_audit_blueprint(DB_PATH, login_required, access))
 # handed in because the blob store lives beside the database (see packages.blob_root),
 # and HUB_URL because the agent's download URL has to be absolute.
 app.register_blueprint(create_packages_blueprint(
-    DB_PATH, LOG_DIR, login_required, access, hub_url=HUB_URL,
+    DB_PATH, LOG_DIR, login_required, access, hub_url=HUB_URL
+))
+# A running deployment: the agent's step events, a step's log, Abort and Retry now (roadmap
+# #5). on_change because its progress route marks `deployments` itself, and only when a step
+# moved -- see deploy_progress_web.py.
+app.register_blueprint(create_deploy_progress_blueprint(
+    DB_PATH, login_required, access,
     on_change=lambda topic, machine: mark_changed(topic, machine),
-    wake_scheduler=lambda: wake_deploy_scheduler(),
 ))
 # Package building for the assistant (roadmap #26): public web reads, winget lookups and
 # installer downloads into <LOG_DIR>/staging. Ordinary routes, so the assistant reaches them
@@ -7600,6 +7606,31 @@ def _mark_changes(response):
                 mark_changed(topic, machine)
     except Exception as e:
         print(f"[changes] after-request mark failed: {e}")
+    return response
+
+
+# The blueprints whose successful console writes can make a target due NOW: a new deployment,
+# a retry or redeploy, Retry now, Abort (packages, deploy_progress).
+_DEPLOY_WAKE_BLUEPRINTS = frozenset({"packages", "deploy_progress"})
+
+
+@app.after_request
+def _wake_deploys(response):
+    """Run the deploy scheduler's next pass now after an operator acts on a deployment, so
+    Deploy, Retry or Abort shows its effect in a second rather than up to half a minute
+    later. One hook here rather than a callback threaded into each route, for the reason
+    _mark_changes is one hook. Agent traffic (`/api/agent/...`: payload downloads, step
+    keepalives) is excluded -- a deploy RESULT wakes the scheduler from _on_command_result,
+    and a keepalive every ten seconds per running machine must not drive extra passes.
+    """
+    try:
+        if (request.blueprint in _DEPLOY_WAKE_BLUEPRINTS
+                and request.method == "POST"
+                and not request.path.startswith("/api/agent/")
+                and 200 <= response.status_code < 300):
+            wake_deploy_scheduler()
+    except Exception as e:
+        print(f"[deploy] after-request wake failed: {e}")
     return response
 
 

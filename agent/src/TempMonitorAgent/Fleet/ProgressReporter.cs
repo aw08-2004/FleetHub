@@ -61,7 +61,9 @@ public sealed class ProgressReporter : IStepProgress, IAsyncDisposable
         _log = log;
         _keepaliveMillis = keepaliveMillis;
         _abort = CancellationTokenSource.CreateLinkedTokenSource(parent);
-        _pump = Task.Run(PumpAsync);
+        // Its own lifetime, ended by CompleteAsync -- not the command's token, which an
+        // abort cancels while the final events still have to be posted.
+        _pump = Task.Run(PumpAsync, CancellationToken.None);
     }
 
     /// <summary>The token to run the executor under: cancelled by the service stopping,
@@ -90,7 +92,7 @@ public sealed class ProgressReporter : IStepProgress, IAsyncDisposable
         catch (Exception ex)
         {
             // Never into the executor: narration must not break the install it narrates.
-            _log.LogDebug("Progress report for {Id} dropped: {Msg}", _commandId, ex.Message);
+            _log.LogDebug(ex, "Progress report for {Id} dropped", _commandId);
         }
     }
 
@@ -106,8 +108,15 @@ public sealed class ProgressReporter : IStepProgress, IAsyncDisposable
             _completed = true;
             _running = null;
         }
-        _stop.Cancel();
-        try { await _pump.WaitAsync(ct); } catch (OperationCanceledException) { }
+        await _stop.CancelAsync();
+        try
+        {
+            await _pump.WaitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // The caller gave up waiting for the pump; the drain below still runs.
+        }
         await DrainAsync(CancellationToken.None);
     }
 
@@ -172,7 +181,7 @@ public sealed class ProgressReporter : IStepProgress, IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _log.LogDebug("Progress post threw for {Id}: {Msg}", _commandId, ex.Message);
+                _log.LogDebug(ex, "Progress post threw for {Id}", _commandId);
                 result = new ProgressPostResult(Ok: false, Cancel: false, Gone: false);
             }
 

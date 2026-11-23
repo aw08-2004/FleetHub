@@ -31,25 +31,39 @@ public static class PackageStepRunner
 {
     /// <summary>What one step did. `Continue` is separate from `Succeeded` because a step
     /// marked continue_on_error can fail and still let the deploy proceed -- and the log
-    /// has to say both things happened.</summary>
+    /// has to say both things happened.
     ///
     /// `ExitCode` and `Why` are what the console's step list shows beside a red step (PDQ's
-    /// "More Info"); null where there was no process, or nothing went wrong.
+    /// "More Info"); null where there was no process, or nothing went wrong.</summary>
     public readonly record struct StepOutcome(
         bool Succeeded, bool Continue, int? ExitCode = null, string? Why = null,
         bool Aborted = false);
 
     /// <summary>Run every step in order. Returns false as soon as one fails without
-    /// `continue_on_error` set, or the run is cancelled.
-    ///
-    /// <paramref name="phases"/> hears each step start and end. A cancelled run is never
-    /// "carried on" past, whatever the step's continue_on_error says: that flag is for a
-    /// step that failed, and an operator's Abort is not a failure to tolerate.</summary>
-    public static async Task<bool> RunAllAsync(
+    /// `continue_on_error` set, or the run is cancelled.</summary>
+    public static Task<bool> RunAllAsync(
         JsonArray steps, PackageVariables vars, int defaultTimeout,
         IReadOnlyCollection<int> defaultExitCodes, Action<string> say, Action<string> emit,
-        CancellationToken ct, PhaseTracker? phases = null)
+        CancellationToken ct) =>
+        RunAllAsync(steps, vars, new StepDefaults(defaultTimeout, defaultExitCodes),
+                    say, emit, null, ct);
+
+    /// <summary>The package-wide timeout and exit codes a step falls back to when it sets
+    /// neither. One value so RunAllAsync stays within a readable parameter list.</summary>
+    public readonly record struct StepDefaults(int Timeout, IReadOnlyCollection<int> ExitCodes);
+
+    /// <summary>As above, with <paramref name="phases"/> told about each step as it starts
+    /// and ends (see IStepProgress) -- what DeployPackageExecutor calls.
+    ///
+    /// A cancelled run is never "carried on" past, whatever the step's continue_on_error
+    /// says: that flag is for a step that failed, and an operator's Abort is not a failure
+    /// to tolerate.</summary>
+    public static async Task<bool> RunAllAsync(
+        JsonArray steps, PackageVariables vars, StepDefaults defaults,
+        Action<string> say, Action<string> emit, PhaseTracker? phases, CancellationToken ct)
     {
+        var defaultTimeout = defaults.Timeout;
+        var defaultExitCodes = defaults.ExitCodes;
         var index = 0;
         foreach (var node in steps)
         {

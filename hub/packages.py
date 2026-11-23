@@ -1579,6 +1579,19 @@ def get_deployment(db_path, deployment_id, now=None):
     return deployment
 
 
+UNKNOWN_DEPLOYMENT = "unknown deployment"
+
+
+def _deployment_status(conn, deployment_id):
+    """A deployment's status, or KeyError when there is no such deployment -- the one
+    check every operator action on a deployment starts with."""
+    row = conn.execute(
+        "SELECT status FROM deployments WHERE id = ?", (str(deployment_id),)).fetchone()
+    if row is None:
+        raise KeyError(UNKNOWN_DEPLOYMENT)
+    return row["status"]
+
+
 def cancel_deployment(db_path, deployment_id, actor="system"):
     """Stop a deployment. Targets that haven't reached a terminal state become
     `cancelled`; ones already in flight are left alone.
@@ -1591,11 +1604,7 @@ def cancel_deployment(db_path, deployment_id, actor="system"):
     """
     now = int(time.time())
     with get_conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT status FROM deployments WHERE id = ?", (str(deployment_id),)).fetchone()
-        if row is None:
-            raise KeyError("unknown deployment")
-        if row["status"] == DEPLOY_COMPLETE:
+        if _deployment_status(conn, deployment_id) == DEPLOY_COMPLETE:
             raise ValueError("that deployment has already finished")
         conn.execute(
             "UPDATE deployment_targets SET status = ?, updated_at = ? "
@@ -1638,10 +1647,7 @@ def retry_deployment_failures(db_path, deployment_id, actor="system", machines=N
         clauses.append(f"machine IN ({','.join('?' for _ in names)})")
         params.extend(names)
     with get_conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT status FROM deployments WHERE id = ?", (str(deployment_id),)).fetchone()
-        if row is None:
-            raise KeyError("unknown deployment")
+        _deployment_status(conn, deployment_id)
         cur = conn.execute(
             "UPDATE deployment_targets SET status = ?, attempts = 0, next_attempt_at = ?, "
             "last_error = NULL, abort_requested_at = NULL, abort_requested_by = NULL, "
@@ -1657,8 +1663,13 @@ def retry_deployment_failures(db_path, deployment_id, actor="system", machines=N
     if requeued:
         fleet.audit(db_path, actor=actor, action="retry_deployment",
                     level=fleet.LEVEL_SECURITY, target=deployment_id,
+                    # An operator's SELECTION is worth naming; a scope list is
+                    # the operator's whole reach, so a count says enough there.
                     detail={"requeued": requeued,
-                            "machines": list(machines) if machines is not None else None,
+                            "machines": (list(machines) if include_succeeded
+                                         and machines is not None else None),
+                            "scope_size": (len(machines) if not include_succeeded
+                                           and machines is not None else None),
                             "include_succeeded": bool(include_succeeded)})
     return requeued
 
@@ -1679,9 +1690,7 @@ def retry_now(db_path, deployment_id, machines, actor="system", now=None):
     if not names:
         return 0
     with get_conn(db_path) as conn:
-        if conn.execute("SELECT 1 FROM deployments WHERE id = ?",
-                        (str(deployment_id),)).fetchone() is None:
-            raise KeyError("unknown deployment")
+        _deployment_status(conn, deployment_id)
         cur = conn.execute(
             "UPDATE deployment_targets SET next_attempt_at = ?, updated_at = ? "
             "WHERE deployment_id = ? AND status = ? AND attempts > 0 "
@@ -1694,6 +1703,30 @@ def retry_now(db_path, deployment_id, machines, actor="system", now=None):
                     level=fleet.LEVEL_NOTICE, target=deployment_id,
                     detail={"machines": names, "moved": moved})
     return moved
+
+
+def _plan_abort(targets, commands, versions):
+    """Sort abort targets into what happens to each -- see abort_targets. Pure, so the
+    decision is one place and the writes that follow it another."""
+    plan = {"cancel": [], "flag": [], "unclaimed": [], "unsupported": [], "skipped": []}
+    for target in targets:
+        machine = target["machine"]
+        command = commands.get(target["command_id"])
+        if target["status"] == TARGET_PENDING:
+            plan["cancel"].append(machine)
+        elif target["status"] != TARGET_IN_FLIGHT:
+            plan["skipped"].append(machine)
+        elif command is not None and command["status"] == fleet.STATUS_PENDING:
+            plan["flag"].append(machine)
+            plan["unclaimed"].append(command["id"])
+        elif command is None or _version_at_least(versions.get(machine), MIN_PROGRESS_AGENT):
+            # `command is None` is the instant between the scheduler claiming the target and
+            # queueing its command. Flagging it is right: the command lands, and either the
+            # retire above or the agent's first progress POST stops it.
+            plan["flag"].append(machine)
+        else:
+            plan["unsupported"].append(machine)
+    return plan
 
 
 def abort_targets(db_path, deployment_id, machines, actor="system", now=None):
@@ -1725,9 +1758,7 @@ def abort_targets(db_path, deployment_id, machines, actor="system", now=None):
     if not names:
         return outcome
     with get_conn(db_path) as conn:
-        if conn.execute("SELECT 1 FROM deployments WHERE id = ?",
-                        (str(deployment_id),)).fetchone() is None:
-            raise KeyError("unknown deployment")
+        _deployment_status(conn, deployment_id)
         targets = [dict(r) for r in conn.execute(
             "SELECT machine, status, command_id FROM deployment_targets "
             f"WHERE deployment_id = ? AND machine IN ({','.join('?' for _ in names)})",
@@ -1736,25 +1767,10 @@ def abort_targets(db_path, deployment_id, machines, actor="system", now=None):
                                [t["command_id"] for t in targets if t["command_id"]])
         versions = _agent_versions(conn, [t["machine"] for t in targets])
 
-    to_cancel, to_flag, unclaimed = [], [], []
-    for target in targets:
-        machine = target["machine"]
-        command = commands.get(target["command_id"])
-        if target["status"] == TARGET_PENDING:
-            to_cancel.append(machine)
-        elif target["status"] != TARGET_IN_FLIGHT:
-            outcome["skipped"].append(machine)
-        elif command is not None and command["status"] == fleet.STATUS_PENDING:
-            to_flag.append(machine)
-            unclaimed.append(command["id"])
-        elif _version_at_least(versions.get(machine), MIN_PROGRESS_AGENT) or command is None:
-            # `command is None` is the instant between the scheduler claiming the target and
-            # queueing its command. Flagging it is right: the command lands, and either the
-            # retire below or the agent's first progress POST stops it.
-            to_flag.append(machine)
-        else:
-            outcome["unsupported"].append(machine)
-
+    plan = _plan_abort(targets, commands, versions)
+    outcome["skipped"] = plan["skipped"]
+    outcome["unsupported"] = plan["unsupported"]
+    to_cancel, to_flag = plan["cancel"], plan["flag"]
     if to_cancel or to_flag:
         with get_conn(db_path) as conn:
             for machine in to_cancel:
@@ -1771,7 +1787,7 @@ def abort_targets(db_path, deployment_id, machines, actor="system", now=None):
                     (now, str(actor), now, str(deployment_id), machine, TARGET_IN_FLIGHT))
             _refresh_deployment_status(conn, str(deployment_id), now)
     # Outside the transaction above: fleet writes on its own connection (see SCHEDULER).
-    for command_id in unclaimed:
+    for command_id in plan["unclaimed"]:
         fleet.cancel_command_if_pending(db_path, command_id)
 
     outcome["cancelled"] = to_cancel
@@ -1825,6 +1841,35 @@ def _rows_by_id(conn, sql, ids):
     return {r["id"]: dict(r) for r in _select_in(conn, sql, sorted({i for i in ids if i}))}
 
 
+def _skeleton_sources(params):
+    """The payload list as the agent resolves it: `sources`, else a legacy single `source`
+    that is not the `multi` marker (DeployPackageExecutor.ResolveSourceList)."""
+    sources = params.get("sources")
+    if isinstance(sources, list):
+        return sources
+    legacy = params.get("source")
+    return [legacy] if isinstance(legacy, dict) and legacy.get("kind") != "multi" else []
+
+
+def _skeleton_steps(params):
+    steps = params.get("steps")
+    if isinstance(steps, list) and steps:
+        entries = []
+        for ordinal, step in enumerate(steps, start=1):
+            step = step if isinstance(step, dict) else {}
+            entries.append({"phase": PHASE_STEP, "ordinal": ordinal,
+                            "kind": step.get("kind") or "", "label": step.get("name") or ""})
+        return entries
+    # Only the program, never its arguments: those can carry a licence key, and this
+    # label is shown to anyone who can read the deployment.
+    return [{"phase": PHASE_STEP, "ordinal": 1, "kind": "command",
+             "label": os.path.basename(str(params.get("install_command") or ""))}]
+
+
+def _download_label(source):
+    return source.get("file_name") or source.get("ref") or source.get("name") or ""
+
+
 def progress_skeleton(params):
     """The phases one `deploy_package` command will report, in order, from its own params.
 
@@ -1834,32 +1879,83 @@ def progress_skeleton(params):
     steps are `params.steps`, or the one command line as step 1 of 1; detection is once.
     """
     params = params if isinstance(params, dict) else {}
-    sources = params.get("sources")
-    if not isinstance(sources, list):
-        legacy = params.get("source")
-        sources = [legacy] if isinstance(legacy, dict) and legacy.get("kind") != "multi" else []
-    entries = []
-    downloads = [s for s in sources
+    downloads = [s for s in _skeleton_sources(params)
                  if isinstance(s, dict) and s.get("kind") in FILE_SOURCE_KINDS]
-    for ordinal, source in enumerate(downloads, start=1):
-        entries.append({
-            "phase": PHASE_DOWNLOAD, "ordinal": ordinal, "kind": source.get("kind"),
-            "label": source.get("file_name") or source.get("ref") or source.get("name") or ""})
-    steps = params.get("steps")
-    if isinstance(steps, list) and steps:
-        for ordinal, step in enumerate(steps, start=1):
-            step = step if isinstance(step, dict) else {}
-            entries.append({"phase": PHASE_STEP, "ordinal": ordinal,
-                            "kind": step.get("kind") or "", "label": step.get("name") or ""})
-    else:
-        # Only the program, never its arguments: those can carry a licence key, and this
-        # label is shown to anyone who can read the deployment.
-        entries.append({"phase": PHASE_STEP, "ordinal": 1, "kind": "command",
-                        "label": os.path.basename(str(params.get("install_command") or ""))})
+    entries = [{"phase": PHASE_DOWNLOAD, "ordinal": ordinal, "kind": source.get("kind"),
+                "label": _download_label(source)}
+               for ordinal, source in enumerate(downloads, start=1)]
+    entries.extend(_skeleton_steps(params))
     detection = params.get("detection") if isinstance(params.get("detection"), dict) else {}
     entries.append({"phase": PHASE_DETECT, "ordinal": 1,
                     "kind": detection.get("kind") or DETECT_NONE, "label": ""})
     return entries
+
+
+def _clean_progress(phase, ordinal, state, exit_code, out_seq, message):
+    """Validate one progress event; returns (ordinal, exit_code, out_seq, message)."""
+    if phase not in PHASES:
+        raise ValueError(f"unknown phase: {phase!r}")
+    if state not in STEP_STATES:
+        raise ValueError(f"unknown step state: {state!r}")
+    try:
+        ordinal = int(ordinal)
+    except (TypeError, ValueError):
+        raise ValueError("ordinal must be an integer")
+    if not (1 <= ordinal <= MAX_STEPS):
+        raise ValueError(f"ordinal must be between 1 and {MAX_STEPS}")
+    exit_code = _optional_int(exit_code, "exit_code")
+    out_seq = _optional_int(out_seq, "out_seq")
+    if out_seq is not None and out_seq < 0:
+        raise ValueError("out_seq must be non-negative")
+    message = str(message)[:MAX_PROGRESS_MESSAGE_CHARS] if message else None
+    return ordinal, exit_code, out_seq, message
+
+
+def _progress_command(conn, command_id, agent_id):
+    """The command a progress event is about, if this agent may write it -- the rules of
+    fleet.append_command_output, plus: it must be a deployment."""
+    command = conn.execute(
+        "SELECT machine, type, status, claimed_by FROM commands WHERE id = ?",
+        (command_id,)).fetchone()
+    if command is None:
+        raise KeyError("unknown command")
+    if command["claimed_by"] != str(agent_id):
+        raise PermissionError("command was not claimed by this agent")
+    if command["type"] != COMMAND_TYPE:
+        raise PermissionError("progress is only recorded for package deployments")
+    if command["status"] != fleet.STATUS_CLAIMED:
+        raise PermissionError(f"command is {command['status']}, not accepting progress")
+    return command
+
+
+def _write_step(conn, command_id, phase, ordinal, event, now):
+    """Apply one event to its row; returns whether anything moved. A first sighting moves,
+    and so does a running phase reaching its end. A repeat (running -> running, the
+    keepalive) or a late event for a phase already finished changes nothing: monotonic.
+    `event` is (state, exit_code, message, out_seq)."""
+    state, exit_code, message, out_seq = event
+    existing = conn.execute(
+        "SELECT state FROM deployment_target_steps "
+        "WHERE command_id = ? AND phase = ? AND ordinal = ?",
+        (command_id, phase, ordinal)).fetchone()
+    terminal = state in STEP_TERMINAL
+    if existing is None:
+        conn.execute(
+            "INSERT INTO deployment_target_steps(command_id, phase, ordinal, state, "
+            "exit_code, message, started_at, finished_at, out_from_seq, out_to_seq, "
+            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (command_id, phase, ordinal, state, exit_code, message,
+             None if terminal else now, now if terminal else None,
+             None if terminal else out_seq, out_seq if terminal else None, now))
+        return True
+    if existing["state"] == STEP_RUNNING and terminal:
+        conn.execute(
+            "UPDATE deployment_target_steps SET state = ?, exit_code = ?, message = ?, "
+            "finished_at = ?, out_to_seq = ?, updated_at = ? "
+            "WHERE command_id = ? AND phase = ? AND ordinal = ?",
+            (state, exit_code, message, now, out_seq, now, command_id, phase, ordinal))
+        return True
+    return False
 
 
 def record_step_progress(db_path, command_id, agent_id, *, phase, ordinal, state,
@@ -1880,63 +1976,15 @@ def record_step_progress(db_path, command_id, agent_id, *, phase, ordinal, state
 
     `cancel` is the abort signal -- see abort_targets.
     """
-    if phase not in PHASES:
-        raise ValueError(f"unknown phase: {phase!r}")
-    if state not in STEP_STATES:
-        raise ValueError(f"unknown step state: {state!r}")
-    try:
-        ordinal = int(ordinal)
-    except (TypeError, ValueError):
-        raise ValueError("ordinal must be an integer")
-    if not (1 <= ordinal <= MAX_STEPS):
-        raise ValueError(f"ordinal must be between 1 and {MAX_STEPS}")
-    exit_code = _optional_int(exit_code, "exit_code")
-    out_seq = _optional_int(out_seq, "out_seq")
-    if out_seq is not None and out_seq < 0:
-        raise ValueError("out_seq must be non-negative")
-    message = (str(message)[:MAX_PROGRESS_MESSAGE_CHARS] if message else None)
+    ordinal, exit_code, out_seq, message = _clean_progress(
+        phase, ordinal, state, exit_code, out_seq, message)
     if now is None:
         now = int(time.time())
-
     command_id = str(command_id)
     with get_conn(db_path) as conn:
-        command = conn.execute(
-            "SELECT machine, type, status, claimed_by FROM commands WHERE id = ?",
-            (command_id,)).fetchone()
-        if command is None:
-            raise KeyError("unknown command")
-        if command["claimed_by"] != str(agent_id):
-            raise PermissionError("command was not claimed by this agent")
-        if command["type"] != COMMAND_TYPE:
-            raise PermissionError("progress is only recorded for package deployments")
-        if command["status"] != fleet.STATUS_CLAIMED:
-            raise PermissionError(f"command is {command['status']}, not accepting progress")
-
-        existing = conn.execute(
-            "SELECT state FROM deployment_target_steps "
-            "WHERE command_id = ? AND phase = ? AND ordinal = ?",
-            (command_id, phase, ordinal)).fetchone()
-        terminal = state in STEP_TERMINAL
-        changed = False
-        if existing is None:
-            conn.execute(
-                "INSERT INTO deployment_target_steps(command_id, phase, ordinal, state, "
-                "exit_code, message, started_at, finished_at, out_from_seq, out_to_seq, "
-                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (command_id, phase, ordinal, state, exit_code, message,
-                 None if terminal else now, now if terminal else None,
-                 None if terminal else out_seq, out_seq if terminal else None, now))
-            changed = True
-        elif existing["state"] == STEP_RUNNING and terminal:
-            conn.execute(
-                "UPDATE deployment_target_steps SET state = ?, exit_code = ?, message = ?, "
-                "finished_at = ?, out_to_seq = ?, updated_at = ? "
-                "WHERE command_id = ? AND phase = ? AND ordinal = ?",
-                (state, exit_code, message, now, out_seq, now, command_id, phase, ordinal))
-            changed = True
-        # Anything else is a repeat (running -> running, the keepalive) or a late event for
-        # a phase already finished: monotonic, so nothing moves.
-
+        command = _progress_command(conn, command_id, agent_id)
+        changed = _write_step(conn, command_id, phase, ordinal,
+                              (state, exit_code, message, out_seq), now)
         abort = conn.execute(
             "SELECT 1 FROM deployment_targets WHERE command_id = ? "
             "AND abort_requested_at IS NOT NULL LIMIT 1", (command_id,)).fetchone()
@@ -1985,6 +2033,42 @@ def _stage(target, command, deployment, now):
     return STAGE_FINISHING
 
 
+def _target_steps(command, reported):
+    """The step list for one target's attempt: the skeleton from the command's params, each
+    entry filled in from what the agent reported."""
+    if command is None:
+        return []
+    try:
+        params = json.loads(command["params_json"] or "{}")
+    except ValueError:
+        params = {}
+    steps = []
+    for entry in progress_skeleton(params):
+        row = reported.get((command["id"], entry["phase"], entry["ordinal"])) or {}
+        entry.update({key: row.get(key) for key in (
+            "state", "exit_code", "message", "started_at", "finished_at")})
+        entry["has_output"] = row.get("out_from_seq") is not None
+        steps.append(entry)
+    return steps
+
+
+_STEP_SUMMARY_KEYS = ("phase", "ordinal", "label", "kind", "state")
+
+
+def _summarise_steps(target, steps):
+    """The furthest phase the agent has reached, and the first one that went wrong -- the
+    "step 3 of 5" and the "More Info" of the PDQ view."""
+    target["steps"] = steps
+    target["step_total"] = sum(1 for s in steps if s["phase"] == PHASE_STEP)
+    reached = [s for s in steps if s.get("state")]
+    target["current_step"] = (
+        {key: reached[-1][key] for key in _STEP_SUMMARY_KEYS} if reached else None)
+    failed = next((s for s in steps if s.get("state") in (STEP_FAILED, STEP_ABORTED)), None)
+    target["failed_step"] = (
+        {key: failed[key] for key in _STEP_SUMMARY_KEYS + ("exit_code", "message")}
+        if failed else None)
+
+
 def _attach_progress(conn, deployment, now):
     """Give every target of `deployment` its live stage and step list, in place.
 
@@ -1992,17 +2076,15 @@ def _attach_progress(conn, deployment, now):
     has a row per machine and the progress view re-reads it every couple of seconds.
     """
     targets = deployment["targets"]
-    command_ids = [t["command_id"] for t in targets if t.get("command_id")]
+    command_ids = sorted({t["command_id"] for t in targets if t.get("command_id")})
     commands = _rows_by_id(
         conn, "SELECT id, status, claimed_at, params_json FROM commands WHERE id IN ({})",
         command_ids)
     finished = {r["command_id"]: r["completed_at"] for r in _select_in(
         conn, "SELECT command_id, completed_at FROM command_results WHERE command_id IN ({})",
-        sorted(set(command_ids)))}
-    reported = {}
-    for row in _select_in(conn, "SELECT * FROM deployment_target_steps "
-                                "WHERE command_id IN ({})", sorted(set(command_ids))):
-        reported[(row["command_id"], row["phase"], row["ordinal"])] = dict(row)
+        command_ids)}
+    reported = {(r["command_id"], r["phase"], r["ordinal"]): dict(r) for r in _select_in(
+        conn, "SELECT * FROM deployment_target_steps WHERE command_id IN ({})", command_ids)}
     versions = _agent_versions(conn, [t["machine"] for t in targets])
 
     for target in targets:
@@ -2013,34 +2095,7 @@ def _attach_progress(conn, deployment, now):
         target["stage"] = _stage(target, command, deployment, now)
         target["started_at"] = command["claimed_at"] if command else None
         target["finished_at"] = finished.get(target.get("command_id"))
-        steps = []
-        if command is not None:
-            try:
-                params = json.loads(command["params_json"] or "{}")
-            except ValueError:
-                params = {}
-            for entry in progress_skeleton(params):
-                row = reported.get((command["id"], entry["phase"], entry["ordinal"])) or {}
-                entry.update({key: row.get(key) for key in (
-                    "state", "exit_code", "message", "started_at", "finished_at")})
-                entry["has_output"] = row.get("out_from_seq") is not None
-                steps.append(entry)
-        target["steps"] = steps
-        target["step_total"] = sum(1 for s in steps if s["phase"] == PHASE_STEP)
-        # The furthest phase the agent has reached, and the first one that went wrong --
-        # the "step 3 of 5" and the "More Info" of the PDQ view.
-        reached = [s for s in steps if s.get("state")]
-        current = reached[-1] if reached else None
-        target["current_step"] = (
-            {"phase": current["phase"], "ordinal": current["ordinal"],
-             "label": current["label"], "kind": current["kind"], "state": current["state"]}
-            if current else None)
-        failed = next((s for s in steps if s.get("state") in (STEP_FAILED, STEP_ABORTED)), None)
-        target["failed_step"] = (
-            {"phase": failed["phase"], "ordinal": failed["ordinal"], "label": failed["label"],
-             "kind": failed["kind"], "state": failed["state"],
-             "exit_code": failed["exit_code"], "message": failed["message"]}
-            if failed else None)
+        _summarise_steps(target, _target_steps(command, reported))
 
 
 def step_output(db_path, deployment_id, machine, phase, ordinal, after_seq=-1):
