@@ -62,6 +62,8 @@ public static class AgentConfig
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/result";
     public static string CommandOutputUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/output";
+    public static string CommandProgressUrl(string commandId) =>
+        HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/progress";
 
     /// <summary>
     /// Does <paramref name="url"/> actually address OUR hub?
@@ -184,6 +186,14 @@ public static class AgentConfig
     // before we get there.
     public const int StreamMaxChunkChars = 16_000;
     public const int StreamPostRetries = 3;
+
+    // --- Deployment step progress (roadmap #5) -----------------------------
+    // While a phase runs, its "running" event is re-sent this often. Not for the console --
+    // the hub ignores a repeat -- but because the ANSWER is how an abort reaches the agent:
+    // an hour-long installer would otherwise only hear "stop" when it finished. Ten seconds
+    // is the abort latency an operator waits through, against one tiny POST per running
+    // deployment per interval on the hub.
+    public const int ProgressKeepaliveMillis = 10_000;
 
     // Commands execute off the main loop (see Worker), so a long script no longer
     // blocks telemetry/heartbeats. Bound the concurrency so a queued pile of scripts

@@ -176,7 +176,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.182.0"
+HUB_VERSION = "1.183.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2529,6 +2529,13 @@ def _on_command_result(command_id, machine, success, result, output=None):
     rules.handle_message_result returns None immediately for any command that was not a
     rule-issued message, which is very nearly all of them: one indexed lookup per result.
     """
+    # A deployment attempt just ended: record it now, not on the next half-minute pass, so
+    # the progress view goes from "finishing" to its result while the operator is watching.
+    try:
+        if packages.is_deploy_command(DB_PATH, command_id):
+            wake_deploy_scheduler()
+    except Exception as e:
+        print(f"[deploy] Could not wake the scheduler for {command_id}: {e}")
     if result is None and output:
         try:
             parsed = json.loads(output)
@@ -2604,7 +2611,9 @@ app.register_blueprint(create_audit_blueprint(DB_PATH, login_required, access))
 # handed in because the blob store lives beside the database (see packages.blob_root),
 # and HUB_URL because the agent's download URL has to be absolute.
 app.register_blueprint(create_packages_blueprint(
-    DB_PATH, LOG_DIR, login_required, access, hub_url=HUB_URL
+    DB_PATH, LOG_DIR, login_required, access, hub_url=HUB_URL,
+    on_change=lambda topic, machine: mark_changed(topic, machine),
+    wake_scheduler=lambda: wake_deploy_scheduler(),
 ))
 # Package building for the assistant (roadmap #26): public web reads, winget lookups and
 # installer downloads into <LOG_DIR>/staging. Ordinary routes, so the assistant reaches them
@@ -4688,6 +4697,10 @@ def deploy_scheduler():
     """
     while True:
         interval = settings.get_int(DB_PATH, "deploy.scheduler_interval_seconds")
+        # Cleared BEFORE the pass, never after the wait: a poke that lands while this pass
+        # runs must leave the event set and buy another pass, not be wiped by a clear that
+        # comes after it -- the lost-wakeup shape fleet.wait_for_commands documents.
+        _deploy_wake.clear()
         try:
             reconciled, dispatched = packages.tick(
                 DB_PATH,
@@ -4712,7 +4725,19 @@ def deploy_scheduler():
                 print(f"[deploy] Requested a wake for {woke} offline target(s).")
         except Exception as e:
             print(f"[deploy] Target wake pass failed: {e}")
-        time.sleep(interval)
+        # A wait, not a sleep: wake_deploy_scheduler() ends it early when an operator acts
+        # or an attempt finishes. The interval stays the floor for everything else (backoffs
+        # coming due, windows opening), and is still what bounds a pass that nobody pokes.
+        _deploy_wake.wait(interval)
+
+
+# Set to run the scheduler's next pass now. One Event, so a burst of pokes (fifty results
+# landing together) is one extra pass, not fifty -- the pass handles every due row anyway.
+_deploy_wake = threading.Event()
+
+
+def wake_deploy_scheduler():
+    _deploy_wake.set()
 
 
 def start_deploy_scheduler():

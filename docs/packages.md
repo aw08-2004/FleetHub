@@ -83,6 +83,36 @@ backoff, using the same expiry the queue already enforces. Retries are per machi
 (default 3 attempts, backoff doubling from 15 minutes), and a deployment can carry a
 window — don't start before X, give up after Y.
 
+**Watching a deployment.** Open a deployment from the Deployments tab. Each machine shows
+what it is doing — *Queued*, *Sent, waiting for the machine* (it has not picked the job up:
+offline, or between polls), *Running*, *Aborting...*, *Waiting to retry*, *Finishing*, then the
+result — and, while it runs, which step it is on (*Step 2 of 3 · Install drivers*) and for how
+long. Click the machine name for its step list: every download, every step and the detection
+check, each with its result, exit code and duration, and the reason a failed step gave.
+**Log** under a step shows that step's own output and follows it while it runs; the log is kept
+as long as command output is (24 hours by default), after which the whole run's output is still
+in the machine's command history.
+
+Select machines with the checkboxes to act on them:
+
+- **Abort** — a machine that has not started is cancelled at once. One that is installing is
+  stopped at the step it is on (that step's program is ended, which can leave the software
+  half-installed) within about ten seconds; the row reads *Aborting...* until the agent
+  confirms, then *Cancelled*. An aborted machine is not retried. If the abort reaches the
+  machine after its last step, the row records *Succeeded*, because it did.
+- **Redeploy** — run the package again on the selected machines in the same deployment, with
+  a fresh set of attempts, including machines where it already succeeded. It uses the
+  package as it is defined now.
+- **Retry now** — a machine waiting out its retry backoff is sent on the next pass. A
+  deployment's window is never pulled forward.
+
+*Retry failures* at the bottom redeploys every failed, expired or cancelled machine you can
+see.
+
+> **The step list and Abort need agent 3.53.0 or newer** (and hub 1.183.0). An older agent
+> installs exactly as before and shows as *Running* with its planned steps until its result
+> arrives; it cannot be told to stop mid-install, so Abort answers that instead of pretending.
+
 **Authorization** is the `deploy_packages` capability plus machine scope, from Permission
 Groups. Targets are checked *before* anything is written and the request is refused whole
 if any single machine is out of scope — a deploy that quietly installs on nine of the ten
@@ -92,8 +122,12 @@ operator sees only the target rows they could have created.
 **Endpoints.** Console (`deploy_packages`): `GET|POST /api/packages`,
 `GET|PUT|DELETE /api/packages/<id>`, `POST /api/packages/upload`,
 `GET|POST /api/deployments`, `GET /api/deployments/<id>`,
-`POST /api/deployments/<id>/cancel`, `POST /api/deployments/<id>/retry`.
-Agent (token auth): `GET /api/agent/packages/<sha256>`.
+`POST /api/deployments/<id>/cancel`, `POST /api/deployments/<id>/retry` (optional
+`machines` to redeploy a selection), `POST /api/deployments/<id>/retry-now`,
+`POST /api/deployments/<id>/abort`,
+`GET /api/deployments/<id>/targets/<machine>/steps/<phase>/<ordinal>/output`.
+Agent (token auth): `GET /api/agent/packages/<sha256>`,
+`POST /api/agent/commands/<id>/progress` (step events; the answer carries the abort).
 
 > The upload endpoint is the one place that accepts `multipart/form-data` rather than
 > JSON — a file upload cannot be JSON. It is deliberately inert to compensate: it stores

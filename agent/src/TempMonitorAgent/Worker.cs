@@ -362,12 +362,22 @@ public sealed class Worker : BackgroundService
     private async Task RunOneAsync(FleetCommand cmd, CancellationToken ct)
     {
         await using var streamer = new OutputStreamer(_fleet, cmd.Id, _log);
+        // Step progress, and the Abort that rides back on it, for deployments only: a pump
+        // and a keepalive per command would be pure overhead for the commands that have no
+        // steps. Declared after the streamer so it is disposed first (await using unwinds in
+        // reverse), while the stream it stamps chunk numbers from still exists.
+        await using var progress = cmd.Type == "deploy_package"
+            ? new ProgressReporter(_fleet, cmd.Id, streamer.Mark, ct, _log)
+            : null;
         try
         {
-            var result = await _dispatcher.ExecuteAsync(cmd, streamer.Add, ct);
-            // ORDER MATTERS: the console stops polling for output once the command hits a
-            // terminal status, so the last chunks must be flushed BEFORE the result lands
-            // or the operator silently loses the tail of what they ran.
+            var result = await _dispatcher.ExecuteAsync(
+                cmd, streamer.Add, progress, progress?.Token ?? ct);
+            // ORDER MATTERS: the hub refuses progress and output for a command that has a
+            // result, and the console stops polling once it does -- so the last step event
+            // and the last chunks must both land BEFORE the result, or the final step reads
+            // "running" for ever and the operator silently loses the tail of what they ran.
+            if (progress is not null) await progress.CompleteAsync(ct);
             await streamer.CompleteAsync(ct);
             await _fleet.ReportResultAsync(cmd.Id, result, ct);
         }

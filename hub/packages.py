@@ -48,6 +48,14 @@ Four ideas carry the design, and each exists because the naive version is wrong:
     command and one backoff, using the exact same expiry the queue already enforces --
     rather than a second, parallel notion of delivery that could disagree with it.
 
+  * **Which step a machine is on is REPORTED, never parsed out of the log.** An agent from
+    3.53.0 posts one small event per phase transition (see LIVE PROGRESS below), and the
+    console renders a PDQ-style stepper from them. The log already says `step 2/5`, and
+    reading that was the obvious shortcut -- rejected, because the log is capped at 256k
+    characters, pruned after a day, and worded by whichever agent build wrote it, so the
+    one deploy an operator most needs to read (the long, noisy, failing one) is exactly
+    the one whose markers fall off the end.
+
 Authorization lives entirely upstream, at the `deploy_packages` capability plus machine
 scope (see packages_web.py). Nothing here checks a session, exactly like fleet.py.
 
@@ -234,6 +242,57 @@ MAX_ERROR_CHARS = 2000
 # create_command accepts it and the agent's dispatcher can route it.
 COMMAND_TYPE = "deploy_package"
 
+# ================================
+# LIVE PROGRESS
+# ================================
+# What the console shows while a target is running, PDQ Deploy's "x of y steps" view. Three
+# PHASES, because those are what the agent actually does: fetch each file payload, run each
+# step (or the one legacy command line, as step 1 of 1), then check detection once.
+#
+# **The skeleton comes from the hub, the states from the agent.** The labels and the count
+# are read off the command's own params -- the recipe snapshot build_command_params already
+# took -- so the stepper is drawn before the machine has said a word and cannot drift from
+# what was sent, even if the package is edited mid-rollout. The agent only says "ordinal 3
+# of phase step is now ok". Having the agent send its own plan was rejected: it would be a
+# second copy of a document the hub already holds, and the two could disagree.
+#
+# **Keyed by command, not by target.** A retry is a new command, so every attempt keeps its
+# own steps: the evidence of WHY attempt 1 failed at step 3 is not overwritten the moment
+# attempt 2 starts downloading.
+PHASE_DOWNLOAD = "download"
+PHASE_STEP = "step"
+PHASE_DETECT = "detect"
+PHASES = (PHASE_DOWNLOAD, PHASE_STEP, PHASE_DETECT)
+
+STEP_RUNNING = "running"
+STEP_OK = "ok"
+STEP_FAILED = "failed"
+STEP_SKIPPED = "skipped"        # failed, but continue_on_error carried the deploy on
+STEP_ABORTED = "aborted"
+STEP_STATES = (STEP_RUNNING, STEP_OK, STEP_FAILED, STEP_SKIPPED, STEP_ABORTED)
+STEP_TERMINAL = frozenset({STEP_OK, STEP_FAILED, STEP_SKIPPED, STEP_ABORTED})
+
+# The agent build that reports steps and honours an abort. **A compatibility API, not
+# trivia** (CLAUDE.md): an older agent installs exactly as before but says nothing until its
+# result, so the console shows it as plain "running" and does not offer Abort -- an abort it
+# would never hear of would leave a row saying "aborting" over an installer that is still
+# going. Mirrored as MIN_PROGRESS_AGENT in static/js/packages.js; this copy is the one that
+# refuses.
+MIN_PROGRESS_AGENT = (3, 53, 0)
+
+MAX_PROGRESS_MESSAGE_CHARS = 500
+
+# What a target is DOING, derived on read rather than stored -- `status` already says where
+# it is in the scheduler's lifecycle, and a second stored column would be one more thing to
+# keep in step with it. These are the PDQ-style live states the progress view shows.
+STAGE_SCHEDULED = "scheduled"    # pending, its window has not opened
+STAGE_QUEUED = "queued"          # pending and due: the next scheduler pass sends it
+STAGE_RETRY_WAIT = "retry_wait"  # pending, waiting out a backoff after a failed attempt
+STAGE_WAITING = "waiting"        # sent; the machine has not picked it up yet
+STAGE_RUNNING = "running"        # the machine is installing
+STAGE_ABORTING = "aborting"      # abort requested, the machine has not stopped yet
+STAGE_FINISHING = "finishing"    # the result is in; the next scheduler pass records it
+
 
 # ================================
 # DB SETUP
@@ -370,6 +429,43 @@ def init_packages_db(db_path):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deployment_targets_status "
             "ON deployment_targets(deployment_id, status)"
+        )
+        # An abort asked for while the target was in flight. A FLAG, not a status change:
+        # the installer is still running until the agent says otherwise, and a row that
+        # read `cancelled` over a running installer is the record that lies (see
+        # cancel_deployment). reconcile_once turns it into `cancelled` once the command ends.
+        target_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(deployment_targets)")}
+        if "abort_requested_at" not in target_columns:
+            conn.execute("ALTER TABLE deployment_targets ADD COLUMN abort_requested_at INTEGER")
+        if "abort_requested_by" not in target_columns:
+            conn.execute("ALTER TABLE deployment_targets ADD COLUMN abort_requested_by TEXT")
+        # Live step progress -- see LIVE PROGRESS above. `out_from_seq`/`out_to_seq` are the
+        # command's streamed-output chunk numbers either side of the phase (to is exclusive,
+        # NULL while running), which is what lets the console show ONE step's log rather
+        # than the whole run's.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deployment_target_steps (
+                command_id    TEXT NOT NULL,
+                phase         TEXT NOT NULL,
+                ordinal       INTEGER NOT NULL,
+                state         TEXT NOT NULL,
+                exit_code     INTEGER,
+                message       TEXT,
+                started_at    INTEGER,
+                finished_at   INTEGER,
+                out_from_seq  INTEGER,
+                out_to_seq    INTEGER,
+                updated_at    INTEGER NOT NULL,
+                PRIMARY KEY (command_id, phase, ordinal)
+            )
+            """
+        )
+        # The abort check on every progress POST reads the target by its command.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_deployment_targets_command "
+            "ON deployment_targets(command_id)"
         )
 
 
@@ -1455,8 +1551,11 @@ def list_targets(db_path, statuses=TARGET_ACTIVE, machines=None, limit=MAX_TARGE
     return [dict(r) for r in rows]
 
 
-def get_deployment(db_path, deployment_id):
-    """One deployment with every target row -- the progress view."""
+def get_deployment(db_path, deployment_id, now=None):
+    """One deployment with every target row -- the progress view. Each target carries its
+    live `stage` and `steps` (see _attach_progress)."""
+    if now is None:
+        now = int(time.time())
     with get_conn(db_path) as conn:
         row = conn.execute(
             "SELECT d.*, p.name AS package_name, p.version AS package_version "
@@ -1469,8 +1568,9 @@ def get_deployment(db_path, deployment_id):
             "SELECT * FROM deployment_targets WHERE deployment_id = ? "
             "ORDER BY machine COLLATE NOCASE", (str(deployment_id),)
         ).fetchall()
-    deployment = dict(row)
-    deployment["targets"] = [dict(t) for t in targets]
+        deployment = dict(row)
+        deployment["targets"] = [dict(t) for t in targets]
+        _attach_progress(conn, deployment, now)
     counts = {}
     for target in deployment["targets"]:
         counts[target["status"]] = counts.get(target["status"], 0) + 1
@@ -1510,15 +1610,33 @@ def cancel_deployment(db_path, deployment_id, actor="system"):
                 level=fleet.LEVEL_NOTICE, target=deployment_id)
 
 
-def retry_deployment_failures(db_path, deployment_id, actor="system"):
+def retry_deployment_failures(db_path, deployment_id, actor="system", machines=None,
+                              include_succeeded=False):
     """Put every failed/expired target back in the queue with a fresh attempt budget.
 
     Separate from creating a new deployment because the operator's intent is different:
     "try these seven again", not "start a new push". Keeping it on the same deployment
     row is what lets the history show one deploy that eventually reached 100% rather
-    than a chain of partial ones nobody can line up.
+    than a chain of partial ones nobody can line up. **This is PDQ's "Redeploy"** -- the
+    obvious port, a new deployment per redeploy, was rejected for exactly that reason.
+
+    `machines` narrows it to those targets (an operator's selection, or the caller's scope
+    -- an operator scoped to three machines must not requeue the other forty). None means
+    every target. `include_succeeded` lets a selection redeploy machines that already
+    succeeded, which is "Redeploy selected"; the plain button only ever retries failures.
     """
     now = int(time.time())
+    statuses = [TARGET_FAILED, TARGET_EXPIRED, TARGET_CANCELLED]
+    if include_succeeded:
+        statuses.append(TARGET_SUCCEEDED)
+    clauses = [f"status IN ({','.join('?' for _ in statuses)})"]
+    params = list(statuses)
+    if machines is not None:
+        names = [_clean(m) for m in machines if _clean(m)]
+        if not names:
+            return 0
+        clauses.append(f"machine IN ({','.join('?' for _ in names)})")
+        params.extend(names)
     with get_conn(db_path) as conn:
         row = conn.execute(
             "SELECT status FROM deployments WHERE id = ?", (str(deployment_id),)).fetchone()
@@ -1526,10 +1644,9 @@ def retry_deployment_failures(db_path, deployment_id, actor="system"):
             raise KeyError("unknown deployment")
         cur = conn.execute(
             "UPDATE deployment_targets SET status = ?, attempts = 0, next_attempt_at = ?, "
-            "last_error = NULL, updated_at = ? "
-            "WHERE deployment_id = ? AND status IN (?, ?, ?)",
-            (TARGET_PENDING, now, now, str(deployment_id),
-             TARGET_FAILED, TARGET_EXPIRED, TARGET_CANCELLED),
+            "last_error = NULL, abort_requested_at = NULL, abort_requested_by = NULL, "
+            "updated_at = ? WHERE deployment_id = ? AND " + " AND ".join(clauses),
+            [TARGET_PENDING, now, now, str(deployment_id)] + params,
         )
         requeued = cur.rowcount or 0
         if requeued:
@@ -1540,8 +1657,448 @@ def retry_deployment_failures(db_path, deployment_id, actor="system"):
     if requeued:
         fleet.audit(db_path, actor=actor, action="retry_deployment",
                     level=fleet.LEVEL_SECURITY, target=deployment_id,
-                    detail={"requeued": requeued})
+                    detail={"requeued": requeued,
+                            "machines": list(machines) if machines is not None else None,
+                            "include_succeeded": bool(include_succeeded)})
     return requeued
+
+
+def retry_now(db_path, deployment_id, machines, actor="system", now=None):
+    """Skip the backoff: targets waiting to RETRY become due on the next scheduler pass.
+
+    PDQ calls its version "Prioritize" -- move queued targets up a concurrency queue. This
+    scheduler has no such queue (every due target is dispatched on the pass that finds it),
+    so the one wait an operator can usefully cut short is the retry backoff, after they
+    have switched the machine on or fixed what failed. A deployment WINDOW is deliberately
+    not overridden: it is the agreement with the people at those desks, and skipping it is
+    a new deployment's decision, not a button on this one.
+    """
+    if now is None:
+        now = int(time.time())
+    names = [_clean(m) for m in machines or [] if _clean(m)]
+    if not names:
+        return 0
+    with get_conn(db_path) as conn:
+        if conn.execute("SELECT 1 FROM deployments WHERE id = ?",
+                        (str(deployment_id),)).fetchone() is None:
+            raise KeyError("unknown deployment")
+        cur = conn.execute(
+            "UPDATE deployment_targets SET next_attempt_at = ?, updated_at = ? "
+            "WHERE deployment_id = ? AND status = ? AND attempts > 0 "
+            "  AND next_attempt_at > ? "
+            f"  AND machine IN ({','.join('?' for _ in names)})",
+            [now, now, str(deployment_id), TARGET_PENDING, now] + names)
+        moved = cur.rowcount or 0
+    if moved:
+        fleet.audit(db_path, actor=actor, action="retry_deployment_now",
+                    level=fleet.LEVEL_NOTICE, target=deployment_id,
+                    detail={"machines": names, "moved": moved})
+    return moved
+
+
+def abort_targets(db_path, deployment_id, machines, actor="system", now=None):
+    """Stop these targets, including ones already installing. PDQ's Abort.
+
+    cancel_deployment deliberately leaves in-flight targets alone, and that stays true:
+    this is the separate, explicit "and stop the ones that are running too". Per target:
+
+      * **pending** -- cancelled at once; nothing was sent.
+      * **sent, not picked up** -- the queued command is retired (fleet.cancel_command_
+        if_pending), which closes the race with a claim in one UPDATE.
+      * **running on an agent that reports progress** -- FLAGGED, not cancelled. The agent
+        hears it in the answer to its next progress POST (one at least every few seconds
+        while it runs), kills the step's process tree and reports. The row reads
+        "aborting" until then, and reconcile_once records `cancelled` once the command
+        has really ended -- or `succeeded`, if the abort arrived after the last step,
+        because that is what happened.
+      * **running on an older agent** -- refused, listed in `unsupported`. It has no way
+        to hear an abort, and a row saying "aborting" over an installer that runs to the
+        end is the lie cancel_deployment exists to avoid.
+      * **already finished** -- `skipped`.
+
+    Returns the machine names by outcome.
+    """
+    if now is None:
+        now = int(time.time())
+    names = [_clean(m) for m in machines or [] if _clean(m)]
+    outcome = {"cancelled": [], "aborting": [], "unsupported": [], "skipped": []}
+    if not names:
+        return outcome
+    with get_conn(db_path) as conn:
+        if conn.execute("SELECT 1 FROM deployments WHERE id = ?",
+                        (str(deployment_id),)).fetchone() is None:
+            raise KeyError("unknown deployment")
+        targets = [dict(r) for r in conn.execute(
+            "SELECT machine, status, command_id FROM deployment_targets "
+            f"WHERE deployment_id = ? AND machine IN ({','.join('?' for _ in names)})",
+            [str(deployment_id)] + names)]
+        commands = _rows_by_id(conn, "SELECT id, status FROM commands WHERE id IN ({})",
+                               [t["command_id"] for t in targets if t["command_id"]])
+        versions = _agent_versions(conn, [t["machine"] for t in targets])
+
+    to_cancel, to_flag, unclaimed = [], [], []
+    for target in targets:
+        machine = target["machine"]
+        command = commands.get(target["command_id"])
+        if target["status"] == TARGET_PENDING:
+            to_cancel.append(machine)
+        elif target["status"] != TARGET_IN_FLIGHT:
+            outcome["skipped"].append(machine)
+        elif command is not None and command["status"] == fleet.STATUS_PENDING:
+            to_flag.append(machine)
+            unclaimed.append(command["id"])
+        elif _version_at_least(versions.get(machine), MIN_PROGRESS_AGENT) or command is None:
+            # `command is None` is the instant between the scheduler claiming the target and
+            # queueing its command. Flagging it is right: the command lands, and either the
+            # retire below or the agent's first progress POST stops it.
+            to_flag.append(machine)
+        else:
+            outcome["unsupported"].append(machine)
+
+    if to_cancel or to_flag:
+        with get_conn(db_path) as conn:
+            for machine in to_cancel:
+                conn.execute(
+                    "UPDATE deployment_targets SET status = ?, last_error = ?, updated_at = ? "
+                    "WHERE deployment_id = ? AND machine = ? AND status = ?",
+                    (TARGET_CANCELLED, f"aborted by {actor}", now, str(deployment_id),
+                     machine, TARGET_PENDING))
+            for machine in to_flag:
+                conn.execute(
+                    "UPDATE deployment_targets SET abort_requested_at = ?, "
+                    "abort_requested_by = ?, updated_at = ? "
+                    "WHERE deployment_id = ? AND machine = ? AND status = ?",
+                    (now, str(actor), now, str(deployment_id), machine, TARGET_IN_FLIGHT))
+            _refresh_deployment_status(conn, str(deployment_id), now)
+    # Outside the transaction above: fleet writes on its own connection (see SCHEDULER).
+    for command_id in unclaimed:
+        fleet.cancel_command_if_pending(db_path, command_id)
+
+    outcome["cancelled"] = to_cancel
+    outcome["aborting"] = to_flag
+    if to_cancel or to_flag:
+        fleet.audit(db_path, actor=actor, action="abort_deployment_targets",
+                    level=fleet.LEVEL_SECURITY, target=deployment_id, detail=outcome)
+    return outcome
+
+
+# ================================
+# LIVE PROGRESS -- recording and reading
+# ================================
+def _version_at_least(version, minimum):
+    """True when a MAJOR.MINOR.PATCH string is at least `minimum`. Unknown is False --
+    the same rule as files.version_at_least, kept local so this module does not import
+    the file browser's for one regex."""
+    match = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", str(version or ""))
+    return bool(match) and tuple(int(p) for p in match.groups()) >= tuple(minimum)
+
+
+def _agent_versions(conn, machines):
+    """{machine: agent version} as last reported. machine_info belongs to app.py; a database
+    without it (a test, a fresh hub) simply has no versions."""
+    names = sorted({m for m in machines if m})
+    try:
+        return {r["machine"]: r["companion_version"] for r in _select_in(
+            conn, "SELECT machine, companion_version FROM machine_info WHERE machine IN ({})",
+            names)}
+    except sqlite3.OperationalError:
+        return {}
+
+
+# SQLite caps bound parameters per statement (999 on older builds). A fleet-wide deployment
+# can name more machines than that, so every IN (...) over targets goes through here.
+_IN_CHUNK = 500
+
+
+def _select_in(conn, sql, values, extra=()):
+    """Run `sql` (one `{}` where the IN placeholders go) over `values` in chunks."""
+    rows = []
+    values = list(values)
+    for start in range(0, len(values), _IN_CHUNK):
+        chunk = values[start:start + _IN_CHUNK]
+        rows.extend(conn.execute(sql.format(",".join("?" for _ in chunk)),
+                                 list(chunk) + list(extra)).fetchall())
+    return rows
+
+
+def _rows_by_id(conn, sql, ids):
+    return {r["id"]: dict(r) for r in _select_in(conn, sql, sorted({i for i in ids if i}))}
+
+
+def progress_skeleton(params):
+    """The phases one `deploy_package` command will report, in order, from its own params.
+
+    Must count EXACTLY as DeployPackageExecutor does, or the agent's ordinals land on the
+    wrong rows: downloads are the FILE payloads only (winget resolves its own), in list
+    order, falling back to the legacy single `source` exactly as ResolveSourceList does;
+    steps are `params.steps`, or the one command line as step 1 of 1; detection is once.
+    """
+    params = params if isinstance(params, dict) else {}
+    sources = params.get("sources")
+    if not isinstance(sources, list):
+        legacy = params.get("source")
+        sources = [legacy] if isinstance(legacy, dict) and legacy.get("kind") != "multi" else []
+    entries = []
+    downloads = [s for s in sources
+                 if isinstance(s, dict) and s.get("kind") in FILE_SOURCE_KINDS]
+    for ordinal, source in enumerate(downloads, start=1):
+        entries.append({
+            "phase": PHASE_DOWNLOAD, "ordinal": ordinal, "kind": source.get("kind"),
+            "label": source.get("file_name") or source.get("ref") or source.get("name") or ""})
+    steps = params.get("steps")
+    if isinstance(steps, list) and steps:
+        for ordinal, step in enumerate(steps, start=1):
+            step = step if isinstance(step, dict) else {}
+            entries.append({"phase": PHASE_STEP, "ordinal": ordinal,
+                            "kind": step.get("kind") or "", "label": step.get("name") or ""})
+    else:
+        # Only the program, never its arguments: those can carry a licence key, and this
+        # label is shown to anyone who can read the deployment.
+        entries.append({"phase": PHASE_STEP, "ordinal": 1, "kind": "command",
+                        "label": os.path.basename(str(params.get("install_command") or ""))})
+    detection = params.get("detection") if isinstance(params.get("detection"), dict) else {}
+    entries.append({"phase": PHASE_DETECT, "ordinal": 1,
+                    "kind": detection.get("kind") or DETECT_NONE, "label": ""})
+    return entries
+
+
+def record_step_progress(db_path, command_id, agent_id, *, phase, ordinal, state,
+                         exit_code=None, message=None, out_seq=None, now=None):
+    """One phase transition from the agent running `command_id`. Returns
+    {"changed": bool, "cancel": bool, "machine": str}.
+
+    **Idempotent and monotonic.** The agent retries a POST it is unsure about and repeats
+    the current `running` event as a keepalive (that keepalive is how an abort reaches a
+    step that runs for an hour), so a repeat must change nothing, and a late `running`
+    must never reopen a phase already reported finished. `changed` says whether anything
+    moved, which is what decides whether open consoles are told to refetch -- a keepalive
+    every few seconds per running machine must not wake every progress view in the building.
+
+    The same ownership rules as fleet.append_command_output: the command must exist, be a
+    deployment, be claimed by THIS agent, and still be running. One agent must not be able
+    to write another's progress, and a finished command is not reopened.
+
+    `cancel` is the abort signal -- see abort_targets.
+    """
+    if phase not in PHASES:
+        raise ValueError(f"unknown phase: {phase!r}")
+    if state not in STEP_STATES:
+        raise ValueError(f"unknown step state: {state!r}")
+    try:
+        ordinal = int(ordinal)
+    except (TypeError, ValueError):
+        raise ValueError("ordinal must be an integer")
+    if not (1 <= ordinal <= MAX_STEPS):
+        raise ValueError(f"ordinal must be between 1 and {MAX_STEPS}")
+    exit_code = _optional_int(exit_code, "exit_code")
+    out_seq = _optional_int(out_seq, "out_seq")
+    if out_seq is not None and out_seq < 0:
+        raise ValueError("out_seq must be non-negative")
+    message = (str(message)[:MAX_PROGRESS_MESSAGE_CHARS] if message else None)
+    if now is None:
+        now = int(time.time())
+
+    command_id = str(command_id)
+    with get_conn(db_path) as conn:
+        command = conn.execute(
+            "SELECT machine, type, status, claimed_by FROM commands WHERE id = ?",
+            (command_id,)).fetchone()
+        if command is None:
+            raise KeyError("unknown command")
+        if command["claimed_by"] != str(agent_id):
+            raise PermissionError("command was not claimed by this agent")
+        if command["type"] != COMMAND_TYPE:
+            raise PermissionError("progress is only recorded for package deployments")
+        if command["status"] != fleet.STATUS_CLAIMED:
+            raise PermissionError(f"command is {command['status']}, not accepting progress")
+
+        existing = conn.execute(
+            "SELECT state FROM deployment_target_steps "
+            "WHERE command_id = ? AND phase = ? AND ordinal = ?",
+            (command_id, phase, ordinal)).fetchone()
+        terminal = state in STEP_TERMINAL
+        changed = False
+        if existing is None:
+            conn.execute(
+                "INSERT INTO deployment_target_steps(command_id, phase, ordinal, state, "
+                "exit_code, message, started_at, finished_at, out_from_seq, out_to_seq, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (command_id, phase, ordinal, state, exit_code, message,
+                 None if terminal else now, now if terminal else None,
+                 None if terminal else out_seq, out_seq if terminal else None, now))
+            changed = True
+        elif existing["state"] == STEP_RUNNING and terminal:
+            conn.execute(
+                "UPDATE deployment_target_steps SET state = ?, exit_code = ?, message = ?, "
+                "finished_at = ?, out_to_seq = ?, updated_at = ? "
+                "WHERE command_id = ? AND phase = ? AND ordinal = ?",
+                (state, exit_code, message, now, out_seq, now, command_id, phase, ordinal))
+            changed = True
+        # Anything else is a repeat (running -> running, the keepalive) or a late event for
+        # a phase already finished: monotonic, so nothing moves.
+
+        abort = conn.execute(
+            "SELECT 1 FROM deployment_targets WHERE command_id = ? "
+            "AND abort_requested_at IS NOT NULL LIMIT 1", (command_id,)).fetchone()
+    return {"changed": changed, "cancel": abort is not None, "machine": command["machine"]}
+
+
+def _optional_int(value, field):
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be an integer")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be an integer")
+
+
+def is_deploy_command(db_path, command_id):
+    """Whether `command_id` is some target's current attempt. The scheduler is woken when
+    one finishes, so the result is recorded now rather than on the next half-minute pass."""
+    with get_conn(db_path) as conn:
+        return conn.execute(
+            "SELECT 1 FROM deployment_targets WHERE command_id = ? LIMIT 1",
+            (str(command_id),)).fetchone() is not None
+
+
+def _stage(target, command, deployment, now):
+    """What a target is doing right now -- see the STAGE_* vocabulary."""
+    status = target["status"]
+    if status == TARGET_PENDING:
+        if deployment.get("window_start") and deployment["window_start"] > now:
+            return STAGE_SCHEDULED
+        if target.get("attempts") and (target.get("next_attempt_at") or 0) > now:
+            return STAGE_RETRY_WAIT
+        return STAGE_QUEUED
+    if status != TARGET_IN_FLIGHT:
+        return status
+    if target.get("abort_requested_at"):
+        return STAGE_ABORTING
+    if command is None:
+        return STAGE_QUEUED
+    if command["status"] == fleet.STATUS_PENDING:
+        return STAGE_WAITING
+    if command["status"] == fleet.STATUS_CLAIMED:
+        return STAGE_RUNNING
+    return STAGE_FINISHING
+
+
+def _attach_progress(conn, deployment, now):
+    """Give every target of `deployment` its live stage and step list, in place.
+
+    Three batched reads for the whole deployment, never one per target: a fleet-wide push
+    has a row per machine and the progress view re-reads it every couple of seconds.
+    """
+    targets = deployment["targets"]
+    command_ids = [t["command_id"] for t in targets if t.get("command_id")]
+    commands = _rows_by_id(
+        conn, "SELECT id, status, claimed_at, params_json FROM commands WHERE id IN ({})",
+        command_ids)
+    finished = {r["command_id"]: r["completed_at"] for r in _select_in(
+        conn, "SELECT command_id, completed_at FROM command_results WHERE command_id IN ({})",
+        sorted(set(command_ids)))}
+    reported = {}
+    for row in _select_in(conn, "SELECT * FROM deployment_target_steps "
+                                "WHERE command_id IN ({})", sorted(set(command_ids))):
+        reported[(row["command_id"], row["phase"], row["ordinal"])] = dict(row)
+    versions = _agent_versions(conn, [t["machine"] for t in targets])
+
+    for target in targets:
+        command = commands.get(target.get("command_id"))
+        version = versions.get(target["machine"])
+        target["agent_version"] = version
+        target["agent_reports_steps"] = _version_at_least(version, MIN_PROGRESS_AGENT)
+        target["stage"] = _stage(target, command, deployment, now)
+        target["started_at"] = command["claimed_at"] if command else None
+        target["finished_at"] = finished.get(target.get("command_id"))
+        steps = []
+        if command is not None:
+            try:
+                params = json.loads(command["params_json"] or "{}")
+            except ValueError:
+                params = {}
+            for entry in progress_skeleton(params):
+                row = reported.get((command["id"], entry["phase"], entry["ordinal"])) or {}
+                entry.update({key: row.get(key) for key in (
+                    "state", "exit_code", "message", "started_at", "finished_at")})
+                entry["has_output"] = row.get("out_from_seq") is not None
+                steps.append(entry)
+        target["steps"] = steps
+        target["step_total"] = sum(1 for s in steps if s["phase"] == PHASE_STEP)
+        # The furthest phase the agent has reached, and the first one that went wrong --
+        # the "step 3 of 5" and the "More Info" of the PDQ view.
+        reached = [s for s in steps if s.get("state")]
+        current = reached[-1] if reached else None
+        target["current_step"] = (
+            {"phase": current["phase"], "ordinal": current["ordinal"],
+             "label": current["label"], "kind": current["kind"], "state": current["state"]}
+            if current else None)
+        failed = next((s for s in steps if s.get("state") in (STEP_FAILED, STEP_ABORTED)), None)
+        target["failed_step"] = (
+            {"phase": failed["phase"], "ordinal": failed["ordinal"], "label": failed["label"],
+             "kind": failed["kind"], "state": failed["state"],
+             "exit_code": failed["exit_code"], "message": failed["message"]}
+            if failed else None)
+
+
+def step_output(db_path, deployment_id, machine, phase, ordinal, after_seq=-1):
+    """The streamed output of ONE phase of a target's current attempt, PDQ's Output Log.
+
+    Sliced out of the command's ordinary output stream by the chunk numbers the agent
+    reported either side of the phase, so it is readable while the step is still running
+    and costs no second copy of the text. `after_seq` is the same cursor the terminal uses.
+
+    `expired` is True when the attempt has finished and its scrollback has been pruned
+    (fleet.OUTPUT_RETENTION_SECONDS) -- "the log is gone", not "there was no output".
+    The whole run's text still lives in the command's result.
+    """
+    try:
+        after_seq = int(after_seq)
+    except (TypeError, ValueError):
+        raise ValueError("after_seq must be an integer")
+    if phase not in PHASES:
+        raise ValueError(f"unknown phase: {phase!r}")
+    try:
+        ordinal = int(ordinal)
+    except (TypeError, ValueError):
+        raise ValueError("ordinal must be an integer")
+    with get_conn(db_path) as conn:
+        target = conn.execute(
+            "SELECT command_id FROM deployment_targets WHERE deployment_id = ? AND machine = ?",
+            (str(deployment_id), _clean(machine))).fetchone()
+        if target is None:
+            raise KeyError("unknown deployment target")
+        command_id = target["command_id"]
+        row = conn.execute(
+            "SELECT state, out_from_seq, out_to_seq FROM deployment_target_steps "
+            "WHERE command_id = ? AND phase = ? AND ordinal = ?",
+            (command_id, phase, ordinal)).fetchone() if command_id else None
+        result = {"chunks": [], "next_seq": max(after_seq + 1, 0),
+                  "state": row["state"] if row else None,
+                  "done": bool(row) and row["state"] in STEP_TERMINAL,
+                  "expired": False}
+        if row is None or row["out_from_seq"] is None:
+            return result
+        low = max(after_seq + 1, row["out_from_seq"])
+        sql = ("SELECT seq, chunk FROM command_output_chunks "
+               "WHERE command_id = ? AND seq >= ?")
+        params = [command_id, low]
+        if row["out_to_seq"] is not None:
+            sql += " AND seq < ?"
+            params.append(row["out_to_seq"])
+        chunks = conn.execute(sql + " ORDER BY seq ASC", params).fetchall()
+        if not chunks and result["done"]:
+            result["expired"] = conn.execute(
+                "SELECT 1 FROM command_output_chunks WHERE command_id = ? LIMIT 1",
+                (command_id,)).fetchone() is None and conn.execute(
+                "SELECT 1 FROM command_results WHERE command_id = ?",
+                (command_id,)).fetchone() is not None
+    result["chunks"] = [{"seq": c["seq"], "text": c["chunk"]} for c in chunks]
+    if chunks:
+        result["next_seq"] = chunks[-1]["seq"] + 1
+    return result
 
 
 # ================================
@@ -1727,8 +2284,15 @@ def reconcile_once(db_path, now=None):
             continue
 
         if succeeded:
+            # Including a target somebody tried to abort: if the agent finished before it
+            # heard, the software IS installed, and the row says so.
             status, next_at = TARGET_SUCCEEDED, None
             error = None
+        elif target.get("abort_requested_at"):
+            # Aborted, and the command has now really ended. Never retried: an operator who
+            # pressed Abort has answered the retry question already.
+            status, next_at = TARGET_CANCELLED, None
+            error = f"aborted by {target.get('abort_requested_by') or 'an operator'}"
         elif target["attempts"] >= target["max_attempts"]:
             status, next_at = TARGET_FAILED, None
         elif target["window_end"] and target["window_end"] <= now:
@@ -1761,7 +2325,8 @@ def _claim_target(db_path, deployment_id, machine, now):
     with get_conn(db_path) as conn:
         cur = conn.execute(
             "UPDATE deployment_targets SET status = ?, attempts = attempts + 1, "
-            "command_id = NULL, next_attempt_at = NULL, updated_at = ? "
+            "command_id = NULL, next_attempt_at = NULL, abort_requested_at = NULL, "
+            "abort_requested_by = NULL, updated_at = ? "
             "WHERE deployment_id = ? AND machine = ? AND status = ?",
             (TARGET_IN_FLIGHT, now, deployment_id, machine, TARGET_PENDING),
         )

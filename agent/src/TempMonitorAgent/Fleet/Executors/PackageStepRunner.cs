@@ -32,22 +32,38 @@ public static class PackageStepRunner
     /// <summary>What one step did. `Continue` is separate from `Succeeded` because a step
     /// marked continue_on_error can fail and still let the deploy proceed -- and the log
     /// has to say both things happened.</summary>
-    public readonly record struct StepOutcome(bool Succeeded, bool Continue);
+    ///
+    /// `ExitCode` and `Why` are what the console's step list shows beside a red step (PDQ's
+    /// "More Info"); null where there was no process, or nothing went wrong.
+    public readonly record struct StepOutcome(
+        bool Succeeded, bool Continue, int? ExitCode = null, string? Why = null,
+        bool Aborted = false);
 
     /// <summary>Run every step in order. Returns false as soon as one fails without
-    /// `continue_on_error` set.</summary>
+    /// `continue_on_error` set, or the run is cancelled.
+    ///
+    /// <paramref name="phases"/> hears each step start and end. A cancelled run is never
+    /// "carried on" past, whatever the step's continue_on_error says: that flag is for a
+    /// step that failed, and an operator's Abort is not a failure to tolerate.</summary>
     public static async Task<bool> RunAllAsync(
         JsonArray steps, PackageVariables vars, int defaultTimeout,
         IReadOnlyCollection<int> defaultExitCodes, Action<string> say, Action<string> emit,
-        CancellationToken ct)
+        CancellationToken ct, PhaseTracker? phases = null)
     {
         var index = 0;
         foreach (var node in steps)
         {
             index++;
+            if (ct.IsCancellationRequested)
+            {
+                say($"[deploy] stopped before step {index}: the run was cancelled");
+                return false;
+            }
+            phases?.Begin(StepPhase.Step, index);
             if (node is not JsonObject step)
             {
                 say($"[deploy] step {index}: FAILED: not an object");
+                phases?.End(StepState.Failed, message: "not an object");
                 return false;
             }
 
@@ -58,12 +74,24 @@ public static class PackageStepRunner
 
             var outcome = await RunOneAsync(step, kind, vars, defaultTimeout,
                                             defaultExitCodes, say, emit, ct);
-            if (outcome.Succeeded) continue;
+            if (outcome.Aborted || (!outcome.Succeeded && ct.IsCancellationRequested))
+            {
+                phases?.Fail(null, aborted: phases.AbortRequested);
+                say($"[deploy] stopped at step {index}: the run was cancelled");
+                return false;
+            }
+            if (outcome.Succeeded)
+            {
+                phases?.End(StepState.Ok, outcome.ExitCode);
+                continue;
+            }
             if (outcome.Continue)
             {
+                phases?.End(StepState.Skipped, outcome.ExitCode, outcome.Why);
                 say($"[deploy] step {index} failed, carrying on as configured");
                 continue;
             }
+            phases?.End(StepState.Failed, outcome.ExitCode, outcome.Why);
             say($"[deploy] FAILED at step {index}");
             return false;
         }
@@ -83,7 +111,8 @@ public static class PackageStepRunner
         StepOutcome Fail(string why)
         {
             say($"[deploy] {why}");
-            return new StepOutcome(false, carryOn);
+            return new StepOutcome(false, carryOn, Why: why.StartsWith("FAILED: ")
+                ? why["FAILED: ".Length..] : why);
         }
 
         var timeout = Math.Clamp(step.GetInt("timeout_seconds", defaultTimeout), 30, 24 * 60 * 60);
@@ -193,19 +222,24 @@ public static class PackageStepRunner
         StepOutcome Judge(ProcessOutcome outcome, HashSet<int> accepted, int seconds,
                           Action<string> log, bool keepGoing)
         {
+            // ProcessRunner reports a cancelled wait as a timeout. When the token is what
+            // ended it -- an Abort, or the service stopping -- say that, not "timed out".
+            if (outcome.TimedOut && ct.IsCancellationRequested)
+                return new StepOutcome(false, false, Aborted: true);
             if (outcome.TimedOut)
             {
                 log($"[deploy] FAILED: timed out after {seconds}s");
-                return new StepOutcome(false, keepGoing);
+                return new StepOutcome(false, keepGoing, Why: $"timed out after {seconds}s");
             }
             if (!accepted.Contains(outcome.ExitCode))
             {
-                log($"[deploy] FAILED: exit code {outcome.ExitCode} is not in " +
-                    $"[{string.Join(", ", accepted.OrderBy(c => c))}]");
-                return new StepOutcome(false, keepGoing);
+                var why = $"exit code {outcome.ExitCode} is not in " +
+                          $"[{string.Join(", ", accepted.OrderBy(c => c))}]";
+                log("[deploy] FAILED: " + why);
+                return new StepOutcome(false, keepGoing, outcome.ExitCode, why);
             }
             log($"[deploy] exit code {outcome.ExitCode} accepted");
-            return new StepOutcome(true, keepGoing);
+            return new StepOutcome(true, keepGoing, outcome.ExitCode);
         }
     }
 

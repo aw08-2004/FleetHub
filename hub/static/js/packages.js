@@ -1230,56 +1230,400 @@ async function loadDeployments() {
 }
 
 // ---------------------------------------------------------------- progress view
+//
+// PDQ Deploy's deployment status window, roadmap #5. Per machine: what it is DOING (queued,
+// sent, running, aborting...), which step it is on, and -- expanded -- the whole step list
+// with each step's result, exit code and its own log, readable while it runs.
+//
+// The step list is drawn by the HUB from the recipe it sent (packages.progress_skeleton) and
+// filled in by the agent's step events, so this page only renders; it never infers a step
+// from log text. An agent older than MIN_PROGRESS_AGENT reports no steps: its row says so
+// rather than showing an empty list that reads as "nothing happened".
+//
+// The modal is a <dialog>, which FleetLive deliberately waits on, so it polls on its own:
+// every two seconds while anything can still change, and not at all once everything has.
+
+// Mirrors packages.MIN_PROGRESS_AGENT (hub/packages.py). That copy refuses an abort; this
+// one only decides what to OFFER, so drift costs a refused click, never a wrong record.
+const MIN_PROGRESS_AGENT = '3.53.0';
+const PROGRESS_POLL_MS = 2000;
+const LOG_POLL_MS = 1000;
+
+// Literal keys per wire value, for the i18n key scan (see STATUS_LABELS).
+const STAGE_LABELS = {
+    scheduled: () => t('packages.progress.stage.scheduled'),
+    queued: () => t('packages.progress.stage.queued'),
+    retry_wait: () => t('packages.progress.stage.retry_wait'),
+    waiting: () => t('packages.progress.stage.waiting'),
+    running: () => t('packages.progress.stage.running'),
+    aborting: () => t('packages.progress.stage.aborting'),
+    finishing: () => t('packages.progress.stage.finishing'),
+    succeeded: () => t('packages.progress.stage.succeeded'),
+    failed: () => t('packages.progress.stage.failed'),
+    expired: () => t('packages.progress.stage.expired'),
+    cancelled: () => t('packages.progress.stage.cancelled'),
+};
+
+const STEP_STATE_LABELS = {
+    running: () => t('packages.progress.state.running'),
+    ok: () => t('packages.progress.state.ok'),
+    failed: () => t('packages.progress.state.failed'),
+    skipped: () => t('packages.progress.state.skipped'),
+    aborted: () => t('packages.progress.state.aborted'),
+};
+
+// A glyph AND a word for every state: colour alone never carries "did it work" (see the
+// progress bar's CSS), and neither does a symbol someone has to learn.
+const STEP_GLYPHS = { running: '◐', ok: '✓', failed: '✕', skipped: '↷', aborted: '■' };
+
+let progressDeployment = null;
+const expandedTargets = new Set();
+const selectedTargets = new Set();
+// The one step log open at a time: { machine, phase, ordinal, text, nextSeq, done, expired }.
+let openLog = null;
+let logTimer = null;
+
+function stageLabel(stage) {
+    const get = STAGE_LABELS[stage];
+    return get ? get() : statusLabel(stage);
+}
+
+function stepStateLabel(state) {
+    const get = STEP_STATE_LABELS[state];
+    return get ? get() : t('packages.progress.state.not_run');
+}
+
+function versionAtLeast(version, minimum) {
+    const parse = (v) => (String(v || '').match(/^\s*(\d+)\.(\d+)\.(\d+)/) || []).slice(1).map(Number);
+    const a = parse(version);
+    const b = parse(minimum);
+    if (a.length !== 3) return false;
+    for (let i = 0; i < 3; i++) {
+        if (a[i] !== b[i]) return a[i] > b[i];
+    }
+    return true;
+}
+
+function fmtSeconds(seconds) {
+    const s = Math.max(0, Math.round(seconds));
+    if (s < 60) return t('packages.progress.seconds', { seconds: s });
+    return t('packages.progress.minutes', {
+        minutes: Math.floor(s / 60), seconds: String(s % 60).padStart(2, '0') });
+}
+
+function nowEpoch() { return Math.floor(Date.now() / 1000); }
+
+function stepKindLabel(kind) {
+    if (kind === 'command') return t('packages.progress.kind_command');
+    const found = (vocab.step_kinds || []).find((k) => k.name === kind);
+    return found ? found.label : kind;
+}
+
+function detectionKindLabel(kind) {
+    const found = (vocab.detection_kinds || []).find((k) => k.name === kind);
+    return found ? found.label : kind;
+}
+
+/** "Step 2 · Install drivers", "Download · drivers.zip", "Detection · File exists". */
+function phaseLabel(step) {
+    if (step.phase === 'download') {
+        return t('packages.progress.phase_download', { what: step.label || '' });
+    }
+    if (step.phase === 'detect') {
+        return t('packages.progress.phase_detect', { what: detectionKindLabel(step.kind) });
+    }
+    return t('packages.progress.phase_step', {
+        n: step.ordinal, what: step.label || stepKindLabel(step.kind) });
+}
+
+/** What the collapsed row says about where the machine is. */
+function currentStepText(target) {
+    const current = target.current_step;
+    if (!current) return '';
+    if (target.status === 'succeeded') {
+        return t('packages.progress.all_done', { total: target.step_total });
+    }
+    if (current.phase === 'step' && current.state === 'running') {
+        return t('packages.progress.step_of', {
+            current: current.ordinal, total: target.step_total,
+            what: current.label || stepKindLabel(current.kind) });
+    }
+    return phaseLabel(current);
+}
+
+function isUnresolved(target) {
+    return !TERMINAL.includes(target.status);
+}
+
+function renderStepList(target) {
+    const wrap = el('div', 'pkg-steps-wrap');
+    if (!target.steps.length) {
+        wrap.appendChild(el('p', 'stat-card__meta', t('packages.progress.no_steps_yet')));
+        return wrap;
+    }
+    if (!target.agent_reports_steps) {
+        wrap.appendChild(el('p', 'stat-card__meta', target.agent_version
+            ? t('packages.progress.old_agent', { version: target.agent_version, min: MIN_PROGRESS_AGENT })
+            : t('packages.progress.old_agent_unknown', { min: MIN_PROGRESS_AGENT })));
+    }
+    const list = el('ol', 'pkg-steps');
+    const now = nowEpoch();
+    target.steps.forEach((step) => {
+        const item = el('li', `pkg-step pkg-step--${step.state || 'none'}`);
+        item.appendChild(el('span', 'pkg-step__glyph', STEP_GLYPHS[step.state] || '○'));
+        const main = el('div', 'pkg-step__main');
+        main.appendChild(el('div', 'pkg-step__label', phaseLabel(step)));
+        if (!target.agent_reports_steps) {
+            // The plan, and nothing about it: an agent that reports no steps has not said
+            // whether any of them ran, and "Not run" under each would be a claim it never made.
+            item.appendChild(main);
+            list.appendChild(item);
+            return;
+        }
+        const meta = [stepStateLabel(step.state)];
+        if (step.exit_code !== null && step.exit_code !== undefined) {
+            meta.push(t('packages.progress.exit_code', { code: step.exit_code }));
+        }
+        if (step.started_at) {
+            meta.push(fmtSeconds((step.finished_at || now) - step.started_at));
+        }
+        main.appendChild(el('div', 'stat-card__meta', meta.join(' · ')));
+        if (step.message && step.state !== 'ok') {
+            main.appendChild(el('div', 'pkg-target-error', step.message));
+        }
+        if (step.has_output) {
+            const isOpen = openLog && openLog.machine === target.machine
+                && openLog.phase === step.phase && openLog.ordinal === step.ordinal;
+            const toggle = el('button', 'btn btn--ghost pkg-step__log-toggle',
+                isOpen ? t('packages.progress.hide_log') : t('packages.progress.show_log'));
+            toggle.type = 'button';
+            toggle.addEventListener('click', () => toggleLog(target.machine, step));
+            main.appendChild(toggle);
+            if (isOpen) main.appendChild(renderLog());
+        }
+        item.appendChild(main);
+        list.appendChild(item);
+    });
+    wrap.appendChild(list);
+    return wrap;
+}
+
+function renderLog() {
+    const box = el('div', 'pkg-step-log');
+    if (openLog.expired) {
+        box.appendChild(el('p', 'stat-card__meta', t('packages.progress.log_expired')));
+        return box;
+    }
+    const pre = el('pre', 'pkg-step-log__text',
+        openLog.text || (openLog.done ? t('packages.progress.log_empty') : t('common.loading')));
+    pre.id = 'pkg-step-log-text';
+    box.appendChild(pre);
+    return box;
+}
+
+function toggleLog(machine, step) {
+    clearTimeout(logTimer);
+    const same = openLog && openLog.machine === machine
+        && openLog.phase === step.phase && openLog.ordinal === step.ordinal;
+    openLog = same ? null : {
+        machine, phase: step.phase, ordinal: step.ordinal,
+        text: '', nextSeq: -1, done: false, expired: false,
+    };
+    if (progressDeployment) renderProgress(progressDeployment);
+    if (openLog) pollLog();
+}
+
+async function pollLog() {
+    clearTimeout(logTimer);
+    const log = openLog;
+    if (!log || !progressModal.open || !openDeploymentId) return;
+    try {
+        const doc = await api(
+            `/api/deployments/${encodeURIComponent(openDeploymentId)}/targets/`
+            + `${encodeURIComponent(log.machine)}/steps/${encodeURIComponent(log.phase)}/`
+            + `${log.ordinal}/output?after_seq=${log.nextSeq}`);
+        if (log !== openLog) return;      // closed or switched while this was in flight
+        log.text += (doc.chunks || []).map((c) => c.text).join('');
+        if (doc.chunks && doc.chunks.length) log.nextSeq = doc.next_seq - 1;
+        log.done = !!doc.done;
+        log.expired = !!doc.expired;
+        const pre = document.getElementById('pkg-step-log-text');
+        if (pre && !log.expired) {
+            // Follow the tail only if the reader was already there: someone scrolled up to
+            // read an error must not be yanked back down every second.
+            const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+            pre.textContent = log.text || (log.done ? t('packages.progress.log_empty') : t('common.loading'));
+            if (atBottom) pre.scrollTop = pre.scrollHeight;
+        } else if (progressDeployment) {
+            renderProgress(progressDeployment);
+        }
+        if (!log.done) logTimer = setTimeout(pollLog, LOG_POLL_MS);
+    } catch (e) {
+        log.text += `\n${e.message}\n`;
+    }
+}
+
+function renderTargetRows(target, body) {
+    const tr = el('tr', 'pkg-target-row');
+    const pick = el('td');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = selectedTargets.has(target.machine);
+    box.setAttribute('aria-label', t('packages.progress.select_machine', { machine: target.machine }));
+    box.addEventListener('change', () => {
+        if (box.checked) selectedTargets.add(target.machine);
+        else selectedTargets.delete(target.machine);
+        syncProgressActions();
+    });
+    pick.appendChild(box);
+    tr.appendChild(pick);
+
+    const machine = el('td');
+    const expanded = expandedTargets.has(target.machine);
+    const toggle = el('button', 'pkg-expand', `${expanded ? '▾' : '▸'} ${target.machine}`);
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    toggle.title = expanded ? t('packages.progress.hide_steps') : t('packages.progress.show_steps');
+    toggle.addEventListener('click', () => {
+        if (expandedTargets.has(target.machine)) expandedTargets.delete(target.machine);
+        else expandedTargets.add(target.machine);
+        renderProgress(progressDeployment);
+    });
+    machine.appendChild(toggle);
+    tr.appendChild(machine);
+
+    const stage = el('td');
+    stage.appendChild(el('span', `pkg-stage pkg-stage--${target.stage}`, stageLabel(target.stage)));
+    tr.appendChild(stage);
+
+    const where = el('td');
+    const text = currentStepText(target);
+    if (text) where.appendChild(el('div', null, text));
+    if (target.started_at && (target.stage === 'running' || target.stage === 'aborting')) {
+        where.appendChild(el('div', 'stat-card__meta', t('packages.progress.elapsed', {
+            duration: fmtSeconds(nowEpoch() - target.started_at) })));
+    } else if (target.started_at && target.finished_at) {
+        where.appendChild(el('div', 'stat-card__meta', t('packages.progress.took', {
+            duration: fmtSeconds(target.finished_at - target.started_at) })));
+    }
+    tr.appendChild(where);
+
+    tr.appendChild(el('td', null, String(target.attempts)));
+
+    const detail = el('td');
+    if (target.failed_step) {
+        detail.appendChild(el('div', null,
+            t('packages.progress.failed_at', { step: phaseLabel(target.failed_step) })));
+    }
+    if (target.last_error) {
+        detail.appendChild(el('div', 'pkg-target-error', target.last_error));
+    } else if (target.next_attempt_at && target.status === 'pending') {
+        detail.appendChild(el('div', 'stat-card__meta',
+            t('packages.deployments.retries_at', { when: fmtTime(target.next_attempt_at) })));
+    }
+    tr.appendChild(detail);
+    body.appendChild(tr);
+
+    if (expanded) {
+        const stepsRow = el('tr', 'pkg-steps-row');
+        const cell = el('td');
+        cell.colSpan = 6;
+        cell.appendChild(renderStepList(target));
+        stepsRow.appendChild(cell);
+        body.appendChild(stepsRow);
+    }
+}
+
+function renderProgressActions() {
+    const bar = el('div', 'pkg-progress-actions');
+    const all = el('label', 'stat-card__meta');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.id = 'progress-select-all';
+    const visible = progressDeployment.targets.map((target) => target.machine);
+    box.checked = visible.length > 0 && visible.every((m) => selectedTargets.has(m));
+    box.addEventListener('change', () => {
+        visible.forEach((m) => (box.checked ? selectedTargets.add(m) : selectedTargets.delete(m)));
+        renderProgress(progressDeployment);
+    });
+    all.appendChild(box);
+    all.appendChild(document.createTextNode(` ${t('packages.progress.select_all')}`));
+    bar.appendChild(all);
+
+    [['progress-abort', t('packages.progress.abort'), abortSelected, 'btn btn--danger'],
+     ['progress-redeploy', t('packages.progress.redeploy_selected'), redeploySelected, 'btn'],
+     ['progress-retry-now', t('packages.progress.retry_now'), retryNowSelected, 'btn']]
+        .forEach(([id, label, handler, cls]) => {
+            const button = el('button', cls, label);
+            button.type = 'button';
+            button.id = id;
+            button.addEventListener('click', handler);
+            bar.appendChild(button);
+        });
+    return bar;
+}
+
+/** Offer only what the selection can take, so a disabled button explains itself by its
+ *  absence of effect rather than a refusal after the click. */
+function syncProgressActions() {
+    if (!progressDeployment) return;
+    const chosen = progressDeployment.targets.filter((target) => selectedTargets.has(target.machine));
+    const set = (id, enabled) => {
+        const button = document.getElementById(id);
+        if (button) button.disabled = !enabled;
+    };
+    set('progress-abort', chosen.some((target) => isUnresolved(target)
+        && target.stage !== 'aborting'));
+    set('progress-redeploy', chosen.some((target) => !isUnresolved(target)));
+    set('progress-retry-now', chosen.some((target) => target.stage === 'retry_wait'));
+}
 
 function renderProgress(deployment) {
+    progressDeployment = deployment;
     document.getElementById('progress-title').textContent =
         t('packages.deployments.progress_title', {
             package: deployment.package_name || t('packages.deployments.deleted_package'),
             status: statusLabel(deployment.status),
         });
+    // A machine that left the deployment (deleted, or out of scope now) leaves the selection.
+    const present = new Set(deployment.targets.map((target) => target.machine));
+    [...selectedTargets].forEach((m) => { if (!present.has(m)) selectedTargets.delete(m); });
+
+    // The open log's <pre> keeps its scroll position across a re-render.
+    const oldPre = document.getElementById('pkg-step-log-text');
+    const logScroll = oldPre ? oldPre.scrollTop : null;
+
     progressBody.replaceChildren();
     progressBody.appendChild(renderProgressBar(deployment.target_counts, deployment.target_total));
     progressBody.appendChild(renderTally(deployment.target_counts));
+    progressBody.appendChild(renderProgressActions());
 
     const table = el('table', 'data-table');
-    table.style.marginTop = 'var(--space-4)';
     const head = el('thead');
     const headRow = el('tr');
-    [t('packages.deployments.target_col.machine'), t('packages.deployments.target_col.status'),
-     t('packages.deployments.target_col.attempts'),
+    ['', t('packages.deployments.target_col.machine'), t('packages.deployments.target_col.status'),
+     t('packages.progress.col_step'), t('packages.deployments.target_col.attempts'),
      t('packages.deployments.target_col.detail')].forEach((label) => {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
     table.appendChild(head);
-
     const body = el('tbody');
-    deployment.targets.forEach((target) => {
-        const tr = el('tr');
-        tr.appendChild(el('td', null, target.machine));
-        tr.appendChild(el('td', null, statusLabel(target.status)));
-        tr.appendChild(el('td', null, String(target.attempts)));
-
-        const detail = el('td');
-        if (target.last_error) {
-            detail.appendChild(el('div', 'pkg-target-error', target.last_error));
-        } else if (target.next_attempt_at) {
-            detail.appendChild(el('div', 'stat-card__meta',
-                t('packages.deployments.retries_at',
-                  { when: fmtTime(target.next_attempt_at) })));
-        }
-        tr.appendChild(detail);
-        body.appendChild(tr);
-    });
+    deployment.targets.forEach((target) => renderTargetRows(target, body));
     table.appendChild(body);
-    progressBody.appendChild(table);
+    const scroll = el('div', 'table-scroll');
+    scroll.appendChild(table);
+    progressBody.appendChild(scroll);
+    syncProgressActions();
+
+    const pre = document.getElementById('pkg-step-log-text');
+    if (pre && logScroll !== null) pre.scrollTop = logScroll;
 
     // Keep watching only while something can still change. The hub's scheduler is what
     // actually advances the deploy; this is a viewer, so a closed tab costs nothing.
-    const unresolved = deployment.targets.some((t) => !TERMINAL.includes(t.status));
     clearTimeout(pollTimer);
-    if (unresolved && progressModal.open) {
-        pollTimer = setTimeout(() => refreshProgress(), 5000);
+    if (deployment.targets.some(isUnresolved) && progressModal.open) {
+        pollTimer = setTimeout(() => refreshProgress(), PROGRESS_POLL_MS);
     }
 }
 
@@ -1293,14 +1637,88 @@ async function refreshProgress() {
 }
 
 async function openProgress(deploymentId) {
+    if (deploymentId !== openDeploymentId) {
+        expandedTargets.clear();
+        selectedTargets.clear();
+        openLog = null;
+    }
     openDeploymentId = deploymentId;
+    progressDeployment = null;
     progressBody.replaceChildren(el('p', 'stat-card__meta', t('common.loading')));
     progressModal.showModal();
     await refreshProgress();
+    // One machine is the common case (a deploy to one PC): open its steps straight away.
+    if (progressDeployment && progressDeployment.targets.length === 1
+        && !expandedTargets.size) {
+        expandedTargets.add(progressDeployment.targets[0].machine);
+        renderProgress(progressDeployment);
+    }
+}
+
+function selectedMachines() {
+    return progressDeployment
+        ? progressDeployment.targets.map((target) => target.machine).filter((m) => selectedTargets.has(m))
+        : [];
+}
+
+async function postProgressAction(path, machines) {
+    // Content-Type is load-bearing, not habit: app.login_required refuses a POST without
+    // it, which is what keeps a cross-site form from aborting a deploy.
+    return api(`/api/deployments/${encodeURIComponent(openDeploymentId)}/${path}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(machines ? { machines } : {}),
+    });
+}
+
+async function abortSelected() {
+    const machines = selectedMachines();
+    if (!machines.length) return;
+    if (!await confirmDialog({
+        title: t('packages.progress.confirm_abort_title'),
+        message: t('packages.progress.confirm_abort', { count: machines.length }),
+        confirmLabel: t('packages.progress.confirm_abort_ok'),
+        cancelLabel: t('dialog.keep_running'),
+        danger: true,
+    })) return;
+    try {
+        const doc = await postProgressAction('abort', machines);
+        renderProgress(doc);
+        const outcome = doc.abort || {};
+        if ((outcome.unsupported || []).length) {
+            void noticeDialog({ kind: 'error', message: t('packages.progress.abort_unsupported', {
+                min: MIN_PROGRESS_AGENT, machines: outcome.unsupported.join(', ') }) });
+        } else if (!(outcome.cancelled || []).length && !(outcome.aborting || []).length) {
+            void noticeDialog({ message: t('packages.progress.abort_none') });
+        }
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
+}
+
+async function redeploySelected() {
+    const machines = selectedMachines();
+    if (!machines.length) return;
+    if (!await confirmDialog({
+        title: t('packages.progress.confirm_redeploy_title'),
+        message: t('packages.progress.confirm_redeploy', { count: machines.length }),
+        confirmLabel: t('packages.progress.confirm_redeploy_ok'),
+    })) return;
+    try {
+        renderProgress(await postProgressAction('retry', machines));
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
+}
+
+async function retryNowSelected() {
+    const machines = selectedMachines();
+    if (!machines.length) return;
+    try {
+        const doc = await postProgressAction('retry-now', machines);
+        renderProgress(doc);
+        if (!doc.moved) void noticeDialog({ message: t('packages.progress.retry_now_none') });
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
 }
 
 document.getElementById('progress-close').addEventListener('click', () => {
     clearTimeout(pollTimer);
+    clearTimeout(logTimer);
     progressModal.close();
     loadDeployments();
 });

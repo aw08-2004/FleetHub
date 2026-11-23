@@ -196,6 +196,9 @@ UNMARKED_PATHS = frozenset({"/api/report", "/api/agent/heartbeat"})
 UNMARKED_RULES = frozenset({
     "/api/machines/<machine>/live/watch",
     "/api/agent/commands/<command_id>/output",
+    # A deployment's step events (packages_web.py). Not a stream, but the agent repeats the
+    # current one as a keepalive; the route marks `deployments` itself when a step MOVED.
+    "/api/agent/commands/<command_id>/progress",
     "/api/agent/pty/<session_id>/output",
     "/api/fleet/pty/<session_id>/input",
     "/api/agent/remote/<session_id>/signal",

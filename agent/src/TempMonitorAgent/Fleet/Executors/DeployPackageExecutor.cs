@@ -36,6 +36,12 @@ namespace TempMonitorAgent.Fleet.Executors;
 ///      and the deploy only succeeds if the software is actually THERE afterward. It runs
 ///      once, at the end, because it is a claim about the PACKAGE, not about a step.
 ///
+/// Each phase is also REPORTED as it starts and ends (<see cref="IStepProgress"/>, 3.53.0):
+/// one event per payload download, per step, and for detection, which the console draws as
+/// PDQ's "step 3 of 5". An operator's Abort comes back the same way and cancels the token
+/// this runs under; the step's process tree is killed, the result says "aborted", and the
+/// working directory is still removed on the way out.
+///
 /// The whole working directory is deleted afterward, on every path. It lives under the
 /// agent's own %ProgramData% (SYSTEM-owned, like the self-updater's staging dir), not
 /// %TEMP%, so a half-finished install can't leave an executable somewhere a standard user
@@ -58,9 +64,14 @@ public sealed class DeployPackageExecutor : ICommandExecutor
     /// %ProgramData%, for the ACL reason in the class docstring.</summary>
     private static string StagingDir => Path.Combine(AgentConfig.ProgramDataDir, "packages");
 
+    public Task<CommandResult> ExecuteAsync(
+        FleetCommand cmd, Action<string>? onOutput, CancellationToken ct) =>
+        ExecuteAsync(cmd, onOutput, null, ct);
+
     public async Task<CommandResult> ExecuteAsync(
-        FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
+        FleetCommand cmd, Action<string>? onOutput, IStepProgress? progress, CancellationToken ct)
     {
+        var phases = new PhaseTracker(progress);
         var packageName = cmd.Params.GetString("package_name") ?? "package";
         var legacySource = cmd.Params.GetObject("source");
         var steps = cmd.Params.GetArray("steps");
@@ -112,13 +123,22 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             var vars = new PackageVariables(workDir);
 
             // ---- 1. payloads ----
+            // `download` counts FILE payloads only, in list order -- the same count as the
+            // hub's packages.progress_skeleton, or the events land on the wrong rows.
+            var download = 0;
             foreach (var source in sources)
             {
                 var kind = source.GetString("kind") ?? "";
                 if (kind is not ("upload" or "url" or "unc")) continue;
                 var name = source.GetString("name") ?? "payload";
+                phases.Begin(StepPhase.Download, ++download);
                 var (path, error) = await ResolvePayloadAsync(source, kind, workDir, Say, ct);
-                if (error is not null) return new CommandResult(false, log + "\n" + error);
+                if (error is not null)
+                {
+                    phases.End(StepState.Failed, message: error.Replace("[deploy] ", ""));
+                    return new CommandResult(false, log + "\n" + error);
+                }
+                phases.End(StepState.Ok);
                 vars.Bind(name, path!);
                 // `{file}` is what every package written before steps says, so a package
                 // with exactly one payload keeps meaning what it always meant.
@@ -130,16 +150,17 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             if (multiStep)
             {
                 ran = await PackageStepRunner.RunAllAsync(
-                    steps!, vars, timeout, successCodes, Say, Emit, ct);
+                    steps!, vars, timeout, successCodes, Say, Emit, ct, phases);
             }
             else
             {
                 ran = await RunSingleCommandAsync(
-                    cmd, legacySource, vars, timeout, successCodes, Say, Emit, ct);
+                    cmd, legacySource, vars, timeout, successCodes, Say, Emit, ct, phases);
             }
-            if (!ran) return new CommandResult(false, log.ToString());
+            if (!ran) return new CommandResult(false, log + Aborted(phases));
 
             // ---- 4. detection ----
+            phases.Begin(StepPhase.Detect, 1);
             var detection = cmd.Params.GetObject("detection");
             var (detected, detail) = EvaluateDetection(detection);
             Say($"[deploy] detection: {detail}");
@@ -147,14 +168,22 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             {
                 Say("[deploy] FAILED: the installer reported success but the software " +
                     "was not detected afterward");
+                phases.End(StepState.Failed, message: detail);
                 return new CommandResult(false, log.ToString());
             }
+            phases.End(StepState.Ok, message: detail);
 
             Say($"[deploy] {packageName} installed");
             return new CommandResult(true, log.ToString());
         }
         catch (Exception e)
         {
+            // An abort cancels the token, and wherever that lands -- mid-download, between
+            // steps -- it surfaces as an OperationCanceledException. Say so plainly rather
+            // than "FAILED: A task was canceled", which reads like a bug.
+            var aborted = phases.AbortRequested && ct.IsCancellationRequested;
+            phases.Fail(aborted ? null : e.Message, aborted);
+            if (aborted) return new CommandResult(false, log + Aborted(phases));
             _log.LogWarning(e, "deploy_package failed for {Package}", packageName);
             return new CommandResult(false, log + $"\n[deploy] FAILED: {e.Message}");
         }
@@ -171,6 +200,10 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             TempMonitorAgent.Software.SoftwareInventoryReporter.Invalidate();
         }
     }
+
+    /// <summary>The closing line of a run the console stopped -- empty for any other end.</summary>
+    private static string Aborted(PhaseTracker phases) =>
+        phases.AbortRequested ? "\n[deploy] ABORTED from the console" : "";
 
     /// <summary>The payload list, from `sources` or from a lone legacy `source`.</summary>
     private static List<JsonObject> ResolveSourceList(FleetCommand cmd, JsonObject? legacySource)
@@ -190,13 +223,19 @@ public sealed class DeployPackageExecutor : ICommandExecutor
     /// package written before steps runs through and its behaviour must not shift.</summary>
     private async Task<bool> RunSingleCommandAsync(
         FleetCommand cmd, JsonObject? source, PackageVariables vars, int timeout,
-        HashSet<int> successCodes, Action<string> say, Action<string> emit, CancellationToken ct)
+        HashSet<int> successCodes, Action<string> say, Action<string> emit, CancellationToken ct,
+        PhaseTracker? phases = null)
     {
+        // The one command line is step 1 of 1 to the console, so a pre-steps package gets
+        // the same live view as every other.
+        phases?.Begin(StepPhase.Step, 1);
         var kind = source.GetString("kind") ?? "";
         var (file, args, buildError) = BuildCommandLine(cmd, source, kind, vars);
         if (file is null)
         {
-            say("[deploy] " + (buildError ?? "FAILED: deploy_package has no install command"));
+            var why = buildError ?? "FAILED: deploy_package has no install command";
+            say("[deploy] " + why);
+            phases?.End(StepState.Failed, message: why);
             return false;
         }
 
@@ -208,18 +247,30 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         var outcome = await ProcessRunner.RunAsync(
             file, args, ct, timeoutSeconds: timeout, onLine: emit);
 
+        if (outcome.TimedOut && ct.IsCancellationRequested)
+        {
+            // ProcessRunner reports a cancelled wait as a timeout; it was the Abort, or the
+            // service stopping, and the tree is already killed either way.
+            say("[deploy] stopped: the run was cancelled");
+            phases?.Fail(null, aborted: phases.AbortRequested);
+            return false;
+        }
         if (outcome.TimedOut)
         {
             say($"[deploy] FAILED: timed out after {timeout}s");
+            phases?.End(StepState.Failed, message: $"timed out after {timeout}s");
             return false;
         }
         if (!successCodes.Contains(outcome.ExitCode))
         {
-            say($"[deploy] FAILED: exit code {outcome.ExitCode} is not in " +
-                $"[{string.Join(", ", successCodes.OrderBy(c => c))}]");
+            var why = $"exit code {outcome.ExitCode} is not in " +
+                      $"[{string.Join(", ", successCodes.OrderBy(c => c))}]";
+            say("[deploy] FAILED: " + why);
+            phases?.End(StepState.Failed, outcome.ExitCode, why);
             return false;
         }
         say($"[deploy] exit code {outcome.ExitCode} accepted");
+        phases?.End(StepState.Ok, outcome.ExitCode);
         return true;
     }
 
