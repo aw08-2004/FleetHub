@@ -396,10 +396,16 @@ def create_sharing_blueprint(db_path, log_dir, login_required, access,
                 or not (issued_by == stem or issued_by.startswith(stem + "/"))):
             return jsonify({"error": "No such command."}), 404
         result = command.get("result") or None
+        # operator_view, as on the local command route (issue #199): the borrowing hub relays
+        # this answer to any of its operators holding `issue_commands`, not only to the one
+        # with `remote_control` who started the session, and the peer already got its ICE
+        # servers in the start answer -- so a TURN credential here only ever reaches the
+        # people who were not meant to have it.
+        params = fleet.operator_view(command).get("params")
         return jsonify({
             "id": command.get("id"),
             "type": command.get("type"),
-            "params": command.get("params"),
+            "params": params,
             "status": command.get("status"),
             "created_at": command.get("created_at"),
             "result": None if result is None else {
