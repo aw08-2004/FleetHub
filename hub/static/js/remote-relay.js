@@ -112,6 +112,7 @@
         const stream = canvas.captureStream();
         let decoder = null;
         let configured = false;
+        let configuredCodec = '';
         let waitingForKey = true;
         let after = 0;
         let stopped = false;
@@ -159,12 +160,20 @@
         function decodeVideo(record) {
             const key = (record.flags & FLAG_KEYFRAME) !== 0;
             if (!key && waitingForKey) return;
-            if (key && !configured) {
-                const codec = opts.codec === 'vp8' ? 'vp8' : h264CodecString(record.payload);
+            // A keyframe whose codec string differs from the one configured is a NEW encoder:
+            // the agent replaced its helper mid-session (a sign-in at the logon screen, issue
+            // #170) and the stream carries on in this same relay, possibly from a hardware
+            // encoder producing another profile than the one before. Reconfiguring costs nothing
+            // on a keyframe; feeding it to the old configuration may be a decode error and a
+            // wasted round trip for another keyframe.
+            let codec = null;
+            if (key) codec = opts.codec === 'vp8' ? 'vp8' : h264CodecString(record.payload);
+            if (key && (!configured || codec !== configuredCodec)) {
                 // optimizeForLatency: no frame reordering buffer. The agent never emits B-frames,
                 // so there is nothing to reorder and every buffered frame is pure delay.
                 decoder.configure({ codec, optimizeForLatency: true });
                 configured = true;
+                configuredCodec = codec;
             }
             waitingForKey = false;
             lastTimestamp = Math.max(lastTimestamp + 1, Math.round(performance.now() * 1000));

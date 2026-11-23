@@ -13,6 +13,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import fleet
 import settings
+from audit_web import create_audit_blueprint
 from fleet_web import create_fleet_blueprint
 from permissions_web import create_access
 from flask import Flask, jsonify
@@ -61,10 +62,13 @@ def main():
         # operator it signs in as is a break-glass superuser and the permission layer
         # is a pass-through. Scoped-operator refusals (a wrong capability, an
         # out-of-scope machine) are covered in test_permissions_web.py.
+        access = create_access(db_path, {"operator@x.com", "someone.else@x.com",
+                                         "ann@x.com", "bob@x.com"})
         app.register_blueprint(create_fleet_blueprint(
-            db_path, SECRET, fake_login_required,
-            create_access(db_path, {"operator@x.com", "someone.else@x.com",
-                                    "ann@x.com", "bob@x.com"})))
+            db_path, SECRET, fake_login_required, access))
+        # The Audit Log's read route, for the issue #199 checks: the place a pre-1.176.0
+        # issue_command row's TURN credential would surface.
+        app.register_blueprint(create_audit_blueprint(db_path, fake_login_required, access))
         # session.get("user") is read by issue-command; seed it.
         @app.before_request
         def _seed_session():
@@ -531,6 +535,81 @@ def main():
                                  "AND detail_json LIKE ?", (f"%{rsid}%",)).fetchone()
         check("...and the issue_command audit row carries neither",
               trail is not None and "u-secret" not in trail[0] and "c-secret" not in trail[0])
+
+        print("\n== Audit rows written before 1.176.0 lose their TURN credential (issue #199) ==")
+        # Exactly what a pre-1.176.0 create_command wrote: the agent's params verbatim, as a
+        # sorted JSON string inside the detail. One whole, one cut mid-credential at the
+        # 4096-char cap, so the fallback path that cannot parse the params is exercised too.
+        old_params = json.dumps({"session_id": "s0", "ice_servers": [
+            {"urls": ["turn:turn.example:3478"], "username": "old-user",
+             "credential": "old-cred-secret"}]}, sort_keys=True)
+        # Sorted keys put `credential` first in the server object, so this cut lands inside
+        # its value: "old-cred" survives the cut, "-secret" does not.
+        cut_params = old_params[:old_params.index("old-cred-secret") + len("old-cred")]
+        # A username that is NOT a TURN secret: a command whose own params carry one must
+        # come back as stored.
+        plain_params = json.dumps({"username": "alice"}, sort_keys=True)
+
+        def insert_old(cid, params_text):
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    "INSERT INTO audit_log(ts, actor, action, target, detail_json, level) "
+                    "VALUES (?, 'ann@x.com', 'issue_command', 'PC-01', ?, ?)",
+                    (int(time.time()), json.dumps({"command_id": cid,
+                                                   "type": "start_remote_session",
+                                                   "params": params_text}, sort_keys=True),
+                     fleet.LEVEL_SECURITY))
+
+        insert_old("legacy-whole", old_params)
+        insert_old("legacy-cut", cut_params)
+        insert_old("legacy-plain", plain_params)
+        page = c.get("/api/audit?action=issue_command&limit=200").get_json()
+        shown = json.dumps(page)
+        check("the audit route shows no pre-1.176.0 TURN username or credential",
+              "old-user" not in shown and "old-cred" not in shown)
+        by_cid = {e["detail"]["command_id"]: e["detail"] for e in page["entries"]
+                  if isinstance(e.get("detail"), dict)}
+        whole = json.loads(by_cid.get("legacy-whole", {}).get("params", "{}"))
+        check("...keeps the relay URL and session id of the whole row",
+              whole.get("session_id") == "s0"
+              and whole.get("ice_servers") == [{"urls": ["turn:turn.example:3478"]}])
+        check("...still shows the row cut at the cap, ice_servers and all",
+              "ice_servers" in by_cid.get("legacy-cut", {}).get("params", ""))
+        check("...and leaves a username that is not a TURN secret alone",
+              by_cid.get("legacy-plain", {}).get("params") == plain_params)
+
+        def stored(cid):
+            with sqlite3.connect(db_path) as conn:
+                return conn.execute("SELECT detail_json FROM audit_log WHERE detail_json LIKE ?",
+                                    (f"%{cid}%",)).fetchone()[0]
+        check("the rows really are dirty on disk before the scrub (test is meaningful)",
+              "old-cred" in stored("legacy-whole") and "old-cred" in stored("legacy-cut"))
+        plain_before = stored("legacy-plain")
+        # The scrub runs from init_fleet_db on every boot; call it the way a restart would.
+        fleet.init_fleet_db(db_path)
+        check("the startup scrub removes them at rest",
+              "old-user" not in stored("legacy-whole") and "old-cred" not in stored("legacy-whole")
+              and "old-cred" not in stored("legacy-cut"))
+        check("...keeping the relay URL and the cut row's ice_servers on disk",
+              "turn:turn.example:3478" in stored("legacy-whole")
+              and "ice_servers" in stored("legacy-cut"))
+        check("...and not touching a row with no TURN secret in it",
+              stored("legacy-plain") == plain_before)
+        with fleet.get_conn(db_path) as conn:
+            again = fleet.scrub_audit_ice_credentials(conn)
+        check("a second scrub finds nothing to do", again == 0)
+        # And the agent's copy, which is the command row and not the audit row, is untouched.
+        rsid2 = fleet.create_command(
+            db_path, machine="PC-01", command_type="start_remote_session",
+            params={"session_id": "s2", "ice_servers": [
+                {"urls": ["turn:turn.example:3478"], "username": "u2", "credential": "c2"}]},
+            issued_by="ann@x.com")
+        fleet.init_fleet_db(db_path)
+        pulled = [cmd for cmd in c.get("/api/agent/commands", headers=auth).get_json()["commands"]
+                  if cmd["id"] == rsid2]
+        check("after a scrub the agent still receives its TURN credential",
+              pulled and pulled[0]["params"]["ice_servers"][0].get("credential") == "c2"
+              and pulled[0]["params"]["ice_servers"][0].get("username") == "u2")
 
         print(f"\n==== {PASS} passed, {FAIL} failed ====")
         sys.exit(1 if FAIL else 0)

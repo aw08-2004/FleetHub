@@ -282,6 +282,47 @@ def main():
         finally:
             remote_relay.MAX_UP_MESSAGES = saved_up
 
+        print("\n== A replacement helper rejoins a relayed session (issue #170) ==")
+        # The operator signs in at the logon screen, the Windows session changes, and the agent's
+        # supervisor relaunches the helper -- which posts a fresh offer and, on purpose, reads
+        # only the signals AFTER it (RemoteHelper.cs: an older answer would poison its new
+        # peer). So it never sees the console's first `relay` signal, and without a second one
+        # it waits on WebRTC while the viewer sits on "Live (via hub)" with a black screen.
+        r = c.get(f"/api/remote/session/{sid}/relay/down?after=0")
+        viewer_cursor = int(r.headers.get("X-Relay-Next"))
+        rows_before = len(relay_audit_rows())
+        r = c.post(f"/api/agent/remote/{sid}/signal",
+                   json={"kind": "offer", "payload": {"sdp": "v=0 replacement", "relay": True}},
+                   headers=auth)
+        check("the replacement helper posts its offer -> 200", r.status_code == 200)
+        new_offer_seq = r.get_json()["seq"]
+        r = c.post(f"/api/remote/session/{sid}/signal",
+                   json={"kind": "relay", "payload": {"reason": "helper_restarted"}})
+        check("a second relay signal on an already-open relay is accepted -> 200",
+              r.status_code == 200)
+        check("and is not audited as a second switch -- the hub saw the picture already",
+              len(relay_audit_rows()) == rows_before)
+        check("and the relay the viewer is reading stays the same one",
+              remote_relay.get_relay(sid) is not None)
+        r = c.get(f"/api/agent/remote/{sid}/poll?after_seq={new_offer_seq}", headers=auth)
+        check("the replacement helper, reading only past its own offer, hears the relay signal",
+              any(sig["kind"] == "relay" for sig in r.get_json()["signals"]))
+
+        new_frames = remote_relay.frame_records([
+            (remote_relay.KIND_CONTROL, 0, b'{"t":"geom","w":1920,"h":1080}'),
+            (remote_relay.KIND_VIDEO, remote_relay.FLAG_KEYFRAME, b"\x00\x00\x01\x65NEW"),
+        ])
+        r = c.post(f"/api/agent/remote/{sid}/relay/down", data=new_frames, headers=octet)
+        check("the replacement helper's frames are taken into the open relay -> 200",
+              r.status_code == 200)
+        r = c.get(f"/api/remote/session/{sid}/relay/down?after={viewer_cursor}")
+        got = remote_relay.parse_records(r.get_data())
+        check("the viewer, still on its old cursor, gets the new helper's geometry and keyframe",
+              r.headers.get("X-Relay-State") == "open"
+              and [(k, p) for k, _, p in got][-2:] == [
+                  (remote_relay.KIND_CONTROL, b'{"t":"geom","w":1920,"h":1080}'),
+                  (remote_relay.KIND_VIDEO, b"\x00\x00\x01\x65NEW")])
+
         CURRENT_USER = "tech@x.com"
         r = c.get(f"/api/remote/session/{pc09_relay_sid}/relay/down?after=0")
         check("an out-of-scope operator cannot read another machine's frames -> 404",

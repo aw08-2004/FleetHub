@@ -176,7 +176,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.181.0"
+HUB_VERSION = "1.182.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2162,13 +2162,25 @@ if not AI_API_KEY:
     print("[ai] AI_API_KEY unset -- fine for a provider on this network, required by a "
           "hosted one.")
 
-# Optional shared secret for the /api/report telemetry endpoint. When set, every
-# report POST must include a matching 'report_secret' field. **Superseded as the
-# identity control by signed telemetry (roadmap #29)**: agents now sign each report with
-# their own token and `security.require_enrolled_telemetry` can refuse unsigned ones. No
-# agent ever sent this field, so it stays only as an independent extra gate for a hub
-# that already set it -- unset is the normal state, and no longer means "open".
+# **Retired: read only to warn that it is ignored (issue #215).** It was a shared secret every
+# /api/report POST had to repeat in a 'report_secret' field -- and no agent (Windows, Linux,
+# Android) or installer has ever sent that field. So a hub with it set refused every report
+# from every machine, while the fleet channel kept working: machines enrolled, took config and
+# showed online, with no telemetry, serial or uptime. The Docker template listed it under
+# "required", so every fresh Docker hub set up by the docs was in exactly that state. The
+# gate protected nothing -- nothing ever passed it -- and identity on reports is signed
+# telemetry's job now (roadmap #29: the agent's own token, and
+# `security.require_enrolled_telemetry` to refuse unsigned reports).
+#
+# Rejected: keeping it as an enforced gate and only adding a startup warning. Every hub that
+# has it set is broken today, so the warning would describe an outage rather than prevent one,
+# and the fix would still be "delete the line" -- better to stop the outage on upgrade and let
+# the warning ask for the tidy-up.
 AGENT_REPORT_SECRET = os.environ.get("AGENT_REPORT_SECRET", "")
+if AGENT_REPORT_SECRET:
+    print("[security] WARNING: AGENT_REPORT_SECRET is set but is IGNORED -- no agent ever sent "
+          "it, and enforcing it refused every report. Remove it from .env; signed telemetry "
+          "(security.require_enrolled_telemetry) is the control for /api/report.")
 
 # ================================
 # WEB & WEBSOCKET SETUP
@@ -5959,17 +5971,13 @@ def report_temp():
     latched to an agent that signs. Until this, anything that could reach the hub could
     post as any machine, and the console rendered it as that machine.
 
-    AGENT_REPORT_SECRET, when set, is still checked as well -- see its definition.
+    **AGENT_REPORT_SECRET is no longer checked here (issue #215).** No agent ever sent
+    `report_secret`, so enforcing it refused every report from every machine; it is now only
+    read to print a startup warning -- see its definition for the alternative rejected.
     """
     data = request.get_json(silent=True)
     if not data or 'machine' not in data or 'temp' not in data:
         return jsonify({"error": "Invalid payload"}), 400
-
-    # --- secret gate (Finding 1 fix) ---
-    if AGENT_REPORT_SECRET:
-        provided = data.get('report_secret', '')
-        if not hmac.compare_digest(str(provided), AGENT_REPORT_SECRET):
-            return jsonify({"error": "Invalid or missing report secret"}), 403
 
     machine = data['machine']
     if not is_valid_machine_name(machine):

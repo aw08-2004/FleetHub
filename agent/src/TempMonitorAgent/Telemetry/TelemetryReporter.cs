@@ -69,9 +69,19 @@ public sealed class TelemetryReporter : IDisposable
             {
                 latest = TryParseLatestVersion(body);
                 await FlushOfflineAsync(ct);
+                _log.LogInformation("Sent: {Temp} - Hub responded: {Status}",
+                    temp is double t ? $"{t}°C" : "no temperature", status);
             }
-            _log.LogInformation("Sent: {Temp} - Hub responded: {Status}",
-                temp is double t ? $"{t}°C" : "no temperature", status);
+            else
+            {
+                // **A refusal is a Warning, with the hub's reason** (issue #215). This used to
+                // log "Sent: ... Hub responded: 403" at Information and drop the body, so a hub
+                // refusing every report -- AGENT_REPORT_SECRET, which no agent ever sent --
+                // looked like a healthy agent in its own log while the console showed no
+                // telemetry. Only the log changes: Sent stays true (the hub did answer), and
+                // nothing is buffered, as before.
+                _log.LogWarning("Report refused by hub: {Status} {Error}", status, ErrorText(body));
+            }
             return new ReportResult(true, status, latest);
         }
     }
@@ -181,6 +191,21 @@ public sealed class TelemetryReporter : IDisposable
         }
         catch { /* ignore */ }
         return null;
+    }
+
+    /// <summary>The hub's <c>{"error": ...}</c> text, or "" for a body that has none -- the
+    /// same reading as RemoteSignalingClient.ErrorTextAsync, over a body already read.</summary>
+    public static string ErrorText(string? body)
+    {
+        if (string.IsNullOrEmpty(body)) return "";
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("error", out var e) &&
+                   e.ValueKind == JsonValueKind.String ? e.GetString() ?? "" : "";
+        }
+        catch { return ""; }
     }
 
     public void Dispose() => _http.Dispose();

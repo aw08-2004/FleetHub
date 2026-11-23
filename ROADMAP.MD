@@ -801,6 +801,39 @@ downloaders read `main`, so a check that shipped first would refuse every instal
   through a browser, and note whether SmartScreen still warns. A brand-new publisher can
   need some reputation before the warning stops.
 
+**Hub 1.182.0 (+ next Windows agent) -- reports on a Docker hub, sign-in over the relay, old
+audit lines** (#215, #170, #199)
+Three issue fixes in one release. **#215:** `deploy/docker/example.env` listed
+`AGENT_REPORT_SECRET` as required, no agent has ever sent it, and the hub refused every report
+while it was set -- a fresh Docker hub showed enrolled machines with no data. The hub now
+ignores it and warns at startup; the agent logs a refused report as a warning with the hub's
+reason instead of "Sent". Rejected: keeping it enforced with only a warning (every hub that set
+it is already broken, so the warning would describe the outage, not prevent it). **#170:** a
+replacement remote helper (the Windows session changed under it -- a sign-in) reads only
+signals after its own offer, so on a session already relayed through the hub it never saw the
+`relay` signal and the viewer sat on a black "Live (via hub)". The viewer now re-sends `relay`
+when a new offer arrives while relaying (hub-only, works with installed agents). The agent half:
+a session pinned to the console's logon screen now follows the sign-in (`follow_sign_in`);
+pinned user sessions and RDP logon screens stay pinned. Rejected: the hub sending `auto` for a
+logon-screen pick (Auto prefers an active RDP session over the console logon screen).
+**#199:** audit lines from before 1.176.0 kept the TURN username/credential; they are scrubbed
+once at startup (`fleet.scrub_audit_ice_credentials`, no hash chain to break) and redacted on
+every read, and `sharing_web.peer_command_status` no longer hands them to a borrowing hub.
+- [ ] **A Docker hub with the old line still reports.** On a hub whose `.env` still has
+  `AGENT_REPORT_SECRET=...`, the startup log shows the *IGNORED* warning and an enrolled PC's
+  temperature, serial and uptime appear within a minute.
+- [ ] **Sign-in over the relay** (needs a PC reached through the hub relay -- this hub's normal
+  state, *Owed locally* 16). Start a session with **Auto** on a PC at the logon screen, sign
+  in: the pill stays *Live (via hub)* and the signed-in desktop appears within ~15 s, without
+  pressing Start again. `remote-helper.log` shows the new helper *moving the session off WebRTC*.
+- [ ] **Logon-screen pin follows the sign-in** (needs the next Windows agent beta). Pick
+  *Session N -- logon screen* explicitly, sign in: the view follows into the new session. Then
+  pin a signed-in user's session and switch user at the console: the view stays on the pinned
+  session.
+- [ ] **Old audit lines are clean.** On a hub that ran Remote sessions before 1.176.0, the
+  *issue_command* lines for `start_remote_session` in the Audit Log show relay URLs with no
+  `username` or `credential`, and a Remote session still connects.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
 **Read this first when working on the machine that holds the signing key.** Everything below
@@ -7460,8 +7493,10 @@ release first. Making *on* the default is a later hub change, once every agent s
   unscoped, like any other new machine.
 - **Linux and Android onboarding.** The wizard and script are Windows-only; Linux still installs
   with `install.sh --secret`.
-- **Retiring `AGENT_REPORT_SECRET`.** No agent ever sent it. It is kept as an independent gate
-  for any hub that set it.
+- ~~**Retiring `AGENT_REPORT_SECRET`.**~~ **Done in hub 1.182.0 (issue #215).** No agent ever
+  sent it, so "an independent gate for any hub that set it" turned out to mean every report
+  refused on every such hub -- including every Docker hub built from `example.env`, which
+  listed it as required. The hub now ignores it and warns at startup.
 
 ---
 ## 🚧 30. Deleting a device uninstalls its agent   ·   hub 1.146.0 + Windows agent 3.44.0, Linux agent 0.4.0 (next releases)   ·   `fleet.delete_machine(uninstall_actor=)`, `Update/SelfUninstaller.cs` (both agents)
