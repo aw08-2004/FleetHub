@@ -39,6 +39,10 @@ public static class PackageStepRunner
         bool Succeeded, bool Continue, int? ExitCode = null, string? Why = null,
         bool Aborted = false);
 
+    /// <summary>The package-wide timeout and exit codes a step falls back to when it sets
+    /// neither. One value so RunAllAsync stays within a readable parameter list.</summary>
+    public readonly record struct StepDefaults(int Timeout, IReadOnlyCollection<int> ExitCodes);
+
     /// <summary>Run every step in order. Returns false as soon as one fails without
     /// `continue_on_error` set, or the run is cancelled.</summary>
     public static Task<bool> RunAllAsync(
@@ -47,10 +51,6 @@ public static class PackageStepRunner
         CancellationToken ct) =>
         RunAllAsync(steps, vars, new StepDefaults(defaultTimeout, defaultExitCodes),
                     say, emit, null, ct);
-
-    /// <summary>The package-wide timeout and exit codes a step falls back to when it sets
-    /// neither. One value so RunAllAsync stays within a readable parameter list.</summary>
-    public readonly record struct StepDefaults(int Timeout, IReadOnlyCollection<int> ExitCodes);
 
     /// <summary>As above, with <paramref name="phases"/> told about each step as it starts
     /// and ends (see IStepProgress) -- what DeployPackageExecutor calls.
