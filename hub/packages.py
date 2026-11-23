@@ -1638,23 +1638,22 @@ def retry_deployment_failures(db_path, deployment_id, actor="system", machines=N
     statuses = [TARGET_FAILED, TARGET_EXPIRED, TARGET_CANCELLED]
     if include_succeeded:
         statuses.append(TARGET_SUCCEEDED)
-    clauses = [f"status IN ({','.join('?' for _ in statuses)})"]
-    params = list(statuses)
+    sql = ("UPDATE deployment_targets SET status = ?, attempts = 0, next_attempt_at = ?, "
+           "last_error = NULL, abort_requested_at = NULL, abort_requested_by = NULL, "
+           "updated_at = ? WHERE deployment_id = ? "
+           f"AND status IN ({','.join('?' for _ in statuses)})")
+    before = [TARGET_PENDING, now, now, str(deployment_id)] + statuses
+    names = None
     if machines is not None:
         names = [_clean(m) for m in machines if _clean(m)]
         if not names:
             return 0
-        clauses.append(f"machine IN ({','.join('?' for _ in names)})")
-        params.extend(names)
     with get_conn(db_path) as conn:
         _deployment_status(conn, deployment_id)
-        cur = conn.execute(
-            "UPDATE deployment_targets SET status = ?, attempts = 0, next_attempt_at = ?, "
-            "last_error = NULL, abort_requested_at = NULL, abort_requested_by = NULL, "
-            "updated_at = ? WHERE deployment_id = ? AND " + " AND ".join(clauses),
-            [TARGET_PENDING, now, now, str(deployment_id)] + params,
-        )
-        requeued = cur.rowcount or 0
+        if names is None:
+            requeued = conn.execute(sql, before).rowcount or 0
+        else:
+            requeued = _update_in(conn, sql + " AND machine IN ({})", before, names)
         if requeued:
             conn.execute(
                 "UPDATE deployments SET status = ?, updated_at = ? WHERE id = ?",
@@ -1691,13 +1690,12 @@ def retry_now(db_path, deployment_id, machines, actor="system", now=None):
         return 0
     with get_conn(db_path) as conn:
         _deployment_status(conn, deployment_id)
-        cur = conn.execute(
+        moved = _update_in(
+            conn,
             "UPDATE deployment_targets SET next_attempt_at = ?, updated_at = ? "
             "WHERE deployment_id = ? AND status = ? AND attempts > 0 "
-            "  AND next_attempt_at > ? "
-            f"  AND machine IN ({','.join('?' for _ in names)})",
-            [now, now, str(deployment_id), TARGET_PENDING, now] + names)
-        moved = cur.rowcount or 0
+            "  AND next_attempt_at > ? AND machine IN ({})",
+            [now, now, str(deployment_id), TARGET_PENDING, now], names)
     if moved:
         fleet.audit(db_path, actor=actor, action="retry_deployment_now",
                     level=fleet.LEVEL_NOTICE, target=deployment_id,
@@ -1759,10 +1757,10 @@ def abort_targets(db_path, deployment_id, machines, actor="system", now=None):
         return outcome
     with get_conn(db_path) as conn:
         _deployment_status(conn, deployment_id)
-        targets = [dict(r) for r in conn.execute(
-            "SELECT machine, status, command_id FROM deployment_targets "
-            f"WHERE deployment_id = ? AND machine IN ({','.join('?' for _ in names)})",
-            [str(deployment_id)] + names)]
+        targets = [dict(r) for r in _select_in(
+            conn, "SELECT machine, status, command_id FROM deployment_targets "
+                  "WHERE machine IN ({}) AND deployment_id = ?",
+            names, extra=(str(deployment_id),))]
         commands = _rows_by_id(conn, "SELECT id, status FROM commands WHERE id IN ({})",
                                [t["command_id"] for t in targets if t["command_id"]])
         versions = _agent_versions(conn, [t["machine"] for t in targets])
@@ -1835,6 +1833,22 @@ def _select_in(conn, sql, values, extra=()):
         rows.extend(conn.execute(sql.format(",".join("?" for _ in chunk)),
                                  list(chunk) + list(extra)).fetchall())
     return rows
+
+
+def _update_in(conn, sql, before, values):
+    """Run an UPDATE whose LAST placeholder group is `IN ({})` over `values` in chunks,
+    with `before` bound ahead of it each time. Returns the total rows changed.
+
+    For the operator actions that take a selection (Redeploy, Retry now) or a scope list
+    (plain Retry failures): either can be a whole fleet, past what one statement may bind.
+    """
+    changed = 0
+    values = list(values)
+    for start in range(0, len(values), _IN_CHUNK):
+        chunk = values[start:start + _IN_CHUNK]
+        cur = conn.execute(sql.format(",".join("?" for _ in chunk)), list(before) + chunk)
+        changed += cur.rowcount or 0
+    return changed
 
 
 def _rows_by_id(conn, sql, ids):

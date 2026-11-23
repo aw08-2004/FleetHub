@@ -22,9 +22,11 @@ explicit `now` wherever the model takes one.
 import functools
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import time
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import changes
@@ -60,6 +62,15 @@ def raises(exc, fn, *args, **kwargs):
     except Exception:
         return False
     return False
+
+
+def raises_nothing(fn, *args, **kwargs):
+    try:
+        fn(*args, **kwargs)
+    except Exception as e:                              # noqa: BLE001
+        print(f"       raised {type(e).__name__}: {e}")
+        return False
+    return True
 
 
 def fake_login_required(view):
@@ -403,6 +414,28 @@ def model_tests(db_path):
           requeued == 1 and target(db_path, dep, "A-PENDING")["status"] == "cancelled")
     check("an empty scope requeues nothing",
           packages.retry_deployment_failures(db_path, dep, machines=[]) == 0)
+
+    # A scope list or a select-all on a fleet-wide deployment can name more machines than
+    # one SQLite statement may bind -- 999 on older builds. This Python's SQLite allows far
+    # more, so the old cap is put back on this module's connections for these calls: without
+    # it, an unchunked IN (...) would pass here and still 500 on a hub built against an old
+    # library.
+    many = [f"FLEET-{i:04d}" for i in range(1200)] + ["A-WAIT"]
+    real_get_conn = packages.get_conn
+
+    def capped_conn(path):
+        conn = real_get_conn(path)
+        conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+        return conn
+
+    with mock.patch.object(packages, "get_conn", capped_conn):
+        check("a plain retry over a scope past the bind limit still works",
+              raises_nothing(packages.retry_deployment_failures, db_path, dep, machines=many))
+        check("Retry now over a huge selection still works",
+              raises_nothing(packages.retry_now, db_path, dep, many))
+        huge = packages.abort_targets(db_path, dep, many, actor="op@x.com")
+        check("Abort over a huge selection still finds the real target",
+              "A-WAIT" in huge["cancelled"])
 
 
 def audit_rows(db_path):
