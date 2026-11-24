@@ -64,6 +64,26 @@ def _bearer_agent(db_path):
     return agent_id, machine
 
 
+def scoped_targets(access, machines):
+    """Validate every requested target against the caller's scope.
+
+    Returns (targets, error, status) -- all-or-nothing on purpose, see the module
+    docstring. An empty selection is a 400 (malformed request); an out-of-scope
+    machine is a 403 (well-formed, refused). Shared with deploy_progress_web.py, whose
+    Abort and Retry now take a selection of a deployment's machines the same way.
+    """
+    names = [str(m or "").strip() for m in (machines or [])]
+    names = [n for n in names if n]
+    if not names:
+        return None, "Select at least one machine.", 400
+    denied = [n for n in names if not access.in_scope(n)]
+    if denied:
+        return None, (f"You do not have access to {denied[0]!r}"
+                      + (f" and {len(denied) - 1} other machine(s)."
+                         if len(denied) > 1 else ".")), 403
+    return names, None, 200
+
+
 def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=""):
     """Build the packages Blueprint.
 
@@ -82,22 +102,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         return permissions_web.current_actor()
 
     def _scoped_targets(machines):
-        """Validate every requested target against the caller's scope.
-
-        Returns (targets, error, status) -- all-or-nothing on purpose, see the module
-        docstring. An empty selection is a 400 (malformed request); an out-of-scope
-        machine is a 403 (well-formed, refused).
-        """
-        names = [str(m or "").strip() for m in (machines or [])]
-        names = [n for n in names if n]
-        if not names:
-            return None, "Select at least one machine.", 400
-        denied = [n for n in names if not access.in_scope(n)]
-        if denied:
-            return None, (f"You do not have access to {denied[0]!r}"
-                          + (f" and {len(denied) - 1} other machine(s)."
-                             if len(denied) > 1 else ".")), 403
-        return names, None, 200
+        return scoped_targets(access, machines)
 
     # ---------------- Pages ----------------
     @bp.route("/packages")
@@ -359,9 +364,22 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
     @login_required
     @can_deploy
     def retry_deployment(deployment_id):
+        """Redeploy. With no body, every failed/expired/cancelled target -- but only the ones
+        in the caller's scope: an operator who can see three of a deployment's forty
+        machines must not be able to requeue the other thirty-seven. With `machines`, those
+        targets whatever they ended as, which is PDQ's "Redeploy selected"."""
+        data = request.get_json(silent=True) or {}
+        if data.get("machines") is not None:
+            targets, error, status = _scoped_targets(data.get("machines"))
+            if error:
+                return jsonify({"error": error}), status
+            selection, include_succeeded = targets, True
+        else:
+            selection, include_succeeded = access.current().get("machines"), False
         try:
             requeued = packages.retry_deployment_failures(
-                db_path, deployment_id, actor=_current_email())
+                db_path, deployment_id, actor=_current_email(), machines=selection,
+                include_succeeded=include_succeeded)
         except KeyError:
             return jsonify({"error": "unknown deployment"}), 404
         deployment = _visible_deployment(deployment_id)

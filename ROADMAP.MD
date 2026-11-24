@@ -118,7 +118,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-11-03
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-11-23
 
 **How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
 `beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.179.0**; `beta` is at **1.181.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.179.0**; `beta` is at **1.183.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -790,6 +790,32 @@ every read, and `sharing_web.peer_command_status` no longer hands them to a borr
 - [ ] **Old audit lines are clean.** On a hub that ran Remote sessions before 1.176.0, the
   *issue_command* lines for `start_remote_session` in the Audit Log show relay URLs with no
   `username` or `credential`, and a Remote session still connects.
+
+**Hub 1.183.0 + agent 3.53.0 (beta) -- live deployment steps, Abort, Redeploy, Retry now** (#5, #217)
+The deployment view shows what each machine is doing and which step it is on, PDQ-style, with
+each step's result, exit code and own log, plus Abort, Redeploy selected and Retry now. The
+step list comes from the agent's structured events, not from reading the log -- see *Live step
+progress* under #5. Deploy the hub first; then cut agent 3.53.0 with `-Channel beta`.
+- [ ] **Stages on any agent.** Deploy a package to a beta PC and to an offline PC. The offline
+  one reads *Sent, waiting for the machine*; the online one goes *Running* and ends
+  *Succeeded* within a second or two of finishing, not on the next half-minute pass.
+- [ ] **Steps on agent 3.53.0.** Deploy a multi-step package (a driver pack) to a beta PC on
+  3.53.0: the row reads *Step n of m · ...* while it runs, expanding it shows every download,
+  step and the detection check going green in order, and *Log* under the running step follows
+  its output live.
+- [ ] **A failed step says why.** Deploy a package whose second step exits non-zero: the row
+  reads *Failed at Step 2 · ...*, the step shows the exit code, and step 3 and detection read
+  *Not run*.
+- [ ] **Abort stops a running install.** Deploy a package with a long step (a PowerShell
+  `Start-Sleep 300`), select the PC, **Abort**: the row reads *Aborting...* and then
+  *Cancelled* within about ten seconds, the step reads *Aborted*, Task Manager shows no
+  `powershell.exe` left from it, and the target is not retried.
+- [ ] **An older agent is not pretended to.** On a PC still on 3.52.0, the step list shows the
+  plan with the update hint, and **Abort** on it while it runs answers that it cannot be
+  stopped, and the row keeps running to its real result.
+- [ ] **Redeploy and Retry now.** **Redeploy** a succeeded PC: it runs again in the same
+  deployment. After a failed attempt (*Waiting to retry*), **Retry now** sends it at once.
+  A scoped operator's *Retry failures* only requeues machines in their scope.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -1985,7 +2011,7 @@ too. Budget for that explicitly when this becomes an implementation plan.
 
 ---
 
-## ✅ 5. Deploy packages (PDQ-style)   ·   hub 1.27.0; multi-step hub 1.64.0 + agent 3.22.0
+## ✅ 5. Deploy packages (PDQ-style)   ·   hub 1.27.0; multi-step hub 1.64.0 + agent 3.22.0; live steps + Abort hub 1.183.0 + agent 3.53.0
 
 Built (hub 1.27.0). `packages.py` (model + blob store + scheduler, flask-free) +
 `packages_web.py` (console API, agent payload download), a Packages page with a
@@ -2069,6 +2095,58 @@ in the field, and a package WITH steps deliberately offers no command to run
 (`install_command: ""`, `source.kind: "multi"`). Such an agent fails the deploy with "no
 install command" and the target retries until the update reaches it. The alternative —
 running step one and reporting success — is the one outcome that would lie.
+
+### Live step progress, Abort, Redeploy, Retry now · hub 1.183.0 + agent 3.53.0
+
+What PDQ Deploy's status window does, mapped onto this queue. Per target the console shows a
+derived **stage** -- scheduled, queued, *sent, waiting for the machine*, running, aborting,
+waiting to retry, finishing, then the result -- and while it runs, **which step** it is on
+(*Step 2 of 3 · Install drivers*). Expanded, every download, step and the detection check with
+its state, exit code, duration and reason, and **one step's own log**, readable while it runs.
+
+- **The agent reports steps; the hub never parses them out of the log.** The log already says
+  `[deploy] step 2/5`, and reading it was the obvious shortcut -- rejected, because the stream
+  is capped at 256k characters, pruned after a day, and worded by whichever agent build wrote
+  it: the long, noisy, failing deploy an operator most needs to follow is the one whose markers
+  fall off the end. Agent 3.53.0 posts one small event per phase transition to
+  `POST /api/agent/commands/<id>/progress` (`packages.record_step_progress`).
+- **The hub draws the step list from the recipe it sent** (`progress_skeleton`, read off the
+  command's own params snapshot); the agent only says "ordinal n of this phase is now ok".
+  Rejected: the agent sending its plan, a second copy of a document the hub already holds.
+  The two must count downloads the same way -- file payloads only, in list order -- which is
+  pinned by tests on both sides.
+- **Keyed by command, not target** (`deployment_target_steps`), so a retry starts a clean list
+  and the evidence of why attempt 1 failed survives attempt 2. Writes are idempotent and
+  monotonic: a late or repeated event never reopens a finished phase.
+- **Abort rides back on the progress answer.** The agent repeats its running event every ten
+  seconds as a keepalive, and the answer carries `cancel` once an operator aborts; the agent
+  cancels the step's token and ProcessRunner kills the tree, exactly as a timeout would.
+  Rejected: an `abort` command (it queues behind, or races, the command it should stop, and
+  needs a second executor slot) and a hub-to-agent socket (agents never accept connections).
+  An in-flight target is FLAGGED, not cancelled, until the command really ends -- a row
+  reading *cancelled* over a running installer is the lie `cancel_deployment` avoids -- and an
+  abort that lands after the last step records *succeeded*, because that is what happened.
+  An agent older than `MIN_PROGRESS_AGENT` (3.53.0) cannot hear an abort, so it is refused for
+  a running target there rather than offered.
+- **Keepalives do not wake consoles.** The route is in `changes.UNMARKED_RULES` and marks
+  `deployments` itself only when a phase moved.
+- **One step's log is a slice of the existing output stream**, between the chunk numbers the
+  agent stamps on each event (`OutputStreamer.Mark()` numbers the buffered text at the
+  boundary without a second POST racing the pump). No second copy of the text.
+- **Redeploy stays on the same deployment** (`retry_deployment_failures` with a selection),
+  for the reason the retry button always did: the history shows one deploy that reached 100%.
+  Rejected: PDQ's new-deployment-per-redeploy. *Retry failures* is now limited to the
+  caller's scope -- before, a scoped operator requeued every machine's failure.
+- **PDQ's "Prioritize" became Retry now.** This scheduler has no concurrency queue to jump --
+  every due target goes on the pass that finds it -- so the wait worth cutting short is the
+  retry backoff. A deployment window is never overridden.
+- **The scheduler is woken** by a new deployment, a retry, an abort and a deploy result
+  (`wake_deploy_scheduler`), instead of waiting out its interval.
+
+**Not done, deliberately (PDQ features left for later):** a *Waking* stage (the Wake-on-LAN
+pass, #10, does not record which targets it woke), the Heartbeat trigger (deploy when a machine
+comes online), package conditions, nested packages, and step progress on the Android agent
+(it installs as before and shows as plain *Running*).
 
 ---
 

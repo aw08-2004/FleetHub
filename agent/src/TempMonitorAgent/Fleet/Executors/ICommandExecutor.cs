@@ -13,6 +13,14 @@ public interface ICommandExecutor
 {
     string Type { get; }
     Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput, CancellationToken ct);
+
+    /// <summary>The same run, with somewhere to report which phase it is in (see
+    /// <see cref="IStepProgress"/>). A default method so the one executor that has phases
+    /// -- deploy_package -- overrides it and the other forty need no change; an executor
+    /// that ignores progress simply never reports any.</summary>
+    Task<CommandResult> ExecuteAsync(FleetCommand cmd, Action<string>? onOutput,
+                                     IStepProgress? progress, CancellationToken ct) =>
+        ExecuteAsync(cmd, onOutput, ct);
 }
 
 /// <summary>Helpers for pulling typed values out of a command's params object.</summary>

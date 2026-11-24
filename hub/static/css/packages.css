@@ -113,3 +113,94 @@
     word-break: break-word;
     max-width: 46ch;
 }
+
+/* ---------------------------------------------------------------- live progress
+   The PDQ-style deployment view (roadmap #5, hub 1.181.0). Wider than the default modal:
+   a row now carries a stage, the current step and its timing, and the expanded step list
+   sits under it -- at 620px that wrapped every cell onto three lines. */
+#progress-modal { width: min(1000px, 96vw); }
+
+.pkg-progress-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin: var(--space-4) 0 var(--space-2);
+}
+.pkg-progress-actions label { margin-right: auto; display: inline-flex; gap: var(--space-1); align-items: center; }
+
+/* The machine name is the expand control: one obvious target, no extra column. */
+.pkg-expand {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+.pkg-expand:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* What a machine is doing. Word first, colour second -- the same rule as the bar. */
+.pkg-stage {
+    display: inline-block;
+    padding: 1px var(--space-2);
+    border-radius: 999px;
+    font-size: var(--text-xs);
+    background: var(--control-bg);
+    border: 1px solid var(--card-border);
+    white-space: nowrap;
+}
+.pkg-stage--running,
+.pkg-stage--waiting,
+.pkg-stage--finishing { background: var(--accent-soft); border-color: var(--accent); }
+.pkg-stage--aborting,
+.pkg-stage--retry_wait,
+.pkg-stage--expired   { background: var(--warning-bg); border-color: var(--warning); }
+.pkg-stage--succeeded { background: var(--success-bg); border-color: var(--success); }
+.pkg-stage--failed    { background: var(--danger-bg); border-color: var(--danger); }
+
+.pkg-steps-row > td { background: var(--surface); }
+.pkg-steps-wrap { padding: var(--space-2) var(--space-2) var(--space-2) var(--space-6); }
+
+.pkg-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-2);
+}
+.pkg-step { display: flex; gap: var(--space-3); align-items: flex-start; }
+.pkg-step__glyph {
+    width: 1.5em;
+    text-align: center;
+    font-weight: 600;
+    color: var(--muted);
+    flex: none;
+}
+.pkg-step--running .pkg-step__glyph { color: var(--accent); }
+.pkg-step--ok .pkg-step__glyph      { color: var(--success); }
+.pkg-step--failed .pkg-step__glyph,
+.pkg-step--aborted .pkg-step__glyph { color: var(--danger); }
+.pkg-step--skipped .pkg-step__glyph { color: var(--warning); }
+/* Not reached (yet): quieter, so the eye lands on where the machine actually is. */
+.pkg-step--none .pkg-step__label { color: var(--muted); }
+.pkg-step__main { min-width: 0; flex: 1; }
+.pkg-step__log-toggle { margin-top: var(--space-1); }
+
+/* One step's output. Bounded and scrolling: a chatty installer must not push the rest
+   of the step list, and the toolbar, out of the dialog. */
+.pkg-step-log { margin-top: var(--space-2); }
+.pkg-step-log__text {
+    margin: 0;
+    max-height: 320px;
+    overflow: auto;
+    padding: var(--space-2) var(--space-3);
+    background: var(--control-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
