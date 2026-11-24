@@ -1371,6 +1371,10 @@
         "label": "Zertifikat des Domänencontrollers prüfen",
         "help": "Prüft das TLS-Zertifikat des Domänencontrollers. Abschalten macht die Verbindung abhörbar; nur zur Fehlersuche an einer internen CA gedacht."
       },
+      "directory.ca_file": {
+        "label": "CA-Zertifikat (optional)",
+        "help": "Eine PEM-Datei auf dem Hub mit der Zertifizierungsstelle, die das Zertifikat des Domänencontrollers ausgestellt hat, falls es Ihre eigene ist (AD-Zertifikatdienste). Lassen Sie das Feld leer, wenn das Zertifikat von einer öffentlichen Zertifizierungsstelle stammt. In Docker gehört sie unter /state, z. B. /state/ad-ca.pem — es kann dieselbe Datei sein wie das CA-Zertifikat der Anmeldeseite."
+      },
       "directory.allow_insecure": {
         "label": "Unverschlüsseltes LDAP erlauben",
         "help": "Erlaubt Verbindungen über LDAP im Klartext. Das Kennwort des Dienstkontos geht dann unverschlüsselt über das Netz – also aus lassen, sofern du nicht weißt, warum du es brauchst."
