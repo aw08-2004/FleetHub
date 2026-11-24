@@ -26,7 +26,7 @@ Rejected:
     and the hub already learned that a thread pool sized for held requests is not optional
     (install.ps1's service block explains the 128).
 
-TWO LISTENERS, ONE PROCESS (1.187.0). FLEETHUB_AGENT_PORT starts a second cheroot server in
+TWO LISTENERS, ONE PROCESS (1.188.0). FLEETHUB_AGENT_PORT starts a second cheroot server in
 this same process, serving the same application through agent_listener.AgentSurfaceFilter:
 the agent routes, the onboarding wizard, the APK download and the peer API, and a 404 for
 everything else. The reverse proxy publishes that port to the internet and stops publishing
@@ -75,6 +75,26 @@ def _truthy(value, default):
     return str(value).strip().lower() not in ("0", "false", "no", "off")
 
 
+def _env_text(environ, key, default=None):
+    """`environ[key]` stripped, or `default` when it is unset or blank."""
+    return (environ.get(key) or "").strip() or default
+
+
+def _certificate_names(environ):
+    """The names the self-signed certificate covers, beyond localhost/127.0.0.1 which tls.py
+    always adds: this machine's name (what a proxy on another box dials), the internal
+    CONSOLE_URL host and the public HUB_URL host (what an operator browsing the origin
+    directly types). Console host before the HUB_URL host, so the public name stays last as
+    it always was."""
+    names = []
+    for name in (_machine_name(),
+                 urlparse(environ.get("CONSOLE_URL") or "").hostname,
+                 urlparse(environ.get("HUB_URL") or "").hostname):
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def server_config(environ, state_root):
     """Pure: the environment and the state dir in, the server's settings out. Kept apart
     from main() so the tests can check every default without binding a socket or importing
@@ -84,28 +104,17 @@ def server_config(environ, state_root):
     except ValueError:
         port = DEFAULT_PORT
     tls_dir = os.path.join(state_root, "tls")
-    hub_url_host = urlparse(environ.get("HUB_URL") or "").hostname
-    console_url_host = urlparse(environ.get("CONSOLE_URL") or "").hostname
-    names = []
-    # Console host before the HUB_URL host, so the public name stays last as it always was.
-    for name in (_machine_name(), console_url_host, hub_url_host):
-        if name and name not in names:
-            names.append(name)
     return {
-        "host": (environ.get("FLEETHUB_HOST") or "").strip() or "0.0.0.0",
+        "host": _env_text(environ, "FLEETHUB_HOST", "0.0.0.0"),
         "port": port,
         # Kept raw, not parsed here: a typo must stop the hub in config_error(), not quietly
         # fall back to one listener that the proxy is no longer pointed at.
-        "agent_port": (environ.get("FLEETHUB_AGENT_PORT") or "").strip() or None,
-        "agent_host": (environ.get("FLEETHUB_AGENT_HOST") or "").strip() or "0.0.0.0",
+        "agent_port": _env_text(environ, "FLEETHUB_AGENT_PORT"),
+        "agent_host": _env_text(environ, "FLEETHUB_AGENT_HOST", "0.0.0.0"),
         "tls": _truthy(environ.get("FLEETHUB_TLS"), True),
         "cert": environ.get("FLEETHUB_TLS_CERT") or os.path.join(tls_dir, "hub.crt"),
         "key": environ.get("FLEETHUB_TLS_KEY") or os.path.join(tls_dir, "hub.key"),
-        # The names the self-signed certificate covers, beyond localhost/127.0.0.1 which
-        # tls.py always adds: this machine's name (what a proxy on another box dials), the
-        # internal CONSOLE_URL host and the public HUB_URL host (what an operator browsing
-        # the origin directly types).
-        "hostnames": names,
+        "hostnames": _certificate_names(environ),
     }
 
 
@@ -184,11 +193,49 @@ def build_server(application, cfg):
     return server
 
 
+def _prepare_certificate(cfg, state_root):
+    """Generate or load the certificate, tighten our own key folder, and log what was used."""
+    import envfile
+    import tls
+
+    _, _, created = tls.ensure_certificate(cfg["cert"], cfg["key"], cfg["hostnames"])
+    # The private key sits under STATE_ROOT, beneath C:\Program Files on Windows, whose
+    # inherited ACL grants every local user read -- the same exposure envfile.protect
+    # closes for .env. Fails soft and is silent once correct. Only OUR tls folder, though:
+    # see key_dir_to_protect for why an operator's key directory is left alone.
+    own_dir = key_dir_to_protect(cfg, state_root)
+    if own_dir:
+        note = envfile.protect_directory(own_dir)
+        if note:
+            print(f"[serve] {note}", flush=True)
+    else:
+        print(f"[serve] TLS key {cfg['key']} is outside the hub's own tls folder; its "
+              "permissions are left as the operator set them.", flush=True)
+    summary = tls.certificate_summary(cfg["cert"]) or {}
+    print(f"[serve] TLS certificate {'generated' if created else 'loaded'}: "
+          f"{cfg['cert']} (sans={summary.get('sans')}, expires {summary.get('not_after')}, "
+          f"self-signed={summary.get('self_signed')})", flush=True)
+
+
+def _start_agent_listener(application, cfg, scheme, version):
+    """Bind and start the agent-only listener in a daemon thread; return its server."""
+    from agent_listener import AgentSurfaceFilter
+
+    agent_cfg = agent_server_config(cfg)
+    agent_server = build_server(AgentSurfaceFilter(application), agent_cfg)
+    # prepare() binds on THIS thread, so a port already in use stops the hub here with
+    # the real error, rather than dying inside a daemon thread nobody reads.
+    agent_server.prepare()
+    threading.Thread(target=agent_server.serve, name="agent-listener", daemon=True).start()
+    print(f"[serve] FleetHub hub {version} agent listener on "
+          f"{scheme}://{agent_cfg['host']}:{agent_cfg['port']}/ ({THREADS} threads) -- "
+          "agent, onboarding, APK and peer routes only", flush=True)
+    return agent_server
+
+
 def main():
     from wsgi import application  # runs the self-heal and loads .env, as under waitress
     import app as hub_app
-    import envfile
-    import tls
 
     cfg = server_config(os.environ, hub_app.STATE_ROOT)
     problem = config_error(cfg)
@@ -196,37 +243,11 @@ def main():
         print(f"[serve] Refusing to start: {problem}", flush=True)
         return 2
     if cfg["tls"]:
-        _, _, created = tls.ensure_certificate(cfg["cert"], cfg["key"], cfg["hostnames"])
-        # The private key sits under STATE_ROOT, beneath C:\Program Files on Windows, whose
-        # inherited ACL grants every local user read -- the same exposure envfile.protect
-        # closes for .env. Fails soft and is silent once correct. Only OUR tls folder, though:
-        # see key_dir_to_protect for why an operator's key directory is left alone.
-        own_dir = key_dir_to_protect(cfg, hub_app.STATE_ROOT)
-        if own_dir:
-            note = envfile.protect_directory(own_dir)
-            if note:
-                print(f"[serve] {note}", flush=True)
-        else:
-            print(f"[serve] TLS key {cfg['key']} is outside the hub's own tls folder; its "
-                  "permissions are left as the operator set them.", flush=True)
-        summary = tls.certificate_summary(cfg["cert"]) or {}
-        print(f"[serve] TLS certificate {'generated' if created else 'loaded'}: "
-              f"{cfg['cert']} (sans={summary.get('sans')}, expires {summary.get('not_after')}, "
-              f"self-signed={summary.get('self_signed')})", flush=True)
+        _prepare_certificate(cfg, hub_app.STATE_ROOT)
     scheme = "https" if cfg["tls"] else "http"
     agent_server = None
     if cfg["agent_port"]:
-        from agent_listener import AgentSurfaceFilter
-
-        agent_cfg = agent_server_config(cfg)
-        agent_server = build_server(AgentSurfaceFilter(application), agent_cfg)
-        # prepare() binds on THIS thread, so a port already in use stops the hub here with
-        # the real error, rather than dying inside a daemon thread nobody reads.
-        agent_server.prepare()
-        threading.Thread(target=agent_server.serve, name="agent-listener", daemon=True).start()
-        print(f"[serve] FleetHub hub {hub_app.HUB_VERSION} agent listener on "
-              f"{scheme}://{agent_cfg['host']}:{agent_cfg['port']}/ ({THREADS} threads) -- "
-              "agent, onboarding, APK and peer routes only", flush=True)
+        agent_server = _start_agent_listener(application, cfg, scheme, hub_app.HUB_VERSION)
     surface = ("console -- keep this port off the internet and publish the agent port"
                if agent_server else "console and agents")
     print(f"[serve] FleetHub hub {hub_app.HUB_VERSION} on {scheme}://{cfg['host']}:{cfg['port']}/ "

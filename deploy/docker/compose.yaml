@@ -50,7 +50,7 @@ services:
       # has neither key, so it falls back to 3001 and plain HTTP -- the image's own default --
       # and an existing deployment is not moved by pulling this file.
       - "127.0.0.1:${FLEETHUB_PORT:-3001}:${FLEETHUB_PORT:-3001}"
-      # The agent-only listener (hub 1.187.0), for a hub whose console stays off the internet:
+      # The agent-only listener (hub 1.188.0), for a hub whose console stays off the internet:
       # the proxy publishes THIS port as HUB_URL and the console port only internally. Nothing
       # listens on it until FLEETHUB_AGENT_PORT is set in .env, so publishing it unset is
       # harmless. docs/installation.md, "Keeping the console off the internet".

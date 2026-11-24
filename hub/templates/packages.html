@@ -126,6 +126,7 @@
                 </div>
                 <p class="setting__default" id="step-kind-help"></p>
                 <p class="setting__default" id="step-variables"></p>
+                <p class="setting__default" id="step-conditions-note" hidden></p>
             </div>
 
             <label class="setting__label" for="pkg-exit-codes" style="margin-top: var(--space-4);">{{ t('packages.editor.exit_codes') }}</label>
@@ -282,5 +283,6 @@
 {% endblock %}
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+<script src="{{ url_for('static', filename='js/package-conditions.js') }}"></script>
 <script src="{{ url_for('static', filename='js/packages.js') }}"></script>
 {% endblock %}

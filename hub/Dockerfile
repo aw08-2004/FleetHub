@@ -64,7 +64,7 @@ VOLUME ["/state"]
 # HTTPS on 29443 would take every one of them dark on the next pull. New deployments opt in
 # through example.env (FLEETHUB_PORT=29443, FLEETHUB_TLS=1); serve.py then generates the
 # certificate under /state/tls/ on first start. 29444 is the conventional agent-only
-# listener (FLEETHUB_AGENT_PORT, hub 1.187.0), unused unless an operator sets it.
+# listener (FLEETHUB_AGENT_PORT, hub 1.188.0), unused unless an operator sets it.
 EXPOSE 3001 29443 29444
 
 # The same probe install.ps1 makes after starting the Windows service, on whichever port and

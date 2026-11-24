@@ -57,6 +57,88 @@ fleet of MSI installs red.
 > Packages written as one command still go out in the old shape and run on every agent in
 > the field.
 
+### If / Else, Stop, and download conditions
+
+> **Needs agent 3.54.0 or newer** (and hub 1.187.0). A machine on an older agent is not sent a
+> package that uses any of this: it fails at once with the version it needs, and *Retry
+> failures* sends it after the agent updates.
+
+Two more step kinds make a package branch:
+
+| Step | What it does |
+|---|---|
+| `if` | checks a condition on the machine and runs its **Then** steps or its **Else** steps |
+| `stop` | ends the deploy here, as *Succeeded* (nothing to do on this machine) or *Failed* with a message |
+
+*Add Else if* puts another If inside Else. If steps nest up to four deep, and the package's
+step limit (60) counts every step inside them. A successful Stop skips the detection check:
+the package has just said the software is not meant to be on this machine.
+
+**What a condition can test.** On the machine itself: manufacturer, model, *model name*,
+system SKU, serial, chassis type (laptop, desktop, server, tablet, other), memory in GB,
+processor, Windows edition, version (`10.0.22631`), build, release (`23H2`), architecture
+(x64, x86, arm64), BIOS version, computer name, domain or workgroup, whether it is joined to a
+domain, agent version, and the exit code of the previous step. From the hub: Active Directory
+OU, distinguished name and owner, and every custom field. And four checks run on the machine:
+a **file or folder exists**, a **registry value** exists (or equals a value), a **program is
+installed** (optionally at a minimum version), and a **PowerShell check** (exit 0 is true, 1 is
+false, a script that runs to its end without `exit` is true whatever its last command
+returned, anything else means *can't tell* -- and so does a script that throws or does not
+parse, so a typo never quietly sends machines down Else; 60 seconds by default, at most 600).
+
+Clauses combine as *All of these*, *Any of these* or *None of these*, and groups nest. The
+operators are the Rules page's: *is*, *is not*, *contains*, *starts with*, *ends with*,
+*matches the pattern* (`*` and `?`), *is one of* (type values separated by commas), *is known*,
+and *is more than / at least / less than / at most* for numbers and versions. Text compares
+without regard to case, so `LENOVO` is `Lenovo`; versions compare as versions, so 10.0.22631 is
+above 10.0.9200.
+
+> **Lenovo:** `Model` on a ThinkPad is the machine-type code (`21HD0012US`), one per
+> configuration. Test **Model name** instead -- that is the *ThinkPad X1 Carbon Gen 11* an
+> operator thinks in. Dell and HP put the readable name in Model.
+
+**If the machine cannot tell, the If fails.** A model that could not be read makes
+`Model contains "Latitude"` *unknown*, not false, and the If step fails with *could not
+decide* rather than running Else -- so a generic driver pack is never installed on a machine
+nobody identified. Set *If the machine cannot tell* to *Run Else* to choose otherwise for that
+step, or tick *skip Then and Else and carry on*.
+
+**Only download on some machines.** A payload can carry its own condition (on what the machine
+is -- no file or PowerShell checks, and no step results, since downloads come first). Where it
+is false the file is not downloaded, the console shows the download as *Not run*, and a step
+that uses it fails with that reason -- so put those steps inside an If with the same condition.
+
+**The machine's own values in steps.** `{model}`, `{model_name}`, `{manufacturer}`, `{sku}`,
+`{os_build}`, `{arch}` and `{hostname}` work in any step field that takes variables, e.g. an
+extract to `{work}\{model}`. A value that cannot be read fails the step, and so does one with characters
+other than letters, digits, spaces and `. , _ - ( ) +` -- a quote or `;` from the firmware
+must not change what a step runs as SYSTEM. A payload or an
+extract step cannot use these names. A name an extract step binds inside one branch is only
+available after the If when every branch that carries on binds it.
+
+**Test on a machine.** Each If card can test its condition against one machine, from what the
+hub last heard: it says which branch would run and shows each clause's actual value. File,
+registry and PowerShell checks and Lenovo's model name are only known to the machine, so they
+read *checked on the machine*. The deploy itself always reads the machine live.
+
+**Numbering and progress.** Steps are numbered depth-first: an If, then its Then steps, then
+its Else steps, then what comes after. That is the number in error messages and in the
+deployment view, where steps inside an If are indented and labelled *Then* / *Else*, and the
+branch not taken reads *Not run*. *Step n of m* counts only the steps that run.
+
+A worked example, one package for a mixed fleet:
+
+```
+Payloads:  dell    (URL, only download when Manufacturer starts with "Dell")
+           lenovo  (URL, only download when Manufacturer is "LENOVO")
+1  If  Manufacturer starts with "Dell"
+2    Then  Unpack a .zip  {dell}    -> drivers
+3    Else  If  Manufacturer is "LENOVO" and Model name contains "ThinkPad"
+4            Then  Unpack a .zip  {lenovo}  -> drivers
+5            Else  Stop (failed) "Unsupported model"
+6  Install drivers  {drivers}
+```
+
 **Success is exit code AND detection, both.** An installer exiting 0 is evidence, not
 proof — silent installers routinely return 0 having done nothing, and on a fleet-wide push
 that is the failure you least want reported as success. So every package also carries a
@@ -121,6 +203,7 @@ operator sees only the target rows they could have created.
 
 **Endpoints.** Console (`deploy_packages`): `GET|POST /api/packages`,
 `GET|PUT|DELETE /api/packages/<id>`, `POST /api/packages/upload`,
+`POST /api/packages/conditions/preview` (`machine` + `condition`; machine scope applies),
 `GET|POST /api/deployments`, `GET /api/deployments/<id>`,
 `POST /api/deployments/<id>/cancel`, `POST /api/deployments/<id>/retry` (optional
 `machines` to redeploy a selection), `POST /api/deployments/<id>/retry-now`,

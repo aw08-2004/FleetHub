@@ -535,7 +535,7 @@ changed is that the proxy's own connection to the hub is encrypted too.
 
 ## Keeping the console off the internet
 
-Since hub 1.187.0 the hub can answer agents on a port of its own. Agents on PCs outside the
+Since hub 1.188.0 the hub can answer agents on a port of its own. Agents on PCs outside the
 LAN then keep reporting, and the console, its sign-in page, the operator API and Socket.IO
 are no longer published at all. Operators and the desktop client reach the console on the
 LAN or over a VPN.
@@ -564,7 +564,7 @@ lists exactly what the agent port serves.
 **Cutover, in this order.** Each step can be undone on its own, and nothing changes for
 agents at any step.
 
-1. **Update the hub to 1.187.0 or later.** Nothing changes until step 3.
+1. **Update the hub to 1.188.0 or later.** Nothing changes until step 3.
 2. **Give the console its internal address.** Create the internal DNS name and the console's
    nginx server block (below), set `CONSOLE_URL` in the hub's `.env`, and register
    `<CONSOLE_URL>/auth/callback` (Google) or `<CONSOLE_URL>/auth/oidc/callback` (OIDC) as an

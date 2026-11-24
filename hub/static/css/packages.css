@@ -63,6 +63,68 @@
     resize: vertical;
 }
 
+/* ---------------------------------------------------------------- If steps and conditions
+   (roadmap #5, hub 1.187.0). An If card holds two lanes of ordinary step cards; the lanes are
+   tinted and bordered on the leading edge so a step's nesting reads at a glance, which matters
+   most when the same kind of step ("Install drivers") appears once per model. */
+.pkg-card--if { border-color: var(--accent); }
+
+/* Wider than the default modal for the same reason as #progress-modal below: an If's lanes
+   indent a card inside a card, and at the default width a condition's three controls each
+   took a line of their own one level down. */
+#package-modal { width: min(920px, 96vw); }
+
+.pkg-lane {
+    margin-top: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-inline-start: 3px solid var(--card-border);
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+}
+.pkg-lane--then { border-inline-start-color: var(--success); }
+.pkg-lane--else { border-inline-start-color: var(--warning); }
+.pkg-lane__title { font-weight: 600; font-size: var(--text-sm); }
+.pkg-lane__add {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+
+.pkg-cond {
+    border: 1px dashed var(--card-border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2);
+    margin-top: var(--space-2);
+}
+.pkg-cond--nested { background: var(--control-bg); }
+.pkg-cond__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+}
+.pkg-cond__clause { margin-top: var(--space-2); }
+.pkg-cond__line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}
+.pkg-cond__line > select,
+.pkg-cond__line > input,
+.pkg-cond__value > * { min-width: 0; max-width: 100%; }
+.pkg-cond__subject { flex: 1 1 14rem; }
+.pkg-cond__value { flex: 1 1 10rem; display: flex; }
+.pkg-cond__value > * { flex: 1; }
+.pkg-cond__field { margin-top: var(--space-2); }
+.pkg-cond__preview { margin-top: var(--space-2); font-size: var(--text-xs); }
+.pkg-cond__verdict { margin: 0; font-weight: 600; }
+/* Each line already starts with its ✓ / ✕ / ? -- a list bullet as well would be two markers. */
+.pkg-cond__explain { margin: var(--space-1) 0; padding: 0; list-style: none; }
+.pkg-cond-block { margin-top: var(--space-3); }
+
 /* The payload's identity, once uploaded. Monospace because the operator's job here is
    to compare a hash, and a proportional font makes that genuinely harder. */
 .pkg-hash {
@@ -185,6 +247,9 @@
 .pkg-step--skipped .pkg-step__glyph { color: var(--warning); }
 /* Not reached (yet): quieter, so the eye lands on where the machine actually is. */
 .pkg-step--none .pkg-step__label { color: var(--muted); }
+/* The branch an If did not take: quieter still, and struck through, because unlike "not
+   reached yet" it never will be. */
+.pkg-step--not_run .pkg-step__label { color: var(--muted); text-decoration: line-through; }
 .pkg-step__main { min-width: 0; flex: 1; }
 .pkg-step__log-toggle { margin-top: var(--space-1); }
 

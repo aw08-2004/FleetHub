@@ -227,6 +227,19 @@ def test_server_supplied_ui_text_is_in_the_catalog():
                if f"{packages_module.STEP_TEXT_KEY}.{kind}.{part}" not in english]
     check(f"every step kind has catalog text ({missing[:5]})", not missing)
 
+    # The If editor's variables and machine checks (package_conditions), served by name
+    # the same way. An unlabelled variable would offer `packages.cond.var.hw.sku.label` in
+    # the dropdown an operator picks the driver pack's machines with.
+    import package_conditions
+
+    missing = [f"{package_conditions.VAR_TEXT_KEY}.{var.name}.label"
+               for var in package_conditions.STATIC_VARIABLES
+               if f"{package_conditions.VAR_TEXT_KEY}.{var.name}.label" not in english]
+    missing += [f"{package_conditions.PROBE_TEXT_KEY}.{kind}.{part}"
+                for kind in package_conditions.PROBE_KINDS for part in ("label", "description")
+                if f"{package_conditions.PROBE_TEXT_KEY}.{kind}.{part}" not in english]
+    check(f"every condition variable and check has catalog text ({missing[:5]})", not missing)
+
     # Backup destination kinds and the path-token reference, same discipline again.
     import backups as backups_module
     import backup_paths

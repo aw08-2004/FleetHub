@@ -1,6 +1,6 @@
-"""The agent surface: the only paths the hub's internet-facing listener serves (hub 1.187.0).
+"""The agent surface: the only paths the hub's internet-facing listener serves (hub 1.188.0).
 
-WHY THIS EXISTS. Until 1.187.0 one listener served everything, so the hostname agents on
+WHY THIS EXISTS. Until 1.188.0 one listener served everything, so the hostname agents on
 internet PCs need was also the hostname of the console's login page, the whole operator API
 and Socket.IO. An operator who wanted agents outside the LAN had to publish the console with
 them. serve.py can now run a second listener (FLEETHUB_AGENT_PORT) wrapped in

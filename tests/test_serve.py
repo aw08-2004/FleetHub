@@ -104,7 +104,7 @@ def test_config_defaults():
 
 
 def test_agent_listener_config():
-    # 1.187.0: the split is opt-in. The silent failures here are a hub that splits on its own
+    # 1.188.0: the split is opt-in. The silent failures here are a hub that splits on its own
     # (the proxy still points at the one port, now console-only... or the reverse), and a
     # typo'd FLEETHUB_AGENT_PORT that quietly serves one listener while the proxy dials the
     # other and every agent behind it gets connection refused.

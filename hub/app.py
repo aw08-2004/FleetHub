@@ -177,7 +177,7 @@ if _env_acl_note:
 # the beta branch, which this once counted from, was retired on 2026-11-24).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.187.0"
+HUB_VERSION = "1.188.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -185,7 +185,7 @@ LHM_URL = "http://localhost:8085/data.json"
 # an enrolling PC, an Android device or a peer hub. The agent attaches its bearer only to a
 # URL on exactly this origin (IsHubUrl), so this must stay what FLEETHUB_HUB says on the PCs.
 HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
-# The address OPERATORS reach the console on (1.187.0). Equal to HUB_URL unless the console
+# The address OPERATORS reach the console on (1.188.0). Equal to HUB_URL unless the console
 # and the agent channel are split (serve.py, FLEETHUB_AGENT_PORT), in which case HUB_URL is
 # the public agent listener and this is the internal console. Everything a browser checks
 # against its own origin uses it: the cookie's Secure flag, the Socket.IO CORS origin, the
@@ -2599,7 +2599,7 @@ app.register_blueprint(create_users_blueprint(DB_PATH, login_required, access))
 # out capabilities -- it is group administration reached by a different door. The base URL
 # is needed because the link is assembled server-side: an admin reaching the console over an
 # unexpected hostname would otherwise copy a link that works only from there, and would have
-# no way to tell. CONSOLE_URL, not HUB_URL (1.187.0): an invite ends in a console sign-in, and
+# no way to tell. CONSOLE_URL, not HUB_URL (1.188.0): an invite ends in a console sign-in, and
 # on a split hub the public HUB_URL listener serves no console route at all. This blueprint
 # also owns the hub's ONLY unauthenticated console route, GET /invite/<code> -- see
 # invites_web.py for what that page is and is not allowed to say.

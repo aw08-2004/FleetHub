@@ -1,4 +1,4 @@
-"""The agent-only listener's path filter (hub/agent_listener.py, hub 1.187.0).
+"""The agent-only listener's path filter (hub/agent_listener.py, hub 1.188.0).
 
 The silent failures this file exists to catch, one per direction:
 

@@ -234,7 +234,7 @@ authenticated. What is worth knowing about it:
   prefix so a reverse proxy can throttle or block it in one rule, and "Stop hosting" on the
   provisioning page takes it offline entirely.
 
-## The agent listener (hub 1.187.0)
+## The agent listener (hub 1.188.0)
 
 **The perimeter can be the network, not only the sign-in.** With `FLEETHUB_AGENT_PORT` set,
 the hub serves a second listener in the same process. That listener answers only:
