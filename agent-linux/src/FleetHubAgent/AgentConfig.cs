@@ -249,10 +249,31 @@ public static class AgentConfig
         "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/"
         + "agent-linux.manifest.json";
 
-    /// <summary>The manifest URL, overridable so the update path can be exercised against a
-    /// local server rather than raw.githubusercontent. **The KEY is not overridable**, which
-    /// is what makes that safe: a redirected manifest still has to be signed.</summary>
-    public static string UpdateManifestUrl => Env("UPDATE_MANIFEST_URL") ?? StableManifestUrl;
+    /// <summary>The beta train's manifest, beside the stable one on `main` -- the filename
+    /// `channels._AGENT_MANIFEST` names for linux, and the one release.ps1 -Channel beta writes.
+    ///
+    /// **0.3.0 and earlier compiled in only the stable url**, so a Linux box set to beta in the
+    /// console never saw a beta build: the hub's version hint read this file, the agent never
+    /// did. Compiling both in, and letting the hub pick by NAME, is the Windows agent's design
+    /// (roadmap #21) and keeps the hub out of the trust decision.</summary>
+    public const string BetaManifestUrl =
+        "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/"
+        + "agent-linux.manifest.beta.json";
+
+    /// <summary>Channel name to compiled-in url. Public so a test can pin the mapping: this is
+    /// the one function in the agent where a mistake points a machine at the wrong train.</summary>
+    public static string ManifestUrlFor(string? channel) =>
+        State.Channels.Normalize(channel) == State.Channels.Beta
+            ? BetaManifestUrl
+            : StableManifestUrl;
+
+    /// <summary>The manifest this machine's channel points at, overridable so the update path
+    /// can be exercised against a local server rather than raw.githubusercontent. **The KEY is
+    /// not overridable**, which is what makes that safe: a redirected manifest still has to be
+    /// signed. The override wins over BOTH channels, as on Windows -- a test server that only
+    /// answered for one would be a worse tool rather than a safer one.</summary>
+    public static string UpdateManifestUrl =>
+        Env("UPDATE_MANIFEST_URL") ?? ManifestUrlFor(State.AgentState.LoadUpdateChannel());
 
     public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
 
@@ -276,6 +297,11 @@ public static class AgentConfig
     /// heartbeat cannot install a release an operator is holding back.</summary>
     public static string UpdatePinPath => Path.Combine(StateDir, "update-pin.json");
 
+    /// <summary>The hub's channel for this machine, persisted for the pin's reason: a check on a
+    /// fresh boot runs before the first heartbeat, and a beta box must not spend that check on
+    /// the stable manifest. A standing decision, unlike the Processes watch flag.</summary>
+    public static string UpdateChannelPath => Path.Combine(StateDir, "update-channel.json");
+
     /// <summary>Set FLEETHUB_NO_UPDATE=1 to pin a machine to its current build. Honoured for
     /// the same reason the Windows agent honours it: a box being used to reproduce a bug must
     /// not update out from under whoever is looking at it.</summary>
@@ -290,6 +316,20 @@ public static class AgentConfig
     /// trying it. Matches the Windows agent, and exists for the same reason: a build that
     /// starts and immediately dies would otherwise be downloaded and run forever.</summary>
     public const int MaxChainRestarts = 3;
+
+    /// <summary>How long a target the guard gave up on stays given up on. **Until 0.4.1 it was
+    /// forever**: the count is cleared only when a build reaches the hub, so a target that
+    /// failed three times for a passing reason (a full disk, a hub outage during the confirming
+    /// heartbeat) was never tried again and nothing said so after the one warning. A day keeps
+    /// a genuinely broken build down to one round of <see cref="MaxChainRestarts"/> restarts
+    /// per machine per day: the retry starts the count again, so one more failure does not put
+    /// the target straight back to sleep (see SelfUpdater.CheckAndApplyAsync).</summary>
+    public static readonly TimeSpan GiveUpRetryAfter = TimeSpan.FromHours(24);
+
+    /// <summary>Timeout for the binary download, separate from the 30-second manifest one.
+    /// The binary is a ~70 MB self-contained build, and under the shared 30-second timeout a
+    /// slow link cancelled it every fifteen minutes, logged at Debug as "offline?".</summary>
+    public static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(15);
 
     /// <summary>How often to look for a new build. Fifteen minutes, matching the Windows
     /// agent and the hub's own watcher, so a release reaches the whole fleet in one

@@ -48,16 +48,79 @@ public sealed class SelfUpdater
     private readonly AgentState _state;
     private readonly HttpClient _http;
 
+    /// <summary>The binary download's own client. A ~70 MB file does not fit the manifest's
+    /// 30-second budget on a slow link, and sharing one client meant every check on such a
+    /// machine cancelled the download and started again fifteen minutes later.</summary>
+    private readonly HttpClient _download;
+
+    /// <summary>The last failure reported at Warning, so a check that keeps failing the same
+    /// way says so once in the journal rather than every fifteen minutes -- and a check that
+    /// fails a NEW way says so at once. Cleared by any check that gets as far as a decision.
+    ///
+    /// **Until 0.4.1 a network failure here logged at Debug**, under a journal that runs at
+    /// Information, so a box that could not reach the manifest (a 404, a proxy, a timeout)
+    /// looked exactly like a box with nothing to install.</summary>
+    private string? _lastFailure;
+
     /// <summary>1 while an applied update is still waiting to be confirmed by this build doing
     /// real work. Claimed rather than merely read by <see cref="ConfirmRunningBuild"/>, so the
     /// retirement happens exactly once even though two loops call it.</summary>
     private int _awaitingConfirmation;
+
+    /// <summary>Whether this process has already said that the env override is in force.
+    ///
+    /// **The 0.4.1 bootstrap for 0.3.0 boxes is that override**, and it outranks both the
+    /// console's channel and a pin. Left in agent.env after the box reaches 0.4.1, it would keep
+    /// the box on whatever train it names while the console showed something else, and nothing
+    /// would say why -- the exact failure this release exists to end. Once per process, so the
+    /// journal says it at every start without repeating it every fifteen minutes.</summary>
+    private bool _overrideAnnounced;
 
     public SelfUpdater(ILogger<SelfUpdater> log, AgentState state)
     {
         _log = log;
         _state = state;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        _download = new HttpClient { Timeout = AgentConfig.DownloadTimeout };
+    }
+
+    /// <summary>A url as it may appear in the journal: scheme, host, port and path only.
+    ///
+    /// The compiled-in manifests carry nothing secret, but the env override is free text an
+    /// operator typed, and a test server behind basic auth (`https://user:pass@host/...`) or a
+    /// signed query string would otherwise be copied into the journal -- which journald keeps,
+    /// and which gets pasted into tickets. Anything that does not parse is withheld entirely
+    /// rather than logged raw.</summary>
+    public static string ForLog(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u)
+            ? u.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped)
+            : "(unparseable url)";
+
+    /// <summary>Whether the restart-loop guard should stop an attempt at <paramref name="target"/>
+    /// right now. Pure, so the expiry can be tested without a clock or a state file.
+    ///
+    /// It blocks only while the same target has used up its restarts AND the last attempt was
+    /// less than <see cref="AgentConfig.GiveUpRetryAfter"/> ago. A missing timestamp is a file
+    /// from before 0.4.1 and reads as long ago.</summary>
+    public static bool GuardBlocks(RestartState? rs, string target, DateTimeOffset now)
+    {
+        if (rs is null || rs.Target != target || rs.Count < AgentConfig.MaxChainRestarts)
+            return false;
+        return rs.LastAttemptUtc is { } at && now - at < AgentConfig.GiveUpRetryAfter;
+    }
+
+    /// <summary>Report one failed check: Warning the first time this failure is seen, Debug
+    /// while it repeats. See <see cref="_lastFailure"/>.</summary>
+    private void NoteFailure(string message, Exception? e = null)
+    {
+        if (message == _lastFailure)
+        {
+            _log.LogDebug("[update] {Msg} (unchanged)", message);
+            return;
+        }
+        _lastFailure = message;
+        if (e is null) _log.LogWarning("[update] {Msg}", message);
+        else _log.LogWarning(e, "[update] {Msg}", message);
     }
 
     /// <summary>On boot, notice that we came back on the version an update was aiming for --
@@ -103,6 +166,15 @@ public sealed class SelfUpdater
     {
         if (AgentConfig.UpdatesDisabled) return false;
 
+        if (AgentConfig.UpdateManifestOverridden && !_overrideAnnounced)
+        {
+            _overrideAnnounced = true;
+            _log.LogWarning(
+                "[update] FLEETHUB_UPDATE_MANIFEST_URL is set ({Url}); it overrides the console's "
+                + "release channel and any version pin. Remove it from /etc/fleethub/agent.env "
+                + "once this box is on the version you wanted", ForLog(AgentConfig.UpdateManifestUrl));
+        }
+
         try
         {
             // 1. Manifest + detached signature.
@@ -117,7 +189,7 @@ public sealed class SelfUpdater
             // after this point trusts the contents; nothing before it does.
             if (!SignatureVerifier.VerifyRaw(AgentConfig.UpdatePublicKeyHex, manifestBytes, sigHex))
             {
-                _log.LogWarning("[update] manifest signature invalid -- refusing");
+                NoteFailure($"manifest signature invalid at {ForLog(manifestUrl)} -- refusing");
                 return false;
             }
 
@@ -126,7 +198,7 @@ public sealed class SelfUpdater
             if (manifest is null || string.IsNullOrEmpty(manifest.Version)
                 || string.IsNullOrEmpty(manifest.Sha256) || string.IsNullOrEmpty(manifest.Url))
             {
-                _log.LogWarning("[update] manifest incomplete");
+                NoteFailure($"manifest at {ForLog(manifestUrl)} is incomplete");
                 return false;
             }
 
@@ -135,19 +207,34 @@ public sealed class SelfUpdater
             var decision = UpdatePins.Decide(AgentConfig.Version, manifest.Version, pin,
                                               canDowngrade: true, VersionUtil.Compare);
             if (decision == UpdateDecision.PinMismatch)
-                _log.LogWarning("[update] manifest for pinned {Pin} names {Version} -- refusing",
-                                pin, manifest.Version);
-            if (decision != UpdateDecision.Install) return false;
+            {
+                NoteFailure($"manifest for pinned {pin} names {manifest.Version} -- refusing");
+                return false;
+            }
+            if (decision != UpdateDecision.Install)
+            {
+                _lastFailure = null;   // reached a decision: the next failure is news again
+                return false;
+            }
 
-            // 5. Restart-loop guard.
+            // 5. Restart-loop guard, which now expires (AgentConfig.GiveUpRetryAfter).
             var rs = _state.LoadRestartState();
+            if (GuardBlocks(rs, manifest.Version, DateTimeOffset.UtcNow))
+            {
+                NoteFailure($"giving up on {rs!.Target} after {rs.Count} restarts; "
+                            + $"retrying after {AgentConfig.GiveUpRetryAfter.TotalHours:0} h");
+                return false;
+            }
+            // A target the guard gave up on and has now let through starts its count again,
+            // so one more failure does not immediately put it back to sleep for a day.
             if (rs is not null && rs.Target == manifest.Version
                 && rs.Count >= AgentConfig.MaxChainRestarts)
             {
-                _log.LogWarning("[update] giving up on {Target} after {Count} restarts",
-                    rs.Target, rs.Count);
-                return false;
+                _log.LogInformation("[update] retrying {Target}, last given up on at {At}",
+                    rs.Target, rs.LastAttemptUtc?.ToString("u") ?? "an older build");
+                rs = null;
             }
+            _lastFailure = null;
 
             _log.LogInformation("[update] {Cur} -> {New}", AgentConfig.Version, manifest.Version);
 
@@ -155,13 +242,13 @@ public sealed class SelfUpdater
             Directory.CreateDirectory(AgentConfig.UpdateStagingDir);
             var stagedPath = Path.Combine(AgentConfig.UpdateStagingDir,
                 $"fleethub-agent-{manifest.Version}");
-            var bytes = await _http.GetByteArrayAsync(manifest.Url, ct);
+            var bytes = await _download.GetByteArrayAsync(manifest.Url, ct);
             var actualSha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             if (!string.Equals(actualSha, manifest.Sha256.Trim().ToLowerInvariant(),
                                StringComparison.Ordinal))
             {
-                _log.LogWarning("[update] sha256 mismatch (got {Got}, want {Want}) -- aborting",
-                    actualSha, manifest.Sha256);
+                NoteFailure($"sha256 mismatch for {manifest.Version} (got {actualSha}, "
+                            + $"want {manifest.Sha256}) -- aborting");
                 return false;
             }
             await File.WriteAllBytesAsync(stagedPath, bytes, ct);
@@ -240,14 +327,22 @@ public sealed class SelfUpdater
             {
                 Target = manifest.Version,
                 Count = (rs?.Target == manifest.Version ? rs!.Count : 0) + 1,
+                LastAttemptUtc = DateTimeOffset.UtcNow,
             });
             _log.LogInformation("[update] staged {New}; exiting {Code} so systemd starts it",
                 manifest.Version, AgentConfig.RestartExitCode);
             return true;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return false;   // the host is stopping; not a failure worth a line
+        }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
-            _log.LogDebug("[update] check failed (offline?): {Msg}", e.Message);
+            // Warning, once per distinct failure: a 404 (wrong branch, unpushed release), a
+            // proxy refusal or a timeout is the difference between "nothing to install" and
+            // "cannot look", and only the journal can tell an operator which one this box is.
+            NoteFailure($"check failed: {e.Message}");
             return false;
         }
         catch (Exception e)

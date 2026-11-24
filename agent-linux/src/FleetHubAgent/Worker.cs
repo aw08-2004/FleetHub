@@ -19,6 +19,7 @@ namespace FleetHubAgent;
 ///   * commands  -- poll, claim, and dispatch fleet commands
 ///   * update    -- look for a newer signed build, and exit onto it
 ///   * inventory -- the slow local scans (what the package manager says is available)
+///   * processes -- the Processes card's /proc walk, only while somebody has it open
 ///
 /// **Why they are separate**, which is a lesson the Windows agent learned the hard way and
 /// this one inherits rather than repeats: in a serial loop the slowest step sets the latency
@@ -28,9 +29,9 @@ namespace FleetHubAgent;
 /// takes. Worse, the machine can read offline (the hub's 90-second window) because its own
 /// telemetry post is queued in front of its heartbeat.
 ///
-/// The Windows agent runs six loops; this one runs five. The missing one (processes) backs a
-/// feature this agent does not have -- see AgentConfig.Version for why it deliberately sits
-/// below the console's version gates for it, and README.md for what is next.
+/// The Windows agent runs eight loops; this one runs six. The missing two (watchdog, group
+/// policy) back features this agent does not have -- see README.md for what is next. This
+/// comment said "five" until 0.4.1, a loop after the processes loop had shipped.
 /// </summary>
 public sealed class Worker : BackgroundService
 {

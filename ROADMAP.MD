@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.179.0**; `beta` is at **1.183.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.179.0**; `beta` is at **1.184.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -816,6 +816,27 @@ progress* under #5. Deploy the hub first; then cut agent 3.53.0 with `-Channel b
 - [ ] **Redeploy and Retry now.** **Redeploy** a succeeded PC: it runs again in the same
   deployment. After a failed attempt (*Waiting to retry*), **Retry now** sends it at once.
   A scoped operator's *Retry failures* only requeues machines in their scope.
+
+**Hub 1.184.0 + Linux agent 0.4.1 (beta) -- Linux follows its release channel** (#21, #22)
+Found 2026-11-24: a Linux box set to beta sat on 0.3.0 with 0.4.0 in the beta manifest. The Linux
+agent never read the heartbeat's `update_channel`; it read the stable manifest only, and logged a
+failed check at Debug. 0.4.1 compiles in both manifests and picks by the hub's channel name (the
+Windows design), warns once per distinct update failure, gives the download its own 15-minute
+timeout, and retries a given-up target after 24 h instead of never. The hub only rewords the
+Linux install hint, which named one NAS product. Cut 0.4.1 with `-Channel beta`.
+**Rejected:** a hub-sent "update now" command. It would not reach 0.3.0 any more than the
+channel does, and it would give the hub a say in when code runs that the channel design keeps
+out of its hands.
+- [ ] **Bootstrap a 0.3.0 beta box.** Add the beta `FLEETHUB_UPDATE_MANIFEST_URL` line from the
+  0.4.1 notes to `/etc/fleethub/agent.env`, restart, and check the box reaches the newest beta
+  within about 15 minutes. Then remove the line and restart.
+- [ ] **The channel is followed.** On 0.4.1, `journalctl -u fleethub-agent | grep channel`
+  shows *Release channel is now beta*. Moving the box to stable in the console logs the change
+  back on the next heartbeat, and the box does not downgrade.
+- [ ] **A failure is visible.** Temporarily point the override at a missing manifest: the
+  journal shows one `[update] check failed: ... 404` warning, not one every 15 minutes.
+- [ ] **The install hint is generic.** The Linux tab of the onboarding wizard says *NAS and
+  appliance systems*, in English, German and Spanish.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -5836,7 +5857,18 @@ access", and deleting the invite would take the answer with it.
 **Open parameters.** Whether a redemption should notify the admin who created the invite —
 today the audit trail is the only signal. Whether an invite should be able to name a
 directory group instead of an email, for the tenant that would rather not maintain either.
-## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0
+## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0 · channels in 0.4.1
+
+> **Update (2026-11-24, hub 1.184.0) -- channels reach Linux in 0.4.1.** The agent ignored
+> `update_channel` until now, so a box set to beta in the console stayed on the stable manifest
+> (0.3.0) while 0.4.0 waited in the beta one. 0.4.1 reads the channel by name, as the Windows
+> agent does. A 0.3.0 box still needs a one-time bootstrap: the 0.4.1 notes give the line for
+> `/etc/fleethub/agent.env`. **Parity backlog, in order:** patch install (apt/dnf, #14), process end/restart,
+> software inventory (dpkg/rpm), wake + `ethtool` prepare, journald events (#16), network sweep
+> and NICs from `/sys/class/net` (#18), Files tab and folder streaming, `deploy_package` with live
+> steps (gate on the capability report, not `MIN_PROGRESS_AGENT`), disk usage, systemd watchdog
+> (#20). **Not planned for Linux, Windows by nature:** BIOS/firmware, BitLocker, GPO, Windows
+> Update control, ticket tray, remote desktop and virtual display, and the message dialog.
 
 > **Update (2026-10-27, hub 1.169.0) -- the PTY terminal is built**, unreleased until Linux
 > 0.4.0 (*Owed locally* item 19). `Fleet/Shell/UnixPty.cs` opens a Unix pty and starts a login
