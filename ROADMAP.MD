@@ -172,17 +172,21 @@ auto-update off and is updated by hand once the test hub has checked out.
   the 2026-11-24 send paragraph below, so nothing is lost with the branch.
 - [ ] **3. Installer hubs.** Every hub whose *This hub's release channel* reads *Beta* is set to
   *Stable*. A beta hub left behind reads `HUB_VERSION` from a branch that no longer exists and
-  silently stops updating.
+  silently stops updating. **Step 7 does not do this for you:** a beta hub reads `beta`, which
+  stays at 1.185.0, so it never sees the 1.186.0 that removes the setting.
 - [ ] **4. Docker hosts.** Every host on `HUB_TAG=beta-latest`, `beta` or `latest` is set to an
   exact `X.Y.Z` (or `stable-latest`). `beta-latest` never moves again.
 - [x] **5. Docs.** CLAUDE.md, VERSIONING.md, docs/installation.md and the Docker template
   describe the one-branch flow. **Done 2026-11-24 in #223**, the PR that wrote this entry,
   merged after #224.
 - [ ] **6. Delete the `beta` branch** on GitHub.
-- [ ] **7. Hub cleanup, later** (a hub change, so a `HUB_VERSION` bump and release notes): drop
-  *Beta* from `hub.update_channel` in `settings.py`, `channels._REFS` and the three locales,
-  so no operator can pick a channel that reads a missing branch. The agent and client *Beta*
-  choices stay: those manifests live on `main` (the client's is served from `hub/`).
+- [ ] **7. Hub cleanup** (a hub change, so a `HUB_VERSION` bump and release notes): no
+  operator can pick a channel that reads a missing branch. **PR #226, open -- hub 1.186.0.**
+  It removes the `hub.update_channel` setting outright rather than leaving it with one
+  choice, and replaces `channels._REFS` with a single `HUB_REF = "main"`. A hub's stored row
+  for the key is skipped like any key that left the registry, so no migration is needed. The
+  agent and client *Beta* choices stay: those manifests live on `main` (the client's is
+  served from `hub/`).
 
 `main` and `beta` were both at hub **1.185.0** on 2026-11-24 (agent 3.53.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
