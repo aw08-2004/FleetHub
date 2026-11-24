@@ -161,10 +161,10 @@ With auto-update on, it takes every push to `main`. A production installer hub k
 auto-update off and is updated by hand once the test hub has checked out.
 
 **Retiring it, in this order** -- nothing warns after step 6, so steps 1 to 4 come first:
-- [ ] **1. Workflows off `beta`** (a workflow-only PR into `main`). `claude-fix.yml` cuts its
+- [x] **1. Workflows off `beta`** (a workflow-only PR into `main`). `claude-fix.yml` cuts its
   branches from `origin/beta` and fails once the branch is gone; cut them from `main`.
-  `claude-review.yml` and `codeql.yml` drop their `beta` trigger. **PR #224, open** -- tick
-  this when it merges. `hub-image.yml` keeps its `beta` path: it goes inert with the branch,
+  `claude-review.yml` and `codeql.yml` drop their `beta` trigger. **Done 2026-11-24 in #224.**
+  `hub-image.yml` keeps its `beta` path: it goes inert with the branch,
   and the `latest` step still reads the frozen `beta-latest`, so removing it is cleanup.
 - [x] **2. Open PRs into `beta`** are merged into it or retargeted to `main`. **Done
   2026-11-24:** #214 (Authenticode signing) retargeted to `main`, and no PR into `beta` is
@@ -175,8 +175,9 @@ auto-update off and is updated by hand once the test hub has checked out.
   silently stops updating.
 - [ ] **4. Docker hosts.** Every host on `HUB_TAG=beta-latest`, `beta` or `latest` is set to an
   exact `X.Y.Z` (or `stable-latest`). `beta-latest` never moves again.
-- [ ] **5. Docs.** CLAUDE.md, VERSIONING.md, docs/installation.md and the Docker template
-  describe the one-branch flow (the PR that wrote this entry).
+- [x] **5. Docs.** CLAUDE.md, VERSIONING.md, docs/installation.md and the Docker template
+  describe the one-branch flow. **Done 2026-11-24 in #223**, the PR that wrote this entry,
+  merged after #224.
 - [ ] **6. Delete the `beta` branch** on GitHub.
 - [ ] **7. Hub cleanup, later** (a hub change, so a `HUB_VERSION` bump and release notes): drop
   *Beta* from `hub.update_channel` in `settings.py`, `channels._REFS` and the three locales,
