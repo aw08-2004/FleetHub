@@ -25,6 +25,7 @@ What is worth stating about the assertions:
     session with it rather than merely refusing the next request.
 """
 import functools
+import json
 import os
 import sys
 import console_session
@@ -362,6 +363,23 @@ def test_borrowing(a_client, b_client, a_db, b_db, link_id, share_id):
         f"/api/sharing/borrowed/{link_id}/{share_id}/commands/{command_id}")
     check("hub B can follow it up", status.status_code == 200
           and status.get_json()["id"] == command_id)
+
+    # Issue #199, across hubs: hub B relays this status to anyone holding `issue_commands`,
+    # so a peer-started remote session's TURN credential must not ride back on it.
+    remote_id = fleet.create_command(
+        a_db, machine=MACHINE, command_type="start_remote_session",
+        params={"session_id": "peer-s1", "ice_servers": [
+            {"urls": ["turn:turn.example:3478"], "username": "peer-u", "credential": "peer-c"}]},
+        issued_by=queued["issued_by"])
+    status = b_client.get(
+        f"/api/sharing/borrowed/{link_id}/{share_id}/commands/{remote_id}")
+    seen = json.dumps(status.get_json())
+    check("a borrowed remote session's command status carries no TURN username or credential",
+          status.status_code == 200 and "peer-u" not in seen and "peer-c" not in seen
+          and "turn:turn.example:3478" in seen)
+    # Gone again, so the remote section's "exactly one start_remote_session" count is its own.
+    with fleet.get_conn(a_db) as conn:
+        conn.execute("DELETE FROM commands WHERE id = ?", (remote_id,))
 
     print("\n== A capability that was not shared does not work ==")
     refused = b_client.post(f"/api/sharing/borrowed/{link_id}/{share_id}/commands",

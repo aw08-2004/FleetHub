@@ -67,7 +67,7 @@ FleetHub Linux agent installer
   curl -fsSL https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh \
     | sudo bash -s -- --secret 'THE-SECRET'
 
-  # Debian minimal, OpenMediaVault and other images without curl:
+  # Debian minimal, NAS/appliance distros and other images without curl:
   wget -qO- https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh \
     | sudo bash -s -- --secret 'THE-SECRET'
 
@@ -107,8 +107,8 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # curl OR wget, whichever the machine has.
 #
 # **Do not collapse this back to curl.** Requiring curl was the first thing this installer got
-# wrong in the field: Debian's own minimal images -- and appliance distros built on them, like
-# OpenMediaVault -- ship wget and not curl. The failure is `curl: not found` from the FIRST half
+# wrong in the field: Debian's own minimal images -- and the NAS and appliance distros built
+# on them -- ship wget and not curl. The failure is `curl: not found` from the FIRST half
 # of the pipeline, before a single line of this script has run, so the installer cannot even
 # report it. The person then sees a sudo password prompt from the second half of the pipe (both
 # sides of a pipeline start regardless) and reasonably concludes the install ran.
@@ -147,7 +147,7 @@ http_get_file() {
 
 need_http() {
     have curl || have wget || die "neither curl nor wget is installed. Install one first:
-    apt-get update && apt-get install -y curl        # Debian / Ubuntu / OpenMediaVault
+    apt-get update && apt-get install -y curl        # Debian / Ubuntu and derivatives
     dnf install -y curl                              # Fedora / RHEL
   ...or build the agent yourself and install it with --binary, which needs neither."
 }
@@ -156,8 +156,8 @@ need_http() {
 
 check_platform() {
     # `sudo` is named first because that is what most people will reach for, but an account
-    # that is not in sudoers is common on appliance distros (OpenMediaVault manages its users
-    # and does not make them admins), so `su -` is spelled out rather than assumed.
+    # that is not in sudoers is common on NAS and appliance distros (they manage their own users
+    # and do not make them admins), so `su -` is spelled out rather than assumed.
     [ "$(id -u)" -eq 0 ] || die "run this as root: it writes to /opt, /etc and systemd.
   Either pipe to \`sudo bash\`, or become root first with \`su -\` and drop the sudo."
     need systemctl

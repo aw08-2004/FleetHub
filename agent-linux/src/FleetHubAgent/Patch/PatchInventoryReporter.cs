@@ -89,11 +89,10 @@ public sealed class PatchInventoryReporter(ILogger<PatchInventoryReporter> log, 
     }
 
     /// <summary>Force the next inventory pass to re-scan and the next heartbeat to carry the
-    /// result. Nothing calls it yet -- installing patches from the console is not implemented
-    /// on Linux, and the agent's capability report says so, which is what stops the hub
-    /// queuing one. It exists because the moment that lands, the hub's run would otherwise sit
-    /// in REBOOTING for up to six hours waiting for an inventory that had no reason to be
-    /// early.</summary>
+    /// result, even when the content matches what was last sent. Without it, the hub's patch
+    /// run would sit in REBOOTING for up to six hours waiting for an inventory that had no
+    /// reason to be early -- and a run whose install failed outright would never be closed at
+    /// all, because an unchanged list is never re-sent.</summary>
     public void Invalidate()
     {
         lock (_gate)
@@ -101,6 +100,16 @@ public sealed class PatchInventoryReporter(ILogger<PatchInventoryReporter> log, 
             _lastScan = DateTimeOffset.MinValue;
             _lastSentHash = "";
         }
+    }
+
+    /// <summary>Re-scan now and leave the result for the very next heartbeat (ten seconds
+    /// away) rather than the next inventory pass (up to a minute). Called by install_patches
+    /// once the package manager returns: that report is what closes the run, and the console
+    /// is showing the operator a spinner until it lands.</summary>
+    public async Task RefreshNowAsync(CancellationToken ct)
+    {
+        Invalidate();
+        await RefreshIfDueAsync(ct);
     }
 
     /// <summary>The payload the next heartbeat should carry, or null when nothing changed.

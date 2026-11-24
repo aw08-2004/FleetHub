@@ -55,7 +55,7 @@ if command -v curl >/dev/null; then curl -fsSL '<hub>/onboarding/run/<CODE>.sh';
 It installs the agent with `agent-linux/install/install.sh`, which checks the build against the
 fleet's signed Linux manifest. Only when that succeeds does it spend the code, and it writes
 the machine's credential to `/var/lib/fleethub/agent/agent.json` (0600, root). An account that
-is not in sudoers (usual on OpenMediaVault) runs `su -` first and drops the `sudo`. The machine
+is not in sudoers (usual on NAS and appliance distros) runs `su -` first and drops the `sudo`. The machine
 is enrolled under its hostname up to the first dot, which is the name the agent reports. The
 same requirements as a technician's install apply: x86-64, glibc, systemd and OpenSSL 3.
 
@@ -345,6 +345,10 @@ Start from the template beside the compose file, fill in the required values, th
 cp deploy/docker/example.env deploy/docker/.env
 ```
 
+On a **new volume**, write the first sign-in provider into it before you start the hub — see
+[The first sign-in provider](#the-first-sign-in-provider) below. Without one the hub refuses
+to start and restarts in a loop.
+
 ```bash
 docker compose -f deploy/docker/compose.yaml up -d
 ```
@@ -390,6 +394,68 @@ the agent secrets, SMTP. `/state/.env` on the volume is the one the hub **writes
 override a variable that is already set, so a host value wins: a console change looks saved,
 then reverts on the next recreate. `example.env` lists them. Don't set `HUB_STATE_DIR`,
 `HUB_LOG_DIR` or `HUB_RECORDINGS_DIR` either; the image owns them.
+
+#### The first sign-in provider
+
+The sign-in keys belong in `/state/.env`, and you normally edit them at **Settings → Sign-in**.
+But the hub **refuses to start without a provider**, so on a new volume that page cannot be
+reached yet. The log then repeats `RuntimeError: No sign-in provider is configured` and the
+container restarts in a loop. Write the first provider into the volume once:
+
+1. Next to `compose.yaml`, create a temporary file `provider.env` holding **only** the keys of
+   one provider — Google, OIDC, or Active Directory ([access.md](access.md) lists each one's
+   keys). Save it as **UTF-8 without a BOM** — Notepad's default on Windows 11. Avoid
+   `Set-Content` or `>` in Windows PowerShell 5.1, which write a different encoding and turn
+   an `ü` or `ñ` into something else. A password with a space before a `#`, a space at either
+   end, or a leading quote goes in single quotes: `LDAP_BIND_PASSWORD='Winter 2026 #1'`. For
+   Active Directory, for example:
+
+   ```
+   LDAP_SERVER=ldaps://dc1.corp.local
+   LDAP_BIND_DN=CN=svc-fleethub,OU=Service,DC=corp,DC=local
+   LDAP_BIND_PASSWORD=the-service-account-password
+   LDAP_USER_BASE_DN=OU=Staff,DC=corp,DC=local
+   LDAP_LOGIN_GROUP_DN=CN=FleetHub Operators,OU=Groups,DC=corp,DC=local
+   ```
+
+2. Append it to the volume's `.env`. The command runs the hub's own image as the hub's own
+   user, so the file gets the right owner. Windows line endings in `provider.env` are fine;
+   the hub reads them.
+
+   On Linux, or in Git Bash:
+
+   ```bash
+   docker compose -f deploy/docker/compose.yaml run -T --rm --no-deps --entrypoint sh hub -c 'echo >> /state/.env && cat >> /state/.env && chmod 600 /state/.env' < provider.env
+   ```
+
+   In PowerShell, which has no `<` redirection. The first line matters in Windows
+   PowerShell 5.1: without it, 5.1 reads the file in the ANSI code page and pipes it out as
+   ASCII, so an `ü` in an OU name or a `ñ` in a password arrives as `?`. In PowerShell 7 it
+   is harmless.
+
+   ```powershell
+   $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+   ```
+
+   ```powershell
+   Get-Content -Encoding UTF8 provider.env | docker compose -f deploy/docker/compose.yaml run -T --rm --no-deps --entrypoint sh hub -c 'echo >> /state/.env && cat >> /state/.env && chmod 600 /state/.env'
+   ```
+
+3. Delete `provider.env`. It holds a credential, and the volume now has its own copy.
+
+4. Start the hub, or restart it if it was crash-looping:
+
+   ```bash
+   docker compose -f deploy/docker/compose.yaml up -d --force-recreate
+   ```
+
+The log then shows `[auth] Sign-in providers: ...` with the provider you wrote. From then on,
+change it at **Settings → Sign-in**. Only the accounts in `ALLOWED_EMAILS` can open that page,
+so sign in first with one of them.
+
+Putting the keys into the host `.env` instead also starts the hub, and is fine for a quick
+test. The cost is the shadowing described above: every later change on Settings → Sign-in
+reverts on the next recreate.
 
 - **Named volume by default.** SQLite on a Docker Desktop bind mount is slow and its locking
   is unreliable. On a Linux host a bind mount is fine, owned by uid `10001`.

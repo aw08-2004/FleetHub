@@ -63,6 +63,27 @@
         return wrap;
     }
 
+    function checkbox(id, label, isOn, help) {
+        const wrap = el('div', { class: 'setting' });
+        const input = el('input', { type: 'checkbox', id: id });
+        input.checked = !!isOn;
+        wrap.appendChild(el('label', { class: 'setting__label', for: id }, [input, ' ', label]));
+        if (help) wrap.appendChild(el('p', { class: 'setting__help', text: help }));
+        return wrap;
+    }
+
+    function checked(id) {
+        const node = document.getElementById(id);
+        return !!(node && node.checked);
+    }
+
+    // Untrimmed: a person chose the AD service password, and spaces at either end of it are
+    // part of it. The server keeps it as sent (authconfig.RAW_KEYS).
+    function rawVal(id) {
+        const node = document.getElementById(id);
+        return node ? node.value : '';
+    }
+
     function val(id) {
         const node = document.getElementById(id);
         return node ? node.value.trim() : '';
@@ -106,7 +127,9 @@
                 cached.google_enabled ? pill('Google', 'ok') : null,
                 cached.oidc_enabled
                     ? pill(cached.oidc_display_name || 'OIDC', 'ok') : null,
-                (!cached.google_enabled && !cached.oidc_enabled)
+                cached.ldap_enabled
+                    ? pill(cached.ldap_display_name || 'Active Directory', 'ok') : null,
+                (!cached.google_enabled && !cached.oidc_enabled && !cached.ldap_enabled)
                     ? pill(t('settings.signin.none'), 'danger') : null,
             ]),
         ]);
@@ -147,6 +170,33 @@
         card.appendChild(field('auth-oidc-scopes', t('settings.signin.scopes'),
             cached.oidc_scopes, t('settings.signin.scopes_help')));
 
+        // ---- Active Directory (LDAP). The hub checks the password itself here, so the
+        // help text says plainly that OIDC is the better door wherever ADFS or Entra exists.
+        card.appendChild(el('h3', { class: 'perm-subhead', text: t('settings.signin.ldap') }));
+        card.appendChild(el('p', { class: 'setting__help',
+                                   text: t('settings.signin.ldap_help') }));
+        card.appendChild(field('auth-ldap-server', t('settings.signin.ldap_server'),
+            cached.ldap_server, t('settings.signin.ldap_server_help')));
+        card.appendChild(field('auth-ldap-bind-dn', t('settings.signin.ldap_bind_dn'),
+            cached.ldap_bind_dn, t('settings.signin.ldap_bind_dn_help')));
+        card.appendChild(field('auth-ldap-bind-password', t('settings.signin.ldap_bind_password'),
+            cached.ldap_bind_password_set ? cached.unchanged_placeholder : '',
+            cached.ldap_bind_password_set ? t('settings.signin.secret_saved')
+                                          : t('settings.signin.secret_unsaved'),
+            { password: true }));
+        card.appendChild(field('auth-ldap-base', t('settings.signin.ldap_user_base'),
+            cached.ldap_user_base_dn, t('settings.signin.ldap_user_base_help')));
+        card.appendChild(field('auth-ldap-group', t('settings.signin.ldap_group'),
+            cached.ldap_login_group_dn, t('settings.signin.ldap_group_help')));
+        card.appendChild(field('auth-ldap-name', t('settings.signin.button_label'),
+            cached.ldap_display_name, ''));
+        card.appendChild(field('auth-ldap-ca', t('settings.signin.ldap_ca_file'),
+            cached.ldap_ca_file, t('settings.signin.ldap_ca_file_help')));
+        card.appendChild(checkbox('auth-ldap-verify', t('settings.signin.ldap_tls_verify'),
+            cached.ldap_tls_verify, t('settings.signin.ldap_tls_verify_help')));
+        card.appendChild(checkbox('auth-ldap-insecure', t('settings.signin.ldap_allow_insecure'),
+            cached.ldap_allow_insecure, t('settings.signin.ldap_allow_insecure_help')));
+
         // ---- Save
         const actions = el('div', { class: 'chip-add', style: 'margin-top: var(--space-4);' });
         const button = el('button', { class: 'btn btn--primary', type: 'button',
@@ -162,13 +212,25 @@
                 oidc_metadata_url: val('auth-oidc-metadata'),
                 oidc_display_name: val('auth-oidc-name'),
                 oidc_scopes: val('auth-oidc-scopes'),
+                ldap_server: val('auth-ldap-server'),
+                ldap_bind_dn: val('auth-ldap-bind-dn'),
+                ldap_bind_password: rawVal('auth-ldap-bind-password'),
+                ldap_user_base_dn: val('auth-ldap-base'),
+                ldap_login_group_dn: val('auth-ldap-group'),
+                ldap_display_name: val('auth-ldap-name'),
+                ldap_ca_file: val('auth-ldap-ca'),
+                ldap_tls_verify: checked('auth-ldap-verify'),
+                ldap_allow_insecure: checked('auth-ldap-insecure'),
             };
             // Mirrors the server's refusal. Checked here too because this is the one
             // mistake whose consequence is that nobody can sign in to fix it.
             const googleOn = payload.google_client_id && payload.google_client_secret;
             const oidcOn = payload.oidc_client_id && payload.oidc_client_secret
                 && (payload.oidc_issuer || payload.oidc_metadata_url);
-            if (!googleOn && !oidcOn) {
+            const ldapOn = payload.ldap_server && payload.ldap_bind_dn
+                && payload.ldap_bind_password && payload.ldap_user_base_dn
+                && payload.ldap_login_group_dn;
+            if (!googleOn && !oidcOn && !ldapOn) {
                 note.className = 'setting__error';
                 note.textContent = t('settings.signin.no_provider_left');
                 return;

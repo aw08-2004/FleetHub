@@ -75,12 +75,20 @@ def create_auth_blueprint(db_path, login_required, access, env_path, reconfigure
 
         try:
             authconfig.save(env_path, after)
-        except ValueError:
-            # A line break in a client id, secret or issuer url. envfile refuses it before
-            # writing anything -- a second line in .env is a change to ALLOWED_EMAILS made
-            # through a sign-in form -- so nothing was saved and there is nothing to roll back.
-            return jsonify({"error": "Sign-in settings cannot contain line breaks or other "
-                                     "control characters."}), 400
+        except ValueError as e:
+            # A line break in a client id, secret or issuer url -- a second line in .env is a
+            # change to ALLOWED_EMAILS made through a sign-in form -- or a `${NAME}` that .env
+            # would expand into another variable's value. envfile refuses both before writing
+            # anything, so nothing was saved and there is nothing to roll back.
+            #
+            # A fixed sentence naming every cause, not `{e}`: an exception's text reaching the
+            # browser is what CodeQL's stack-trace rule flags, and although envfile's messages
+            # name only the key, the next ValueError raised under this `try` might not. The
+            # specific key goes to the hub log instead.
+            print(f"[auth] sign-in settings not saved: {e}")
+            return jsonify({"error": "Sign-in settings were not saved: a value contains a line "
+                                     "break, another control character, or '${' followed by "
+                                     "a name and '}', which a .env file cannot hold."}), 400
         try:
             reconfigure(after)
         except Exception as e:
@@ -123,6 +131,12 @@ def create_auth_blueprint(db_path, login_required, access, env_path, reconfigure
             "google_enabled": authconfig.google_enabled(after),
             "oidc_enabled": authconfig.oidc_enabled(after),
             "oidc_metadata_url": after.get("oidc_metadata_url") or None,
+            "ldap_enabled": authconfig.ldap_enabled(after),
+            "ldap_configured": authconfig.ldap_configured(after),
+            # Server and group, not the service account's password: these two are what an
+            # auditor asks after a change to the AD door -- which DC, and who may knock.
+            "ldap_server": after.get("ldap_server") or None,
+            "ldap_login_group_dn": after.get("ldap_login_group_dn") or None,
         }, level=fleet.LEVEL_SECURITY)
 
         return jsonify(dict(authconfig.redacted(after), changed=changed)), 200

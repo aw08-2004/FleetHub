@@ -93,6 +93,7 @@ from invites_web import create_invites_blueprint
 from onboarding_web import create_onboarding_blueprint
 from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
+from deploy_progress_web import create_deploy_progress_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from recordings_web import create_recordings_blueprint
@@ -135,6 +136,7 @@ import admx
 from admx_web import create_admx_blueprint
 from directory_web import create_directory_blueprint
 from auth_web import create_auth_blueprint
+from ldapauth_web import create_ldapauth_blueprint
 from apitokens_web import create_apitokens_blueprint
 from push_web import create_push_blueprint
 from sharing_web import create_sharing_blueprint
@@ -175,7 +177,7 @@ if _env_acl_note:
 # ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.179.0"
+HUB_VERSION = "1.185.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -2053,6 +2055,18 @@ OIDC_SCOPES = AUTH_CONFIG["oidc_scopes"]
 
 GOOGLE_ENABLED = authconfig.google_enabled(AUTH_CONFIG)
 OIDC_ENABLED = authconfig.oidc_enabled(AUTH_CONFIG)
+# Active Directory over LDAP: a user-name-and-password form checked against a DC, for a
+# domain with no ADFS or Entra in front of it. Read per request from AUTH_CONFIG by
+# ldapauth_web.py; these two names exist for the login page and the boot check.
+LDAP_ENABLED = authconfig.ldap_enabled(AUTH_CONFIG)
+LDAP_DISPLAY_NAME = AUTH_CONFIG["ldap_display_name"]
+# Filled in, but refused by the same checks a console save runs -- a hand-written ldap://, a
+# group name instead of its DN, a CA file that is not there. Off, and said loudly, rather
+# than half-on: the unchecked version of this sent passwords in cleartext.
+LDAP_PROBLEM = authconfig.ldap_problem(AUTH_CONFIG)
+if LDAP_PROBLEM:
+    print(f"[auth] WARNING: Active Directory sign-in is configured but switched OFF: "
+          f"{LDAP_PROBLEM}")
 
 # How many of a session's claimed directory groups the Permission Groups page will offer
 # back to an admin as a "your own sign-in carried these" hint (roadmap #4). Display only;
@@ -2094,10 +2108,18 @@ if not FLASK_SECRET_KEY:
 # At least one way in. Refusing to boot with none is deliberate: a hub that started with no
 # configured provider would serve a login page with no buttons, which looks like a bug in
 # the hub rather than a missing setting.
-if not (GOOGLE_ENABLED or OIDC_ENABLED):
+#
+# The message names the Docker case because that is where this bites a first install: the
+# host .env is told to leave these keys to the volume's .env, and on a new volume that file
+# is empty. docs/installation.md walks through writing the first provider there.
+if not (GOOGLE_ENABLED or OIDC_ENABLED or LDAP_ENABLED):
     raise RuntimeError(
         "No sign-in provider is configured. Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET, "
-        "and/or OIDC_CLIENT_ID + OIDC_CLIENT_SECRET + OIDC_ISSUER -- see README."
+        "and/or OIDC_CLIENT_ID + OIDC_CLIENT_SECRET + OIDC_ISSUER, and/or the LDAP_* keys "
+        f"for Active Directory, in {ENV_PATH} -- see docs/access.md. In Docker that is the "
+        "volume's /state/.env; docs/installation.md shows how to write the first one."
+        + (f" The LDAP_* keys are there but were refused: {LDAP_PROBLEM}"
+           if LDAP_PROBLEM else "")
     )
 if not ALLOWED_EMAILS:
     raise RuntimeError(
@@ -2141,13 +2163,25 @@ if not AI_API_KEY:
     print("[ai] AI_API_KEY unset -- fine for a provider on this network, required by a "
           "hosted one.")
 
-# Optional shared secret for the /api/report telemetry endpoint. When set, every
-# report POST must include a matching 'report_secret' field. **Superseded as the
-# identity control by signed telemetry (roadmap #29)**: agents now sign each report with
-# their own token and `security.require_enrolled_telemetry` can refuse unsigned ones. No
-# agent ever sent this field, so it stays only as an independent extra gate for a hub
-# that already set it -- unset is the normal state, and no longer means "open".
+# **Retired: read only to warn that it is ignored (issue #215).** It was a shared secret every
+# /api/report POST had to repeat in a 'report_secret' field -- and no agent (Windows, Linux,
+# Android) or installer has ever sent that field. So a hub with it set refused every report
+# from every machine, while the fleet channel kept working: machines enrolled, took config and
+# showed online, with no telemetry, serial or uptime. The Docker template listed it under
+# "required", so every fresh Docker hub set up by the docs was in exactly that state. The
+# gate protected nothing -- nothing ever passed it -- and identity on reports is signed
+# telemetry's job now (roadmap #29: the agent's own token, and
+# `security.require_enrolled_telemetry` to refuse unsigned reports).
+#
+# Rejected: keeping it as an enforced gate and only adding a startup warning. Every hub that
+# has it set is broken today, so the warning would describe an outage rather than prevent one,
+# and the fix would still be "delete the line" -- better to stop the outage on upgrade and let
+# the warning ask for the tidy-up.
 AGENT_REPORT_SECRET = os.environ.get("AGENT_REPORT_SECRET", "")
+if AGENT_REPORT_SECRET:
+    print("[security] WARNING: AGENT_REPORT_SECRET is set but is IGNORED -- no agent ever sent "
+          "it, and enforcing it refused every report. Remove it from .env; signed telemetry "
+          "(security.require_enrolled_telemetry) is the control for /api/report.")
 
 # ================================
 # WEB & WEBSOCKET SETUP
@@ -2245,6 +2279,7 @@ def configure_oauth(config=None, announce=True):
     global GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_ENABLED
     global OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_ISSUER, OIDC_METADATA_URL
     global OIDC_DISPLAY_NAME, OIDC_SCOPES, OIDC_ENABLED
+    global LDAP_ENABLED, LDAP_DISPLAY_NAME
 
     config = config or authconfig.load(os.environ)
     new_oauth = OAuth(app)
@@ -2281,11 +2316,14 @@ def configure_oauth(config=None, announce=True):
     OIDC_DISPLAY_NAME = config["oidc_display_name"]
     OIDC_SCOPES = config["oidc_scopes"]
     OIDC_ENABLED = authconfig.oidc_enabled(config)
+    LDAP_ENABLED = authconfig.ldap_enabled(config)
+    LDAP_DISPLAY_NAME = config["ldap_display_name"]
 
     if announce:
         print("[auth] Sign-in providers: " + (", ".join(
             (["Google"] if GOOGLE_ENABLED else []) +
-            ([f"{OIDC_DISPLAY_NAME} ({OIDC_METADATA_URL})"] if OIDC_ENABLED else []))
+            ([f"{OIDC_DISPLAY_NAME} ({OIDC_METADATA_URL})"] if OIDC_ENABLED else []) +
+            ([f"{LDAP_DISPLAY_NAME} ({config['ldap_server']})"] if LDAP_ENABLED else []))
             or "none"))
     return config
 
@@ -2492,6 +2530,13 @@ def _on_command_result(command_id, machine, success, result, output=None):
     rules.handle_message_result returns None immediately for any command that was not a
     rule-issued message, which is very nearly all of them: one indexed lookup per result.
     """
+    # A deployment attempt just ended: record it now, not on the next half-minute pass, so
+    # the progress view goes from "finishing" to its result while the operator is watching.
+    try:
+        if packages.is_deploy_command(DB_PATH, command_id):
+            wake_deploy_scheduler()
+    except Exception as e:
+        print(f"[deploy] Could not wake the scheduler for {command_id}: {e}")
     if result is None and output:
         try:
             parsed = json.loads(output)
@@ -2568,6 +2613,13 @@ app.register_blueprint(create_audit_blueprint(DB_PATH, login_required, access))
 # and HUB_URL because the agent's download URL has to be absolute.
 app.register_blueprint(create_packages_blueprint(
     DB_PATH, LOG_DIR, login_required, access, hub_url=HUB_URL
+))
+# A running deployment: the agent's step events, a step's log, Abort and Retry now (roadmap
+# #5). on_change because its progress route marks `deployments` itself, and only when a step
+# moved -- see deploy_progress_web.py.
+app.register_blueprint(create_deploy_progress_blueprint(
+    DB_PATH, login_required, access,
+    on_change=lambda topic, machine: mark_changed(topic, machine),
 ))
 # Package building for the assistant (roadmap #26): public web reads, winget lookups and
 # installer downloads into <LOG_DIR>/staging. Ordinary routes, so the assistant reaches them
@@ -2916,12 +2968,39 @@ app.register_blueprint(create_sharing_blueprint(
 def login():
     if session.get("user"):
         return redirect(url_for("index"))
+    return _render_login()
+
+
+def _render_login(error_key=None, status=200, **error_args):
+    """The sign-in page, optionally with a message -- the Active Directory form posts back
+    to /login/ldap and lands here again on a refusal, keeping what it typed out of the URL.
+
+    The form token is minted only when that form is shown: it is the one sign-in that posts
+    to the hub, and the OAuth buttons are plain links that need none.
+    """
     return render_template(
         "login.html",
         google_enabled=GOOGLE_ENABLED,
         oidc_enabled=OIDC_ENABLED,
         oidc_display_name=OIDC_DISPLAY_NAME,
-    )
+        ldap_enabled=LDAP_ENABLED,
+        ldap_display_name=LDAP_DISPLAY_NAME,
+        login_csrf_token=_get_or_create_csrf_token() if LDAP_ENABLED else "",
+        login_error=(i18n.translate(error_key, current_language(), **error_args)
+                     if error_key else ""),
+    ), status
+
+
+def _login_form_token_valid(provided):
+    """The sign-in form's CSRF check. A form field rather than the X-CSRF-Token header
+    login_required reads, because a plain HTML form cannot set a header -- and this page
+    deliberately works without the console's JavaScript."""
+    expected = session.get("csrf_token")
+    if not expected or not provided:
+        return False
+    # Bytes, not str: compare_digest raises TypeError on a non-ASCII str, which would turn a
+    # forged token into a 500 instead of the refusal it is.
+    return hmac.compare_digest(expected.encode("utf-8"), str(provided).encode("utf-8"))
 
 
 def _login_refusal(message):
@@ -3104,6 +3183,17 @@ def auth_oidc_callback():
         except Exception as e:
             print(f"[auth] userinfo lookup failed for the OIDC provider: {e}")
     return _complete_login(user_info, OIDC_DISPLAY_NAME)
+
+
+# Active Directory sign-in (roadmap #4). Registered here, after _complete_login, because it is
+# the success path it hands every sign-in to; the lambda reads AUTH_CONFIG at request time so
+# a change on Settings -> Sign-in applies without a restart, like the OAuth clients.
+app.register_blueprint(create_ldapauth_blueprint(
+    load_config=lambda: AUTH_CONFIG,
+    complete_login=_complete_login,
+    render_login=_render_login,
+    form_token_valid=_login_form_token_valid,
+))
 
 
 @app.route("/logout")
@@ -4613,6 +4703,10 @@ def deploy_scheduler():
     """
     while True:
         interval = settings.get_int(DB_PATH, "deploy.scheduler_interval_seconds")
+        # Cleared BEFORE the pass, never after the wait: a poke that lands while this pass
+        # runs must leave the event set and buy another pass, not be wiped by a clear that
+        # comes after it -- the lost-wakeup shape fleet.wait_for_commands documents.
+        _deploy_wake.clear()
         try:
             reconciled, dispatched = packages.tick(
                 DB_PATH,
@@ -4637,7 +4731,19 @@ def deploy_scheduler():
                 print(f"[deploy] Requested a wake for {woke} offline target(s).")
         except Exception as e:
             print(f"[deploy] Target wake pass failed: {e}")
-        time.sleep(interval)
+        # A wait, not a sleep: wake_deploy_scheduler() ends it early when an operator acts
+        # or an attempt finishes. The interval stays the floor for everything else (backoffs
+        # coming due, windows opening), and is still what bounds a pass that nobody pokes.
+        _deploy_wake.wait(interval)
+
+
+# Set to run the scheduler's next pass now. One Event, so a burst of pokes (fifty results
+# landing together) is one extra pass, not fifty -- the pass handles every due row anyway.
+_deploy_wake = threading.Event()
+
+
+def wake_deploy_scheduler():
+    _deploy_wake.set()
 
 
 def start_deploy_scheduler():
@@ -5896,17 +6002,13 @@ def report_temp():
     latched to an agent that signs. Until this, anything that could reach the hub could
     post as any machine, and the console rendered it as that machine.
 
-    AGENT_REPORT_SECRET, when set, is still checked as well -- see its definition.
+    **AGENT_REPORT_SECRET is no longer checked here (issue #215).** No agent ever sent
+    `report_secret`, so enforcing it refused every report from every machine; it is now only
+    read to print a startup warning -- see its definition for the alternative rejected.
     """
     data = request.get_json(silent=True)
     if not data or 'machine' not in data or 'temp' not in data:
         return jsonify({"error": "Invalid payload"}), 400
-
-    # --- secret gate (Finding 1 fix) ---
-    if AGENT_REPORT_SECRET:
-        provided = data.get('report_secret', '')
-        if not hmac.compare_digest(str(provided), AGENT_REPORT_SECRET):
-            return jsonify({"error": "Invalid or missing report secret"}), 403
 
     machine = data['machine']
     if not is_valid_machine_name(machine):
@@ -7504,6 +7606,31 @@ def _mark_changes(response):
                 mark_changed(topic, machine)
     except Exception as e:
         print(f"[changes] after-request mark failed: {e}")
+    return response
+
+
+# The blueprints whose successful console writes can make a target due NOW: a new deployment,
+# a retry or redeploy, Retry now, Abort (packages, deploy_progress).
+_DEPLOY_WAKE_BLUEPRINTS = frozenset({"packages", "deploy_progress"})
+
+
+@app.after_request
+def _wake_deploys(response):
+    """Run the deploy scheduler's next pass now after an operator acts on a deployment, so
+    Deploy, Retry or Abort shows its effect in a second rather than up to half a minute
+    later. One hook here rather than a callback threaded into each route, for the reason
+    _mark_changes is one hook. Agent traffic (`/api/agent/...`: payload downloads, step
+    keepalives) is excluded -- a deploy RESULT wakes the scheduler from _on_command_result,
+    and a keepalive every ten seconds per running machine must not drive extra passes.
+    """
+    try:
+        if (request.blueprint in _DEPLOY_WAKE_BLUEPRINTS
+                and request.method == "POST"
+                and not request.path.startswith("/api/agent/")
+                and 200 <= response.status_code < 300):
+            wake_deploy_scheduler()
+    except Exception as e:
+        print(f"[deploy] after-request wake failed: {e}")
     return response
 
 

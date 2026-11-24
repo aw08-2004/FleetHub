@@ -81,6 +81,12 @@
     // this one only explains. A compatibility API, not trivia: lowering it offers a copy no
     // machine below it can answer.
     const MIN_STREAM_AGENT = '3.51.0';
+    // Files, not just folders, in Send and Back up. Gates only a selection that HOLDS a file,
+    // and only on THIS (the source) PC: a 3.51.0 receiver already writes a top-level file.
+    // Below it a send of a file fails outright ("is not a file or a folder"), but a backup of
+    // one is worse -- the agent skips it as missing and reports a green run. The hub refuses
+    // that itself (files.picked_files_refusal); this copy only explains it before the click.
+    const MIN_PICKED_FILES_AGENT = '3.52.0';
     // Where a sent folder lands unless the operator says otherwise. A folder of its own on
     // the system drive, never the target user's profile: a copy that lands on a Desktop is a
     // copy the user finds before the technician has finished checking it.
@@ -296,6 +302,7 @@
     let tooOld = null;
     let openTooOld = null;      // the same question asked against MIN_OPEN_AGENT
     let streamTooOld = null;    // ... and against MIN_STREAM_AGENT, for Send
+    let filesTooOld = null;     // ... and against MIN_PICKED_FILES_AGENT, for a picked file
     let scanTooOld = null;      // ...and against MIN_DISKUSAGE_AGENT
 
     async function checkAgentVersion() {
@@ -307,11 +314,13 @@
             openTooOld = (version && versionLess(version, MIN_OPEN_AGENT)) ? version : false;
             scanTooOld = (version && versionLess(version, MIN_DISKUSAGE_AGENT)) ? version : false;
             streamTooOld = (version && versionLess(version, MIN_STREAM_AGENT)) ? version : false;
+            filesTooOld = (version && versionLess(version, MIN_PICKED_FILES_AGENT)) ? version : false;
         } catch (e) {
             tooOld = false;      // unknown is not "too old"; let the command answer for itself
             openTooOld = false;
             scanTooOld = false;
             streamTooOld = false;
+            filesTooOld = false;
         }
     }
 
@@ -774,12 +783,13 @@
         item.rename.disabled = !idle || picked.length !== 1;
         item.newFolder.disabled = !idle || !inFolder;
         item.remove.disabled = !idle || picked.length === 0;
-        // Send and Back up take folders and nothing else -- one or many, never a file or a
-        // drive. Send is NOT greyed on an agent too old for it, for the reason Open on that PC
-        // is not: the click is answered with the version it is waiting for.
-        const folders = inFolder && picked.length > 0 && picked.every((e) => e.directory);
-        item.send.disabled = !idle || !folders || !!sendJob;
-        if (item.backup) item.backup.disabled = !idle || !folders;
+        // Send and Back up take any selection inside a folder -- files, folders or both, never
+        // a drive (the drive list has no folder to be inside). Neither is greyed on an agent too
+        // old for it, for the reason Open on that PC is not: the click is answered with the
+        // version it is waiting for.
+        const pickable = inFolder && picked.length > 0;
+        item.send.disabled = !idle || !pickable || !!sendJob;
+        if (item.backup) item.backup.disabled = !idle || !pickable;
         selectAll.disabled = !idle || !inFolder;
     }
 
@@ -1411,11 +1421,20 @@
     const sendCancel = document.getElementById('files-send-cancel');
     let sendPaths = [];
 
+    /** True, having said why, when this PC's agent cannot handle a picked FILE. Folders are
+     *  unaffected, so the message says so and the operator can untick the files. */
+    function refuseOldFiles(picked) {
+        if (!filesTooOld || picked.every((e) => e.directory)) return false;
+        showError(t('files.files_need_agent', { version: filesTooOld, needed: MIN_PICKED_FILES_AGENT }));
+        return true;
+    }
+
     async function askSend(picked) {
         if (streamTooOld) {
             showError(t('files.send_need_agent', { version: streamTooOld, needed: MIN_STREAM_AGENT }));
             return;
         }
+        if (refuseOldFiles(picked)) return;
         sendPaths = picked.map(entryPath);
         sendHelp.textContent = tPlural('files.send_help', sendPaths.length);
         sendList.replaceChildren();
@@ -1581,7 +1600,7 @@
     // ================================================================
     let backupPaths = [];
     function askBackup(picked) {
-        if (!backupDialog) return;
+        if (!backupDialog || refuseOldFiles(picked)) return;
         backupPaths = picked.map(entryPath);
         document.getElementById('files-backup-help').textContent =
             tPlural('files.backup_help', backupPaths.length);
@@ -1693,11 +1712,11 @@
     onMenu(item.send, (picked) => {
         // Not awaited: menu handlers are fire-and-forget, and askSend reports its own
         // failures inside the dialog.
-        if (picked.length && picked.every((e) => e.directory)) void askSend(picked);
+        if (picked.length && path) void askSend(picked);
     });
     if (item.backup) {
         onMenu(item.backup, (picked) => {
-            if (picked.length && picked.every((e) => e.directory)) askBackup(picked);
+            if (picked.length && path) askBackup(picked);
         });
     }
 
@@ -1840,6 +1859,7 @@
         tooOld = null;
         openTooOld = null;
         streamTooOld = null;
+        filesTooOld = null;
         scanTooOld = null;
         diskSummary = null;
         sortBySize = false;

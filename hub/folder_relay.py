@@ -61,6 +61,8 @@ import threading
 import time
 import uuid
 
+import files
+
 #: Largest single chunk an agent may POST. The agents send 1 MiB; this is the ceiling, so a
 #: misbehaving client cannot use one request to fill the window.
 MAX_CHUNK_BYTES = 4 * 1024 * 1024
@@ -103,12 +105,10 @@ MIN_AGENT_VERSION = (3, 51, 0)
 
 def agent_supports_stream(version):
     """True when an agent version string is at least MIN_AGENT_VERSION. Unknown is False:
-    a machine that never reported a version is not one to start a fifteen-minute wait on."""
-    import re
-    match = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", str(version or ""))
-    if not match:
-        return False
-    return tuple(int(p) for p in match.groups()) >= MIN_AGENT_VERSION
+    a machine that never reported a version is not one to start a fifteen-minute wait on.
+    The parse is files.version_at_least's, so the copy gate and the picked-file gate cannot
+    read one version two ways."""
+    return files.version_at_least(version, MIN_AGENT_VERSION)
 
 # Answers from put_chunk / take_chunk. Strings rather than exceptions: every one of these is
 # an expected state the web layer maps to a status code, not an error.

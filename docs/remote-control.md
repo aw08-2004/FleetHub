@@ -27,18 +27,31 @@ the operator's scope; every session start/stop is in the audit log.
 - **The lock screen, the logon screen, and UAC.** The helper follows the Windows *input
   desktop*, re-attaching its capture and input threads whenever it switches (`Default` ↔
   `Winlogon`) and rebuilding Desktop Duplication on the new desktop. That is what makes the lock
-  screen visible and typeable. Signing in destroys the Windows session the helper lives in, so
-  the service supervises the helper and re-injects it into the new session — the view comes back
-  on its own a few seconds after the remote login succeeds.
-- **Auto follows the session; a pinned session stays pinned.** Sign-out and *switch user* move
-  the interactive desktop into a different Windows session, and only sometimes by killing the
-  one the helper is in. On a switch-user the old session survives, disconnected but intact, so
-  the helper keeps streaming a live picture of a desktop that is no longer on the monitor and no
-  longer where the operator's keystrokes land. With **Auto** selected the service re-asks which
-  session is interactive every few seconds and moves the helper when the answer changes (the
-  browser reconnects on its own, as it does after a sign-in). A session the operator picked by
-  hand is never moved — watching one user's session while somebody else uses the console is a
-  legitimate thing to be doing.
+  screen visible and typeable. Signing in often destroys the Windows session the helper lives in
+  (Windows reconnects the user's existing session to the console instead), so the service
+  supervises the helper and re-injects it into the new session — the view comes back on its own a
+  few seconds after the remote login succeeds. That holds for a session **relayed through the
+  hub** too: the new helper posts a fresh offer, and a viewer already on the relay answers it by
+  asking for the relay again, so the replacement joins the same relay and the picture resumes in
+  place, still *Live (via hub)*. Until issue #170 this case stayed black for good, because the
+  new helper never heard the viewer's original request to relay.
+- **Auto follows the session; so does a pinned logon screen; a pinned user session stays
+  pinned.** Sign-out and *switch user* move the interactive desktop into a different Windows
+  session, and only sometimes by killing the one the helper is in. On a switch-user the old
+  session survives, disconnected but intact, so the helper keeps streaming a live picture of a
+  desktop that is no longer on the monitor and no longer where the operator's keystrokes land.
+  With **Auto** selected the service re-asks which session is interactive every few seconds and
+  moves the helper when the answer changes (the browser reconnects on its own, as it does after a
+  sign-in). Picking the **console's logon screen** by hand ("Session 1 — logon screen
+  (connected, console)") follows the sign-in the same way: once somebody signs in and the
+  console moves to their session, the helper moves with it, because a logon screen is a place to
+  sign in, not someone's session to watch. It is not simply turned into *Auto* — Auto prefers an
+  active RDP session over the console's logon screen, so on a box with somebody on RDP the
+  console's logon screen could not be reached at all. A signed-in **user's** session picked by
+  hand, or an RDP session's logon screen, is never moved — watching one user's session while
+  somebody else uses the console is a legitimate thing to be doing. The pinned-logon-screen
+  behaviour needs an agent newer than the one shipped when this was written; older agents keep a
+  pinned logon screen where it was (the hub-side relay fix above does not depend on the agent).
 - **A screen nobody is touching is not a broken capture.** Desktop Duplication reports "no new
   frame" for a desktop that has not changed, which is the permanent state of a logon screen.
   Treating that as a failure is how the remote view used to end up black with *"the agent is not

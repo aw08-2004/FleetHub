@@ -535,6 +535,12 @@ REGISTRY = (
        unit="seconds"),
     _s("directory.alert_on_unmatched", "directory", "bool", True),
     _s("directory.tls_verify", "directory", "bool", True),
+    # A PEM path ON THE HUB, not the certificate itself: a path is short, survives a settings
+    # export without dragging key material around, and is the same shape as the sign-in's
+    # LDAP_CA_FILE, so one file under /state serves both. Empty means "the image's public CA
+    # list", which never contains an enterprise AD CS root -- that was the first thing a real
+    # domain hit (CERTIFICATE_VERIFY_FAILED, with no setting that could fix it).
+    _s("directory.ca_file", "directory", "str", ""),
     _s("directory.allow_insecure", "directory", "bool", False),
 
     # ---------------- Firmware updates (roadmap #9) ----------------

@@ -41,6 +41,8 @@ import json
 import re
 from urllib.parse import quote
 
+import packages
+
 TIER_READ = "read"
 TIER_WRITE = "write"
 TIER_CONFIRM = "confirm"
@@ -221,6 +223,11 @@ _MACHINE = {"type": "string", "description": "The machine's name exactly as the 
                                             "the `machine` field of list_machines."}
 
 
+# The packages route is named by three tables below (the read, the create and the precheck).
+# One constant, so they cannot name two different routes after a rename.
+_PACKAGES_ROUTE = "/api/packages"
+
+
 def _params(required=(), **props):
     return {"type": "object", "properties": props, "required": list(required)}
 
@@ -301,7 +308,7 @@ CURATED = (
      "GET", "/api/deployments/<deployment_id>",
      _params(["deployment_id"], deployment_id={"type": "string"})),
     ("list_packages", "The software packages that can be deployed.",
-     "GET", "/api/packages", _params()),
+     "GET", _PACKAGES_ROUTE, _params()),
     ("get_package", "One package's full recipe: sources, steps, command, detection.",
      "GET", "/api/packages/<package_id>",
      _params(["package_id"], package_id={"type": "string"})),
@@ -355,7 +362,7 @@ CURATED = (
      "\"<DisplayName in Programs and Features>\", \"min_version\": \"1.2.3\"}, or "
      "{\"kind\": \"file_exists\", \"path\": \"C:\\Program Files\\...\\app.exe\"}, or "
      "registry_value {root, key, name, equals}. Needs the operator's confirmation.",
-     "POST", "/api/packages",
+     "POST", _PACKAGES_ROUTE,
      _params(["name"], name={"type": "string"}, description={"type": "string"},
              version={"type": "string"},
              sources={"type": "array", "items": {"type": "object"},
@@ -858,6 +865,71 @@ def build_request(name, args):
     if method == "GET":
         return None, method, path, {k: v for k, v in args.items() if v is not None}, None
     return None, method, path, None, args
+
+
+def coerce_body(value):
+    """`call_endpoint`'s `body` as (error, dict-or-None). Hub 1.180.1.
+
+    Before this a body that was not a JSON object became NO body, silently: the route then
+    answered "a package name is required" about a request whose name the model had written,
+    and a model that is told the wrong thing blames the wrong layer (it told the operator
+    the hub was "stripping the payload"). A small model often sends a nested argument as a
+    JSON *string*, so a string holding an object is accepted as that object; anything else
+    is refused by name, so the next attempt can fix the shape instead of repeating it."""
+    if value is None or value == "" or value == {}:
+        return None, None
+    if isinstance(value, dict):
+        return None, value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return None, parsed
+    return ("`body` must be a JSON object, not " + type(value).__name__ + ": send the fields "
+            "as an object, not as text and not as a list"), None
+
+
+def _precheck_package(body):
+    """The route's own verdict on a package definition, before a card exists for it."""
+    body = body if isinstance(body, dict) else {}
+    try:
+        packages.check_definition(
+            name=body.get("name"),
+            sources=body.get("sources") if body.get("sources") is not None
+            else body.get("source"),
+            steps=body.get("steps"),
+            install_command=body.get("install_command"),
+            install_args=body.get("install_args"),
+            timeout_seconds=body.get("timeout_seconds", 900),
+            success_exit_codes=body.get("success_exit_codes"),
+            detection=body.get("detection"))
+    except (TypeError, AttributeError, KeyError) as error:
+        # Not a verdict, a shape the validators did not expect. A fuzz of every field with
+        # lists, numbers, booleans and nested junk found none that gets here, but the route
+        # has no model in front of it and this path does: a surprise has to come back as a
+        # sentence the model can act on, not as an exception out of the tool loop.
+        return (f"no card was queued: the definition has a field of the wrong type "
+                f"({type(error).__name__}). Send name as text, sources and steps as lists "
+                "of objects and detection as an object")
+    except ValueError as error:
+        return (f"no card was queued: {error}. The call carried only these fields: "
+                f"{', '.join(sorted(body)) or 'none'}. Send the whole definition in ONE call "
+                "(name, sources and/or steps, detection)")
+    return None
+
+
+# Confirm-tier routes whose body can be judged without running them. A card for a body that
+# is certain to be refused is a click that can only fail, and an operator who confirms it
+# gets the same 400 the model never saw coming (hub 1.180.1). Keyed by (method, route rule).
+PRECHECKS = {("POST", _PACKAGES_ROUTE): _precheck_package}
+
+
+def precheck(method, rule, body):
+    """An error sentence if this call would certainly be refused, else None."""
+    check = PRECHECKS.get((method, rule))
+    return check(body) if check else None
 
 
 def check_path(path):

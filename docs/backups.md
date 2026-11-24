@@ -224,10 +224,10 @@ and reports which files it could not read, rather than failing.
 **Junctions are never followed.** A Windows profile contains junctions pointing at their
 own ancestors; following them is an infinite walk.
 
-### One-off backup of picked folders
+### One-off backup of picked files and folders
 
-In a PC's **Files** tab, tick one or more folders, right-click and choose **Back up…**. That
-queues one backup of just those folders to the PC's backup destination -- the same request
+In a PC's **Files** tab, tick any files and folders, right-click and choose **Back up…**. That
+queues one backup of just those to the PC's backup destination -- the same request
 as **Back up now**, so it waits for an offline PC, respects the concurrency limit and can be
 cancelled from the Backup tab. It shows in the run list with the trigger **selection**.
 
@@ -244,6 +244,18 @@ configured paths. The policy's **excludes** still apply. Its files restore like 
 A pending **Back up now** and a pending selection share one slot per PC: the newer request
 replaces the older. `POST /api/backups/machines/<machine>/run` with `{"paths": [...]}`
 (`manage_backups` + scope).
+
+**On a PC whose agent is older than 3.52.0**, a picked file would be skipped while the run
+still reported success, so the hub refuses anything it cannot confirm is a folder, with a
+409 that says which case it is:
+
+- **a file** -- untick it, or update the agent;
+- **a folder whose listing is over 15 minutes old** (the Files tab was left open) -- refresh
+  the folder in the Files tab and try again;
+- **a token path** such as `%Users%\Documents`, sent through the API -- name the folder in
+  full, or update the agent.
+
+From agent 3.52.0 on, none of these is refused.
 
 ### Restoring a PC's files
 

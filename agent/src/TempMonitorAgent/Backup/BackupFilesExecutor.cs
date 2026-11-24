@@ -257,13 +257,7 @@ public sealed class BackupFilesExecutor : ICommandExecutor
         {
             ct.ThrowIfCancellationRequested();
             var readRoot = snapshot.MapPath(root);
-            if (!Directory.Exists(readRoot))
-            {
-                say($"[backup] note: {root} does not exist; skipping");
-                continue;
-            }
-
-            foreach (var (original, readPath) in Walk(root, readRoot, matcher, say, ct))
+            foreach (var (original, readPath) in RootEntries(root, readRoot, matcher, say, ct))
             {
                 if (!seen.Add(original)) continue;
 
@@ -323,6 +317,47 @@ public sealed class BackupFilesExecutor : ICommandExecutor
         }
 
         return new Selection(files, deletions, total, skipped, null);
+    }
+
+    /// <summary>What one included path contributes: everything under a folder, the file
+    /// itself for a file, and nothing (said aloud) for a path that is neither.
+    ///
+    /// <b>A file is a valid root since 3.52.0.</b> The Files tab's one-off backup sends what
+    /// the operator ticked, files included. Before this an included file read as "does not
+    /// exist; skipping" -- a run that reported success while leaving out exactly what was
+    /// asked for. A file root still answers to the excludes and is never a link, the same two
+    /// rules every file found by the walk answers to.</summary>
+    internal static IEnumerable<(string Original, string ReadPath)> RootEntries(
+        string root, string readRoot, PathExpander.ExcludeMatcher matcher,
+        Action<string> say, CancellationToken ct)
+    {
+        if (Directory.Exists(readRoot)) return Walk(root, readRoot, matcher, say, ct);
+        if (File.Exists(readRoot))
+        {
+            // Both are said aloud: an operator who picked this one file is owed the reason it
+            // is not in the backup (review on #211), where a file the walk skips is one of many.
+            if (matcher.Matches(root))
+            {
+                say($"[backup] note: {root} matches an exclude; skipping");
+                return [];
+            }
+            if (IsLink(readRoot))
+            {
+                say($"[backup] note: {root} is a link; not followed");
+                return [];
+            }
+            return [(root, readRoot)];
+        }
+        say($"[backup] note: {root} does not exist; skipping");
+        return [];
+    }
+
+    private static bool IsLink(string path)
+    {
+        try { return File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint); }
+        // Not a link as far as we can tell: the read below fails on it and names it as
+        // unreadable, which beats skipping it without a word.
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
     /// <summary>Depth-first walk yielding (original path, path to read from).</summary>

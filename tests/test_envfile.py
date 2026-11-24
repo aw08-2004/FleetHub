@@ -226,7 +226,63 @@ def test_set_vars_refuses_a_line_break():
     check("...and None still deletes, validation notwithstanding", "AI_API_KEY" not in text())
 
 
+def test_values_come_back_exactly_as_written():
+    """What python-dotenv -- the reader that fills os.environ -- makes of the file must be
+    what was saved. Unquoted, it cuts at ` #`, drops edge spaces and cannot parse a leading
+    quote, so a person-chosen password such as the AD service account's worked until the
+    next restart and then bound as something else."""
+    print("\n== Values read back by python-dotenv exactly as written ==")
+    from dotenv import dotenv_values
+    cases = ["Winter 2026 #1", " spaced ", "'leading", '"leading', "it's", "a\\b",
+             "back\\'slash", "#first", "plain-value_123", "$HOME", "ünïcödé ñ"]
+    path = _fresh()
+    for value in cases:
+        envfile.set_vars(path, {"LDAP_BIND_PASSWORD": value})
+        loaded = dotenv_values(path).get("LDAP_BIND_PASSWORD")
+        check(f"{value!r} survives python-dotenv", loaded == value)
+        check(f"{value!r} reads back the same through read_all",
+              envfile.read_all(path).get("LDAP_BIND_PASSWORD") == value)
+        check(f"...so saving {value!r} again reports no change",
+              envfile.set_vars(path, {"LDAP_BIND_PASSWORD": value}) == set())
+
+    path = _fresh()
+    envfile.set_vars(path, {"K": "plain-value_123"})
+    with open(path, encoding="utf-8") as fh:
+        check("a value that needs no quotes is still written bare -- older files unchanged",
+              "K=plain-value_123\n" in fh.read())
+
+    # ${NAME} cannot be stored: python-dotenv expands it even in single quotes, with no
+    # escape. Refused by name, before the file is touched, rather than saved as something else.
+    path = _fresh()
+    with open(path, encoding="utf-8") as fh:
+        before = fh.read()
+    try:
+        envfile.set_vars(path, {"LDAP_BIND_PASSWORD": "Pa${HOME}ss"})
+        check("a ${NAME} value is refused", False)
+    except ValueError as e:
+        check("a ${NAME} value is refused", True)
+        check("...naming the key, never the value", "LDAP_BIND_PASSWORD" in str(e)
+              and "Pa$" not in str(e))
+    with open(path, encoding="utf-8") as fh:
+        check("...and the file was not touched", fh.read() == before)
+
+    # A lone surrogate (a bad paste) cannot be encoded. Checked only after open("w") had
+    # truncated the file, it left .env EMPTY -- ALLOWED_EMAILS and the session key gone --
+    # while the caller reported that nothing was saved. Found in the second review.
+    path = _fresh("ALLOWED_EMAILS=root@example.com\nFLASK_SECRET_KEY=hunter2\n")
+    with open(path, encoding="utf-8") as fh:
+        before = fh.read()
+    try:
+        envfile.set_vars(path, {"LDAP_BIND_PASSWORD": "pass\ud800word"})
+        check("a lone surrogate is refused", False)
+    except ValueError:
+        check("a lone surrogate is refused", True)
+    with open(path, encoding="utf-8") as fh:
+        check("...and .env keeps every key it had", fh.read() == before)
+
+
 if __name__ == "__main__":
+    test_values_come_back_exactly_as_written()
     test_read_all()
     test_read_all_tolerates_a_bom()
     test_set_vars_preserves_everything_else()

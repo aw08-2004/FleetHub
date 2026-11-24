@@ -10,8 +10,9 @@ some permission group maps (see [Permission groups](#permission-groups)); anyone
 is refused at the callback with 403 rather than admitted to an empty dashboard. Agent endpoints such as
 `POST /api/report` use agent credentials instead of sign-in.
 
-Sign-in is **OpenID Connect**, and any OIDC provider will do. Configure Google,
-another issuer, or both — the hub refuses to start with none.
+Sign-in is **OpenID Connect**, and any OIDC provider will do. For a domain with no ADFS or
+Entra ID, there is also **Active Directory sign-in** over LDAP (below). Configure any
+combination — the hub refuses to start with none.
 
 Always required, whichever provider you use:
 
@@ -48,6 +49,114 @@ The issuer's `/.well-known/openid-configuration` is discovered automatically, so
 there is no per-vendor code and adding a provider is configuration, not a release.
 (Set `OIDC_METADATA_URL` instead if your provider's discovery document isn't at
 the conventional path.)
+
+### Active Directory sign-in (LDAP)
+
+For an on-premises domain with **no ADFS and no Entra ID** in front of it. The sign-in page
+gains a user-name-and-password form, and the hub checks what is typed against a domain
+controller over LDAPS. Only members of one **login group** can sign in this way.
+
+> ⚠️ **Prefer OIDC wherever ADFS or Entra ID exists.** With this provider the hub sees each
+> operator's domain password, and there is no MFA. ADFS is an OIDC issuer: point
+> `OIDC_ISSUER` at `https://adfs.corp.local/adfs` and nothing below is needed.
+
+```
+LDAP_SERVER=ldaps://dc1.corp.local
+LDAP_BIND_DN=CN=svc-fleethub,OU=Service,DC=corp,DC=local
+LDAP_BIND_PASSWORD=...
+LDAP_USER_BASE_DN=OU=Staff,DC=corp,DC=local
+LDAP_LOGIN_GROUP_DN=CN=FleetHub Operators,OU=Groups,DC=corp,DC=local
+LDAP_DISPLAY_NAME=Corp AD                # optional; what the sign-in button says
+LDAP_CA_FILE=/state/ad-ca.pem            # optional; your own CA, in PEM
+```
+
+| Key | |
+|---|---|
+| `LDAP_SERVER` | `ldaps://` and the DC's name, optionally `:port`. Plain `ldap://` is refused, because it would send every operator's password in cleartext. `LDAP_ALLOW_INSECURE=1` allows it for an isolated lab |
+| `LDAP_BIND_DN` | a **read-only service account**, as a DN or a UPN. Any domain user can read what the hub needs |
+| `LDAP_USER_BASE_DN` | where operators' accounts are. `DC=corp,DC=local` searches the whole domain |
+| `LDAP_LOGIN_GROUP_DN` | the security group whose members may sign in — its full **distinguished name**, not its name. Nested groups count |
+| `LDAP_CA_FILE` | the CA that signed the DC's certificate, when that is your own AD CS and not a public CA. Leave it empty if the hub already trusts the certificate |
+| `LDAP_TLS_VERIFY` | `0` turns certificate checking off. Don't: anything on the network path could then pose as the DC and collect every password typed in |
+
+All of these can also be set at **Settings → Sign-in**, like the other providers.
+
+**Letting one group sign in, step by step:**
+
+1. Create a security group, for example `FleetHub Operators`, and add the operators to it,
+   directly or through nested groups. In *Active Directory Users and Computers* (with
+   *View → Advanced Features* on), open the group's **Attribute Editor** tab and copy its
+   `distinguishedName`.
+2. Create or pick a read-only service account for the hub.
+3. Set the keys above, with that DN as `LDAP_LOGIN_GROUP_DN`. On a new Docker volume, see
+   [The first sign-in provider](installation.md#the-first-sign-in-provider).
+4. Make sure at least one account in `ALLOWED_EMAILS` is in the group, and that its `mail`
+   attribute holds that address, so someone can sign in to finish the setup.
+5. Sign in as that account. On **Permission Groups**, create a group with the capabilities
+   the operators should have, and paste the same group DN under **Directory groups**. The
+   editor lists the DNs your own sign-in carried, so you can click it instead.
+
+Being in the login group only lets someone **try** to sign in. What they can then do still
+comes from `ALLOWED_EMAILS` and the permission groups, exactly as for OIDC. A member who is
+in neither is refused after the password check, with *not authorized*.
+
+How it works, and the limits that follow from it:
+
+- **The group is checked before the password.** The service account searches for the
+  account with the login group in the search filter, and skips disabled accounts. The hub
+  tries the password only for an account that search finds. An account outside the group
+  never has its password checked, so the form cannot be used to guess passwords for, or lock
+  out, anyone else in the domain.
+- **The identity is the account's `mail` attribute**, or its `userPrincipalName` when `mail`
+  is empty. Permission groups and `ALLOWED_EMAILS` match against it, so it must be the
+  address you grant access to.
+- **The group claim is the account's group DNs**, nested membership included, read at sign-in.
+  A permission group's *Directory groups* entry matches them exactly, ignoring case.
+- People can type `jdoe`, `CORP\jdoe` or `jdoe@corp.local`.
+- **The hub reads AD's own lockout count before it tries a password.** The service account
+  reads the domain's *Account lockout threshold* and the account's current count of wrong
+  passwords (`badPwdCount`). If one more wrong password could lock the account, the hub
+  refuses locally without asking the DC. AD's count includes wrong passwords from anywhere —
+  a workstation, a phone with an old password, a VPN client — and survives a hub restart, so
+  the hub never sends **the** wrong password that locks an account. That holds for any
+  threshold, including 3 (DISA STIG).
+- **A backstop for when that count cannot be read:** after 4 wrong passwords for one account,
+  the hub stops asking the DC until **70 minutes have passed since the last one**, which is
+  how AD itself resets its count. On its own, the backstop keeps the hub's wrong passwords
+  under a policy with a threshold of 5 or more and a reset of 60 minutes or less. It forgets
+  its counts when the hub restarts; the AD read does not. Attempts are counted before the
+  bind, so many requests at once cannot get past either limit.
+- The count is kept per domain controller. The read and the bind both go to `LDAP_SERVER`,
+  which is the same DC unless that name resolves to several in turn — point it at one DC.
+- **The flip side, accepted on purpose:** anyone who knows a member's user name can keep
+  that member from signing in **through this form**, by spending the attempts AD has left
+  for them. The alternative was a domain-wide AD lockout instead. A member held back like
+  this sees the ordinary *sign-in failed* message, even with the right password; the hub log
+  says why. If Active Directory is your **only** provider, this can keep the break-glass
+  admins out too. Configure a second provider for them if you can, and keep their logon
+  names off public pages. Restarting the hub clears the backstop, but not AD's own count.
+- Separately, one client is stopped after 20 failed sign-ins in 15 minutes — an IPv4 address,
+  or an IPv6 /64. Successful sign-ins do not count.
+- **Every refusal looks the same**: the same message, the same status, and no faster than
+  0.75 seconds, whether the account does not exist, is not in the group, is disabled, is
+  held back by the lockout guard, or typed the wrong password. The time floor only hides
+  the difference while the whole refusal fits under it; when a slow DC pushes a refusal
+  past 0.75 seconds, the hub log says so. The hub log
+  (`[auth] AD sign-in refused ...`) records the actual reason, including AD's own (*password
+  expired*, *account locked out*).
+- **Settings written by hand get the same checks as the console.** A `.env` with
+  `LDAP_SERVER=ldap://...` (without `LDAP_ALLOW_INSECURE=1`), a group name instead of its
+  DN, or a missing `LDAP_CA_FILE` switches this sign-in **off**, and the hub log says why at
+  startup: `[auth] WARNING: Active Directory sign-in is configured but switched OFF: ...`.
+- Saved from **Settings → Sign-in**, the service-account password is stored exactly as typed,
+  spaces and `#` included. The one thing `.env` cannot hold is `${` followed by a name and
+  `}`; the save is refused if the password contains that. **Written into `.env` by hand**,
+  a password with a space before a `#`, a space at either end, or a leading quote must be
+  in single quotes, with any `\` or `'` inside written as `\\` or `\'`:
+  `LDAP_BIND_PASSWORD='Winter 2026 #1'`. Unquoted, `.env` would read that one as
+  `Winter 2026`.
+- As with OIDC, membership is read **once, at sign-in**. Removing someone from the group
+  takes effect when their session ends.
 
 **You can also edit all of the above from the console**, at **Settings → Sign-in** —
 `.env` is only needed to bootstrap the first provider. Changes are written to `.env` and
@@ -204,8 +313,8 @@ hire is granted access by being put in the right group in your directory, and ne
 touches the FleetHub console at all.
 
 Add them in the group editor's **Directory groups** field. Paste whatever your
-provider sends: Entra sends group **object IDs** (GUIDs), on-prem/ADFS issuers send
-distinguished names, some send plain names. Matching is exact but case-insensitive —
+provider sends: Entra sends group **object IDs** (GUIDs), on-prem/ADFS issuers and the
+hub's own Active Directory sign-in send distinguished names, some send plain names. Matching is exact but case-insensitive —
 nothing is prefix- or substring-matched, so `CN=Hospital` will not open a group named
 `CN=Hospital IT`.
 
@@ -294,6 +403,7 @@ Configure it at **Settings → Active Directory**:
 | `directory.bind_dn` | a **read-only** service account |
 | `directory.sync_interval_minutes` | 60 by default |
 | `directory.computer_filter` | `(objectClass=computer)` by default |
+| `directory.ca_file` | the CA that signed the DC's certificate, as a PEM file on the hub — needed when that is your own AD Certificate Services and not a public CA. In Docker put it under `/state`, e.g. `/state/ad-ca.pem`; sign-in's `LDAP_CA_FILE` can name the same file |
 
 The bind **password** goes in `.env`, never in hub settings — the settings table is
 readable by anyone with `manage_settings` and is included in the hub database backup:
@@ -321,6 +431,11 @@ Things worth knowing:
 - **A machine that leaves AD has its AD fields cleared**, deliberately. A stale OU left
   behind on a deleted computer account would keep granting access through an OU-scoped
   group indefinitely.
+- **`CERTIFICATE_VERIFY_FAILED ... unable to get local issuer certificate`** on the status
+  card means the hub does not trust the CA behind the DC's certificate. Export your root CA
+  as *Base-64 encoded X.509* (`certlm.msc` → Trusted Root Certification Authorities), copy it
+  to the hub, and set `directory.ca_file` to its path. Setting the CA on the sign-in page
+  alone does not cover sync.
 - **Plain `ldap://` is refused by default** — a simple bind sends the service account's
   password in cleartext. There is an explicit opt-out for isolated labs.
 - Searches are **always paged**. AD's default server limit is 1000 results and it

@@ -376,7 +376,16 @@
     "title": "Sign in",
     "prompt": "Sign in with an authorized account to view the dashboard.",
     "google": "Sign in with Google",
-    "sso": "Sign in with {provider}"
+    "sso": "Sign in with {provider}",
+    "ldap_or": "or",
+    "ldap_username": "User name",
+    "ldap_username_hint": "jdoe, CORP\\jdoe or jdoe@corp.local",
+    "ldap_password": "Password",
+    "ldap_submit": "Sign in with {provider}",
+    "ldap_failed": "Sign-in failed. Check your user name and password. If both are right, ask your administrator whether your account may sign in to FleetHub.",
+    "ldap_throttled": "Too many failed sign-ins. Try again in about {minutes} min.",
+    "ldap_unavailable": "The hub cannot reach Active Directory right now, so this sign-in is unavailable. Try again later, or ask your administrator to check the hub log.",
+    "ldap_expired": "This sign-in page had expired. Enter your password again."
   },
   "denied": {
     "title": "Access denied",
@@ -1439,6 +1448,10 @@
         "label": "Verify the DC's certificate",
         "help": "Validate the domain controller's LDAPS certificate. Turn off only for a lab with a self-signed cert — with it off, anything that can intercept the connection can capture the service account's password."
       },
+      "directory.ca_file": {
+        "label": "CA certificate (optional)",
+        "help": "A PEM file on the hub with the CA that signed the domain controller's certificate, if that is your own CA (AD Certificate Services). Leave it empty if the certificate is from a public CA. In Docker, put it under /state, e.g. /state/ad-ca.pem — the sign-in page's CA certificate can be the same file."
+      },
       "directory.allow_insecure": {
         "label": "Allow plain (unencrypted) LDAP",
         "help": "Permit binding over ldap:// without TLS. The bind password is then sent in CLEARTEXT across your network. Leave off unless this is an isolated lab."
@@ -2038,13 +2051,30 @@
       "scopes": "Scopes",
       "scopes_help": "Must include openid. Add \"groups\" (or your provider's equivalent) if you map directory groups to permission groups.",
       "save": "Save sign-in settings",
-      "no_provider_left": "That would leave no way to sign in to this hub. Configure Google or an OIDC provider before saving.",
+      "no_provider_left": "That would leave no way to sign in to this hub. Configure Google, an OIDC provider or Active Directory before saving.",
       "confirm": "Change how people sign in to this hub?\n\nThis takes effect immediately for new sign-ins. Existing sessions are not signed out. If the new settings are wrong, the break-glass administrators in ALLOWED_EMAILS can change them back — provided they can still sign in.",
       "confirm_title": "Change sign-in settings",
       "confirm_ok": "Apply changes",
       "applying": "Applying…",
       "saved_changed": "Saved. Updated: {fields}",
-      "saved_unchanged": "No changes to save."
+      "saved_unchanged": "No changes to save.",
+      "ldap": "Active Directory (LDAP)",
+      "ldap_help": "For a domain with no ADFS or Entra ID. Members of the login group sign in with their domain user name and password, which the hub checks against a domain controller over LDAPS. The hub sees the password and there is no MFA, so use OIDC instead wherever ADFS or Entra ID exists. Fill in every required field to turn it on, or clear them all to turn it off.",
+      "ldap_server": "Domain controller",
+      "ldap_server_help": "e.g. ldaps://dc1.corp.local (port 636). Plain ldap:// is refused unless insecure LDAP is allowed below.",
+      "ldap_bind_dn": "Service account",
+      "ldap_bind_dn_help": "A read-only account the hub uses to find a user before it tries their password, e.g. CN=svc-fleethub,OU=Service,DC=corp,DC=local or svc-fleethub@corp.local.",
+      "ldap_bind_password": "Service account password",
+      "ldap_user_base": "User search base",
+      "ldap_user_base_help": "Where the operators' accounts are, e.g. OU=Staff,DC=corp,DC=local. Use DC=corp,DC=local to search the whole domain.",
+      "ldap_group": "Login group",
+      "ldap_group_help": "The full distinguished name of the security group whose members may sign in, e.g. CN=FleetHub Operators,OU=Groups,DC=corp,DC=local. Nested groups count. Membership only lets someone try: they still need to be in ALLOWED_EMAILS or in a permission group, which can name this same DN under Directory groups.",
+      "ldap_ca_file": "CA certificate (optional)",
+      "ldap_ca_file_help": "A PEM file on the hub with the CA that signed the domain controller's certificate, if that is your own CA. In Docker, put it under /state, e.g. /state/ad-ca.pem.",
+      "ldap_tls_verify": "Verify the domain controller's certificate",
+      "ldap_tls_verify_help": "Leave this on. Without it, anything on the network path can pose as the domain controller and collect every password typed into the sign-in page.",
+      "ldap_allow_insecure": "Allow plain ldap:// (isolated lab only)",
+      "ldap_allow_insecure_help": "Sends every operator's password across the network in cleartext."
     },
     "search_placeholder": "Search settings",
     "search_count": {
@@ -2298,6 +2328,69 @@
         "attempts": "Attempt {attempts} of {max}",
         "load_failed": "Could not load the machines that are waiting or running. Reload the page to try again."
       }
+    },
+    "_progress": [
+      "The live deployment view (roadmap #5): what each machine is doing, which step it",
+      "is on, each step's result and log, and Abort / Redeploy / Retry now."
+    ],
+    "progress": {
+      "stage": {
+        "scheduled": "Scheduled",
+        "queued": "Queued",
+        "retry_wait": "Waiting to retry",
+        "waiting": "Sent, waiting for the machine",
+        "running": "Running",
+        "aborting": "Aborting…",
+        "finishing": "Finishing",
+        "succeeded": "Succeeded",
+        "failed": "Failed",
+        "expired": "Expired",
+        "cancelled": "Cancelled"
+      },
+      "state": {
+        "running": "Running",
+        "ok": "Done",
+        "failed": "Failed",
+        "skipped": "Failed, carried on",
+        "aborted": "Aborted",
+        "not_run": "Not run"
+      },
+      "col_step": "Progress",
+      "step_of": "Step {current} of {total} · {what}",
+      "phase_step": "Step {n} · {what}",
+      "phase_download": "Download · {what}",
+      "phase_detect": "Detection · {what}",
+      "kind_command": "Install command",
+      "exit_code": "exit code {code}",
+      "seconds": "{seconds}s",
+      "minutes": "{minutes}m {seconds}s",
+      "elapsed": "running for {duration}",
+      "took": "took {duration}",
+      "all_done": "All {total} steps done",
+      "failed_at": "Failed at {step}",
+      "show_steps": "Show steps",
+      "hide_steps": "Hide steps",
+      "no_steps_yet": "The step list appears once the machine has been sent this deployment.",
+      "old_agent": "This machine's agent ({version}) does not report steps. Update it to {min} for the live step view and Abort.",
+      "old_agent_unknown": "This machine's agent does not report steps. Agent {min} or newer shows the live step view and can be aborted.",
+      "show_log": "Log",
+      "hide_log": "Hide log",
+      "log_empty": "This step printed nothing.",
+      "log_expired": "This step's log has been cleaned up. The whole run's output is still in the machine's command history.",
+      "select_all": "Select all",
+      "select_machine": "Select {machine}",
+      "abort": "Abort",
+      "confirm_abort_title": "Abort the selected machines?",
+      "confirm_abort": "{count} machine(s) selected. Machines that have not started are cancelled. Machines installing right now are stopped at the step they are on — that step's program is ended, which can leave the software half-installed.",
+      "confirm_abort_ok": "Abort",
+      "abort_unsupported": "Not aborted — these machines run an agent older than {min}, which cannot be told to stop: {machines}",
+      "abort_none": "Nothing to abort: the selected machines had already finished.",
+      "redeploy_selected": "Redeploy",
+      "confirm_redeploy_title": "Redeploy to the selected machines?",
+      "confirm_redeploy": "{count} machine(s) selected. Each gets a fresh set of attempts with the package as it is defined now, including machines where it already succeeded.",
+      "confirm_redeploy_ok": "Redeploy",
+      "retry_now": "Retry now",
+      "retry_now_none": "None of the selected machines is waiting to retry."
     },
     "_status": [
       "Deployment and per-machine statuses. These are shown in tables and in the tally",
@@ -4456,12 +4549,12 @@
     },
     "send_title": "Send to another computer",
     "send_help": {
-      "one": "Copy this folder to another computer, live. Nothing on this computer changes.",
-      "other": "Copy these {count} folders to another computer, live. Nothing on this computer changes."
+      "one": "Copy this item to another computer, live. Nothing on this computer changes.",
+      "other": "Copy these {count} items to another computer, live. Nothing on this computer changes."
     },
     "send_target": "Computer",
     "send_destination": "Into this folder on that computer",
-    "send_destination_help": "Each folder lands inside it under its own name. Files already there are kept, not replaced.",
+    "send_destination_help": "Each file and folder lands inside it under its own name. Files already there are kept, not replaced.",
     "send_ok": "Send",
     "send_pick_target": "Pick a computer to send to.",
     "send_no_targets": "No other computer you manage can take a live copy yet. It needs agent {needed} or newer.",
@@ -4475,14 +4568,15 @@
     "send_cancelled": "Copy to {target} was cancelled.",
     "send_lost": "The hub lost track of this copy (it may have restarted).",
     "send_cancel": "Cancel copy",
-    "backup_title": "Back up these folders",
+    "backup_title": "Back up these items",
     "backup_help": {
-      "one": "One backup of this folder to the backup destination, kept apart from the scheduled backups.",
-      "other": "One backup of these {count} folders to the backup destination, kept apart from the scheduled backups."
+      "one": "One backup of this item to the backup destination, kept apart from the scheduled backups.",
+      "other": "One backup of these {count} items to the backup destination, kept apart from the scheduled backups."
     },
     "backup_ok": "Back up",
     "backup_started": "Backup started. Follow it on the Backup tab.",
-    "backup_queued": "Backup queued: {message}"
+    "backup_queued": "Backup queued: {message}",
+    "files_need_agent": "This PC runs agent {version}; sending or backing up a file needs {needed} or newer. Folders work now, so untick the files or update the agent."
   },
   "patches": {
     "classification": {
@@ -5501,7 +5595,7 @@
       "os_windows": "Windows",
       "os_linux": "Linux",
       "linux_intro": "On the Linux machine, paste this command into a terminal. It asks for your password, then installs the agent and enrols the machine:",
-      "linux_hint": "If your account cannot use sudo, which is usual on OpenMediaVault, run su - first, then paste the command without the word sudo at the end. The installer needs systemd and a 64-bit Intel or AMD machine.",
+      "linux_hint": "If your account cannot use sudo, as is common on NAS and appliance systems, run su - first, then paste the command without the word sudo at the end. The installer needs systemd and a 64-bit Intel or AMD machine.",
       "install_intro": "Download the installer and open it. Windows asks for administrator rights; allow it. The window shows each step and ends with a success line.",
       "download": "Download installer",
       "download_hint": "If Windows warns that the file is unrecognised, choose More info, then Run anyway.",

@@ -346,7 +346,16 @@
     "title": "Anmelden",
     "prompt": "Melden Sie sich mit einem autorisierten Konto an, um die Übersicht zu sehen.",
     "google": "Mit Google anmelden",
-    "sso": "Mit {provider} anmelden"
+    "sso": "Mit {provider} anmelden",
+    "ldap_or": "oder",
+    "ldap_username": "Benutzername",
+    "ldap_username_hint": "jdoe, CORP\\jdoe oder jdoe@corp.local",
+    "ldap_password": "Passwort",
+    "ldap_submit": "Mit {provider} anmelden",
+    "ldap_failed": "Die Anmeldung ist fehlgeschlagen. Prüfen Sie Benutzername und Passwort. Wenn beides stimmt, fragen Sie Ihren Administrator, ob Ihr Konto sich bei FleetHub anmelden darf.",
+    "ldap_throttled": "Zu viele fehlgeschlagene Anmeldungen. Versuchen Sie es in etwa {minutes} Min. erneut.",
+    "ldap_unavailable": "Der Hub erreicht Active Directory gerade nicht, daher ist diese Anmeldung nicht verfügbar. Versuchen Sie es später erneut oder bitten Sie Ihren Administrator, das Hub-Protokoll zu prüfen.",
+    "ldap_expired": "Diese Anmeldeseite war abgelaufen. Geben Sie Ihr Passwort erneut ein."
   },
   "denied": {
     "title": "Zugriff verweigert",
@@ -1362,6 +1371,10 @@
         "label": "Zertifikat des Domänencontrollers prüfen",
         "help": "Prüft das TLS-Zertifikat des Domänencontrollers. Abschalten macht die Verbindung abhörbar; nur zur Fehlersuche an einer internen CA gedacht."
       },
+      "directory.ca_file": {
+        "label": "CA-Zertifikat (optional)",
+        "help": "Eine PEM-Datei auf dem Hub mit der Zertifizierungsstelle, die das Zertifikat des Domänencontrollers ausgestellt hat, falls es Ihre eigene ist (AD-Zertifikatdienste). Lassen Sie das Feld leer, wenn das Zertifikat von einer öffentlichen Zertifizierungsstelle stammt. In Docker gehört sie unter /state, z. B. /state/ad-ca.pem — es kann dieselbe Datei sein wie das CA-Zertifikat der Anmeldeseite."
+      },
       "directory.allow_insecure": {
         "label": "Unverschlüsseltes LDAP erlauben",
         "help": "Erlaubt Verbindungen über LDAP im Klartext. Das Kennwort des Dienstkontos geht dann unverschlüsselt über das Netz – also aus lassen, sofern du nicht weißt, warum du es brauchst."
@@ -1951,13 +1964,30 @@
       "scopes": "Scopes",
       "scopes_help": "Muss openid enthalten. Ergänze „groups“ (oder das Äquivalent deines Anbieters), wenn du Verzeichnisgruppen auf Berechtigungsgruppen abbildest.",
       "save": "Anmeldeeinstellungen speichern",
-      "no_provider_left": "Damit gäbe es keine Möglichkeit mehr, sich an diesem Hub anzumelden. Richte vor dem Speichern Google oder einen OIDC-Anbieter ein.",
+      "no_provider_left": "Damit gäbe es keine Möglichkeit mehr, sich an diesem Hub anzumelden. Konfigurieren Sie vor dem Speichern Google, einen OIDC-Anbieter oder Active Directory.",
       "confirm": "Ändern, wie sich Personen an diesem Hub anmelden?\n\nDas wirkt sofort für neue Anmeldungen. Bestehende Sitzungen werden nicht abgemeldet. Sind die neuen Einstellungen falsch, können die Notfall-Administratoren aus ALLOWED_EMAILS sie zurücksetzen – sofern sie sich noch anmelden können.",
       "confirm_title": "Anmeldeeinstellungen ändern",
       "confirm_ok": "Änderungen übernehmen",
       "applying": "Wird angewendet…",
       "saved_changed": "Gespeichert. Aktualisiert: {fields}",
-      "saved_unchanged": "Keine Änderungen zu speichern."
+      "saved_unchanged": "Keine Änderungen zu speichern.",
+      "ldap": "Active Directory (LDAP)",
+      "ldap_help": "Für eine Domäne ohne ADFS oder Entra ID. Mitglieder der Anmeldegruppe melden sich mit Domänen-Benutzernamen und Passwort an, die der Hub über LDAPS bei einem Domänencontroller prüft. Der Hub sieht das Passwort, und es gibt keine MFA. Verwenden Sie daher OIDC, wo immer ADFS oder Entra ID vorhanden ist. Füllen Sie alle Pflichtfelder aus, um die Anmeldung einzuschalten, oder leeren Sie alle, um sie auszuschalten.",
+      "ldap_server": "Domänencontroller",
+      "ldap_server_help": "z. B. ldaps://dc1.corp.local (Port 636). Unverschlüsseltes ldap:// wird abgelehnt, solange unsicheres LDAP unten nicht erlaubt ist.",
+      "ldap_bind_dn": "Dienstkonto",
+      "ldap_bind_dn_help": "Ein Nur-Lese-Konto, mit dem der Hub einen Benutzer sucht, bevor er dessen Passwort prüft, z. B. CN=svc-fleethub,OU=Service,DC=corp,DC=local oder svc-fleethub@corp.local.",
+      "ldap_bind_password": "Passwort des Dienstkontos",
+      "ldap_user_base": "Suchbasis für Benutzer",
+      "ldap_user_base_help": "Wo die Konten der Operatoren liegen, z. B. OU=Staff,DC=corp,DC=local. Mit DC=corp,DC=local wird die ganze Domäne durchsucht.",
+      "ldap_group": "Anmeldegruppe",
+      "ldap_group_help": "Der vollständige Distinguished Name der Sicherheitsgruppe, deren Mitglieder sich anmelden dürfen, z. B. CN=FleetHub Operators,OU=Groups,DC=corp,DC=local. Verschachtelte Gruppen zählen mit. Die Mitgliedschaft erlaubt nur den Versuch: Zusätzlich ist ALLOWED_EMAILS oder eine Berechtigungsgruppe nötig, die denselben DN unter Verzeichnisgruppen nennen kann.",
+      "ldap_ca_file": "CA-Zertifikat (optional)",
+      "ldap_ca_file_help": "Eine PEM-Datei auf dem Hub mit der Zertifizierungsstelle, die das Zertifikat des Domänencontrollers ausgestellt hat, falls es Ihre eigene ist. In Docker gehört sie unter /state, z. B. /state/ad-ca.pem.",
+      "ldap_tls_verify": "Zertifikat des Domänencontrollers prüfen",
+      "ldap_tls_verify_help": "Lassen Sie dies eingeschaltet. Ohne Prüfung kann sich alles auf dem Netzwerkpfad als Domänencontroller ausgeben und jedes auf der Anmeldeseite eingegebene Passwort abgreifen.",
+      "ldap_allow_insecure": "Unverschlüsseltes ldap:// erlauben (nur isoliertes Labor)",
+      "ldap_allow_insecure_help": "Sendet das Passwort jedes Operators im Klartext über das Netzwerk."
     },
     "search_placeholder": "Einstellungen durchsuchen",
     "search_count": {
@@ -2207,6 +2237,69 @@
         "attempts": "Versuch {attempts} von {max}",
         "load_failed": "Die wartenden oder laufenden Geräte konnten nicht geladen werden. Laden Sie die Seite neu, um es erneut zu versuchen."
       }
+    },
+    "_progress": [
+      "The live deployment view (roadmap #5): what each machine is doing, which step it",
+      "is on, each step's result and log, and Abort / Redeploy / Retry now."
+    ],
+    "progress": {
+      "stage": {
+        "scheduled": "Geplant",
+        "queued": "In der Warteschlange",
+        "retry_wait": "Wartet auf neuen Versuch",
+        "waiting": "Gesendet, wartet auf den Rechner",
+        "running": "Läuft",
+        "aborting": "Wird abgebrochen…",
+        "finishing": "Wird abgeschlossen",
+        "succeeded": "Erfolgreich",
+        "failed": "Fehlgeschlagen",
+        "expired": "Abgelaufen",
+        "cancelled": "Abgebrochen"
+      },
+      "state": {
+        "running": "Läuft",
+        "ok": "Fertig",
+        "failed": "Fehlgeschlagen",
+        "skipped": "Fehlgeschlagen, fortgesetzt",
+        "aborted": "Abgebrochen",
+        "not_run": "Nicht ausgeführt"
+      },
+      "col_step": "Fortschritt",
+      "step_of": "Schritt {current} von {total} · {what}",
+      "phase_step": "Schritt {n} · {what}",
+      "phase_download": "Download · {what}",
+      "phase_detect": "Erkennung · {what}",
+      "kind_command": "Installationsbefehl",
+      "exit_code": "Exitcode {code}",
+      "seconds": "{seconds} s",
+      "minutes": "{minutes} min {seconds} s",
+      "elapsed": "läuft seit {duration}",
+      "took": "dauerte {duration}",
+      "all_done": "Alle {total} Schritte erledigt",
+      "failed_at": "Fehlgeschlagen bei {step}",
+      "show_steps": "Schritte anzeigen",
+      "hide_steps": "Schritte ausblenden",
+      "no_steps_yet": "Die Schrittliste erscheint, sobald diese Verteilung an den Rechner gesendet wurde.",
+      "old_agent": "Der Agent dieses Rechners ({version}) meldet keine Schritte. Aktualisieren Sie ihn auf {min} für die Live-Schrittansicht und das Abbrechen.",
+      "old_agent_unknown": "Der Agent dieses Rechners meldet keine Schritte. Ab Agent {min} gibt es die Live-Schrittansicht und das Abbrechen.",
+      "show_log": "Protokoll",
+      "hide_log": "Protokoll ausblenden",
+      "log_empty": "Dieser Schritt hat nichts ausgegeben.",
+      "log_expired": "Das Protokoll dieses Schritts wurde bereits bereinigt. Die gesamte Ausgabe steht weiterhin im Befehlsverlauf des Rechners.",
+      "select_all": "Alle auswählen",
+      "select_machine": "{machine} auswählen",
+      "abort": "Abbrechen",
+      "confirm_abort_title": "Ausgewählte Rechner abbrechen?",
+      "confirm_abort": "{count} Rechner ausgewählt. Rechner, die noch nicht begonnen haben, werden storniert. Rechner, die gerade installieren, werden beim aktuellen Schritt gestoppt — dessen Programm wird beendet, was die Software halb installiert zurücklassen kann.",
+      "confirm_abort_ok": "Abbrechen",
+      "abort_unsupported": "Nicht abgebrochen — auf diesen Rechnern läuft ein Agent älter als {min}, der nicht gestoppt werden kann: {machines}",
+      "abort_none": "Nichts abzubrechen: Die ausgewählten Rechner waren bereits fertig.",
+      "redeploy_selected": "Erneut verteilen",
+      "confirm_redeploy_title": "An die ausgewählten Rechner erneut verteilen?",
+      "confirm_redeploy": "{count} Rechner ausgewählt. Jeder erhält neue Versuche mit dem Paket in seiner aktuellen Definition, auch Rechner, auf denen es bereits erfolgreich war.",
+      "confirm_redeploy_ok": "Erneut verteilen",
+      "retry_now": "Jetzt wiederholen",
+      "retry_now_none": "Keiner der ausgewählten Rechner wartet auf einen neuen Versuch."
     },
     "status": {
       "scheduled": "geplant",
@@ -4333,12 +4426,12 @@
     },
     "send_title": "An anderen Computer senden",
     "send_help": {
-      "one": "Diesen Ordner live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts.",
-      "other": "Diese {count} Ordner live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts."
+      "one": "Dieses Objekt live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts.",
+      "other": "Diese {count} Objekte live auf einen anderen Computer kopieren. Auf diesem Computer ändert sich nichts."
     },
     "send_target": "Computer",
     "send_destination": "In diesen Ordner auf dem anderen Computer",
-    "send_destination_help": "Jeder Ordner landet darin unter seinem eigenen Namen. Bereits vorhandene Dateien bleiben erhalten und werden nicht ersetzt.",
+    "send_destination_help": "Jede Datei und jeder Ordner landet darin unter dem eigenen Namen. Bereits vorhandene Dateien bleiben erhalten und werden nicht ersetzt.",
     "send_ok": "Senden",
     "send_pick_target": "Wählen Sie einen Zielcomputer.",
     "send_no_targets": "Kein anderer von Ihnen verwalteter Computer kann bisher eine Live-Kopie empfangen. Dafür ist Agent {needed} oder neuer nötig.",
@@ -4352,14 +4445,15 @@
     "send_cancelled": "Kopie nach {target} wurde abgebrochen.",
     "send_lost": "Der Hub hat diese Kopie aus den Augen verloren (möglicherweise wurde er neu gestartet).",
     "send_cancel": "Kopie abbrechen",
-    "backup_title": "Diese Ordner sichern",
+    "backup_title": "Diese Objekte sichern",
     "backup_help": {
-      "one": "Eine einmalige Sicherung dieses Ordners am Sicherungsziel, getrennt von den geplanten Sicherungen.",
-      "other": "Eine einmalige Sicherung dieser {count} Ordner am Sicherungsziel, getrennt von den geplanten Sicherungen."
+      "one": "Eine einmalige Sicherung dieses Objekts am Sicherungsziel, getrennt von den geplanten Sicherungen.",
+      "other": "Eine einmalige Sicherung dieser {count} Objekte am Sicherungsziel, getrennt von den geplanten Sicherungen."
     },
     "backup_ok": "Sichern",
     "backup_started": "Sicherung gestartet. Den Fortschritt sehen Sie im Tab Sicherung.",
-    "backup_queued": "Sicherung eingereiht: {message}"
+    "backup_queued": "Sicherung eingereiht: {message}",
+    "files_need_agent": "Dieser PC hat Agent {version}; zum Senden oder Sichern einer Datei ist {needed} oder neuer nötig. Ordner funktionieren schon jetzt: Wählen Sie die Dateien ab oder aktualisieren Sie den Agent."
   },
   "patches": {
     "classification": {
@@ -5378,7 +5472,7 @@
       "os_windows": "Windows",
       "os_linux": "Linux",
       "linux_intro": "Fügen Sie diesen Befehl auf dem Linux-Rechner in ein Terminal ein. Er fragt nach Ihrem Passwort, installiert dann den Agenten und meldet den Rechner an:",
-      "linux_hint": "Wenn Ihr Konto sudo nicht verwenden darf, was bei OpenMediaVault üblich ist, führen Sie zuerst su - aus und fügen Sie den Befehl dann ohne das Wort sudo am Ende ein. Der Installer braucht systemd und einen 64-Bit-Rechner mit Intel- oder AMD-Prozessor.",
+      "linux_hint": "Wenn Ihr Konto sudo nicht verwenden darf, was bei NAS- und Appliance-Systemen üblich ist, führen Sie zuerst su - aus und fügen Sie den Befehl dann ohne das Wort sudo am Ende ein. Der Installer braucht systemd und einen 64-Bit-Rechner mit Intel- oder AMD-Prozessor.",
       "install_intro": "Laden Sie das Installationsprogramm herunter und öffnen Sie es. Windows fragt nach Administratorrechten; erlauben Sie dies. Das Fenster zeigt jeden Schritt und endet mit einer Erfolgsmeldung.",
       "download": "Installationsprogramm herunterladen",
       "download_hint": "Wenn Windows warnt, dass die Datei unbekannt ist, wählen Sie „Weitere Informationen“ und dann „Trotzdem ausführen“.",

@@ -33,6 +33,10 @@ public sealed class OutputStreamer : IAsyncDisposable
     private readonly object _gate = new();
 
     private StringBuilder _buffer = new();
+    // Chunks Mark() has already numbered, waiting for the pump. Always posted before
+    // anything still in _buffer, and every seq here is lower than any the buffer will get,
+    // so the one-pump ordering rule above still holds.
+    private readonly Queue<(int Seq, string Text)> _sealed = new();
     private int _seq;
     private bool _stopped;      // hub said truncated => stop streaming this command
     private bool _completed;
@@ -62,6 +66,38 @@ public sealed class OutputStreamer : IAsyncDisposable
             if (_buffer.Length < AgentConfig.StreamMaxChunkChars) return;
         }
         try { _wake.Release(); } catch (SemaphoreFullException) { /* already awake */ }
+    }
+
+    /// <summary>Draw a line in the stream: everything added before this call gets a chunk
+    /// number below the one returned, everything added after gets that number or above.
+    /// That is how a deployment's step events say which chunks are one step's log (see
+    /// IStepProgress). Thread-safe and non-blocking -- it numbers the buffered text now and
+    /// leaves the posting to the pump, rather than flushing from the caller's thread, which
+    /// would put a second POST in flight beside the pump's and break the ordering.
+    ///
+    /// Null once the hub has capped this command's output: past the cap there is no stream
+    /// left to point into.</summary>
+    public int? Mark()
+    {
+        bool hadText;
+        int next;
+        lock (_gate)
+        {
+            if (_stopped) return null;
+            hadText = _buffer.Length > 0;
+            while (_buffer.Length > 0)
+            {
+                var take = Math.Min(_buffer.Length, AgentConfig.StreamMaxChunkChars);
+                _sealed.Enqueue((_seq++, _buffer.ToString(0, take)));
+                _buffer.Remove(0, take);
+            }
+            next = _seq;
+        }
+        if (hadText)
+        {
+            try { _wake.Release(); } catch (SemaphoreFullException) { /* already awake */ }
+        }
+        return next;
     }
 
     /// <summary>Flush whatever is left and stop. MUST be awaited before reporting the
@@ -101,14 +137,21 @@ public sealed class OutputStreamer : IAsyncDisposable
             int seq;
             lock (_gate)
             {
-                if (_stopped || _buffer.Length == 0) return;
-
-                // Split oversized buffers so the hub never has to reject one. Take whole
-                // characters only; the boundary is cosmetic since the console concatenates.
-                var take = Math.Min(_buffer.Length, AgentConfig.StreamMaxChunkChars);
-                payload = _buffer.ToString(0, take);
-                _buffer.Remove(0, take);
-                seq = _seq++;
+                if (_stopped) return;
+                if (_sealed.Count > 0)
+                {
+                    (seq, payload) = _sealed.Dequeue();
+                }
+                else
+                {
+                    if (_buffer.Length == 0) return;
+                    // Split oversized buffers so the hub never has to reject one. Take whole
+                    // characters only; the boundary is cosmetic since the console concatenates.
+                    var take = Math.Min(_buffer.Length, AgentConfig.StreamMaxChunkChars);
+                    payload = _buffer.ToString(0, take);
+                    _buffer.Remove(0, take);
+                    seq = _seq++;
+                }
             }
 
             var delivered = await PostWithRetriesAsync(seq, payload, ct);
@@ -135,7 +178,7 @@ public sealed class OutputStreamer : IAsyncDisposable
 
             if (result.Truncated)
             {
-                lock (_gate) { _stopped = true; _buffer.Clear(); }
+                lock (_gate) { _stopped = true; _buffer.Clear(); _sealed.Clear(); }
                 _log.LogDebug("Hub capped output for {Id}; stopping stream", _commandId);
                 return false;
             }

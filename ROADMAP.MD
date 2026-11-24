@@ -118,7 +118,7 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-11-03
+## 🧪 On beta, waiting for confirmation   ·   updated 2026-11-23
 
 **How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
 `beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` and `beta` are both at hub **1.179.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.179.0**; `beta` is at **1.185.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -686,6 +686,194 @@ greys *Send to another computer* out on anything older. Deploy the hub first.
 - [ ] **Tickets badge.** With open tickets on a PC in scope, *Tickets* in the sidebar shows
   their number; closing one in another tab drops it without a reload. A scoped operator's
   number counts only their PCs; an operator without *view_tickets* sees no badge.
+
+**Hub 1.180.0 + agent 3.52.0 (beta) -- Send and Back up take files as well as folders**
+Needs agent **3.52.0** cut with `-Channel beta` on the PC the files are on; the receiving PC
+only needs 3.51.0. Deploy the hub first.
+- [ ] **Mixed send.** In the Files tab of a 3.52.0 PC, tick a file and a folder, *Send to
+  another computer…*. On the target the file sits directly in the destination folder and the
+  folder under its own name, both complete.
+- [ ] **A file that has gone.** Tick a file, delete it on the PC, then send: the copy fails
+  and the error names the file.
+- [ ] **Backup of a file.** Tick one file, *Back up…*. The run on the Backup tab lists that
+  one file and it restores. Tick a file the backup excludes (a `*.tmp`, say): it is left out.
+- [ ] **Old agent.** On a PC still on 3.51.0, tick a file: *Send* and *Back up* say the PC
+  needs 3.52.0 for files. Tick only folders: both work as before.
+- [ ] **A picked link is named, not followed.** On a 3.52.0 PC, make a symlink to a file
+  (`mklink link.txt real.txt` in an elevated prompt) and a junction to a folder (`mklink /J`).
+  Tick both and *Send*: the command output lists each as "a link; not followed", and neither
+  arrives. Tick the symlinked file alone and *Back up…*: the run log says it is a link. This
+  is the one check here no test runs, because creating a symlink needs Developer Mode or an
+  elevated prompt, and the agent tests have neither.
+
+**Hub 1.180.1 -- the assistant stops queueing package cards that cannot succeed** (#26)
+Hub only, no agent. Found in the chat *Create Spanish Office 365 installer* on the production
+hub: after the first, complete card expired, the model (`xiaomi/mimo-v2.6-flash` through
+OpenRouter) re-sent `create_package` with only a name and a version, the operator confirmed
+four of the cards and got the same 400 each time, and the model queued fifteen more while
+telling the operator the hub was stripping the payload. The hub was not: it stores and sends
+exactly the arguments it receives. Whether the model or the provider shortened the call cannot
+be told from here, because the raw call is not kept. *Rejected:* keeping the raw model output
+on every action row, which would put whole prompts-worth of text in the database to settle a
+question the gate below makes mostly moot; and a retry cap per chat, which punishes a
+legitimate second attempt as hard as a broken one.
+- [ ] **A broken package card is answered to the model.** In an Ask-mode chat on the beta hub,
+  ask the assistant to build any package, with a model that has been sending short calls if you
+  have one. A `create_package` with no payload and no steps must come back in the chat as a
+  refusal naming the fields it carried, and **no card** appears. A complete call still gives
+  one card, and confirming it creates the package.
+- [ ] **A repeat of an open card is refused.** With a card waiting, ask the assistant to make
+  the same package again: it must point at the open card instead of adding a second. Decline the
+  card, ask again, and a new one appears.
+
+**Hub 1.181.0 -- Active Directory sign-in, and the first provider on a new Docker volume** (#4)
+Hub only, no agent. Needs a domain controller that serves LDAPS (port 636) and a read-only
+service account. Asked for by an operator setting up a Docker demo hub against plain on-prem
+AD, with no ADFS or Entra. None of this has met a real DC: the ldap3 adapter in
+`ldapauth.ldap3_connector` is the untested part, as the sync's was (see #4).
+- [ ] **First provider on a new volume.** On a fresh Docker volume, follow
+  docs/installation.md *The first sign-in provider* with the PowerShell command. The hub
+  starts, and its log shows `[auth] Sign-in providers: Active Directory (ldaps://...)`.
+- [ ] **A member signs in.** With `LDAP_LOGIN_GROUP_DN` set to a test group and a permission
+  group mapping the same DN, a member signs in as `jdoe`, as `CORP\jdoe` and as their UPN.
+  The Permission Groups editor lists the group DNs the sign-in carried.
+- [ ] **Nested membership counts.** A user in a group that is itself a member of the login
+  group signs in.
+- [ ] **Everyone else gets the same sentence.** A wrong password, a user outside the group and
+  a disabled user all show the same message; the hub log names the real reason for each.
+- [ ] **No lockout from the hub.** With the domain's lockout threshold at 5, type one wrong
+  password for a test account at a workstation, then five through the hub. The hub sends only
+  three (the log says *AD's own count leaves 1 attempt(s)*), every refusal shows the same
+  page, and `badPwdCount` on the account stops at 4. This is the first real read of
+  `lockoutThreshold` and `badPwdCount`: check the log shows no *could not read the domain
+  lockout policy* line.
+- [ ] **A hand-written ldap:// is switched off.** Put `LDAP_SERVER=ldap://...` in the volume's
+  .env without `LDAP_ALLOW_INSECURE`: the hub logs *configured but switched OFF* at start and
+  the form does not appear.
+- [ ] **A password with a space and #.** Save a service-account password like `Winter 2026 #1`
+  at Settings -> Sign-in, restart the hub, and sign in: the bind still works.
+- [ ] **TLS.** With the DC's certificate from an internal CA, sign-in fails until
+  `LDAP_CA_FILE` points at the CA's PEM under `/state`, then works. `ldap://` is refused on
+  save at Settings -> Sign-in.
+- [ ] **Settings -> Sign-in.** The Active Directory fields save, the password shows as saved
+  and never reads back, and clearing every provider is refused.
+
+**Hub 1.182.0 (+ next Windows agent) -- reports on a Docker hub, sign-in over the relay, old
+audit lines** (#215, #170, #199)
+Three issue fixes in one release. **#215:** `deploy/docker/example.env` listed
+`AGENT_REPORT_SECRET` as required, no agent has ever sent it, and the hub refused every report
+while it was set -- a fresh Docker hub showed enrolled machines with no data. The hub now
+ignores it and warns at startup; the agent logs a refused report as a warning with the hub's
+reason instead of "Sent". Rejected: keeping it enforced with only a warning (every hub that set
+it is already broken, so the warning would describe the outage, not prevent it). **#170:** a
+replacement remote helper (the Windows session changed under it -- a sign-in) reads only
+signals after its own offer, so on a session already relayed through the hub it never saw the
+`relay` signal and the viewer sat on a black "Live (via hub)". The viewer now re-sends `relay`
+when a new offer arrives while relaying (hub-only, works with installed agents). The agent half:
+a session pinned to the console's logon screen now follows the sign-in (`follow_sign_in`);
+pinned user sessions and RDP logon screens stay pinned. Rejected: the hub sending `auto` for a
+logon-screen pick (Auto prefers an active RDP session over the console logon screen).
+**#199:** audit lines from before 1.176.0 kept the TURN username/credential; they are scrubbed
+once at startup (`fleet.scrub_audit_ice_credentials`, no hash chain to break) and redacted on
+every read, and `sharing_web.peer_command_status` no longer hands them to a borrowing hub.
+- [ ] **A Docker hub with the old line still reports.** On a hub whose `.env` still has
+  `AGENT_REPORT_SECRET=...`, the startup log shows the *IGNORED* warning and an enrolled PC's
+  temperature, serial and uptime appear within a minute.
+- [ ] **Sign-in over the relay** (needs a PC reached through the hub relay -- this hub's normal
+  state, *Owed locally* 16). Start a session with **Auto** on a PC at the logon screen, sign
+  in: the pill stays *Live (via hub)* and the signed-in desktop appears within ~15 s, without
+  pressing Start again. `remote-helper.log` shows the new helper *moving the session off WebRTC*.
+- [ ] **Logon-screen pin follows the sign-in** (needs the next Windows agent beta). Pick
+  *Session N -- logon screen* explicitly, sign in: the view follows into the new session. Then
+  pin a signed-in user's session and switch user at the console: the view stays on the pinned
+  session.
+- [ ] **Old audit lines are clean.** On a hub that ran Remote sessions before 1.176.0, the
+  *issue_command* lines for `start_remote_session` in the Audit Log show relay URLs with no
+  `username` or `credential`, and a Remote session still connects.
+
+**Hub 1.183.0 + agent 3.53.0 (beta) -- live deployment steps, Abort, Redeploy, Retry now** (#5, #217)
+The deployment view shows what each machine is doing and which step it is on, PDQ-style, with
+each step's result, exit code and own log, plus Abort, Redeploy selected and Retry now. The
+step list comes from the agent's structured events, not from reading the log -- see *Live step
+progress* under #5. Deploy the hub first; then cut agent 3.53.0 with `-Channel beta`.
+- [ ] **Stages on any agent.** Deploy a package to a beta PC and to an offline PC. The offline
+  one reads *Sent, waiting for the machine*; the online one goes *Running* and ends
+  *Succeeded* within a second or two of finishing, not on the next half-minute pass.
+- [ ] **Steps on agent 3.53.0.** Deploy a multi-step package (a driver pack) to a beta PC on
+  3.53.0: the row reads *Step n of m · ...* while it runs, expanding it shows every download,
+  step and the detection check going green in order, and *Log* under the running step follows
+  its output live.
+- [ ] **A failed step says why.** Deploy a package whose second step exits non-zero: the row
+  reads *Failed at Step 2 · ...*, the step shows the exit code, and step 3 and detection read
+  *Not run*.
+- [ ] **Abort stops a running install.** Deploy a package with a long step (a PowerShell
+  `Start-Sleep 300`), select the PC, **Abort**: the row reads *Aborting...* and then
+  *Cancelled* within about ten seconds, the step reads *Aborted*, Task Manager shows no
+  `powershell.exe` left from it, and the target is not retried.
+- [ ] **An older agent is not pretended to.** On a PC still on 3.52.0, the step list shows the
+  plan with the update hint, and **Abort** on it while it runs answers that it cannot be
+  stopped, and the row keeps running to its real result.
+- [ ] **Redeploy and Retry now.** **Redeploy** a succeeded PC: it runs again in the same
+  deployment. After a failed attempt (*Waiting to retry*), **Retry now** sends it at once.
+  A scoped operator's *Retry failures* only requeues machines in their scope.
+
+**Hub 1.184.0 + Linux agent 0.4.1 (beta) -- Linux follows its release channel** (#21, #22)
+Found 2026-11-24: a Linux box set to beta sat on 0.3.0 with 0.4.0 in the beta manifest. The Linux
+agent never read the heartbeat's `update_channel`; it read the stable manifest only, and logged a
+failed check at Debug. 0.4.1 compiles in both manifests and picks by the hub's channel name (the
+Windows design), warns once per distinct update failure, gives the download its own 15-minute
+timeout, and retries a given-up target after 24 h instead of never. The hub only rewords the
+Linux install hint, which named one NAS product. Cut 0.4.1 with `-Channel beta`.
+**Rejected:** a hub-sent "update now" command. It would not reach 0.3.0 any more than the
+channel does, and it would give the hub a say in when code runs that the channel design keeps
+out of its hands.
+- [ ] **Bootstrap a 0.3.0 beta box.** Add the beta `FLEETHUB_UPDATE_MANIFEST_URL` line from the
+  0.4.1 notes to `/etc/fleethub/agent.env`, restart, and check the box reaches the newest beta
+  within about 15 minutes. Then remove the line and restart.
+- [ ] **The channel is followed.** On 0.4.1, `journalctl -u fleethub-agent | grep channel`
+  shows *Release channel is now beta*. Moving the box to stable in the console logs the change
+  back on the next heartbeat, and the box does not downgrade.
+- [ ] **A failure is visible.** Temporarily point the override at a missing manifest: the
+  journal shows one `[update] check failed: ... 404` warning, not one every 15 minutes.
+- [ ] **The install hint is generic.** The Linux tab of the onboarding wizard says *NAS and
+  appliance systems*, in English, German and Spanish.
+
+**Linux agent 0.5.0 (beta) -- End task, Restart, patch install, installed software** (#14, #22, #25)
+Agent only: the console and the patch scheduler read the capability report, so nothing on the
+hub changes. Cut with `agent-linux/release.ps1 -Version 0.5.0 -Channel beta`; it supersedes
+0.4.1, which need not be cut separately.
+**Rejected:** relaunching a non-service process on Restart, as Windows does. argv, environment,
+cwd, terminal and the user's session cannot be read back faithfully from /proc, so the
+relaunch would be a different program sharing a path. Also rejected: `apt-get upgrade` of
+everything in a run (a run installs what was approved), and filtering the software list to
+`apt-mark showmanual` (it hides the libraries a vulnerability question is about).
+- [ ] **End task.** On a 0.5.0 box, open Processes, right-click a `sleep 600` started from the
+  Terminal tab, **End task**: it is gone within a second. Then a process that ignores SIGTERM
+  (`bash -c 'trap "" TERM; sleep 600'`): the result says it was force-killed after 5 s.
+- [ ] **Refusals.** End task on `systemd` (pid 1) and on `fleethub-agent` both fail with the
+  reason, and the box stays up.
+- [ ] **Restart.** Restart on an nginx or cron process restarts the unit (`systemctl status`
+  shows a fresh start time). On a desktop app it refuses with *not part of a system service*;
+  on a process started from the Terminal tab it refuses because it runs inside the agent's own
+  service, and the agent keeps running.
+- [ ] **Patch run.** Approve one apt update for a Debian/Ubuntu box, run it with *If required*:
+  the target reads Applied within a minute of the command finishing, without a restart unless
+  it was a kernel. Repeat with a kernel update and check the box restarts after five minutes.
+- [ ] **Software.** The box's Software section lists its packages with versions, and the
+  report sheet's Software CSV includes it.
+**Hub 1.185.0 -- a CA certificate for Active Directory sync** (#4)
+Sync trusted only the image's public CA list, so a DC with an AD CS certificate failed every
+pass with `CERTIFICATE_VERIFY_FAILED`, and the CA field on the sign-in page did not apply to
+sync. `directory.ca_file` names a PEM file on the hub, the same shape as `LDAP_CA_FILE`.
+Rejected: telling operators to set `SSL_CERT_FILE` to a hand-built bundle -- it works (it was
+the interim fix on the first real domain) but changes trust for every TLS call the hub makes
+and goes stale with the image.
+- [ ] **Sync trusts the enterprise CA.** On a hub whose DC has an AD CS certificate, set
+  *CA certificate* under Settings -> Active Directory to the root CA's PEM file, press
+  **Sync now**: the status card reads OK and counts the OUs. Empty the field again: the same
+  `CERTIFICATE_VERIFY_FAILED` comes back, so the setting is what fixed it.
+- [ ] **A wrong path says so.** Set it to a file that does not exist: the card names
+  `directory.ca_file` and says to put the file under /state, rather than a bare error.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
@@ -1881,7 +2069,7 @@ too. Budget for that explicitly when this becomes an implementation plan.
 
 ---
 
-## ✅ 5. Deploy packages (PDQ-style)   ·   hub 1.27.0; multi-step hub 1.64.0 + agent 3.22.0
+## ✅ 5. Deploy packages (PDQ-style)   ·   hub 1.27.0; multi-step hub 1.64.0 + agent 3.22.0; live steps + Abort hub 1.183.0 + agent 3.53.0
 
 Built (hub 1.27.0). `packages.py` (model + blob store + scheduler, flask-free) +
 `packages_web.py` (console API, agent payload download), a Packages page with a
@@ -1965,6 +2153,58 @@ in the field, and a package WITH steps deliberately offers no command to run
 (`install_command: ""`, `source.kind: "multi"`). Such an agent fails the deploy with "no
 install command" and the target retries until the update reaches it. The alternative —
 running step one and reporting success — is the one outcome that would lie.
+
+### Live step progress, Abort, Redeploy, Retry now · hub 1.183.0 + agent 3.53.0
+
+What PDQ Deploy's status window does, mapped onto this queue. Per target the console shows a
+derived **stage** -- scheduled, queued, *sent, waiting for the machine*, running, aborting,
+waiting to retry, finishing, then the result -- and while it runs, **which step** it is on
+(*Step 2 of 3 · Install drivers*). Expanded, every download, step and the detection check with
+its state, exit code, duration and reason, and **one step's own log**, readable while it runs.
+
+- **The agent reports steps; the hub never parses them out of the log.** The log already says
+  `[deploy] step 2/5`, and reading it was the obvious shortcut -- rejected, because the stream
+  is capped at 256k characters, pruned after a day, and worded by whichever agent build wrote
+  it: the long, noisy, failing deploy an operator most needs to follow is the one whose markers
+  fall off the end. Agent 3.53.0 posts one small event per phase transition to
+  `POST /api/agent/commands/<id>/progress` (`packages.record_step_progress`).
+- **The hub draws the step list from the recipe it sent** (`progress_skeleton`, read off the
+  command's own params snapshot); the agent only says "ordinal n of this phase is now ok".
+  Rejected: the agent sending its plan, a second copy of a document the hub already holds.
+  The two must count downloads the same way -- file payloads only, in list order -- which is
+  pinned by tests on both sides.
+- **Keyed by command, not target** (`deployment_target_steps`), so a retry starts a clean list
+  and the evidence of why attempt 1 failed survives attempt 2. Writes are idempotent and
+  monotonic: a late or repeated event never reopens a finished phase.
+- **Abort rides back on the progress answer.** The agent repeats its running event every ten
+  seconds as a keepalive, and the answer carries `cancel` once an operator aborts; the agent
+  cancels the step's token and ProcessRunner kills the tree, exactly as a timeout would.
+  Rejected: an `abort` command (it queues behind, or races, the command it should stop, and
+  needs a second executor slot) and a hub-to-agent socket (agents never accept connections).
+  An in-flight target is FLAGGED, not cancelled, until the command really ends -- a row
+  reading *cancelled* over a running installer is the lie `cancel_deployment` avoids -- and an
+  abort that lands after the last step records *succeeded*, because that is what happened.
+  An agent older than `MIN_PROGRESS_AGENT` (3.53.0) cannot hear an abort, so it is refused for
+  a running target there rather than offered.
+- **Keepalives do not wake consoles.** The route is in `changes.UNMARKED_RULES` and marks
+  `deployments` itself only when a phase moved.
+- **One step's log is a slice of the existing output stream**, between the chunk numbers the
+  agent stamps on each event (`OutputStreamer.Mark()` numbers the buffered text at the
+  boundary without a second POST racing the pump). No second copy of the text.
+- **Redeploy stays on the same deployment** (`retry_deployment_failures` with a selection),
+  for the reason the retry button always did: the history shows one deploy that reached 100%.
+  Rejected: PDQ's new-deployment-per-redeploy. *Retry failures* is now limited to the
+  caller's scope -- before, a scoped operator requeued every machine's failure.
+- **PDQ's "Prioritize" became Retry now.** This scheduler has no concurrency queue to jump --
+  every due target goes on the pass that finds it -- so the wait worth cutting short is the
+  retry backoff. A deployment window is never overridden.
+- **The scheduler is woken** by a new deployment, a retry, an abort and a deploy result
+  (`wake_deploy_scheduler`), instead of waiting out its interval.
+
+**Not done, deliberately (PDQ features left for later):** a *Waking* stage (the Wake-on-LAN
+pass, #10, does not record which targets it woke), the Heartbeat trigger (deploy when a machine
+comes online), package conditions, nested packages, and step progress on the Android agent
+(it installs as before and shows as plain *Running*).
 
 ---
 
@@ -2604,6 +2844,63 @@ same shape of finding the TURN work produced on first contact with hardware.
 - **Target actions by OU/group.** Once OU/group data is synced, a Permission Group's
   `machine_scope` gains a second resolution mode — "AD OU/group" alongside the v1 explicit
   list — so deploys and commands can target an OU the same way.
+
+**✅ Active Directory sign-in over LDAP -- built (hub 1.181.0).** The login above assumed an
+OIDC issuer in front of AD (Entra or ADFS). A domain with only domain controllers had no way
+in, so the hub now takes a user name and password and checks them with an LDAPS bind
+(`ldapauth.py` + `ldapauth_web.py`). Resolved parameters:
+
+- **The login group is checked before the password, and is required.** A read-only service
+  account searches for the account with `memberOf:1.2.840.113556.1.4.1941:=<group>` (nested
+  membership) and enabled-only in the filter; the user's own bind happens only for an account
+  that search returned. *Rejected:* binding as whoever typed their name and checking the group
+  afterwards, which needs no service account but makes a public page a password oracle and a
+  lockout button for every account in the domain.
+- **Its own LDAP_* keys on Settings -> Sign-in (break-glass), not the `directory.*` sync
+  settings.** Those are `manage_settings`, and the DC that decides who you are is the
+  perimeter. Configured twice on purpose.
+- **The hub must not lock domain accounts -- decided by AD's own count.** Before each user
+  bind the service account reads the domain's `lockoutThreshold` / `lockOutObservationWindow`
+  and the account's `badPwdCount` / `badPasswordTime`, and the hub refuses locally if one more
+  failure (plus any still in flight) could reach the threshold. That covers failures the hub
+  never saw (a phone with an old password), thresholds below 5 (DISA STIG: 3), and a hub
+  restart. The count is per DC, so `LDAP_SERVER` should name one DC. **Backstop** when that
+  read fails or there is no policy: 4 attempts per account (keyed on its DN, so every spelling
+  shares one budget), then nothing until 70 minutes after the LAST one -- AD's reset rule,
+  with 10 minutes' margin over the 60-minute policies it promises to cover, for bind latency
+  and clock drift. Reserved before the bind under a lock, with in-flight attempts counted
+  apart from settled ones, so neither concurrency nor a success landing mid-flight can
+  overshoot. 20 failures per client (IPv4 address or IPv6 /64) in 15 minutes. *Rejected:* a
+  sliding window (the first version) -- a patient attacker refills it one failure at a time
+  while AD's count never resets; a budget per (account, address), which hands a distributed
+  attacker the domain-wide lockout this exists to prevent; and the hub's own count alone (the
+  second version), which a single outside typo or a STIG threshold defeats. *Accepted cost:*
+  anyone who knows a member's user name can keep them out of THIS form by spending the
+  attempts AD has left for them -- on an AD-only hub, the break-glass admins included.
+- **Group DNs go out as the `groups` claim**, so the existing directory-group mapping applies
+  unchanged and `_complete_login` stays the single authorization decision.
+- **One message for every refusal**, the per-account block included, and never faster than
+  0.75 s, so neither the page nor its timing tells an anonymous client which names are
+  members. AD's sub-code (`data 52e`, `775`) goes to the log only.
+- **Hand-written settings get the console's checks.** `authconfig.ldap_problem` runs at boot
+  and per request, and `ldap3_connector` refuses a non-ldaps:// URL on its own as well: the
+  first version validated only on a console save, so a hand-written `LDAP_SERVER=ldap://...`
+  on a new Docker volume would have bound in cleartext.
+- **Passwords go to ldap3 as bytes.** Given a str, ldap3 applies SASLprep (NFKC), which AD
+  does not -- a correct password with a micro sign or a superscript digit was refused and
+  counted towards lockout. And `envfile` now single-quotes any value .env cannot hold
+  unquoted (` #`, leading quotes, edge spaces), which a person-chosen service password hits.
+- **ldaps:// only**, with `LDAP_ALLOW_INSECURE` for isolated labs and `LDAP_CA_FILE` for an
+  internal CA. *Rejected:* StartTLS (the same certificate requirement as LDAPS, for a second
+  code path), Kerberos/IWA and NTLM (keytab and SPN, and neither survives the tunnel or proxy
+  in front of most hubs).
+- **The empty-password bind is refused before the DC is asked** -- an LDAP simple bind with a
+  DN and no password is an unauthenticated bind, which many directories answer with success.
+
+Same release: the Docker first-start trap. `example.env` told operators to keep provider keys
+out of the host file, while a new volume's `/state/.env` was empty and the hub refuses to boot
+without a provider -- so following the template produced a crash loop with no documented way
+out. docs/installation.md now has the one-command fix, and the boot error points at it.
 
 **Constraints**: this changes the security perimeter, so the break-glass rule above is
 what prevents a misconfigured mapping from locking everyone out. On-prem LDAP needs
@@ -4471,6 +4768,19 @@ read with `FileShare.ReadWrite | Delete` and no shadow copy, so an exclusively-o
 skipped and named rather than failing the copy -- a VSS snapshot was rejected as minutes of
 setup and gigabytes of diff area for what is usually a handful of folders.
 
+**Files as well as folders (hub 1.180.0 + agent 3.52.0).** The first version took folders only,
+which was read too literally from the request; an operator migrating a PC wants the odd file
+too. A picked file is one file record at the top of the stream, so the RECEIVER needed no
+change and stays at 3.51.0, and the hub needed none either -- it only ever had paths. What did
+need the source agent: the sender refused anything that was not a folder, and the backup walk
+skipped a file root as "does not exist" while the run went green, which is why the console
+gates a selection holding a file on MIN_PICKED_FILES_AGENT (3.52.0) for the SOURCE PC -- and
+so does the hub (files.picked_files_refusal), because a console-only gate leaves the silent
+backup failure open to any other client. The hub cannot tell a file from a folder by its path,
+so on an older agent it accepts only paths that the folder listing it served minutes ago shows
+as folders. Rejected: requiring 3.52.0 for every selection, which would take the folder backup
+away from the whole stable fleet to protect a case only a file hits.
+
 **One-off folder backup (hub 1.179.0, no agent change).** *Back up…* in the same menu is the
 Backup tab's "Back up now" with `paths`: the same request slot, dispatcher, throttle and
 cancel, as trigger `selection`. It is always a full in a chain of its own, and **selection
@@ -5584,7 +5894,26 @@ access", and deleting the invite would take the answer with it.
 **Open parameters.** Whether a redemption should notify the admin who created the invite —
 today the audit trail is the only signal. Whether an invite should be able to name a
 directory group instead of an email, for the tenant that would rather not maintain either.
-## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0
+## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0 · channels in 0.4.1 · process control, patch install, software in 0.5.0
+
+> **Update (2026-11-24, agent 0.5.0) -- the first parity batch is built.** `kill_process` (SIGTERM,
+> then SIGKILL after 5 s), `restart_process` (system services only, via `systemctl restart`;
+> the unit must sit directly under `system.slice`, because the innermost `.service` of a desktop
+> app is `user@<uid>.service`), `install_patches` (apt/dnf, only what is still offered, re-scan
+> at once) and the installed-software report (dpkg/rpm). No hub change: every gate reads the
+> capability report. Still open, in order: Wake-on-LAN, Files tab, `deploy_package`, journald,
+> network sweep, disk usage, watchdog, Snap/Flatpak.
+
+> **Update (2026-11-24, hub 1.184.0) -- channels reach Linux in 0.4.1.** The agent ignored
+> `update_channel` until now, so a box set to beta in the console stayed on the stable manifest
+> (0.3.0) while 0.4.0 waited in the beta one. 0.4.1 reads the channel by name, as the Windows
+> agent does. A 0.3.0 box still needs a one-time bootstrap: the 0.4.1 notes give the line for
+> `/etc/fleethub/agent.env`. **Parity backlog, in order:** patch install (apt/dnf, #14), process end/restart,
+> software inventory (dpkg/rpm), wake + `ethtool` prepare, journald events (#16), network sweep
+> and NICs from `/sys/class/net` (#18), Files tab and folder streaming, `deploy_package` with live
+> steps (gate on the capability report, not `MIN_PROGRESS_AGENT`), disk usage, systemd watchdog
+> (#20). **Not planned for Linux, Windows by nature:** BIOS/firmware, BitLocker, GPO, Windows
+> Update control, ticket tray, remote desktop and virtual display, and the message dialog.
 
 > **Update (2026-10-27, hub 1.169.0) -- the PTY terminal is built**, unreleased until Linux
 > 0.4.0 (*Owed locally* item 19). `Fleet/Shell/UnixPty.cs` opens a Unix pty and starts a login
@@ -7266,8 +7595,10 @@ release first. Making *on* the default is a later hub change, once every agent s
   unscoped, like any other new machine.
 - **Linux and Android onboarding.** The wizard and script are Windows-only; Linux still installs
   with `install.sh --secret`.
-- **Retiring `AGENT_REPORT_SECRET`.** No agent ever sent it. It is kept as an independent gate
-  for any hub that set it.
+- ~~**Retiring `AGENT_REPORT_SECRET`.**~~ **Done in hub 1.182.0 (issue #215).** No agent ever
+  sent it, so "an independent gate for any hub that set it" turned out to mean every report
+  refused on every such hub -- including every Docker hub built from `example.env`, which
+  listed it as required. The hub now ignores it and warns at startup.
 
 ---
 ## 🚧 30. Deleting a device uninstalls its agent   ·   hub 1.146.0 + Windows agent 3.44.0, Linux agent 0.4.0 (next releases)   ·   `fleet.delete_machine(uninstall_actor=)`, `Update/SelfUninstaller.cs` (both agents)
