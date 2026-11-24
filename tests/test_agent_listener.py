@@ -94,6 +94,33 @@ def test_public_surface_is_exactly_the_decided_one():
           not missing)
 
 
+# Every path variable a public route may carry. Each is a value the hub minted itself --
+# uuid4().hex, token_hex, token_urlsafe, a hex digest, an int, or an onboarding code from
+# onboarding.ALPHABET -- so none can ever hold a "%". That matters because is_agent_path
+# refuses any PATH_INFO that still contains a percent-escape: a route that put a filename or
+# a package name in the path would 404 on the agent port for exactly the names containing
+# "%", and the agent would retry it silently forever. Such a value belongs in the query
+# string or the body, which the filter never looks at.
+MINTED_PATH_VARIABLES = {
+    "change_id", "code", "command_id", "digest", "index", "request_id", "restore_id",
+    "run_id", "scan_id", "seq", "session_id", "sha256", "share_id", "ticket_id", "token",
+    "transfer_id", "update_id",
+}
+
+
+def test_public_path_variables_are_minted_ids():
+    print("\n-- every path variable on the agent surface is an id the hub minted --")
+    seen, unknown = set(), {}
+    for rule in app.app.url_map.iter_rules():
+        if not agent_listener.is_agent_path(sample_path(rule.rule)):
+            continue
+        seen |= set(rule.arguments)
+        for name in set(rule.arguments) - MINTED_PATH_VARIABLES:
+            unknown.setdefault(name, rule.rule)
+    check(f"the agent surface has path variables to check ({len(seen)})", len(seen) > 5)
+    check(f"none is free text that could hold a '%' (unknown: {unknown})", not unknown)
+
+
 def test_agent_sources_are_served():
     print("\n-- every hub path the agents are compiled with is served --")
     roots = [os.path.join(_REPO, d) for d in ("agent/src", "agent-shared", "agent-linux/src",
@@ -217,6 +244,7 @@ def test_console_url_defaults_to_hub_url():
 def main():
     test_every_agent_route_passes()
     test_public_surface_is_exactly_the_decided_one()
+    test_public_path_variables_are_minted_ids()
     test_agent_sources_are_served()
     test_console_is_refused()
     test_tricks_are_refused()

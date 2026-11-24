@@ -102,7 +102,13 @@ def is_agent_path(path):
     percent-escape that still decodes to something else. PATH_INFO arrives already decoded,
     so a surviving escape is a double-encoding -- no agent sends one, and refusing it costs
     nothing, whereas reasoning about which layer decodes it a second time is how traversal
-    bugs are born."""
+    bugs are born.
+
+    **The price: no agent route may carry free text in its path.** A filename holding a
+    literal "%" arrives here as "%" and is refused, so the agent gets a 404 it retries
+    silently. Every path variable on this surface today is an id the hub minted (hex,
+    URL-safe token, onboarding code); a name goes in the query string or the body, which this
+    never sees. tests/test_agent_listener.py fails on a path variable outside that set."""
     if not isinstance(path, str) or not path.startswith("/"):
         return False
     if "\\" in path or "\x00" in path or unquote(path) != path:
