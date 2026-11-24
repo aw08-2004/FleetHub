@@ -321,7 +321,9 @@ public static class AgentConfig
     /// forever**: the count is cleared only when a build reaches the hub, so a target that
     /// failed three times for a passing reason (a full disk, a hub outage during the confirming
     /// heartbeat) was never tried again and nothing said so after the one warning. A day keeps
-    /// a genuinely broken build down to one attempt per machine per day.</summary>
+    /// a genuinely broken build down to one round of <see cref="MaxChainRestarts"/> restarts
+    /// per machine per day: the retry starts the count again, so one more failure does not put
+    /// the target straight back to sleep (see SelfUpdater.CheckAndApplyAsync).</summary>
     public static readonly TimeSpan GiveUpRetryAfter = TimeSpan.FromHours(24);
 
     /// <summary>Timeout for the binary download, separate from the 30-second manifest one.
