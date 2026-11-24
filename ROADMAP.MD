@@ -180,8 +180,8 @@ auto-update off and is updated by hand once the test hub has checked out.
   describe the one-branch flow. **Done 2026-11-24 in #223**, the PR that wrote this entry,
   merged after #224.
 - [ ] **6. Delete the `beta` branch** on GitHub.
-- [ ] **7. Hub cleanup** (a hub change, so a `HUB_VERSION` bump and release notes): no
-  operator can pick a channel that reads a missing branch. **PR #226, open -- hub 1.186.0.**
+- [x] **7. Hub cleanup** (a hub change, so a `HUB_VERSION` bump and release notes): no
+  operator can pick a channel that reads a missing branch. **Done 2026-11-24 in #226, hub 1.186.0.**
   It removes the `hub.update_channel` setting outright rather than leaving it with one
   choice, and replaces `channels._REFS` with a single `HUB_REF = "main"`. A hub's stored row
   for the key is skipped like any key that left the registry, so no migration is needed. The
@@ -908,8 +908,9 @@ out of its hands.
 
 **Linux agent 0.5.0 (beta) -- End task, Restart, patch install, installed software** (#14, #22, #25)
 Agent only: the console and the patch scheduler read the capability report, so nothing on the
-hub changes. Cut with `agent-linux/release.ps1 -Version 0.5.0 -Channel beta`; it supersedes
-0.4.1, which need not be cut separately.
+hub changes. Cut with `agent-linux/release.ps1 -Version 0.5.0 -Channel beta`, which writes
+the beta manifest on `main`. It follows `linux-agent-v0.4.1-beta`, cut on 2026-11-24, so a box
+on 0.4.1 and the beta channel takes it within about fifteen minutes.
 **Rejected:** relaunching a non-service process on Restart, as Windows does. argv, environment,
 cwd, terminal and the user's session cannot be read back faithfully from /proc, so the
 relaunch would be a different program sharing a path. Also rejected: `apt-get upgrade` of
