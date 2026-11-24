@@ -238,6 +238,25 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
     /// one has answered. Read by the process loop.</summary>
     public bool? ProcessesWanted { get; private set; }
 
+    /// <summary>The last parse failure each heartbeat handler logged at Warning.
+    ///
+    /// A reply that is not JSON at all -- a proxy's HTML error page answering 200 -- fails
+    /// both handlers on every heartbeat, and until 0.4.1 the policy handler said so every
+    /// ten seconds. Warned once per distinct error, at Debug while it repeats, and cleared
+    /// by the next reply that parses: SelfUpdater's NoteFailure rule, for the same reason.</summary>
+    private string? _lastChannelError, _lastPolicyError;
+
+    private void WarnOnce(ref string? last, Exception e, string what)
+    {
+        if (e.Message == last)
+        {
+            _log.LogDebug("Ignoring malformed {What} from the hub (unchanged): {Msg}", what, e.Message);
+            return;
+        }
+        last = e.Message;
+        _log.LogWarning(e, "Ignoring malformed {What} from the hub: {Msg}", what, e.Message);
+    }
+
     /// <summary>Which release channel the hub says this machine follows (roadmap #21).
     ///
     /// **Absent means stable**, unlike the pin below, where absent changes nothing. That is the
@@ -253,6 +272,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
         {
             var sent = JsonNode.Parse(reply)?["update_channel"]?.GetValue<string>();
             var channel = Channels.Normalize(sent);
+            _lastChannelError = null;
             if (channel == AgentState.LoadUpdateChannel()) return;
             _state.SaveUpdateChannel(channel);
             _log.LogInformation("Release channel is now {Channel}; updates will come from {Url}",
@@ -260,7 +280,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
         }
         catch (Exception e)
         {
-            _log.LogWarning(e, "Ignoring malformed channel from the hub: {Msg}", e.Message);
+            WarnOnce(ref _lastChannelError, e, "channel");
         }
     }
 
@@ -273,9 +293,14 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
         try
         {
             var block = JsonNode.Parse(reply)?["update_policy"];
-            if (block is null) return;
+            if (block is null)
+            {
+                _lastPolicyError = null;
+                return;
+            }
             var pin = UpdatePins.PinFromPolicy(
                 block["mode"]?.GetValue<string>(), block["version"]?.GetValue<string>());
+            _lastPolicyError = null;
             if (pin == AgentState.LoadUpdatePin()) return;
             _state.SaveUpdatePin(pin);
             if (pin is null) _log.LogInformation("Agent updates are automatic again");
@@ -283,7 +308,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
         }
         catch (Exception e)
         {
-            _log.LogWarning(e, "Ignoring malformed update policy from the hub: {Msg}", e.Message);
+            WarnOnce(ref _lastPolicyError, e, "update policy");
         }
     }
 
