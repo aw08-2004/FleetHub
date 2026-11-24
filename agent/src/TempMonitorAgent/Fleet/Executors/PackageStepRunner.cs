@@ -458,8 +458,18 @@ public static class PackageStepRunner
 /// (see packages._VARIABLE_RE), so an unknown name is refused there rather than reaching a
 /// machine as a literal brace pair in a command line.
 /// </summary>
-public sealed class PackageVariables
+public sealed partial class PackageVariables
 {
+    /// <summary>What a machine fact may contain to be substituted at all. An allow-list, not
+    /// escaping (SECURITY.MD): the value is an SMBIOS string the OEM wrote, it lands as plain
+    /// text in a command line or a PowerShell script that runs as SYSTEM, and there is no one
+    /// escaping that is right for msiexec, cmd and PowerShell at once. Every real model,
+    /// manufacturer, SKU, build, architecture and computer name seen in the fleet fits
+    /// ("Dell Inc.", "ThinkPad X1 Carbon Gen 11", "VMware7,1"); a quote, `;`, `$`, `&` or `%`
+    /// fails the step with the value in the message instead of changing what it runs.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^[A-Za-z0-9 ._,()+\-]+$")]
+    private static partial System.Text.RegularExpressions.Regex SafeFactValue();
+
     private readonly Dictionary<string, string> _bindings = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _withheld = new(StringComparer.Ordinal);
     private IMachineFacts? _facts;
@@ -536,6 +546,10 @@ public sealed class PackageVariables
                 var value = _facts.Get(variable)
                     ?? throw new InvalidOperationException(
                         $"{token} is this machine's {variable}, which could not be read");
+                if (!SafeFactValue().IsMatch(value))
+                    throw new InvalidOperationException(
+                        $"{token} is this machine's {variable}, '{value}', which has characters " +
+                        "that are not safe to put into a command line");
                 text = text.Replace(token, value, StringComparison.Ordinal);
             }
         }

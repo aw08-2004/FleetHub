@@ -109,7 +109,9 @@ that uses it fails with that reason -- so put those steps inside an If with the 
 
 **The machine's own values in steps.** `{model}`, `{model_name}`, `{manufacturer}`, `{sku}`,
 `{os_build}`, `{arch}` and `{hostname}` work in any step field that takes variables, e.g. an
-extract to `{work}\{model}`. A value that cannot be read fails the step. A payload or an
+extract to `{work}\{model}`. A value that cannot be read fails the step, and so does one with characters
+other than letters, digits, spaces and `. , _ - ( ) +` -- a quote or `;` from the firmware
+must not change what a step runs as SYSTEM. A payload or an
 extract step cannot use these names. A name an extract step binds inside one branch is only
 available after the If when every branch that carries on binds it.
 

@@ -311,6 +311,39 @@ public class PackageConditionTests
         Assert.Contains("could not be read", progress.Events[1].Message);
     }
 
+    [Theory]
+    // An OEM writes these strings, and they land in a command line that runs as SYSTEM. A
+    // quote or a command separator must fail the step, not change what it runs.
+    [InlineData("Latitude 5440\" & calc & \"")]
+    [InlineData("Model'; Remove-Item C:\\x; '")]
+    [InlineData("$(whoami)")]
+    [InlineData("50%PATH%")]
+    public async Task AFactValueThatCouldChangeTheCommandIsRefused(string model)
+    {
+        var progress = new Recorder();
+        var result = await Executor(new Dictionary<string, string?> { ["hw.model"] = model })
+            .ExecuteAsync(Package(List(Run("/c echo pack-for-{model}"))), null, progress,
+                          CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("not safe to put into a command line", progress.Events[1].Message);
+    }
+
+    [Theory]
+    [InlineData("ThinkPad X1 Carbon Gen 11")]
+    [InlineData("VMware7,1")]
+    [InlineData("HP EliteBook 840 G8 Notebook PC")]
+    [InlineData("Surface Laptop 5 (1950)")]
+    public async Task RealModelNamesAreSubstituted(string model)
+    {
+        var result = await Executor(new Dictionary<string, string?> { ["hw.model"] = model })
+            .ExecuteAsync(Package(List(Run("/c echo pack-for-{model}"))), null, new Recorder(),
+                          CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("pack-for-" + model, result.Output);
+    }
+
     [Fact]
     public async Task APayloadWhoseConditionIsFalseIsNotDownloadedAndCannotBeUsed()
     {
