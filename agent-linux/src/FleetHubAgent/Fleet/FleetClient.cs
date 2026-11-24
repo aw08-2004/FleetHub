@@ -245,8 +245,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
     /// beta for this machine to be on, while a pin exists to STOP an install and one heartbeat
     /// that failed to resolve it must not release the hold. The hub sends the DELIVERED
     /// channel, so a beta box is told stable while stable is strictly newer -- nothing here
-    /// needs to know that. Persisted only when it changed.</summary>
-    private void ApplyUpdateChannel(string reply)
+    /// needs to know that. Persisted only when it changed. Internal so a test can feed it a
+    /// heartbeat reply and read the channel back from disk.</summary>
+    internal void ApplyUpdateChannel(string reply)
     {
         try
         {
