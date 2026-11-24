@@ -356,17 +356,19 @@ docker compose -f deploy/docker/compose.yaml up -d
 | Tag | Follows |
 |---|---|
 | `X.Y.Z` | exactly that `HUB_VERSION` from `main`, never rebuilt |
-| `beta-X.Y.Z` | exactly that `HUB_VERSION` from `beta`, never rebuilt |
 | `stable-latest` | the newest `main` release (the default) |
-| `beta-latest` | the newest `beta` release |
-| `latest` | whichever of the two has the higher `HUB_VERSION` (usually beta; on a tie, the `main` build) |
+| `beta-X.Y.Z`, `beta-latest` | **retired** with the `beta` branch on 2026-11-24; they never move again |
+| `latest` | the higher of `stable-latest` and the frozen `beta-latest` -- so `main`, once `main` passes 1.185.0 |
 
-Set `HUB_TAG` (for example `HUB_TAG=1.143.0`) to choose when a release goes in.
+**Pin `HUB_TAG` to a version** (for example `HUB_TAG=1.185.0`) to choose when a release goes
+in. Since the `beta` branch was retired, a pin is how a release is staged: point a test hub at
+the newest `X.Y.Z`, check it, then move the production hosts' pin to the same number. A host on
+`stable-latest` takes every release at its next pull, untested.
 
-**`latest` changed meaning on 2026-10-30.** It used to follow `main`; it now follows whichever
-channel is newer, which is usually `beta`. A host whose `.env` still says `HUB_TAG=latest`
-from the old template starts pulling beta builds, so set it to `stable-latest`. The old `beta`
-tag no longer moves; a host on it stays on its last image until it is set to `beta-latest`.
+**A host on `beta-latest` or `beta` must be moved.** It stays on its last image with no
+warning. Set it to a pinned `X.Y.Z` or to `stable-latest`. A host on `latest` needs no urgent
+change, but should be pinned as well: `latest` has changed meaning twice already (on
+2026-10-30 and on 2026-11-24).
 
 **Updating is pull and recreate.** The image sets `HUB_UPDATE_MODE=image`, which switches off
 every in-place update path: the watcher, **Update now**, and the boot-time self-heal. They
