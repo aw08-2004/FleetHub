@@ -147,6 +147,7 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         // One directory per attempt, deleted whole at the end. Per attempt rather than
         // shared, so a retry can never pick up a half-unpacked folder the previous one left
         // behind and install from it.
+        SweepStaleAttempts(StagingDir, DateTime.UtcNow);
         var workDir = Path.Combine(StagingDir, Guid.NewGuid().ToString("N"));
         try
         {
@@ -267,12 +268,61 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             // On every path, including a failure: a rejected or spent installer -- and
             // anything a step unpacked next to it -- must not stay on disk waiting to be
             // run by something else.
-            try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
-            catch (Exception e) { _log.LogDebug("Could not clean up {Path}: {Msg}", workDir, e.Message); }
+            DeleteAttemptDir(workDir);
             // Also on every path: a deploy that failed halfway may still have installed
             // something, and the device sheet (roadmap #25) should say what is actually there
             // within one inventory pass rather than at the top of the next hour.
             TempMonitorAgent.Software.SoftwareInventoryReporter.Invalidate();
+        }
+    }
+
+    /// <summary>Remove one attempt's folder, retrying briefly. A process killed on a timeout
+    /// or an Abort can take a moment to release the folder it ran in (see ProcessRunner), and
+    /// what is in here -- installers, unpacked drivers, If-step PowerShell checks -- ran as
+    /// SYSTEM and must not be left lying around. A failure is a warning, not a debug line:
+    /// <see cref="SweepStaleAttempts"/> retries it on the next deploy, but someone should
+    /// be able to see that it happened.</summary>
+    private void DeleteAttemptDir(string dir)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+                return;
+            }
+            catch (Exception e) when (attempt < 3)
+            {
+                _log.LogDebug("Retrying clean-up of {Path}: {Msg}", dir, e.Message);
+                Thread.Sleep(500 * attempt);
+            }
+            catch (Exception e)
+            {
+                _log.LogWarning("Could not clean up {Path}; the next deploy retries it: {Msg}",
+                                dir, e.Message);
+                return;
+            }
+        }
+    }
+
+    /// <summary>Delete attempt folders an earlier deploy could not -- a clean-up that failed,
+    /// or a service stopped or a machine powered off mid-install, which no `finally` survives.
+    /// Only folders untouched for an hour: a deploy is one at a time per machine today, but
+    /// nothing here should depend on that to avoid deleting a live attempt's files.</summary>
+    internal void SweepStaleAttempts(string stagingDir, DateTime nowUtc)
+    {
+        try
+        {
+            if (!Directory.Exists(stagingDir)) return;
+            foreach (var dir in Directory.EnumerateDirectories(stagingDir))
+            {
+                if (nowUtc - Directory.GetLastWriteTimeUtc(dir) > TimeSpan.FromHours(1))
+                    DeleteAttemptDir(dir);
+            }
+        }
+        catch (Exception e)
+        {
+            _log.LogDebug("Could not sweep {Path}: {Msg}", stagingDir, e.Message);
         }
     }
 

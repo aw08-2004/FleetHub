@@ -410,6 +410,52 @@ public class PackageConditionTests
         }
     }
 
+    [Fact]
+    public async Task AFolderATimedOutProcessRanInCanBeDeletedAtOnce()
+    {
+        // The review question on #228: an If's PowerShell check is written into the attempt
+        // folder, and on a timeout or an Abort the process is killed -- which only ASKS. The
+        // folder is the process's working directory, and Windows refuses to delete that while
+        // the process is still going. Pins the contract ProcessRunner now keeps by waiting
+        // for the exit; the race itself is timing-dependent and did not reproduce on the
+        // machine this was written on, so this test passing does not prove it was ever hit.
+        var dir = Path.Combine(Path.GetTempPath(), "pkgcwd-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "check.ps1"), "Start-Sleep 30");
+
+        var outcome = await ProcessRunner.RunAsync(
+            "cmd.exe", "/c ping -n 30 127.0.0.1 > nul", CancellationToken.None,
+            timeoutSeconds: 1, workingDir: dir);
+
+        Assert.True(outcome.TimedOut);
+        Directory.Delete(dir, recursive: true);   // throws if the folder is still in use
+        Assert.False(Directory.Exists(dir));
+    }
+
+    [Fact]
+    public void TheSweepRemovesOnlyAttemptFoldersLeftOverFromBefore()
+    {
+        var staging = Path.Combine(Path.GetTempPath(), "pkgsweep-" + Guid.NewGuid().ToString("N"));
+        var stale = Path.Combine(staging, "old-attempt");
+        var live = Path.Combine(staging, "live-attempt");
+        Directory.CreateDirectory(stale);
+        Directory.CreateDirectory(live);
+        File.WriteAllText(Path.Combine(stale, "check.ps1"), "exit 0");
+        var now = DateTime.UtcNow;
+        Directory.SetLastWriteTimeUtc(stale, now.AddHours(-2));
+        try
+        {
+            Executor(Latitude).SweepStaleAttempts(staging, now);
+
+            Assert.False(Directory.Exists(stale));
+            Assert.True(Directory.Exists(live));   // a running attempt is never swept
+        }
+        finally
+        {
+            try { Directory.Delete(staging, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
     [Theory]
     [InlineData(9, "laptop")]
     [InlineData(10, "laptop")]
