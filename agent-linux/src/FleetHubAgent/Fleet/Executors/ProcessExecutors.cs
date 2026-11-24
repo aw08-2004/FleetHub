@@ -82,6 +82,35 @@ public static partial class ProcessGuard
         return null;
     }
 
+    /// <summary>Units whose restart is refused whatever process inside them was clicked.
+    ///
+    /// **The process guard alone is not enough for Restart, because Restart acts on the
+    /// UNIT.** Everything the agent starts -- a Terminal-tab shell and whatever runs in it, the
+    /// apt-get an install runs -- lives in the agent's own cgroup, so Restart on a harmless
+    /// `sleep` started from the Terminal tab resolved to fleethub-agent.service and restarted
+    /// the agent mid-command, losing the result. The same holds for any helper a core service
+    /// forks. Caught in review of the 0.5.0 PR. TempMonitorAgent.service is listed for the
+    /// legacy name rule in CLAUDE.md, though no Linux install has ever used it.</summary>
+    private static readonly HashSet<string> ProtectedUnits = new(StringComparer.Ordinal)
+    {
+        "fleethub-agent.service", "TempMonitorAgent.service",
+        "systemd-journald.service", "systemd-logind.service", "systemd-udevd.service",
+        "dbus.service", "dbus-broker.service",
+    };
+
+    /// <summary>Why restarting <paramref name="unit"/> is refused, or null if it may be
+    /// restarted. <paramref name="ownUnit"/> is the agent's own unit as its cgroup says, so a
+    /// package or test install under another unit name is covered too.</summary>
+    public static string? RefusalForUnit(string unit, string? ownUnit)
+    {
+        if (unit == ownUnit || unit is "fleethub-agent.service" or "TempMonitorAgent.service")
+            return $"it runs inside {unit}, the FleetHub agent's own service -- restarting that "
+                   + "would restart the agent and lose this result. End it instead";
+        if (ProtectedUnits.Contains(unit))
+            return $"it runs inside {unit}, a core system service";
+        return null;
+    }
+
     /// <summary>A unit name safe to hand to systemctl as one argument: no leading dash, no
     /// path, no whitespace. The cgroup path is kernel-written, but it names what a local
     /// process put itself in, and this is about to run as root.</summary>
@@ -380,6 +409,9 @@ public sealed class RestartProcessExecutor(ILogger<RestartProcessExecutor> log) 
                 $"{actual} ({pid}) is not part of a system service, so there is nothing that "
                 + "knows how to start it again the way it was started. End it, then start it "
                 + "again from the Terminal tab (or have its user reopen it).");
+        var ownUnit = ProcessGuard.SystemServiceFor(Table.Cgroup(SelfPid));
+        if (ProcessGuard.RefusalForUnit(unit, ownUnit) is { } unitWhy)
+            return new(null, null, $"{actual} ({pid}) cannot be restarted: {unitWhy}");
         return new(unit, actual, null);
     }
 }

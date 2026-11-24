@@ -206,6 +206,36 @@ public sealed class ProcessControlTests : IDisposable
     }
 
     [Fact]
+    public void A_child_of_the_agent_does_not_restart_the_agent()
+    {
+        // The beta checklist's own `sleep 600`, started from the Terminal tab: an ordinary
+        // name, inside the agent's cgroup. Restart must not resolve to the agent's unit.
+        Add(3100, "sleep", ppid: 3000, cgroup: "0::/system.slice/fleethub-agent.service");
+        var decision = Restarter().Decide("sleep", 3100);
+        Assert.Null(decision.Unit);
+        Assert.Contains("FleetHub agent's own service", decision.Refusal);
+    }
+
+    [Fact]
+    public void The_agents_unit_is_read_from_its_own_cgroup_too()
+    {
+        // An install under a different unit name is still the agent.
+        Add(4242, "fleethub-agent", ppid: 1, cgroup: "0::/system.slice/fh-test.service");
+        Add(3100, "sleep", ppid: 4242, cgroup: "0::/system.slice/fh-test.service");
+        Assert.Contains("own service", Restarter(self: 4242).Decide("sleep", 3100).Refusal);
+    }
+
+    [Theory]
+    [InlineData("systemd-journald.service")]
+    [InlineData("dbus.service")]
+    [InlineData("systemd-logind.service")]
+    public void A_helper_inside_a_core_unit_does_not_restart_it(string unit)
+    {
+        Add(3200, "helper", ppid: 1, cgroup: $"0::/system.slice/{unit}");
+        Assert.Contains("core system service", Restarter().Decide("helper", 3200).Refusal);
+    }
+
+    [Fact]
     public void Restart_checks_the_name_and_the_guard_first()
     {
         Add(700, "nginx", ppid: 1, cgroup: "0::/system.slice/nginx.service");

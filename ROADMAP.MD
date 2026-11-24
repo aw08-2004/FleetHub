@@ -853,8 +853,9 @@ everything in a run (a run installs what was approved), and filtering the softwa
 - [ ] **Refusals.** End task on `systemd` (pid 1) and on `fleethub-agent` both fail with the
   reason, and the box stays up.
 - [ ] **Restart.** Restart on an nginx or cron process restarts the unit (`systemctl status`
-  shows a fresh start time). On a desktop app or a shell it refuses with *not part of a system
-  service*.
+  shows a fresh start time). On a desktop app it refuses with *not part of a system service*;
+  on a process started from the Terminal tab it refuses because it runs inside the agent's own
+  service, and the agent keeps running.
 - [ ] **Patch run.** Approve one apt update for a Debian/Ubuntu box, run it with *If required*:
   the target reads Applied within a minute of the command finishing, without a restart unless
   it was a kernel. Repeat with a kernel update and check the box restarts after five minutes.
