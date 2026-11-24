@@ -118,16 +118,72 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-11-23
+## 🧪 Waiting for confirmation   ·   updated 2026-11-24
 
-**How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
-`beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
-below what an operator has to confirm on a beta hub or a beta PC. Nothing goes to `main` until
-every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main` PR, which
-empties this list. A box that fails stays open with what went wrong written next to it, and
-the fix goes to `beta` like anything else.
+**How releases work since 2026-11-24.** Every change is a PR into `main`. Each one adds below
+what an operator has to confirm, on the **test hub** (a hub pinned to the newest `X.Y.Z` image)
+or on the **beta PCs** (agents on the beta channel, which read `agent.manifest.beta.json` from
+`main`). A release moves on when its own boxes are ticked: production hosts move their
+`HUB_TAG` pin to that hub version, and an agent beta is promoted by copying its beta manifest
+over the stable one. A box that fails stays open with what went wrong written next to it, and
+the fix is a PR into `main` like anything else. The boxes below from before 2026-11-24 are owed
+on the production hub (or the named agent), as each send note says.
 
-`main` is at hub **1.179.0**; `beta` is at **1.185.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
+### Beta branch retired (2026-11-24)
+
+**Decision.** The `beta` branch is retired. Hubs are staged by pinning an exact image tag,
+agents by the beta channel manifest, and both already live on `main`.
+
+**Why.** The branch was meant as a gate and did not work as one:
+- `beta` reached `main` unconfirmed on the owner's call three times in a row (2026-11-03,
+  2026-11-15, 2026-11-24), and the list below had grown to 77 open boxes by the last of them.
+- **It held back the very beta PCs it was for.** Agents read both manifests from `main`
+  (`AgentConfig.cs`, `channels.agent_manifest_url`), so an agent beta committed to `beta`
+  reached no PC until the batch merge: agent 3.53.0 was cut as a beta and reached beta PCs
+  only on 2026-11-24.
+- It cost a second numbering line (bump against `beta`, not `main`), workflow changes that had
+  to land on both branches (#164), the `HUB_TAG=latest` trap (*Move the Docker hosts first*),
+  and a release PR of 56 commits that nobody could review as a whole.
+
+**Rejected alternatives.**
+- *Keep the branch and enforce the gate.* That would have kept the delay on agent betas, which
+  no amount of discipline fixes, and the gate had been overridden at every release since
+  2026-11-03.
+- *Tags alone, with no agent beta channel either.* An exact-version pin (#21) is a rollback,
+  not a stage: the agent's own updater installs it, so a release that breaks the updater, the
+  heartbeat or the service start leaves the pin unable to reach the PCs it broke. The beta
+  manifest costs one extra signed file and keeps a few PCs between a release and the fleet.
+- *Keep a hub beta channel built from `main`.* A hub needs no moving beta pointer when every
+  build already has an immutable `X.Y.Z` tag to pin.
+
+**One gap stays open:** a hub installed with the Windows installer cannot be pinned to a tag.
+With auto-update on, it takes every push to `main`. A production installer hub keeps
+auto-update off and is updated by hand once the test hub has checked out.
+
+**Retiring it, in this order** -- nothing warns after step 6, so steps 1 to 4 come first:
+- [ ] **1. Workflows off `beta`** (a workflow-only PR into `main`). `claude-fix.yml` cuts its
+  branches from `origin/beta` and fails once the branch is gone; cut them from `main`.
+  `claude-review.yml` and `codeql.yml` drop their `beta` trigger. **PR #224, open** -- tick
+  this when it merges. `hub-image.yml` keeps its `beta` path: it goes inert with the branch,
+  and the `latest` step still reads the frozen `beta-latest`, so removing it is cleanup.
+- [x] **2. Open PRs into `beta`** are merged into it or retargeted to `main`. **Done
+  2026-11-24:** #214 (Authenticode signing) retargeted to `main`, and no PR into `beta` is
+  left. `git log origin/main..origin/beta` then held only #221's roadmap note, whose content is
+  the 2026-11-24 send paragraph below, so nothing is lost with the branch.
+- [ ] **3. Installer hubs.** Every hub whose *This hub's release channel* reads *Beta* is set to
+  *Stable*. A beta hub left behind reads `HUB_VERSION` from a branch that no longer exists and
+  silently stops updating.
+- [ ] **4. Docker hosts.** Every host on `HUB_TAG=beta-latest`, `beta` or `latest` is set to an
+  exact `X.Y.Z` (or `stable-latest`). `beta-latest` never moves again.
+- [ ] **5. Docs.** CLAUDE.md, VERSIONING.md, docs/installation.md and the Docker template
+  describe the one-branch flow (the PR that wrote this entry).
+- [ ] **6. Delete the `beta` branch** on GitHub.
+- [ ] **7. Hub cleanup, later** (a hub change, so a `HUB_VERSION` bump and release notes): drop
+  *Beta* from `hub.update_channel` in `settings.py`, `channels._REFS` and the three locales,
+  so no operator can pick a channel that reads a missing branch. The agent and client *Beta*
+  choices stay: those manifests live on `main` (the client's is served from `hub/`).
+
+`main` and `beta` were both at hub **1.185.0** on 2026-11-24 (agent 3.53.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -148,6 +204,13 @@ version pair, 3.50.0 on `main` against 3.51.0 on `beta`, kept at 3.51.0 because 
 goes backwards. *Move the Docker hosts first* is still open but did not block this one: with
 `main` and `beta` on the same hub version, a host on `HUB_TAG=latest` gets 1.179.0 whichever
 channel it follows. It blocks the next release in which `beta` runs ahead of `main` again.
+
+**2026-11-24: `beta` (hub 1.185.0, agent 3.53.0 beta, Linux agent 0.4.1 beta) sent to `main`
+unconfirmed, on the owner's call** (PR #222). The 77 open boxes below were open at the time and
+stay here until ticked, on the same footing as the 2026-11-03 and 2026-11-15 releases. This one
+went ahead of *Move the Docker hosts first*, which was still open while `beta` ran ahead of
+`main`. The stable agent manifests did not move (Windows 3.50.0, Linux 0.3.0); only the beta
+manifests did. It was the last `beta` → `main` PR -- see *Beta branch retired* above.
 
 **Hub 1.159.0 — Group Policy, waiting on agent 3.48.0** (#163)
 - [x] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*

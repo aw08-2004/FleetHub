@@ -131,17 +131,19 @@ was rendering while marked `hidden` because a `display: flex` outranked the UA s
 deployed hub, whether or not `HUB_AUTO_UPDATE` is on. A push that only touches docs or
 `tests/` needs no bump, because there is nothing for a hub to install.
 
-**Beta first (since 2026-10-21).** Changes land on `beta`, never directly on `main`, so in
-practice every bump is made on `beta` and is the next number after *`beta`'s*, which runs
-ahead of `main`'s. `main` takes `beta`'s number as it stands when the one `beta` → `main` PR
-merges, after everything in ROADMAP.MD → *On beta, waiting for confirmation* is ticked. `main`
-skipping the numbers it never ran is fine; the rule above is only that none repeats.
+**One branch (since 2026-11-24).** Every change is a PR into `main`, and every bump is the next
+number after `main`'s. From 2026-10-21 to 2026-11-24 changes landed on a `beta` branch first and
+reached `main` in one batch, so `main` skips the numbers only `beta` ran (everything between
+1.179.0 and 1.185.0, for one); that is fine, because the rule above is only that none repeats. Why the
+branch was retired, and what stages a release instead, is in ROADMAP.MD → *Beta branch
+retired*.
 
 The same number is the hub's **container image tag**. `.github/workflows/hub-image.yml`
-publishes `ghcr.io/<owner>/fleethub:X.Y.Z` (and the moving `stable-latest`) from `main`,
-and `beta-X.Y.Z` (and `beta-latest`) from `beta`; `latest` moves to whichever of the two has
-the higher number, and mirrors every tag to the pre-rename `temp_monitor-hub` for hosts still on the
-old compose file. It **fails** if `HUB_VERSION` is not three numeric components, or if that tag already
+publishes `ghcr.io/<owner>/fleethub:X.Y.Z` (and the moving `stable-latest`) from `main`, and
+mirrors every tag to the pre-rename `temp_monitor-hub` for hosts still on the old compose file.
+**The `X.Y.Z` tag is the staging tool now**: a test hub pins the newest one, and production moves
+its `HUB_TAG` pin once that hub checks out. The `beta-X.Y.Z` and `beta-latest` tags stopped at
+the last `beta` build and never move again. It **fails** if `HUB_VERSION` is not three numeric components, or if that tag already
 exists. A reused number never overwrites an image: the push fails, and a container hub
 cannot install a release that has no new tag.
 

@@ -8,9 +8,10 @@
 #   docker compose -f deploy/docker/compose.yaml pull
 #   docker compose -f deploy/docker/compose.yaml up -d
 #
-# Pin HUB_TAG to a version (HUB_TAG=1.143.0) to choose when a release goes in;
-# "stable-latest" follows main, "beta-latest" follows the beta branch, and "latest" is the
-# newest of the two -- which is usually beta, so it is not the default. Deploy order is
+# Pin HUB_TAG to a version (HUB_TAG=1.185.0) to choose when a release goes in -- since the
+# beta branch was retired (2026-11-24) that pin is how a release is staged: a test hub takes
+# the newest version first, production moves its pin after. "stable-latest" follows main and
+# takes every release untested; "beta-latest" is frozen and never moves again. Deploy order is
 # unchanged: hub first, agent releases after.
 name: fleethub
 
