@@ -271,7 +271,7 @@ public class PackageConditionTests
             Run("/c echo never")));
         // A detection rule that would FAIL if it ran: a Stop is the package saying the
         // software is not meant to be installed here.
-        cmd.Params["detection"] = new JsonObject
+        cmd.Params!["detection"] = new JsonObject
             { ["kind"] = "file_exists", ["path"] = @"C:\definitely\not\here.exe" };
 
         var result = await Executor(Latitude).ExecuteAsync(cmd, null, progress, CancellationToken.None);
@@ -307,7 +307,7 @@ public class PackageConditionTests
         var failed = await Executor(new Dictionary<string, string?>()).ExecuteAsync(Package(List(
             Run("/c echo pack-for-{model}"))), null, progress, CancellationToken.None);
         Assert.False(failed.Success);
-        Assert.DoesNotContain("pack-for-{model}", failed.Output.Replace("echo pack-for-{model}", ""));
+        Assert.DoesNotContain("pack-for-{model}", (failed.Output ?? "").Replace("echo pack-for-{model}", ""));
         Assert.Contains("could not be read", progress.Events[1].Message);
     }
 
@@ -433,25 +433,32 @@ public class PackageConditionTests
     }
 
     [Fact]
-    public void TheSweepRemovesOnlyAttemptFoldersLeftOverFromBefore()
+    public async Task TheSweepRemovesOnlyAttemptFoldersLeftOverFromBefore()
     {
         var staging = Path.Combine(Path.GetTempPath(), "pkgsweep-" + Guid.NewGuid().ToString("N"));
         var stale = Path.Combine(staging, "old-attempt");
-        var live = Path.Combine(staging, "live-attempt");
-        Directory.CreateDirectory(stale);
-        Directory.CreateDirectory(live);
+        var fresh = Path.Combine(staging, "new-attempt");
+        var longRunning = Path.Combine(staging, "long-running-attempt");
+        foreach (var dir in new[] { stale, fresh, longRunning }) Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(stale, "check.ps1"), "exit 0");
         var now = DateTime.UtcNow;
+        // Review on #228: a single step can run for hours without touching the folder's top
+        // level, so its timestamps alone make a LIVE attempt look abandoned. Its held marker
+        // is what keeps it.
+        using var held = DeployPackageExecutor.HoldLiveMarker(longRunning);
         Directory.SetLastWriteTimeUtc(stale, now.AddHours(-2));
+        Directory.SetLastWriteTimeUtc(longRunning, now.AddHours(-3));
         try
         {
-            Executor(Latitude).SweepStaleAttempts(staging, now);
+            await Executor(Latitude).SweepStaleAttemptsAsync(staging, now);
 
             Assert.False(Directory.Exists(stale));
-            Assert.True(Directory.Exists(live));   // a running attempt is never swept
+            Assert.True(Directory.Exists(fresh));        // too new to be anyone's leftover
+            Assert.True(Directory.Exists(longRunning));  // old, but its attempt is still running
         }
         finally
         {
+            held.Dispose();
             try { Directory.Delete(staging, recursive: true); } catch { /* best effort */ }
         }
     }

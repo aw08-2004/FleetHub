@@ -147,11 +147,13 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         // One directory per attempt, deleted whole at the end. Per attempt rather than
         // shared, so a retry can never pick up a half-unpacked folder the previous one left
         // behind and install from it.
-        SweepStaleAttempts(StagingDir, DateTime.UtcNow);
+        await SweepStaleAttemptsAsync(StagingDir, DateTime.UtcNow);
         var workDir = Path.Combine(StagingDir, Guid.NewGuid().ToString("N"));
+        FileStream? live = null;
         try
         {
             Directory.CreateDirectory(workDir);
+            live = HoldLiveMarker(workDir);
             var vars = new PackageVariables(workDir);
             // What If conditions, download conditions and `{model}` read (3.54.0). Live and
             // lazy -- see WindowsMachineFacts -- so a package with no conditions reads nothing.
@@ -268,7 +270,10 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             // On every path, including a failure: a rejected or spent installer -- and
             // anything a step unpacked next to it -- must not stay on disk waiting to be
             // run by something else.
-            DeleteAttemptDir(workDir);
+            // The marker is released first: this attempt's own delete would otherwise trip
+            // over the very file that tells a sweep the folder is in use.
+            live?.Dispose();
+            await DeleteAttemptDirAsync(workDir);
             // Also on every path: a deploy that failed halfway may still have installed
             // something, and the device sheet (roadmap #25) should say what is actually there
             // within one inventory pass rather than at the top of the next hour.
@@ -276,13 +281,24 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         }
     }
 
+    /// <summary>The file a running attempt holds open, exclusively, in its own folder for as
+    /// long as it runs. <see cref="SweepStaleAttempts"/> skips any folder whose marker it
+    /// cannot open, so a live attempt is never swept, whatever its folder's timestamps say:
+    /// a single step can run for hours without touching the folder's top level, so its
+    /// last-write time alone would make it look abandoned.</summary>
+    private const string LiveMarker = ".live";
+
+    internal static FileStream HoldLiveMarker(string workDir) =>
+        new(Path.Combine(workDir, LiveMarker), FileMode.Create, FileAccess.Write, FileShare.None);
+
     /// <summary>Remove one attempt's folder, retrying briefly. A process killed on a timeout
     /// or an Abort can take a moment to release the folder it ran in (see ProcessRunner), and
     /// what is in here -- installers, unpacked drivers, If-step PowerShell checks -- ran as
     /// SYSTEM and must not be left lying around. A failure is a warning, not a debug line:
     /// <see cref="SweepStaleAttempts"/> retries it on the next deploy, but someone should
-    /// be able to see that it happened.</summary>
-    private void DeleteAttemptDir(string dir)
+    /// be able to see that it happened. Waits with Task.Delay, never a blocking sleep: a sweep
+    /// over many leftovers must not hold a thread.</summary>
+    private async Task DeleteAttemptDirAsync(string dir)
     {
         const int attempts = 3;
         string? lastError = null;
@@ -297,7 +313,7 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             {
                 lastError = e.Message;
                 _log.LogDebug("Clean-up of {Path} failed (attempt {N}): {Msg}", dir, attempt, e.Message);
-                if (attempt < attempts) Thread.Sleep(500 * attempt);
+                if (attempt < attempts) await Task.Delay(500 * attempt);
             }
         }
         _log.LogWarning("Could not clean up {Path}; the next deploy retries it: {Msg}",
@@ -306,22 +322,40 @@ public sealed class DeployPackageExecutor : ICommandExecutor
 
     /// <summary>Delete attempt folders an earlier deploy could not -- a clean-up that failed,
     /// or a service stopped or a machine powered off mid-install, which no `finally` survives.
-    /// Only folders untouched for an hour: a deploy is one at a time per machine today, but
-    /// nothing here should depend on that to avoid deleting a live attempt's files.</summary>
-    internal void SweepStaleAttempts(string stagingDir, DateTime nowUtc)
+    /// A folder whose live marker is held is skipped outright; of the rest, only those
+    /// untouched for an hour go, so an attempt that has only just been created is safe too.
+    /// Neither rule depends on deploys running one at a time.</summary>
+    internal async Task SweepStaleAttemptsAsync(string stagingDir, DateTime nowUtc)
     {
         try
         {
             if (!Directory.Exists(stagingDir)) return;
             foreach (var dir in Directory.EnumerateDirectories(stagingDir))
             {
-                if (nowUtc - Directory.GetLastWriteTimeUtc(dir) > TimeSpan.FromHours(1))
-                    DeleteAttemptDir(dir);
+                if (nowUtc - Directory.GetLastWriteTimeUtc(dir) <= TimeSpan.FromHours(1)) continue;
+                if (IsLive(dir)) continue;
+                await DeleteAttemptDirAsync(dir);
             }
         }
         catch (Exception e)
         {
             _log.LogDebug("Could not sweep {Path}: {Msg}", stagingDir, e.Message);
+        }
+    }
+
+    /// <summary>Whether some running attempt holds this folder's live marker.</summary>
+    private static bool IsLive(string dir)
+    {
+        var marker = Path.Combine(dir, LiveMarker);
+        if (!File.Exists(marker)) return false;
+        try
+        {
+            using var probe = new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.None);
+            return false;
+        }
+        catch (IOException)
+        {
+            return true;   // held open by the attempt that owns it
         }
     }
 
