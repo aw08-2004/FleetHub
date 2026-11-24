@@ -1371,6 +1371,10 @@
         "label": "Verificar el certificado del controlador de dominio",
         "help": "Valida el certificado TLS del controlador de dominio. Desactivarlo hace que la conexión sea interceptable; sirve solo para diagnosticar una CA interna."
       },
+      "directory.ca_file": {
+        "label": "Certificado de la CA (opcional)",
+        "help": "Un archivo PEM en el hub con la CA que firmó el certificado del controlador de dominio, si es una CA propia (Servicios de certificados de AD). Déjelo vacío si el certificado proviene de una CA pública. En Docker, colóquelo en /state, p. ej. /state/ad-ca.pem; puede ser el mismo archivo que el certificado de la CA de la página de inicio de sesión."
+      },
       "directory.allow_insecure": {
         "label": "Permitir LDAP sin cifrar",
         "help": "Permite conectarse por LDAP en claro. La contraseña de la cuenta de servicio viaja entonces por la red sin cifrar, así que déjalo desactivado salvo que sepas por qué lo necesitas."

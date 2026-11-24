@@ -1448,6 +1448,10 @@
         "label": "Verify the DC's certificate",
         "help": "Validate the domain controller's LDAPS certificate. Turn off only for a lab with a self-signed cert — with it off, anything that can intercept the connection can capture the service account's password."
       },
+      "directory.ca_file": {
+        "label": "CA certificate (optional)",
+        "help": "A PEM file on the hub with the CA that signed the domain controller's certificate, if that is your own CA (AD Certificate Services). Leave it empty if the certificate is from a public CA. In Docker, put it under /state, e.g. /state/ad-ca.pem — the sign-in page's CA certificate can be the same file."
+      },
       "directory.allow_insecure": {
         "label": "Allow plain (unencrypted) LDAP",
         "help": "Permit binding over ldap:// without TLS. The bind password is then sent in CLEARTEXT across your network. Leave off unless this is an isolated lab."

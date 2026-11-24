@@ -127,7 +127,7 @@ every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main
 empties this list. A box that fails stays open with what went wrong written next to it, and
 the fix goes to `beta` like anything else.
 
-`main` is at hub **1.179.0**; `beta` is at **1.184.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
+`main` is at hub **1.179.0**; `beta` is at **1.185.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -861,6 +861,19 @@ everything in a run (a run installs what was approved), and filtering the softwa
   it was a kernel. Repeat with a kernel update and check the box restarts after five minutes.
 - [ ] **Software.** The box's Software section lists its packages with versions, and the
   report sheet's Software CSV includes it.
+**Hub 1.185.0 -- a CA certificate for Active Directory sync** (#4)
+Sync trusted only the image's public CA list, so a DC with an AD CS certificate failed every
+pass with `CERTIFICATE_VERIFY_FAILED`, and the CA field on the sign-in page did not apply to
+sync. `directory.ca_file` names a PEM file on the hub, the same shape as `LDAP_CA_FILE`.
+Rejected: telling operators to set `SSL_CERT_FILE` to a hand-built bundle -- it works (it was
+the interim fix on the first real domain) but changes trust for every TLS call the hub makes
+and goes stale with the image.
+- [ ] **Sync trusts the enterprise CA.** On a hub whose DC has an AD CS certificate, set
+  *CA certificate* under Settings -> Active Directory to the root CA's PEM file, press
+  **Sync now**: the status card reads OK and counts the OUs. Empty the field again: the same
+  `CERTIFICATE_VERIFY_FAILED` comes back, so the setting is what fixed it.
+- [ ] **A wrong path says so.** Set it to a file that does not exist: the card names
+  `directory.ca_file` and says to put the file under /state, rather than a bare error.
 
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
