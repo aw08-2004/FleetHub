@@ -332,9 +332,18 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             if (!Directory.Exists(stagingDir)) return;
             foreach (var dir in Directory.EnumerateDirectories(stagingDir))
             {
-                if (nowUtc - Directory.GetLastWriteTimeUtc(dir) <= TimeSpan.FromHours(1)) continue;
-                if (IsLive(dir)) continue;
-                await DeleteAttemptDirAsync(dir);
+                // One folder at a time: a leftover that cannot be read must not stop the
+                // sweep from getting to the ones after it.
+                try
+                {
+                    if (nowUtc - Directory.GetLastWriteTimeUtc(dir) <= TimeSpan.FromHours(1)) continue;
+                    if (IsLive(dir)) continue;
+                    await DeleteAttemptDirAsync(dir);
+                }
+                catch (Exception e)
+                {
+                    _log.LogDebug("Could not sweep {Path}: {Msg}", dir, e.Message);
+                }
             }
         }
         catch (Exception e)
@@ -353,9 +362,11 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             using var probe = new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.None);
             return false;
         }
-        catch (IOException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return true;   // held open by the attempt that owns it
+            // Held open by the attempt that owns it -- or a marker this account cannot even
+            // open, which is no evidence the attempt is over. Either way, leave it.
+            return true;
         }
     }
 
