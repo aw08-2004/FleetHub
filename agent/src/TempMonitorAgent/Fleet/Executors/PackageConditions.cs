@@ -449,12 +449,25 @@ public sealed partial class ConditionEvaluator(
         var script = vars.Resolve(leaf.GetString("script"));
         if (string.IsNullOrWhiteSpace(script)) return Tri.Unknown;
         var timeout = Math.Clamp(leaf.GetInt("timeout_seconds", 60), 5, 600);
-        var path = vars.PathIn($"check-{Guid.NewGuid():N}.ps1");
+        var id = Guid.NewGuid().ToString("N");
+        var path = vars.PathIn($"check-{id}.ps1");
         await File.WriteAllTextAsync(path, script, ct);
+        // The operator's script runs INSIDE a wrapper, because `powershell.exe -File` exits 1
+        // for a script that throws, fails to parse, or calls a cmdlet that is not there -- the
+        // same 1 that means "no". Run bare, a typo in a driver package's check would read as
+        // false and send every machine down Else, which is the false-when-it-should-be-unknown
+        // case three-valued logic exists to prevent. The wrapper turns any terminating error
+        // into exit 2 (unknown) and passes an explicit `exit N` through. A script that ends
+        // without one answers 0, as it would on its own.
+        var wrapper = vars.PathIn($"check-{id}-run.ps1");
+        await File.WriteAllTextAsync(wrapper,
+            "$global:LASTEXITCODE = 0\n" +
+            $"try {{ & '{path.Replace("'", "''")}' }} catch {{ [Console]::Error.WriteLine($_); exit 2 }}\n" +
+            "exit $LASTEXITCODE\n", ct);
         say("[deploy] running a PowerShell check");
         var outcome = await ProcessRunner.RunAsync(
             "powershell.exe",
-            $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{path}\"",
+            $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{wrapper}\"",
             ct, timeoutSeconds: timeout, workingDir: vars.WorkDir, onLine: emit);
         if (outcome.TimedOut)
         {
@@ -463,8 +476,8 @@ public sealed partial class ConditionEvaluator(
             return Tri.Unknown;
         }
         Notes.Add($"PowerShell check exited {outcome.ExitCode}");
-        // 0 and 1 are the two answers; anything else is a script that broke, which is not
-        // the same thing as a script that said no.
+        // 0 and 1 are the two answers; anything else -- including the wrapper's 2 for a script
+        // that threw -- is a script that broke, which is not the same thing as one that said no.
         return outcome.ExitCode switch { 0 => Tri.True, 1 => Tri.False, _ => Tri.Unknown };
     }
 }

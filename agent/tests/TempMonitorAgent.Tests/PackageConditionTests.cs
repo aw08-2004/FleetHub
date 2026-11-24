@@ -343,6 +343,36 @@ public class PackageConditionTests
     }
 
     [Theory]
+    // An explicit answer is the answer.
+    [InlineData("exit 0", Tri.True)]
+    [InlineData("exit 1", Tri.False)]
+    [InlineData("exit 7", Tri.Unknown)]
+    // A script that ends without `exit` and without an error answers yes, as it would alone.
+    [InlineData("$x = 1", Tri.True)]
+    // The review finding on #228: under `powershell -File` all three of these exit 1, which
+    // read as FALSE and sent every machine down Else. A broken check is unknown, never no.
+    [InlineData("throw 'typo in the check'", Tri.Unknown)]
+    [InlineData("Get-NoSuchCmdlet -ErrorAction Stop", Tri.Unknown)]
+    [InlineData("if (", Tri.Unknown)]
+    public async Task APowerShellCheckThatBreaksIsUnknownNotFalse(string script, Tri expected)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pkgcond-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var eval = new ConditionEvaluator(new Facts(Latitude), new PackageVariables(dir),
+                                              () => null, _ => { }, _ => { }, CancellationToken.None);
+            var result = await eval.EvaluateAsync(
+                new JsonObject { ["probe"] = "powershell", ["script"] = script });
+            Assert.Equal(expected, result);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Theory]
     [InlineData(9, "laptop")]
     [InlineData(10, "laptop")]
     [InlineData(31, "laptop")]
