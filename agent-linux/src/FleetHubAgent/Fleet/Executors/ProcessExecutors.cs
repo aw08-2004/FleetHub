@@ -145,18 +145,7 @@ public sealed class ProcTable(string procRoot = "/proc")
     /// what Windows' own tree kill does too.</summary>
     public IReadOnlyList<int> Descendants(int pid)
     {
-        var children = new Dictionary<int, List<int>>();
-        IEnumerable<string> dirs;
-        try { dirs = Directory.EnumerateDirectories(procRoot).ToList(); }
-        catch { return []; }
-        foreach (var dir in dirs)
-        {
-            if (!int.TryParse(Path.GetFileName(dir), out var child)) continue;
-            if (ParentPid(child) is not { } parent) continue;
-            if (!children.TryGetValue(parent, out var list)) children[parent] = list = [];
-            list.Add(child);
-        }
-
+        var children = ChildrenByParent();
         var result = new List<int>();
         var queue = new Queue<int>([pid]);
         var seen = new HashSet<int> { pid };
@@ -171,6 +160,23 @@ public sealed class ProcTable(string procRoot = "/proc")
             }
         }
         return result;
+    }
+
+    /// <summary>One walk of /proc: every pid, filed under its parent.</summary>
+    private Dictionary<int, List<int>> ChildrenByParent()
+    {
+        var children = new Dictionary<int, List<int>>();
+        List<string> dirs;
+        try { dirs = Directory.EnumerateDirectories(procRoot).ToList(); }
+        catch { return children; }
+        foreach (var dir in dirs)
+        {
+            if (!int.TryParse(Path.GetFileName(dir), out var child)) continue;
+            if (ParentPid(child) is not { } parent) continue;
+            if (!children.TryGetValue(parent, out var list)) children[parent] = list = [];
+            list.Add(child);
+        }
+        return children;
     }
 
     private string Read(int pid, string file)
@@ -278,36 +284,42 @@ public sealed class KillProcessExecutor(ILogger<KillProcessExecutor> log) : ICom
         foreach (var pid in pids)
         {
             var actual = Table.Name(pid);
-            if (actual is null || Table.StartTicks(pid) is not { } start)
+            var start = Table.StartTicks(pid);
+            if (actual is null || start is null)
             {
                 gone.Add(pid);
                 continue;
             }
-            if (!ProcessGuard.NameMatches(expected, actual))
-            {
-                refused.Add($"{pid} is now {actual}, not {expected}");
-                continue;
-            }
-            if (ProcessGuard.RefusalFor(pid, actual, Table.ParentPid(pid), SelfPid) is { } why)
+            if (RequestedRefusal(expected, pid, actual) is { } why)
             {
                 refused.Add(why);
                 continue;
             }
-            if (taken.Add(pid)) targets.Add(new Target(pid, start, Requested: true));
-            if (!tree) continue;
-
-            foreach (var child in Table.Descendants(pid))
-            {
-                // A descendant is held to the same guard. Ending a shell's tree must not take
-                // the agent down because the agent happened to be started from it in a test.
-                var childName = Table.Name(child);
-                if (childName is null || Table.StartTicks(child) is not { } childStart) continue;
-                if (ProcessGuard.RefusalFor(child, childName, Table.ParentPid(child), SelfPid) is not null)
-                    continue;
-                if (taken.Add(child)) targets.Add(new Target(child, childStart, Requested: false));
-            }
+            if (taken.Add(pid)) targets.Add(new Target(pid, start.Value, Requested: true));
+            if (tree) AddDescendants(pid, targets, taken);
         }
         return new KillPlan(targets, gone, refused);
+    }
+
+    /// <summary>Why a pid the operator named may not be ended: reused, or guarded.</summary>
+    private string? RequestedRefusal(string expected, int pid, string actual) =>
+        !ProcessGuard.NameMatches(expected, actual)
+            ? $"{pid} is now {actual}, not {expected}"
+            : ProcessGuard.RefusalFor(pid, actual, Table.ParentPid(pid), SelfPid);
+
+    /// <summary>Add everything <paramref name="pid"/> started. A descendant is held to the same
+    /// guard: ending a shell's tree must not take the agent down because the agent happened to
+    /// be started from it in a test.</summary>
+    private void AddDescendants(int pid, List<Target> targets, HashSet<int> taken)
+    {
+        foreach (var child in Table.Descendants(pid))
+        {
+            var name = Table.Name(child);
+            var start = Table.StartTicks(child);
+            if (name is null || start is null) continue;
+            if (ProcessGuard.RefusalFor(child, name, Table.ParentPid(child), SelfPid) is not null) continue;
+            if (taken.Add(child)) targets.Add(new Target(child, start.Value, Requested: false));
+        }
     }
 
     private async Task<List<Target>> WaitAsync(IReadOnlyCollection<Target> targets, TimeSpan grace,
