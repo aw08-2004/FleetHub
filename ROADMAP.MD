@@ -163,11 +163,13 @@ auto-update off and is updated by hand once the test hub has checked out.
 **Retiring it, in this order** -- nothing warns after step 6, so steps 1 to 4 come first:
 - [ ] **1. Workflows off `beta`** (a workflow-only PR into `main`). `claude-fix.yml` cuts its
   branches from `origin/beta` and fails once the branch is gone; cut them from `main`.
-  `claude-review.yml` can drop its `beta` trigger, and `hub-image.yml` its `beta` publish path.
-- [ ] **2. Open PRs into `beta`** are merged into it or retargeted to `main` (#214, Authenticode
-  signing). Anything already merged into `beta` but not `main` is lost with the branch, so
-  check `git log origin/main..origin/beta` is empty, or holds only #221's roadmap note -- that
-  note's content is the 2026-11-24 send paragraph below, already on `main`.
+  `claude-review.yml` and `codeql.yml` drop their `beta` trigger. **PR #224, open** -- tick
+  this when it merges. `hub-image.yml` keeps its `beta` path: it goes inert with the branch,
+  and the `latest` step still reads the frozen `beta-latest`, so removing it is cleanup.
+- [x] **2. Open PRs into `beta`** are merged into it or retargeted to `main`. **Done
+  2026-11-24:** #214 (Authenticode signing) retargeted to `main`, and no PR into `beta` is
+  left. `git log origin/main..origin/beta` then held only #221's roadmap note, whose content is
+  the 2026-11-24 send paragraph below, so nothing is lost with the branch.
 - [ ] **3. Installer hubs.** Every hub whose *This hub's release channel* reads *Beta* is set to
   *Stable*. A beta hub left behind reads `HUB_VERSION` from a branch that no longer exists and
   silently stops updating.
