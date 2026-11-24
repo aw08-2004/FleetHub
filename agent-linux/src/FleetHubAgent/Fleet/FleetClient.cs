@@ -259,7 +259,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
         }
         catch (Exception e)
         {
-            _log.LogWarning("Ignoring malformed channel from the hub: {Msg}", e.Message);
+            _log.LogWarning(e, "Ignoring malformed channel from the hub: {Msg}", e.Message);
         }
     }
 
