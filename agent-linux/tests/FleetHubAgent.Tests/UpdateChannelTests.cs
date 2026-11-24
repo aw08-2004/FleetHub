@@ -97,6 +97,19 @@ public class UpdateChannelTests
             new RestartState { Target = "0.4.1", Count = 1, LastAttemptUtc = Now }, "0.4.1", Now));
     }
 
+    [Theory]
+    [InlineData("https://user:s3cret@test.example:8443/m.json?token=abc#x",
+                "https://test.example:8443/m.json")]
+    [InlineData("https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/agent-linux.manifest.beta.json",
+                "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/agent-linux.manifest.beta.json")]
+    [InlineData("not a url with pass=hunter2", "(unparseable url)")]
+    public void A_url_reaches_the_journal_without_credentials(string url, string logged)
+    {
+        // The override is free text an operator typed. A password or a signed query string in
+        // it must not be copied into a journal that gets pasted into tickets.
+        Assert.Equal(logged, SelfUpdater.ForLog(url));
+    }
+
     [Fact]
     public void The_download_has_more_time_than_the_manifest()
     {

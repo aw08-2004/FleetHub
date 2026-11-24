@@ -84,6 +84,18 @@ public sealed class SelfUpdater
         _download = new HttpClient { Timeout = AgentConfig.DownloadTimeout };
     }
 
+    /// <summary>A url as it may appear in the journal: scheme, host, port and path only.
+    ///
+    /// The compiled-in manifests carry nothing secret, but the env override is free text an
+    /// operator typed, and a test server behind basic auth (`https://user:pass@host/...`) or a
+    /// signed query string would otherwise be copied into the journal -- which journald keeps,
+    /// and which gets pasted into tickets. Anything that does not parse is withheld entirely
+    /// rather than logged raw.</summary>
+    public static string ForLog(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u)
+            ? u.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped)
+            : "(unparseable url)";
+
     /// <summary>Whether the restart-loop guard should stop an attempt at <paramref name="target"/>
     /// right now. Pure, so the expiry can be tested without a clock or a state file.
     ///
@@ -160,7 +172,7 @@ public sealed class SelfUpdater
             _log.LogWarning(
                 "[update] FLEETHUB_UPDATE_MANIFEST_URL is set ({Url}); it overrides the console's "
                 + "release channel and any version pin. Remove it from /etc/fleethub/agent.env "
-                + "once this box is on the version you wanted", AgentConfig.UpdateManifestUrl);
+                + "once this box is on the version you wanted", ForLog(AgentConfig.UpdateManifestUrl));
         }
 
         try
@@ -177,7 +189,7 @@ public sealed class SelfUpdater
             // after this point trusts the contents; nothing before it does.
             if (!SignatureVerifier.VerifyRaw(AgentConfig.UpdatePublicKeyHex, manifestBytes, sigHex))
             {
-                NoteFailure($"manifest signature invalid at {manifestUrl} -- refusing");
+                NoteFailure($"manifest signature invalid at {ForLog(manifestUrl)} -- refusing");
                 return false;
             }
 
@@ -186,7 +198,7 @@ public sealed class SelfUpdater
             if (manifest is null || string.IsNullOrEmpty(manifest.Version)
                 || string.IsNullOrEmpty(manifest.Sha256) || string.IsNullOrEmpty(manifest.Url))
             {
-                NoteFailure($"manifest at {manifestUrl} is incomplete");
+                NoteFailure($"manifest at {ForLog(manifestUrl)} is incomplete");
                 return false;
             }
 
