@@ -261,6 +261,47 @@ public class PackageConditionTests
     }
 
     [Fact]
+    public async Task TheSharedStepTreeIsNumberedExactlyAsTheHubNumbersIt()
+    {
+        // tests/fixtures/package-step-tree.json is also read by tests/test_package_conditions.py
+        // against packages.iter_steps. Each side numbering a tree its own way would put every
+        // step after the first difference on the wrong row of the console.
+        string? path = null;
+        for (var probe = new DirectoryInfo(AppContext.BaseDirectory); probe is not null; probe = probe.Parent)
+        {
+            var candidate = Path.Combine(probe.FullName, "tests", "fixtures", "package-step-tree.json");
+            if (File.Exists(candidate)) { path = candidate; break; }
+        }
+        Assert.True(path is not null, "tests/fixtures/package-step-tree.json not found");
+        var fixture = JsonNode.Parse(File.ReadAllText(path!))!.AsObject();
+        var facts = fixture["facts"]!.AsObject()
+            .ToDictionary(kv => kv.Key, kv => (string?)kv.Value!.GetValue<string>());
+        var expected = fixture["ordinals"]!.AsObject()
+            .ToDictionary(kv => kv.Key, kv => kv.Value!.GetValue<int>());
+        var notRun = fixture["not_run"]!.AsArray().Select(n => n!.GetValue<string>()).ToHashSet();
+
+        var progress = new Recorder();
+        var result = await Executor(facts).ExecuteAsync(
+            Package((JsonArray)fixture["steps"]!.DeepClone()), null, progress, CancellationToken.None);
+
+        Assert.True(result.Success, result.Output);
+        // Every step that ran logged "step N — kind: name": its N is the hub's number for it.
+        var ran = System.Text.RegularExpressions.Regex.Matches(
+                result.Output ?? "", @"step (\d+) — \w+: (\w+)")
+            .ToDictionary(m => m.Groups[2].Value, m => int.Parse(m.Groups[1].Value));
+        foreach (var (name, ordinal) in expected)
+        {
+            if (notRun.Contains(name)) continue;
+            Assert.Equal(ordinal, ran[name]);
+        }
+        // ...and every step that did not run was reported not_run on exactly its number.
+        var notRunOrdinals = progress.Events
+            .Where(e => e.Phase == StepPhase.Step && e.State == StepState.NotRun)
+            .Select(e => e.Ordinal).OrderBy(o => o).ToArray();
+        Assert.Equal(notRun.Select(n => expected[n]).OrderBy(o => o).ToArray(), notRunOrdinals);
+    }
+
+    [Fact]
     public async Task ASuccessfulStopEndsTheDeployWithoutDetection()
     {
         var progress = new Recorder();

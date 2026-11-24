@@ -172,6 +172,16 @@ def test_steps():
           numbering == [(1, "if", 0, None, None), (2, "run", 1, 1, "then"),
                         (3, "run", 1, 1, "else"), (4, "run", 0, None, None)])
 
+    # The fixture the agent's PackageConditionTests reads too: if hub and agent ever number a
+    # tree differently, every later step is reported onto the wrong row of the console.
+    fixture_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures",
+                                "package-step-tree.json")
+    with open(fixture_path, encoding="utf-8") as f:
+        fixture = json.load(f)
+    tree = packages.validate_steps(fixture["steps"])
+    check("the shared step tree numbers depth-first, as the agent does",
+          {s["name"]: o for o, s, _, _, _ in packages.iter_steps(tree)} == fixture["ordinals"])
+
     check("an If needs a condition",
           refused(packages.validate_steps, [{"kind": "if", "then_steps": [run("x")]}],
                   contains="needs a condition"))

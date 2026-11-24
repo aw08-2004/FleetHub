@@ -272,7 +272,7 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             // run by something else.
             // The marker is released first: this attempt's own delete would otherwise trip
             // over the very file that tells a sweep the folder is in use.
-            live?.Dispose();
+            if (live is not null) await live.DisposeAsync();
             await DeleteAttemptDirAsync(workDir);
             // Also on every path: a deploy that failed halfway may still have installed
             // something, and the device sheet (roadmap #25) should say what is actually there
