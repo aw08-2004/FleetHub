@@ -403,6 +403,7 @@ Configure it at **Settings → Active Directory**:
 | `directory.bind_dn` | a **read-only** service account |
 | `directory.sync_interval_minutes` | 60 by default |
 | `directory.computer_filter` | `(objectClass=computer)` by default |
+| `directory.ca_file` | the CA that signed the DC's certificate, as a PEM file on the hub — needed when that is your own AD Certificate Services and not a public CA. In Docker put it under `/state`, e.g. `/state/ad-ca.pem`; sign-in's `LDAP_CA_FILE` can name the same file |
 
 The bind **password** goes in `.env`, never in hub settings — the settings table is
 readable by anyone with `manage_settings` and is included in the hub database backup:
@@ -430,6 +431,11 @@ Things worth knowing:
 - **A machine that leaves AD has its AD fields cleared**, deliberately. A stale OU left
   behind on a deleted computer account would keep granting access through an OU-scoped
   group indefinitely.
+- **`CERTIFICATE_VERIFY_FAILED ... unable to get local issuer certificate`** on the status
+  card means the hub does not trust the CA behind the DC's certificate. Export your root CA
+  as *Base-64 encoded X.509* (`certlm.msc` → Trusted Root Certification Authorities), copy it
+  to the hub, and set `directory.ca_file` to its path. Setting the CA on the sign-in page
+  alone does not cover sync.
 - **Plain `ldap://` is refused by default** — a simple bind sends the service account's
   password in cleartext. There is an explicit opt-out for isolated labs.
 - Searches are **always paged**. AD's default server limit is 1000 results and it

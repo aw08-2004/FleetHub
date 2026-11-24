@@ -73,6 +73,7 @@ def config_from_settings(db_path):
         "alert_on_unmatched": settings_module.get_bool(
             db_path, "directory.alert_on_unmatched"),
         "tls_verify": settings_module.get_bool(db_path, "directory.tls_verify"),
+        "ca_file": get(db_path, "directory.ca_file"),
         "allow_insecure": settings_module.get_bool(db_path, "directory.allow_insecure"),
     }
 
@@ -552,7 +553,37 @@ def validate_config(config):
             "Refusing to bind over plain LDAP -- the service-account password would be "
             "sent in cleartext. Use ldaps:// (port 636), or explicitly allow insecure "
             "binds in settings if this is an isolated lab.")
+    ca_file = str(config.get("ca_file") or "").strip()
+    if ca_file and not os.path.isfile(ca_file):
+        # Said here, by name, rather than left to ldap3: its own error for a missing CA file
+        # is an LDAPSSLConfigurationError raised from Tls() -- outside the bind's try, so it
+        # surfaced as a bare exception with no hint that the SETTING is what is wrong.
+        raise DirectoryError(
+            f"The CA certificate file {ca_file!r} (directory.ca_file) does not exist on the "
+            f"hub. In Docker it must be inside the container -- put it under /state, e.g. "
+            f"/state/ad-ca.pem.")
     return server_url, base_dn, bind_dn, password
+
+
+def tls_options(ldap3, config):
+    """The ldap3.Tls for an ldaps:// server.
+
+    **With directory.ca_file set, that file REPLACES the public CA list for this connection**
+    -- ssl loads no default roots once a cafile is given. That is what is wanted: the DC's
+    certificate comes from one known enterprise AD CS root, and nothing else should be able
+    to vouch for it. Empty keeps the old behaviour, the image's public CA list, so a DC with
+    a publicly issued certificate keeps working unchanged. The same as ldapauth's _tls, so a
+    single PEM file under /state serves both sign-in and sync.
+
+    Rejected: telling operators to point SSL_CERT_FILE at a hand-built bundle. It works --
+    it was the workaround on the first real domain -- but it changes trust for every TLS
+    connection the hub makes and goes stale whenever the image's CA list is updated.
+    """
+    import ssl
+    verify = config.get("tls_verify", True)
+    ca_file = str(config.get("ca_file") or "").strip()
+    return ldap3.Tls(validate=ssl.CERT_REQUIRED if verify else ssl.CERT_NONE,
+                     ca_certs_file=(ca_file or None) if verify else None)
 
 
 def fetch_computers(config, page_size=500):
@@ -568,16 +599,14 @@ def fetch_computers(config, page_size=500):
     ldap3 = _load_ldap3()
     use_ssl = server_url.lower().startswith("ldaps://")
 
-    tls = None
-    if use_ssl and config.get("tls_verify", True):
-        import ssl
-        tls = ldap3.Tls(validate=ssl.CERT_REQUIRED)
-    elif use_ssl:
-        import ssl
-        tls = ldap3.Tls(validate=ssl.CERT_NONE)
-
-    server = ldap3.Server(server_url, get_info=ldap3.NONE, tls=tls,
-                          connect_timeout=int(config.get("timeout_seconds") or 15))
+    try:
+        server = ldap3.Server(server_url, get_info=ldap3.NONE,
+                              tls=tls_options(ldap3, config) if use_ssl else None,
+                              connect_timeout=int(config.get("timeout_seconds") or 15))
+    except Exception as e:
+        # A CA file that is not a certificate, or a port ldap3 will not accept. Without this
+        # the "Sync now" button answered with a bare 500 instead of the status card.
+        raise DirectoryError(f"Cannot set up the connection to {server_url}: {e}")
     search_filter = (str(config.get("computer_filter") or "").strip()
                      or "(objectClass=computer)")
     try:
