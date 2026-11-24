@@ -224,17 +224,15 @@ REGISTRY = (
     _s("hub.live_default_window_seconds", "hub", "int", 60, minimum=5, maximum=86400,
        unit="seconds"),
     _s("hub.auto_update", "hub", "bool", None),
-    # Release channels (roadmap #21). Three knobs, one per updater, and they are deliberately
-    # independent: a hub tracking beta while its fleet stays stable is the normal way to try a
-    # hub release, and the reverse (a pilot ring of agents against a stable hub) is the normal
-    # way to try an agent one.
+    # Release channels (roadmap #21). The agents' channel is fleet.default_agent_channel plus a
+    # per-machine override; the client's is below. **There is no `hub.update_channel` any
+    # more.** It picked the git branch this hub read HUB_VERSION from -- `main` or `beta` --
+    # and the beta branch was retired on 2026-11-24 (ROADMAP.MD, *Beta branch retired*), so a
+    # hub left on beta would have silently stopped updating. Removed rather than narrowed to
+    # one choice: a picker with one option is a setting that does nothing. A hub's stored row
+    # for it is skipped by _build like any key that left the registry, and every hub reads main
+    # (channels.HUB_REF).
     #
-    # `hub.update_channel` selects a git REF rather than a manifest, because the hub has no
-    # manifest -- it reads HUB_VERSION out of app.py. Beta hubs track the `beta` branch. It
-    # only INSTALLS anything when hub.auto_update is on, but the sidebar update notice follows
-    # it either way: knowing a newer hub exists matters most precisely when this hub is not
-    # going to install it by itself.
-    _s("hub.update_channel", "hub", "enum", channels.DEFAULT, choices=list(channels.CHANNELS)),
     # Which client build the Download page offers and updater.dart accepts. Lives in `hub`
     # rather than a section of its own for the reason device_token_lifetime_days does: one
     # knob is not a tab.

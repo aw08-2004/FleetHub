@@ -1497,10 +1497,6 @@
         "label": "Update-Liste eines Rechners vergessen nach",
         "help": "Wie lange die gemeldeten verfügbaren Updates eines Rechners ohne neue Meldung bestehen bleiben. Ein Rechner, der nichts mehr meldet, würde sonst seine letzte Antwort für immer behalten und einen Compliance-Wert stützen, der seit Monaten nicht mehr stimmt."
       },
-      "hub.update_channel": {
-        "label": "Release-Kanal dieses Hubs",
-        "help": "Aus welchem Branch dieser Hub seine eigene Version liest und aktualisiert, wenn automatische Hub-Updates aktiv sind. Der Update-Hinweis folgt dem in jedem Fall – Sie erfahren also von einem neueren Hub, auch wenn dieser ihn nicht selbst installiert."
-      },
       "hub.client_update_channel": {
         "label": "Release-Kanal des Clients",
         "help": "Welchen Desktop- und Mobile-Client-Build die Download-Seite anbietet und auf welchen sich ein installierter Client selbst aktualisiert."
@@ -1781,10 +1777,6 @@
       "patches.auto_approve_classifications": {
         "security": "Sicherheit",
         "critical": "Kritisch"
-      },
-      "hub.update_channel": {
-        "stable": "Stabil",
-        "beta": "Beta"
       },
       "hub.client_update_channel": {
         "stable": "Stabil",

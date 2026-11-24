@@ -745,8 +745,8 @@ def test_hub_update_notice():
 
         print("\n-- release-notes URL builders --")
         check("hub: no version -> None", _channels.hub_release_notes_url("") is None)
-        check("hub: beta reads the beta ref",
-              "/blob/beta/" in _channels.hub_release_notes_url("1.2.3", _channels.BETA))
+        check("hub: notes are read from main",
+              "/blob/main/" in _channels.hub_release_notes_url("1.2.3"))
         check("agent: no version -> None", _channels.agent_release_notes_url(None) is None)
         check("agent: stable tag has no suffix",
               _channels.agent_release_notes_url("3.1.0").endswith("/agent-v3.1.0"))
