@@ -173,11 +173,11 @@ if _env_acl_note:
 # ================================
 # CONFIG
 # ================================
-# Bump on every push to beta that touches hub/ -- to the next number after BETA's, which runs
-# ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
+# Bump on every push to main that touches hub/ -- to the next number after main's (CLAUDE.md;
+# the beta branch, which this once counted from, was retired on 2026-11-24).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.185.0"
+HUB_VERSION = "1.186.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -1266,13 +1266,12 @@ AGENT_MANIFEST_URLS = {(p, c): channels.agent_manifest_url(c, p)
 # Kept as a name because the old constant is referenced in comments and tests as the stable
 # manifest; it is now simply the stable channel's entry.
 AGENT_MANIFEST_URL = AGENT_MANIFEST_URLS[(capabilities.PLATFORM_WINDOWS, channels.STABLE)]
-# The hub reads its own latest version straight out of app.py on the ref its channel tracks --
-# same source-of-truth and raw-GitHub trust as the client version hints above. Used by the
-# sidebar update notice always, and by the opt-in self-updater when it is enabled. Resolved
-# per call rather than pinned at import, so changing the channel in Settings takes effect on
-# the next watcher tick instead of at the next restart.
+# The hub reads its own latest version straight out of app.py on main -- same
+# source-of-truth and raw-GitHub trust as the client version hints above. Used by the
+# sidebar update notice always, and by the opt-in self-updater when it is enabled. Main only
+# since the beta branch was retired (channels.HUB_REF says why).
 def hub_source_url():
-    return channels.hub_source_url(hub_update_channel())
+    return channels.hub_source_url()
 HUB_UPDATE_CHECK_INTERVAL = 15 * 60  # 15 minutes
 AGENT_VERSION_CHECK_INTERVAL = 15 * 60  # 15 minutes
 # First version of the C# agent. A client reporting >= this is on the agent train.
@@ -1339,10 +1338,6 @@ def set_machine_channel_override(machine, channel):
     """Pin a machine to a channel, or pass None/"" to return it to the fleet default."""
     return channels.set_override(DB_PATH, machine, channel,
                                  to_timestamp_str(datetime.now()))
-
-def hub_update_channel():
-    """This hub's own channel -- which git ref it reads its version from and updates to."""
-    return channels.normalize(settings.get(DB_PATH, "hub.update_channel"))
 
 def version_tuple(v):
     """Tolerant version parse: reads the leading dotted-numeric prefix and ignores
@@ -1512,10 +1507,8 @@ def start_agent_version_watcher():
 # Ed25519 fleet-update trust root that gates agent binaries.
 # ================================
 # Source archive for the no-git path. codeload serves a branch zip directly.
-# Resolved per call, like hub_source_url above, so switching channel in Settings takes
-# effect on the next update rather than at the next restart (roadmap #21).
 def hub_archive_url():
-    return channels.hub_archive_url(hub_update_channel())
+    return channels.hub_archive_url()
 # Within the repo (and so within that archive), all of the hub's code and assets live under
 # this one directory. The self-updater mirrors it wholesale into HUB_CODE_DIR -- there is
 # deliberately no per-file allowlist anymore. That list was decided by the *running* version,
@@ -1651,9 +1644,9 @@ def _perform_hub_update_git(worktree_root):
     True only if fetch AND reset succeeded -- the caller restarts only then. Discards local
     drift by design (operator-confirmed).
 
-    The ref is the channel's (roadmap #21), and it is read once here rather than per git call
-    so that a channel changed mid-update cannot fetch one ref and reset to another."""
-    ref = channels.hub_ref(hub_update_channel())
+    The ref is always main (channels.HUB_REF); it followed a per-hub channel until the beta
+    branch was retired on 2026-11-24."""
+    ref = channels.HUB_REF
     code_dir = os.path.join(worktree_root, HUB_ARCHIVE_SUBDIR)
     # Snapshotted BEFORE the reset, while the tree is still the running version's.
     requirements_before = _requirements_text(code_dir)
@@ -1673,10 +1666,10 @@ def _stage_hub_archive(staging, archive_url):
     """Download and unpack the branch archive into `staging`, returning the path to the
     archive's hub/ directory, or None on any failure (logged, never raises).
 
-    `archive_url` is passed in rather than resolved here, for the reason
-    _perform_hub_update_git reads its ref once: hub_archive_url() re-reads the channel
-    setting on every call, so resolving it inside the download AND again in the log line
-    let an operator switching channel mid-update fetch one train and report the other.
+    `archive_url` is passed in rather than resolved here so the download and the log line
+    name the same URL. That mattered most while hub_archive_url() re-read a per-hub channel
+    setting on every call -- switching channel mid-update fetched one train and reported the
+    other. The setting is gone (the beta branch was retired), and the one-resolve rule stays.
 
     Everything lands in staging and is sanity-checked BEFORE the caller touches the live
     install -- a truncated download or a moved layout upstream must fail the update, not
@@ -7303,7 +7296,7 @@ def get_hub_version_info():
         "latest": latest,
         # Where the notice's "Release notes" link points. Built, not fetched: nothing here
         # checks the file exists, which is why CLAUDE.md makes writing it part of the bump.
-        "release_notes_url": channels.hub_release_notes_url(latest, hub_update_channel()),
+        "release_notes_url": channels.hub_release_notes_url(latest),
         "update_available": hub_update_available(),
         # The notice stays out of the way when the hub will install this by itself.
         "auto_update": hub_auto_update_enabled(),
@@ -7660,7 +7653,7 @@ def _fleet_agent_release():
 
 def _hub_release_notes_url():
     try:
-        return channels.hub_release_notes_url(get_latest_hub_version(), hub_update_channel())
+        return channels.hub_release_notes_url(get_latest_hub_version())
     except Exception:
         return None
 

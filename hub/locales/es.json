@@ -1497,10 +1497,6 @@
         "label": "Olvidar la lista de actualizaciones de un equipo tras",
         "help": "Cuánto sobreviven las actualizaciones disponibles notificadas por un equipo sin volver a notificarse. De lo contrario, un equipo que deja de informar conservaría su última respuesta para siempre y sostendría una cifra de cumplimiento que hace meses que no es cierta."
       },
-      "hub.update_channel": {
-        "label": "Canal de versiones de este hub",
-        "help": "De qué rama lee este hub su propia versión, y a cuál se actualiza cuando las actualizaciones automáticas están activas. El aviso de actualización sigue este canal en cualquier caso, así que se le informa de un hub más nuevo aunque este no vaya a instalarlo."
-      },
       "hub.client_update_channel": {
         "label": "Canal de versiones del cliente",
         "help": "Qué versión del cliente de escritorio y móvil ofrece la página de descarga, y a cuál se actualiza un cliente instalado."
@@ -1781,10 +1777,6 @@
       "patches.auto_approve_classifications": {
         "security": "Seguridad",
         "critical": "Crítica"
-      },
-      "hub.update_channel": {
-        "stable": "Estable",
-        "beta": "Beta"
       },
       "hub.client_update_channel": {
         "stable": "Estable",

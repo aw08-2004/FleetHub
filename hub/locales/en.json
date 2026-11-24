@@ -1574,10 +1574,6 @@
         "label": "Forget a machine's update list after",
         "help": "How long a machine's reported available updates survive without being re-reported. A machine that stops reporting would otherwise keep its last answer forever and hold up a compliance figure that has not been true for months."
       },
-      "hub.update_channel": {
-        "label": "This hub's release channel",
-        "help": "Which branch this hub reads its own version from, and updates to when automatic hub updates are on. The update notice follows this either way, so you are told a newer hub exists even when this one will not install it itself."
-      },
       "hub.client_update_channel": {
         "label": "Client release channel",
         "help": "Which desktop and mobile client build the Download page offers, and which one an installed client updates itself to."
@@ -1863,10 +1859,6 @@
       "patches.auto_approve_classifications": {
         "security": "Security",
         "critical": "Critical"
-      },
-      "hub.update_channel": {
-        "stable": "Stable",
-        "beta": "Beta"
       },
       "hub.client_update_channel": {
         "stable": "Stable",
