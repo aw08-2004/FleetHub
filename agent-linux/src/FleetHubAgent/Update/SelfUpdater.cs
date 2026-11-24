@@ -67,6 +67,15 @@ public sealed class SelfUpdater
     /// retirement happens exactly once even though two loops call it.</summary>
     private int _awaitingConfirmation;
 
+    /// <summary>Whether this process has already said that the env override is in force.
+    ///
+    /// **The 0.4.1 bootstrap for 0.3.0 boxes is that override**, and it outranks both the
+    /// console's channel and a pin. Left in agent.env after the box reaches 0.4.1, it would keep
+    /// the box on whatever train it names while the console showed something else, and nothing
+    /// would say why -- the exact failure this release exists to end. Once per process, so the
+    /// journal says it at every start without repeating it every fifteen minutes.</summary>
+    private bool _overrideAnnounced;
+
     public SelfUpdater(ILogger<SelfUpdater> log, AgentState state)
     {
         _log = log;
@@ -144,6 +153,15 @@ public sealed class SelfUpdater
     public async Task<bool> CheckAndApplyAsync(CancellationToken ct)
     {
         if (AgentConfig.UpdatesDisabled) return false;
+
+        if (AgentConfig.UpdateManifestOverridden && !_overrideAnnounced)
+        {
+            _overrideAnnounced = true;
+            _log.LogWarning(
+                "[update] FLEETHUB_UPDATE_MANIFEST_URL is set ({Url}); it overrides the console's "
+                + "release channel and any version pin. Remove it from /etc/fleethub/agent.env "
+                + "once this box is on the version you wanted", AgentConfig.UpdateManifestUrl);
+        }
 
         try
         {
