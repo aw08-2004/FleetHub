@@ -149,6 +149,13 @@ goes backwards. *Move the Docker hosts first* is still open but did not block th
 `main` and `beta` on the same hub version, a host on `HUB_TAG=latest` gets 1.179.0 whichever
 channel it follows. It blocks the next release in which `beta` runs ahead of `main` again.
 
+**2026-11-24: `beta` (hub 1.185.0, agent 3.53.0 beta, Linux agent 0.4.1 beta) sent to `main`
+unconfirmed, on the owner's call.** The 77 open boxes below were open at the time and stay here
+until ticked, on the same footing as the 2026-11-03 and 2026-11-15 releases. This one goes ahead
+of the *Move the Docker hosts first* precondition, which was still open: `beta` now runs ahead of
+`main`, so a host on `HUB_TAG=latest` follows the newer hub once `main` is released from `beta`.
+The stable Windows agent manifest stays at 3.50.0 on `main`; only the beta manifests move.
+
 **Hub 1.159.0 — Group Policy, waiting on agent 3.48.0** (#163)
 - [x] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
   item 4c below (apply, Managed elsewhere, unlink removes).
