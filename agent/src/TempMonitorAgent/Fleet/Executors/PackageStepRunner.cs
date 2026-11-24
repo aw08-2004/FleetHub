@@ -26,6 +26,10 @@ namespace TempMonitorAgent.Fleet.Executors;
 ///   * **Variables never escape the working directory by accident.** They are substituted
 ///     as plain text into command lines the operator wrote, but the paths they hold are all
 ///     produced here, under the attempt's own directory.
+///   * **An If that cannot decide fails, it does not fall through to Else** (3.54.0). The
+///     list is a tree since then -- an If step holds a Then lane and an Else lane -- and the
+///     one way it could quietly do damage is an unreadable model taking the generic branch.
+///     See <see cref="ConditionEvaluator"/> and hub/package_conditions.py.
 /// </summary>
 public static class PackageStepRunner
 {
@@ -43,6 +47,16 @@ public static class PackageStepRunner
     /// neither. One value so RunAllAsync stays within a readable parameter list.</summary>
     public readonly record struct StepDefaults(int Timeout, IReadOnlyCollection<int> ExitCodes);
 
+    /// <summary>How a step list ended. <see cref="StoppedSuccess"/> is a Stop step saying
+    /// "nothing to do on this machine": the deploy succeeds WITHOUT running detection, because
+    /// the package itself has said the software is not meant to be here.</summary>
+    public enum RunEnd { Completed, Failed, StoppedSuccess }
+
+    /// <summary>Where a run says what it is doing: its own log lines, the installers' output,
+    /// and the console's phase events. One value so the entry points stay within a readable
+    /// parameter list.</summary>
+    public readonly record struct StepSinks(Action<string> Say, Action<string> Emit, PhaseTracker? Phases);
+
     /// <summary>Run every step in order. Returns false as soon as one fails without
     /// `continue_on_error` set, or the run is cancelled.</summary>
     public static Task<bool> RunAllAsync(
@@ -53,63 +67,203 @@ public static class PackageStepRunner
                     say, emit, null, ct);
 
     /// <summary>As above, with <paramref name="phases"/> told about each step as it starts
-    /// and ends (see IStepProgress) -- what DeployPackageExecutor calls.
-    ///
-    /// A cancelled run is never "carried on" past, whatever the step's continue_on_error
-    /// says: that flag is for a step that failed, and an operator's Abort is not a failure
-    /// to tolerate.</summary>
+    /// and ends (see IStepProgress). A successful Stop counts as success here.</summary>
     public static async Task<bool> RunAllAsync(
         JsonArray steps, PackageVariables vars, StepDefaults defaults,
-        Action<string> say, Action<string> emit, PhaseTracker? phases, CancellationToken ct)
+        Action<string> say, Action<string> emit, PhaseTracker? phases, CancellationToken ct) =>
+        await RunTreeAsync(steps, vars, defaults, new StepSinks(say, emit, phases), null, ct)
+        != RunEnd.Failed;
+
+    /// <summary>Run a step list that may branch (agent 3.54.0) -- what DeployPackageExecutor
+    /// calls. <paramref name="facts"/> answers If conditions; without it every condition about
+    /// the machine reads unknown, which fails the If closed.
+    ///
+    /// **Numbering is depth-first, exactly as the hub's packages.iter_steps:** an If, then
+    /// every step of its Then lane, then every step of its Else lane, then what follows. The
+    /// lane NOT taken is still counted -- each of its steps reported <c>not_run</c> -- or every
+    /// ordinal after it would land on the wrong row of the console's step list.
+    ///
+    /// A cancelled run is never "carried on" past, whatever a step's continue_on_error says:
+    /// that flag is for a step that failed, and an operator's Abort is not a failure to
+    /// tolerate.</summary>
+    public static Task<RunEnd> RunTreeAsync(
+        JsonArray steps, PackageVariables vars, StepDefaults defaults, StepSinks sinks,
+        IMachineFacts? facts, CancellationToken ct) =>
+        new TreeRun(vars, defaults, sinks, facts, ct).ListAsync(steps);
+
+    /// <summary>One run's walk through the tree: the shared ordinal counter and the last exit
+    /// code, which both have to survive descending into a lane and coming back out.</summary>
+    private sealed class TreeRun(
+        PackageVariables vars, StepDefaults defaults, StepSinks sinks, IMachineFacts? facts,
+        CancellationToken ct)
     {
-        var defaultTimeout = defaults.Timeout;
-        var defaultExitCodes = defaults.ExitCodes;
-        var index = 0;
-        foreach (var node in steps)
+        private int _ordinal;
+        private int? _lastExitCode;
+        private readonly IMachineFacts _facts = facts ?? new NoFacts();
+        private readonly Action<string> _say = sinks.Say;
+        private readonly PhaseTracker? _phases = sinks.Phases;
+
+        public async Task<RunEnd> ListAsync(JsonArray? list)
         {
-            index++;
+            if (list is null) return RunEnd.Completed;
+            foreach (var node in list)
+            {
+                var end = await StepAsync(node, ++_ordinal);
+                if (end != RunEnd.Completed) return end;
+            }
+            return RunEnd.Completed;
+        }
+
+        private async Task<RunEnd> StepAsync(JsonNode? node, int index)
+        {
             if (ct.IsCancellationRequested)
             {
-                say($"[deploy] stopped before step {index}: the run was cancelled");
-                return false;
+                _say($"[deploy] stopped before step {index}: the run was cancelled");
+                return RunEnd.Failed;
             }
-            phases?.Begin(StepPhase.Step, index);
+            _phases?.Begin(StepPhase.Step, index);
             if (node is not JsonObject step)
             {
-                say($"[deploy] step {index}: FAILED: not an object");
-                phases?.End(StepState.Failed, message: "not an object");
-                return false;
+                _say($"[deploy] step {index}: FAILED: not an object");
+                _phases?.End(StepState.Failed, message: "not an object");
+                return RunEnd.Failed;
             }
 
             var kind = step.GetString("kind") ?? "";
             var label = step.GetString("name");
-            say($"[deploy] step {index}/{steps.Count} — {kind}" +
-                (string.IsNullOrWhiteSpace(label) ? "" : $": {label}"));
+            _say($"[deploy] step {index} — {kind}" +
+                 (string.IsNullOrWhiteSpace(label) ? "" : $": {label}"));
+            return kind switch
+            {
+                "if" => await IfAsync(step, index),
+                "stop" => Stop(step),
+                _ => await ActionAsync(step, kind, index),
+            };
+        }
 
-            var outcome = await RunOneAsync(step, kind, vars, defaultTimeout,
-                                            defaultExitCodes, say, emit, ct);
+        private RunEnd Stop(JsonObject step)
+        {
+            var success = step.GetString("outcome") == "success";
+            var text = step.GetString("message") is { Length: > 0 } message
+                ? message
+                : DefaultStopMessage(success);
+            _say($"[deploy] STOP ({(success ? "success" : "failure")}): {text}");
+            _phases?.End(success ? StepState.Ok : StepState.Failed, message: text);
+            return success ? RunEnd.StoppedSuccess : RunEnd.Failed;
+        }
+
+        private static string DefaultStopMessage(bool success) =>
+            success ? "stopped: nothing to do on this machine" : "stopped by the package";
+
+        private async Task<RunEnd> ActionAsync(JsonObject step, string kind, int index)
+        {
+            var outcome = await RunOneAsync(step, kind, vars, defaults.Timeout,
+                                            defaults.ExitCodes, _say, sinks.Emit, ct);
+            if (outcome.ExitCode is { } code) _lastExitCode = code;
             if (outcome.Aborted || (!outcome.Succeeded && ct.IsCancellationRequested))
             {
-                phases?.Fail(null, aborted: phases.AbortRequested);
-                say($"[deploy] stopped at step {index}: the run was cancelled");
-                return false;
+                _phases?.Fail(null, aborted: _phases.AbortRequested);
+                _say($"[deploy] stopped at step {index}: the run was cancelled");
+                return RunEnd.Failed;
             }
             if (outcome.Succeeded)
             {
-                phases?.End(StepState.Ok, outcome.ExitCode);
-                continue;
+                _phases?.End(StepState.Ok, outcome.ExitCode);
+                return RunEnd.Completed;
             }
             if (outcome.Continue)
             {
-                phases?.End(StepState.Skipped, outcome.ExitCode, outcome.Why);
-                say($"[deploy] step {index} failed, carrying on as configured");
-                continue;
+                _phases?.End(StepState.Skipped, outcome.ExitCode, outcome.Why);
+                _say($"[deploy] step {index} failed, carrying on as configured");
+                return RunEnd.Completed;
             }
-            phases?.End(StepState.Failed, outcome.ExitCode, outcome.Why);
-            say($"[deploy] FAILED at step {index}");
-            return false;
+            _phases?.End(StepState.Failed, outcome.ExitCode, outcome.Why);
+            _say($"[deploy] FAILED at step {index}");
+            return RunEnd.Failed;
         }
-        return true;
+
+        private async Task<RunEnd> IfAsync(JsonObject step, int index)
+        {
+            var evaluator = new ConditionEvaluator(
+                _facts, vars, () => _lastExitCode, _say, sinks.Emit, ct);
+            Tri answer;
+            try
+            {
+                answer = await evaluator.EvaluateAsync(step["condition"]);
+            }
+            catch (OperationCanceledException)
+            {
+                _phases?.Fail(null, aborted: _phases.AbortRequested);
+                _say($"[deploy] stopped at step {index}: the run was cancelled");
+                return RunEnd.Failed;
+            }
+            var seen = string.Join("; ", evaluator.Notes.Distinct().Take(6));
+            _say($"[deploy] condition is {answer.ToString().ToLowerInvariant()}" +
+                 (seen.Length > 0 ? $" ({seen})" : ""));
+
+            // UNKNOWN never quietly becomes Else -- see hub/package_conditions.py. Only the
+            // operator's own on_unknown: "else" turns it into one.
+            if (answer == Tri.Unknown && step.GetString("on_unknown") != "else")
+                return Undecided(step, index, seen);
+            if (answer == Tri.Unknown)
+                _say("[deploy] the machine could not tell; running Else as configured");
+
+            var takeThen = answer == Tri.True;
+            _phases?.End(StepState.Ok, message: Trim($"{(takeThen ? "Then" : "Else")}: {seen}"));
+            if (!takeThen)
+            {
+                MarkNotRun(step["then_steps"] as JsonArray);
+                return await ListAsync(step["else_steps"] as JsonArray);
+            }
+            var end = await ListAsync(step["then_steps"] as JsonArray);
+            if (end == RunEnd.Completed) MarkNotRun(step["else_steps"] as JsonArray);
+            return end;
+        }
+
+        /// <summary>An If the machine could not answer: a failed step, or -- with
+        /// continue_on_error -- a skipped one that runs neither lane.</summary>
+        private RunEnd Undecided(JsonObject step, int index, string seen)
+        {
+            var why = "could not decide: " + (seen.Length > 0 ? seen : "the condition is unknown here");
+            var carryOn = step.GetBool("continue_on_error");
+            _phases?.End(carryOn ? StepState.Skipped : StepState.Failed, message: Trim(why));
+            // Both lanes are left unrun either way; count them so later ordinals stay where
+            // the console expects them.
+            MarkNotRun(step["then_steps"] as JsonArray);
+            MarkNotRun(step["else_steps"] as JsonArray);
+            if (carryOn)
+            {
+                _say($"[deploy] step {index}: {why} -- skipping both branches as configured");
+                return RunEnd.Completed;
+            }
+            _say($"[deploy] FAILED at step {index}: {why}");
+            return RunEnd.Failed;
+        }
+
+        /// <summary>Count -- and report as not_run -- every step of a lane that will not run,
+        /// nested lanes included.</summary>
+        private void MarkNotRun(JsonArray? list)
+        {
+            if (list is null) return;
+            foreach (var node in list)
+            {
+                var index = ++_ordinal;
+                _phases?.Mark(StepPhase.Step, index, StepState.NotRun);
+                if (node is JsonObject step && step.GetString("kind") == "if")
+                {
+                    MarkNotRun(step["then_steps"] as JsonArray);
+                    MarkNotRun(step["else_steps"] as JsonArray);
+                }
+            }
+        }
+
+        private static string Trim(string text) => text.Length <= 400 ? text : text[..400] + "…";
+
+        /// <summary>The facts a run has when it was given none: every one unknown.</summary>
+        private sealed class NoFacts : IMachineFacts
+        {
+            public string? Get(string name) => null;
+        }
     }
 
     private static async Task<StepOutcome> RunOneAsync(
@@ -304,9 +458,36 @@ public static class PackageStepRunner
 /// (see packages._VARIABLE_RE), so an unknown name is refused there rather than reaching a
 /// machine as a literal brace pair in a command line.
 /// </summary>
-public sealed class PackageVariables
+public sealed partial class PackageVariables
 {
+    /// <summary>What a machine fact may contain to be substituted at all. An allow-list, not
+    /// escaping (SECURITY.MD): the value is an SMBIOS string the OEM wrote, it lands as plain
+    /// text in a command line or a PowerShell script that runs as SYSTEM, and there is no one
+    /// escaping that is right for msiexec, cmd and PowerShell at once. Every real model,
+    /// manufacturer, SKU, build, architecture and computer name seen in the fleet fits
+    /// ("Dell Inc.", "ThinkPad X1 Carbon Gen 11", "VMware7,1"); a quote, `;`, `$`, `&` or `%`
+    /// fails the step with the value in the message instead of changing what it runs.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^[A-Za-z0-9 ._,()+\-]+$")]
+    private static partial System.Text.RegularExpressions.Regex SafeFactValue();
+
     private readonly Dictionary<string, string> _bindings = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _withheld = new(StringComparer.Ordinal);
+    private IMachineFacts? _facts;
+
+    /// <summary>`{name}` -> the machine fact it substitutes. hub/package_conditions.py
+    /// FACT_BINDINGS, spelled identically; the hub refuses a payload or extract step that
+    /// claims one of these names, so they never collide with a binding.</summary>
+    public static readonly IReadOnlyDictionary<string, string> FactBindings =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["manufacturer"] = "hw.manufacturer",
+            ["model"] = "hw.model",
+            ["model_name"] = "hw.model_name",
+            ["sku"] = "hw.sku",
+            ["os_build"] = "os.build",
+            ["arch"] = "os.arch",
+            ["hostname"] = "sys.hostname",
+        };
 
     public PackageVariables(string workDir)
     {
@@ -316,7 +497,24 @@ public sealed class PackageVariables
 
     public string WorkDir { get; }
 
-    public void Bind(string name, string value) => _bindings[name] = value;
+    public void Bind(string name, string value)
+    {
+        _withheld.Remove(name);
+        _bindings[name] = value;
+    }
+
+    /// <summary>A name that is deliberately NOT bound on this machine, with the reason -- a
+    /// payload whose download condition was false. A step that uses it fails with that
+    /// reason rather than running with a literal "{drivers}" in its arguments.</summary>
+    public void Withhold(string name, string reason)
+    {
+        _bindings.Remove(name);
+        _withheld[name] = reason;
+    }
+
+    /// <summary>Let `{model}` and friends resolve, from <paramref name="facts"/>, on first
+    /// use. Lazy: a package that never says `{model}` never pays for the WMI read.</summary>
+    public void BindFacts(IMachineFacts facts) => _facts = facts;
 
     /// <summary>A path inside the attempt's working directory. The name is stripped to a
     /// file name first: a binding is ours, but the SUFFIX can come from a package
@@ -325,11 +523,36 @@ public sealed class PackageVariables
     public string PathIn(string name) =>
         Path.Combine(WorkDir, Path.GetFileName(name) is { Length: > 0 } safe ? safe : "out");
 
+    /// <summary>Substitute every bound `{name}`. Throws InvalidOperationException, with the
+    /// sentence the console shows, for a withheld name or a fact this machine could not read
+    /// -- the runner turns that into a failed step, which is the whole point: an unreadable
+    /// model must not become a path with "{model}" in it.</summary>
     public string Resolve(string? text)
     {
         if (string.IsNullOrEmpty(text)) return text ?? "";
+        foreach (var (name, reason) in _withheld)
+        {
+            if (text.Contains("{" + name + "}", StringComparison.Ordinal))
+                throw new InvalidOperationException(reason);
+        }
         foreach (var (name, value) in _bindings)
             text = text.Replace("{" + name + "}", value, StringComparison.Ordinal);
+        if (_facts is not null)
+        {
+            foreach (var (name, variable) in FactBindings)
+            {
+                var token = "{" + name + "}";
+                if (!text.Contains(token, StringComparison.Ordinal)) continue;
+                var value = _facts.Get(variable)
+                    ?? throw new InvalidOperationException(
+                        $"{token} is this machine's {variable}, which could not be read");
+                if (!SafeFactValue().IsMatch(value))
+                    throw new InvalidOperationException(
+                        $"{token} is this machine's {variable}, '{value}', which has characters " +
+                        "that are not safe to put into a command line");
+                text = text.Replace(token, value, StringComparison.Ordinal);
+            }
+        }
         return text;
     }
 }

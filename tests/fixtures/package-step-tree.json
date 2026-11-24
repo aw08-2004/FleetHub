@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "One step tree and the depth-first number of every step in it, checked by BOTH sides:",
+    "tests/test_package_conditions.py against packages.iter_steps (what the console draws)",
+    "and agent PackageConditionTests against PackageStepRunner (what the agent reports).",
+    "If the two ever number a tree differently, every step after the first difference",
+    "lands on the wrong row of the deployment view -- so neither side may change this",
+    "file without the other's test still passing. The machine is a Latitude 5440, so b",
+    "takes Then, d takes Else, and e, h, i, j, k are not run."
+  ],
+  "facts": {"hw.model": "Latitude 5440"},
+  "steps": [
+    {"kind": "run", "name": "a", "command": "cmd.exe", "args": "/c exit 0"},
+    {"kind": "if", "name": "b",
+     "condition": {"var": "hw.model", "cmp": "contains", "value": "Latitude"},
+     "then_steps": [
+       {"kind": "run", "name": "c", "command": "cmd.exe", "args": "/c exit 0"},
+       {"kind": "if", "name": "d",
+        "condition": {"var": "hw.model", "cmp": "==", "value": "Precision 3581"},
+        "then_steps": [{"kind": "run", "name": "e", "command": "cmd.exe", "args": "/c exit 0"}],
+        "else_steps": [
+          {"kind": "run", "name": "f", "command": "cmd.exe", "args": "/c exit 0"},
+          {"kind": "run", "name": "g", "command": "cmd.exe", "args": "/c exit 0"}
+        ]}
+     ],
+     "else_steps": [
+       {"kind": "run", "name": "h", "command": "cmd.exe", "args": "/c exit 0"},
+       {"kind": "if", "name": "i",
+        "condition": {"var": "hw.model", "cmp": "is_known"},
+        "then_steps": [{"kind": "run", "name": "j", "command": "cmd.exe", "args": "/c exit 0"}],
+        "else_steps": [{"kind": "run", "name": "k", "command": "cmd.exe", "args": "/c exit 0"}]}
+     ]},
+    {"kind": "run", "name": "l", "command": "cmd.exe", "args": "/c exit 0"}
+  ],
+  "ordinals": {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, "g": 7, "h": 8, "i": 9,
+               "j": 10, "k": 11, "l": 12},
+  "not_run": ["e", "h", "i", "j", "k"]
+}

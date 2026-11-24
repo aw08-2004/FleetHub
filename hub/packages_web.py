@@ -37,6 +37,7 @@ from flask import Blueprint, jsonify, render_template, request, send_file
 
 import fleet
 import i18n
+import package_conditions
 import packages
 import permissions
 import permissions_web
@@ -104,6 +105,46 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
     def _scoped_targets(machines):
         return scoped_targets(access, machines)
 
+    def _condition_vocab():
+        """What the If editor builds conditions from, in the caller's language. Served, not
+        hardcoded in the page, for the same reason as step_kinds: a variable added to
+        package_conditions shows up in the builder with no JS change.
+
+        Labels are spelled per variable in the catalogs (`packages.cond.var.<name>.label`);
+        a custom field is labelled with its own name, which is what the operator called it.
+        """
+        fields = package_conditions.field_variables(db_path)
+        variables = []
+        for entry in package_conditions.catalog(fields):
+            name = entry["name"]
+            entry["label"] = (name[len("field."):] if name.startswith("field.")
+                              else i18n.translate(
+                                  f"{package_conditions.VAR_TEXT_KEY}.{name}.label", _lang()))
+            variables.append(entry)
+        operators = sorted({op for ops in package_conditions.OPERATORS_BY_KIND.values()
+                            for op in ops})
+        return {
+            "variables": variables,
+            # The rules page's own operator labels: one wording for "is at least" across the
+            # console, not one per page.
+            "operators": {op: i18n.translate(f"rules.operator.{op}.label", _lang())
+                          for op in operators},
+            "probes": [
+                {"name": kind,
+                 "label": i18n.translate(
+                     f"{package_conditions.PROBE_TEXT_KEY}.{kind}.label", _lang()),
+                 "description": i18n.translate(
+                     f"{package_conditions.PROBE_TEXT_KEY}.{kind}.description", _lang())}
+                for kind in package_conditions.PROBE_KINDS
+            ],
+            "fact_bindings": package_conditions.FACT_BINDINGS,
+            "on_unknown": list(package_conditions.ON_UNKNOWN_CHOICES),
+            "stop_outcomes": list(packages.STOP_OUTCOMES),
+            "max_depth": packages.MAX_STEP_DEPTH,
+            "max_probe_timeout": package_conditions.MAX_PROBE_TIMEOUT,
+            "min_agent": ".".join(str(p) for p in packages.MIN_CONDITIONS_AGENT),
+        }
+
     # ---------------- Pages ----------------
     @bp.route("/packages")
     @login_required
@@ -145,6 +186,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
             "file_placeholder": packages.FILE_PLACEHOLDER,
             "work_variable": packages.WORK_VAR,
             "max_steps": packages.MAX_STEPS,
+            "conditions": _condition_vocab(),
             "max_upload_mb": settings.get_int(db_path, "deploy.max_upload_mb"),
             "defaults": {
                 "success_exit_codes": list(packages.DEFAULT_SUCCESS_EXIT_CODES),
@@ -154,6 +196,46 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
                 "retry_backoff_seconds": settings.get_int(
                     db_path, "deploy.default_retry_backoff_seconds"),
             },
+        }), 200
+
+    @bp.route("/api/packages/conditions/preview", methods=["POST"])
+    @login_required
+    @can_deploy
+    def preview_condition():
+        """What one machine would answer to one condition, from what the HUB knows of it.
+
+        A preview, not a verdict, and the response says which parts it could not answer:
+        the deploy itself is decided by the agent's live reading (package_conditions'
+        docstring says why), and file / registry / PowerShell checks and Lenovo's model name
+        are things only the machine can see. Those come back `unknown` with
+        `on_machine: true`, never guessed.
+
+        The machine arrives in the body, so the scope check is inline -- require_machine
+        reads a URL argument (see permissions_web). The check is the same one, and like
+        require_machine it gives a scoped operator the same 403 for a machine that does not
+        exist as for one outside their scope, so it cannot be used to learn which hostnames
+        exist. An unscoped operator, who can see every machine anyway, gets a preview with no
+        facts for a name the hub has never heard of. (A caller without the capability
+        is stopped earlier, by can_deploy, with that gate's own message.)
+        """
+        data = request.get_json(silent=True) or {}
+        machine = str(data.get("machine") or "").strip()
+        if not machine or not access.in_scope(machine):
+            return jsonify({"error": f"You do not have access to {machine!r}."}), 403
+        fields = package_conditions.field_variables(db_path)
+        try:
+            condition = package_conditions.validate(
+                data.get("condition"), package_conditions.Context(extra=fields))
+        except ValueError as e:
+            return refusals.refuse(e)
+        names = package_conditions.referenced_variables(condition)
+        facts = package_conditions.resolve_hub_facts(db_path, machine, names)
+        result = package_conditions.evaluate(condition, facts, fields)
+        return jsonify({
+            "machine": machine,
+            "result": package_conditions.result_name(result),
+            "explain": package_conditions.explain(condition, facts, fields),
+            "facts": facts,
         }), 200
 
     @bp.route("/api/packages/upload", methods=["POST"])

@@ -944,6 +944,33 @@ and goes stale with the image.
 - [ ] **A wrong path says so.** Set it to a file that does not exist: the card names
   `directory.ca_file` and says to put the file under /state, rather than a bare error.
 
+**Hub 1.187.0 + agent 3.54.0 (beta) -- If / Else and Stop steps, download conditions** (#5)
+A package can branch on what the machine is (model, Lenovo model name, manufacturer, SKU,
+chassis, memory, Windows version / build / release, architecture, BIOS, domain, AD, custom
+fields), what is on it (file, registry value, installed program), a PowerShell check, or the
+previous step's exit code -- and a payload can be downloaded only where a condition holds. See
+*Package conditions* under #5. Check it on the test hub pinned to 1.187.0 first; then cut agent
+3.54.0 with `-Channel beta` and run the boxes below on the beta PCs.
+- [ ] **The right branch on real hardware.** Build *Drivers by model*: If manufacturer starts
+  with Dell → If model contains your Dell model → unpack + pnputil, Else If manufacturer is
+  LENOVO and model name contains your ThinkPad's name → its pack, Else → Stop (failure,
+  "Unsupported model"). Deploy to one PC of each and one other: each takes its branch, the
+  other lanes read *Not run* (struck through), and the third ends *Failed* with the message.
+- [ ] **Only the matching pack downloads.** Give each pack *Only download on some machines*
+  with its manufacturer: on the Dell the Lenovo download reads *Not run · not needed on this
+  machine*, and no Lenovo zip appears under `%ProgramData%\...\packages` while it runs.
+- [ ] **Lenovo's model name.** On a ThinkPad, *Test on a machine* says the hub cannot tell
+  (it has no model name), and the deploy itself matches `hw.model_name` contains "ThinkPad".
+- [ ] **Step n of m counts only what runs.** While the pnputil after a skipped branch runs, the
+  row reads *Step 3 of 3*, not a number past the total.
+- [ ] **An older agent is refused, not sent.** Deploy the same package to a PC still on 3.53.0:
+  it fails at once with "needs agent 3.54.0 or newer -- this machine runs 3.53.0", and after
+  the agent updates, *Retry failures* sends it.
+- [ ] **A Stop that succeeds skips detection.** An If whose Then is Stop (success) on a machine
+  that matches: the deploy reads *Succeeded* and detection reads *Not run*.
+- [ ] **German and Spanish.** The If card, the condition builder and the preview read in the
+  chosen language with no `packages.cond...` keys showing.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
 **Read this first when working on the machine that holds the signing key.** Everything below
@@ -2272,8 +2299,61 @@ its state, exit code, duration and reason, and **one step's own log**, readable 
 
 **Not done, deliberately (PDQ features left for later):** a *Waking* stage (the Wake-on-LAN
 pass, #10, does not record which targets it woke), the Heartbeat trigger (deploy when a machine
-comes online), package conditions, nested packages, and step progress on the Android agent
-(it installs as before and shows as plain *Running*).
+comes online), nested packages, and step progress on the Android agent (it installs as before
+and shows as plain *Running*). Package conditions followed in hub 1.187.0, below.
+
+### Package conditions -- If / Else, Stop, download conditions · hub 1.187.0 + agent 3.54.0
+
+The driver rollout that started it: *on a Latitude install this pack, on a ThinkPad that one,
+on anything else stop*. Operators were writing that as one PowerShell step, and every machine
+downloaded every model's pack to use one of them.
+
+- **An `if` step holds a condition and two nested lanes, `then` and `else`;** an *Else if* is an
+  If inside an Else. A **`stop`** step ends the deploy as a success ("nothing to do here", which
+  also skips detection -- the package has just said the software is not meant to be there) or a
+  failure with a message. A payload's **`only_if`** downloads it only where its condition
+  holds. Ifs nest four deep; `MAX_STEPS` (now 60) counts every step in the tree.
+- **The condition language is the rules engine's AST**, unchanged -- `rules.py`'s operators,
+  case-insensitive text equality, wildcard `matches`, Kleene and/or/not -- so "is" means the
+  same thing on the Rules page and in a package. `package_conditions.py` adds only a `version`
+  kind (10.0.9200 below 10.0.22631, which text comparison gets backwards) and **probe** leaves
+  (file / registry / installed program, shaped exactly like detection rules, plus a PowerShell
+  check: exit 0 true, 1 false, anything else unknown). `rules.py` itself is untouched, so no
+  alert rule's behaviour moved. Rejected: a new expression language (two meanings of `==` in one
+  console), and per-step "only when" flags (no Else, no nesting, and the user asked for real
+  If / Else).
+- **Evaluated on the machine, live.** The hub's `machine_info` is read once at agent start and
+  goes stale across a motherboard swap or a re-image; a driver pack has to match the hardware
+  in the chassis now. The agent reads its own facts lazily (`WindowsMachineFacts`), and the hub
+  ships only what it alone knows -- AD and custom fields -- in `params.facts`. Rejected:
+  hub-side evaluation with a pre-pruned step list. It would have run on every agent already in
+  the field, but on stale data, and it cannot answer the file / registry / PowerShell
+  questions at all.
+- **Unknown never quietly becomes Else.** An If whose condition the machine cannot answer
+  fails the step ("could not decide"), because the generic pack landing on every machine whose
+  WMI had a bad day is the failure this feature most must not have. `on_unknown: "else"` is the
+  operator saying otherwise, per If; `continue_on_error` on the If skips both lanes.
+- **`hw.model_name` is for Lenovo.** Its `Win32_ComputerSystem.Model` is the machine-type code
+  (`21HD0012US`); the name an operator thinks in is `Win32_ComputerSystemProduct.Version`. The
+  hub does not store it, so the console's preview says so rather than guessing.
+- **Depth-first numbering is the progress ordinal.** An If, then its Then steps, then its Else
+  steps, then what follows -- `packages.iter_steps` on the hub, `PackageStepRunner` on the agent,
+  pinned on both sides. The lane not taken is still counted and reported `not_run` (a new
+  state, distinct from `skipped`, which already meant "failed and carried on"), or every later
+  step would land on the wrong row. *Step n of m* counts only what will run.
+- **Variables follow the branches.** A name bound in only one lane is not bound after the If,
+  unless the other lane ends in Stop. `{model}`, `{model_name}`, `{manufacturer}`, `{sku}`,
+  `{os_build}`, `{arch}` and `{hostname}` are the machine's own values for any step; an
+  unreadable one fails the step rather than reaching a path as a literal brace pair.
+- **An agent older than 3.54.0 is refused at dispatch** (`MIN_CONDITIONS_AGENT`), with both
+  versions in the reason, instead of being sent a job it would download every payload for and
+  then fail on.
+- **Preview.** *Test on a machine* in an If card evaluates the condition against the hub's copy
+  of that machine's facts, each clause with its actual value; machine checks read "checked on
+  the machine". Gated on `deploy_packages` plus the machine's scope.
+
+**Not done:** conditions on the Android agent (Android packages refuse If, Stop and download
+conditions), and `hw.model_name` in the hub's inventory (only the agent reads it).
 
 ---
 
