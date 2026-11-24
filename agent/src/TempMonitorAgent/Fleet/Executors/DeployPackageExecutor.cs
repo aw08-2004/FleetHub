@@ -284,25 +284,24 @@ public sealed class DeployPackageExecutor : ICommandExecutor
     /// be able to see that it happened.</summary>
     private void DeleteAttemptDir(string dir)
     {
-        for (var attempt = 1; ; attempt++)
+        const int attempts = 3;
+        string? lastError = null;
+        for (var attempt = 1; attempt <= attempts; attempt++)
         {
             try
             {
                 if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
                 return;
             }
-            catch (Exception e) when (attempt < 3)
-            {
-                _log.LogDebug("Retrying clean-up of {Path}: {Msg}", dir, e.Message);
-                Thread.Sleep(500 * attempt);
-            }
             catch (Exception e)
             {
-                _log.LogWarning("Could not clean up {Path}; the next deploy retries it: {Msg}",
-                                dir, e.Message);
-                return;
+                lastError = e.Message;
+                _log.LogDebug("Clean-up of {Path} failed (attempt {N}): {Msg}", dir, attempt, e.Message);
+                if (attempt < attempts) Thread.Sleep(500 * attempt);
             }
         }
+        _log.LogWarning("Could not clean up {Path}; the next deploy retries it: {Msg}",
+                        dir, lastError);
     }
 
     /// <summary>Delete attempt folders an earlier deploy could not -- a clean-up that failed,
