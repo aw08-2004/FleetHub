@@ -165,7 +165,9 @@ auto-update off and is updated by hand once the test hub has checked out.
   branches from `origin/beta` and fails once the branch is gone; cut them from `main`.
   `claude-review.yml` can drop its `beta` trigger, and `hub-image.yml` its `beta` publish path.
 - [ ] **2. Open PRs into `beta`** are merged into it or retargeted to `main` (#214, Authenticode
-  signing). #221 records the 2026-11-24 send, which this entry carries, so it can close.
+  signing). Anything already merged into `beta` but not `main` is lost with the branch, so
+  check `git log origin/main..origin/beta` is empty, or holds only #221's roadmap note -- that
+  note's content is the 2026-11-24 send paragraph below, already on `main`.
 - [ ] **3. Installer hubs.** Every hub whose *This hub's release channel* reads *Beta* is set to
   *Stable*. A beta hub left behind reads `HUB_VERSION` from a branch that no longer exists and
   silently stops updating.
