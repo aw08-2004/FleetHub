@@ -103,7 +103,7 @@ public sealed class ProcessReader
                 Pid: pid,
                 // /proc/<pid>/status's Name is the same 15-character comm as stat's; the exe
                 // basename is the name a person recognises when comm was truncated.
-                Name: ExeName(dir) ?? status.Name ?? stat.Value.Comm,
+                Name: DisplayName(dir, status.Name, stat.Value.Comm),
                 CpuPercent: 0,
                 MemoryMb: status.RssKb / 1024.0,
                 User: user,
@@ -138,7 +138,37 @@ public sealed class ProcessReader
                                    (int)Math.Max(0, elapsed.TotalMilliseconds), truncated);
     }
 
+    // ------------------------------------------------------------------ one process
+
+    /// <summary>The name the Processes card shows for the process in <paramref name="procDir"/>,
+    /// or null if it has exited.
+    ///
+    /// **One rule, used by the card AND by the executors that act on it.** kill_process and
+    /// restart_process check that a pid still answers to the name the operator clicked; if
+    /// they computed that name differently from the list, every action on a process whose comm
+    /// was truncated would be refused as "the pid was reused".</summary>
+    public static string? NameOf(string procDir)
+    {
+        var stat = ParseStat(ReadOrEmpty(System.IO.Path.Combine(procDir, "stat")));
+        if (stat is null) return null;
+        var status = ParseStatus(ReadOrEmpty(System.IO.Path.Combine(procDir, "status")));
+        return DisplayName(procDir, status.Name, stat.Value.Comm);
+    }
+
+    private static string DisplayName(string procDir, string? statusName, string comm) =>
+        ExeName(procDir) ?? statusName ?? comm;
+
     // ------------------------------------------------------------------ pure parsers
+
+    /// <summary>The parent pid from <c>/proc/&lt;pid&gt;/stat</c> (field 4), or null. Found
+    /// after the LAST close paren for the reason <see cref="ParseStat"/> gives.</summary>
+    public static int? ParseParentPid(string text)
+    {
+        var close = text.LastIndexOf(')');
+        if (close < 0) return null;
+        var rest = text[(close + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return rest.Length > 1 && int.TryParse(rest[1], out var ppid) ? ppid : null;
+    }
 
     /// <summary>The fields of <c>/proc/&lt;pid&gt;/stat</c> this reader uses, or null.
     ///

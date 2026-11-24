@@ -838,6 +838,29 @@ out of its hands.
 - [ ] **The install hint is generic.** The Linux tab of the onboarding wizard says *NAS and
   appliance systems*, in English, German and Spanish.
 
+**Linux agent 0.5.0 (beta) -- End task, Restart, patch install, installed software** (#14, #22, #25)
+Agent only: the console and the patch scheduler read the capability report, so nothing on the
+hub changes. Cut with `agent-linux/release.ps1 -Version 0.5.0 -Channel beta`; it supersedes
+0.4.1, which need not be cut separately.
+**Rejected:** relaunching a non-service process on Restart, as Windows does. argv, environment,
+cwd, terminal and the user's session cannot be read back faithfully from /proc, so the
+relaunch would be a different program sharing a path. Also rejected: `apt-get upgrade` of
+everything in a run (a run installs what was approved), and filtering the software list to
+`apt-mark showmanual` (it hides the libraries a vulnerability question is about).
+- [ ] **End task.** On a 0.5.0 box, open Processes, right-click a `sleep 600` started from the
+  Terminal tab, **End task**: it is gone within a second. Then a process that ignores SIGTERM
+  (`bash -c 'trap "" TERM; sleep 600'`): the result says it was force-killed after 5 s.
+- [ ] **Refusals.** End task on `systemd` (pid 1) and on `fleethub-agent` both fail with the
+  reason, and the box stays up.
+- [ ] **Restart.** Restart on an nginx or cron process restarts the unit (`systemctl status`
+  shows a fresh start time). On a desktop app it refuses with *not part of a system service*;
+  on a process started from the Terminal tab it refuses because it runs inside the agent's own
+  service, and the agent keeps running.
+- [ ] **Patch run.** Approve one apt update for a Debian/Ubuntu box, run it with *If required*:
+  the target reads Applied within a minute of the command finishing, without a restart unless
+  it was a kernel. Repeat with a kernel update and check the box restarts after five minutes.
+- [ ] **Software.** The box's Software section lists its packages with versions, and the
+  report sheet's Software CSV includes it.
 **Hub 1.185.0 -- a CA certificate for Active Directory sync** (#4)
 Sync trusted only the image's public CA list, so a DC with an AD CS certificate failed every
 pass with `CERTIFICATE_VERIFY_FAILED`, and the CA field on the sign-in page did not apply to
@@ -5871,7 +5894,15 @@ access", and deleting the invite would take the answer with it.
 **Open parameters.** Whether a redemption should notify the admin who created the invite —
 today the audit trail is the only signal. Whether an invite should be able to name a
 directory group instead of an email, for the tenant that would rather not maintain either.
-## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0 · channels in 0.4.1
+## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0 · channels in 0.4.1 · process control, patch install, software in 0.5.0
+
+> **Update (2026-11-24, agent 0.5.0) -- the first parity batch is built.** `kill_process` (SIGTERM,
+> then SIGKILL after 5 s), `restart_process` (system services only, via `systemctl restart`;
+> the unit must sit directly under `system.slice`, because the innermost `.service` of a desktop
+> app is `user@<uid>.service`), `install_patches` (apt/dnf, only what is still offered, re-scan
+> at once) and the installed-software report (dpkg/rpm). No hub change: every gate reads the
+> capability report. Still open, in order: Wake-on-LAN, Files tab, `deploy_package`, journald,
+> network sweep, disk usage, watchdog, Snap/Flatpak.
 
 > **Update (2026-11-24, hub 1.184.0) -- channels reach Linux in 0.4.1.** The agent ignored
 > `update_channel` until now, so a box set to beta in the console stayed on the stable manifest

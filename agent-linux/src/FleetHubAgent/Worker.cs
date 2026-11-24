@@ -7,6 +7,7 @@ using FleetHubAgent.State;
 using FleetHubAgent.Update;
 using FleetHubAgent.Telemetry;
 using FleetHubAgent.Patch;
+using FleetHubAgent.Software;
 
 namespace FleetHubAgent;
 
@@ -18,7 +19,8 @@ namespace FleetHubAgent;
 ///   * heartbeat -- liveness; the call that decides whether the machine reads online
 ///   * commands  -- poll, claim, and dispatch fleet commands
 ///   * update    -- look for a newer signed build, and exit onto it
-///   * inventory -- the slow local scans (what the package manager says is available)
+///   * inventory -- the slow local scans (what the package manager says is available, and
+///                  what is installed)
 ///   * processes -- the Processes card's /proc walk, only while somebody has it open
 ///
 /// **Why they are separate**, which is a lesson the Windows agent learned the hard way and
@@ -44,6 +46,7 @@ public sealed class Worker : BackgroundService
     private readonly SelfUpdater _updater;
     private readonly PatchInventoryReporter _patches;
     private readonly ProcessReporter _processes;
+    private readonly SoftwareInventoryReporter _software;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll loop
     /// from re-dispatching something already running.</summary>
@@ -76,7 +79,8 @@ public sealed class Worker : BackgroundService
     public Worker(
         ILogger<Worker> log, AgentState state, ISensorSource sensors,
         TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
-        SelfUpdater updater, PatchInventoryReporter patches, ProcessReporter processes)
+        SelfUpdater updater, PatchInventoryReporter patches, ProcessReporter processes,
+        SoftwareInventoryReporter software)
     {
         _log = log;
         _state = state;
@@ -87,6 +91,7 @@ public sealed class Worker : BackgroundService
         _updater = updater;
         _patches = patches;
         _processes = processes;
+        _software = software;
         _enrollmentSecret = ReadEnrollmentSecret(log);
     }
 
@@ -210,10 +215,14 @@ public sealed class Worker : BackgroundService
                 // is marked sent only below, once the hub has actually answered -- see
                 // PatchInventoryReporter on why those are two steps.
                 var patches = _patches.TakeIfChanged();
+                var software = _software.TakeIfChanged();
                 if (await EnsureEnrolledAsync(ct)
-                    && await _fleet.HeartbeatAsync(ct, patches, _processes.TakeLatest()))
+                    && await _fleet.HeartbeatAsync(ct, patches, _processes.TakeLatest(), software))
                 {
                     if (patches is not null) _patches.MarkSent(patches);
+                    // Kept pending when the hub said its write failed, so the next heartbeat
+                    // carries it again -- see SoftwareInventoryReporter.
+                    if (software is not null && !_fleet.SoftwareRejected) _software.MarkSent(software);
                     // The heartbeat's answer is authoritative for STOPPING: the process loop
                     // only ever asks while idle, so this is how a closed card ends sampling.
                     if (_fleet.ProcessesWanted is { } wanted) _processes.SetWanted(wanted);
@@ -252,6 +261,7 @@ public sealed class Worker : BackgroundService
             try
             {
                 await _patches.RefreshIfDueAsync(ct);
+                await _software.RefreshIfDueAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception e) { _log.LogWarning(e, "Inventory tick failed"); }
