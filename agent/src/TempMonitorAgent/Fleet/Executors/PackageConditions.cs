@@ -460,14 +460,18 @@ public sealed partial class ConditionEvaluator(
         var timeout = Math.Clamp(leaf.GetInt("timeout_seconds", 60), 5, 600);
         var id = Guid.NewGuid().ToString("N");
         var path = vars.PathIn($"check-{id}.ps1");
-        await File.WriteAllTextAsync(path, script, ct);
+        // `exit 0` is appended so a script that runs to its end answers 0, as it would run on
+        // its own. Without it the wrapper's `exit $LASTEXITCODE` below would answer with
+        // whatever native command ran LAST -- a check ending in `reg query` or `findstr` that
+        // found nothing exits 1, reads as false, and sends the machine down Else (review on
+        // #228). An explicit `exit N` earlier in the script still ends it first.
+        await File.WriteAllTextAsync(path, script + "\nexit 0\n", ct);
         // The operator's script runs INSIDE a wrapper, because `powershell.exe -File` exits 1
         // for a script that throws, fails to parse, or calls a cmdlet that is not there -- the
         // same 1 that means "no". Run bare, a typo in a driver package's check would read as
         // false and send every machine down Else, which is the false-when-it-should-be-unknown
         // case three-valued logic exists to prevent. The wrapper turns any terminating error
-        // into exit 2 (unknown) and passes an explicit `exit N` through. A script that ends
-        // without one answers 0, as it would on its own.
+        // into exit 2 (unknown) and passes the script's own exit code through.
         var wrapper = vars.PathIn($"check-{id}-run.ps1");
         await File.WriteAllTextAsync(wrapper,
             "$global:LASTEXITCODE = 0\n" +

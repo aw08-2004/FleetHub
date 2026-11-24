@@ -82,7 +82,8 @@ domain, agent version, and the exit code of the previous step. From the hub: Act
 OU, distinguished name and owner, and every custom field. And four checks run on the machine:
 a **file or folder exists**, a **registry value** exists (or equals a value), a **program is
 installed** (optionally at a minimum version), and a **PowerShell check** (exit 0 is true, 1 is
-false, anything else means *can't tell* -- and so does a script that throws or does not
+false, a script that runs to its end without `exit` is true whatever its last command
+returned, anything else means *can't tell* -- and so does a script that throws or does not
 parse, so a typo never quietly sends machines down Else; 60 seconds by default, at most 600).
 
 Clauses combine as *All of these*, *Any of these* or *None of these*, and groups nest. The

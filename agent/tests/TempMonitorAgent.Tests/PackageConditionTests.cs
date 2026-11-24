@@ -382,6 +382,11 @@ public class PackageConditionTests
     [InlineData("exit 7", Tri.Unknown)]
     // A script that ends without `exit` and without an error answers yes, as it would alone.
     [InlineData("$x = 1", Tri.True)]
+    // ...even when its last line is a native command that "found nothing" (review on #228):
+    // findstr / reg query exit 1, and that must not leak out as the check's answer.
+    [InlineData("cmd.exe /c exit 1", Tri.True)]
+    // Passing a native command's code on is still the script's own choice.
+    [InlineData("cmd.exe /c exit 1\nexit $LASTEXITCODE", Tri.False)]
     // The review finding on #228: under `powershell -File` all three of these exit 1, which
     // read as FALSE and sent every machine down Else. A broken check is unknown, never no.
     [InlineData("throw 'typo in the check'", Tri.Unknown)]
