@@ -86,6 +86,9 @@ def ldap3_installed():
         return False
 
 
+# The only scheme sync binds over by default; anything else is plain LDAP.
+LDAPS_SCHEME = "ldaps://"
+
 LDAP_IMPORT_HINT = (
     "Active Directory sync needs the 'ldap3' package, which is not installed on this "
     "hub. Install it with:  pip install ldap3   (or  pip install -r hub/requirements.txt) "
@@ -545,7 +548,7 @@ def validate_config(config):
             f"No bind password is set. Put it in .env as {BIND_PASSWORD_ENV}=... and "
             f"restart the hub -- it is a credential, so it is deliberately not stored "
             f"in hub settings.")
-    if not server_url.lower().startswith("ldaps://") and not config.get("allow_insecure"):
+    if not server_url.lower().startswith(LDAPS_SCHEME) and not config.get("allow_insecure"):
         # An LDAP simple bind sends the service-account password in cleartext. Refusing by
         # default is the point: this is a domain account with read access to the whole
         # directory, and the failure mode of getting it wrong is silent.
@@ -556,7 +559,7 @@ def validate_config(config):
     ca_file = str(config.get("ca_file") or "").strip()
     # Only where tls_options would actually load it: on ldap:// or with verification off the
     # file is never read, and a stale path there must not block a sync that does not need it.
-    uses_ca_file = server_url.lower().startswith("ldaps://") and config.get("tls_verify", True)
+    uses_ca_file = server_url.lower().startswith(LDAPS_SCHEME) and config.get("tls_verify", True)
     if ca_file and uses_ca_file and not os.path.isfile(ca_file):
         # Said here, by name, rather than left to ldap3: its own error for a missing CA file
         # is an LDAPSSLConfigurationError raised from Tls() -- outside the bind's try, so it
@@ -600,7 +603,7 @@ def fetch_computers(config, page_size=500):
     """
     server_url, base_dn, bind_dn, password = validate_config(config)
     ldap3 = _load_ldap3()
-    use_ssl = server_url.lower().startswith("ldaps://")
+    use_ssl = server_url.lower().startswith(LDAPS_SCHEME)
 
     try:
         server = ldap3.Server(server_url, get_info=ldap3.NONE,
