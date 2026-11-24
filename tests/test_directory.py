@@ -401,6 +401,13 @@ def main():
         except directory.DirectoryError as e:
             check("refuses a CA file that is not on the hub, naming the setting",
                   "directory.ca_file" in str(e) and "/state" in str(e))
+        check("a stale CA path does not block a sync that never reads it (verify off)",
+              directory.validate_config(dict(base, ca_file="/nonexistent/ad-ca.pem",
+                                             tls_verify=False))[0] == "ldaps://dc")
+        check("...nor a plain-LDAP lab sync",
+              directory.validate_config(dict(base, server="ldap://dc", allow_insecure=True,
+                                             ca_file="/nonexistent/ad-ca.pem"))[0]
+              == "ldap://dc")
         ca_path = db_path + ".ca.pem"
         with open(ca_path, "w") as f:
             f.write("-----BEGIN CERTIFICATE-----\n")

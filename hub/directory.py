@@ -554,7 +554,10 @@ def validate_config(config):
             "sent in cleartext. Use ldaps:// (port 636), or explicitly allow insecure "
             "binds in settings if this is an isolated lab.")
     ca_file = str(config.get("ca_file") or "").strip()
-    if ca_file and not os.path.isfile(ca_file):
+    # Only where tls_options would actually load it: on ldap:// or with verification off the
+    # file is never read, and a stale path there must not block a sync that does not need it.
+    uses_ca_file = server_url.lower().startswith("ldaps://") and config.get("tls_verify", True)
+    if ca_file and uses_ca_file and not os.path.isfile(ca_file):
         # Said here, by name, rather than left to ldap3: its own error for a missing CA file
         # is an LDAPSSLConfigurationError raised from Tls() -- outside the bind's try, so it
         # surfaced as a bare exception with no hint that the SETTING is what is wrong.
