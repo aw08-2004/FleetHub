@@ -2164,7 +2164,26 @@
       "choose_file": "Elige un archivo para subir.",
       "save": "Guardar el paquete",
       "apk_payload": "APK que se instalará",
-      "apk_hint": "la carga que contiene el .apk, entre llaves"
+      "apk_hint": "la carga que contiene el .apk, entre llaves",
+      "needs_agent": "Los pasos Si y Detener y las condiciones de descarga requieren el agente {version} o posterior. Un equipo con un agente anterior no recibe este paquete; su fila indica el motivo y «Reintentar fallidos» lo envía cuando el agente se haya actualizado.",
+      "if_condition": "Condición",
+      "on_unknown": "Si el equipo no puede determinarlo",
+      "on_unknown_fail": "Marcar este paso como fallido (recomendado)",
+      "on_unknown_else": "Ejecutar Si no",
+      "if_continue_on_error": "Si no se puede decidir la condición, omitir Entonces y Si no y continuar",
+      "if_then": "Entonces",
+      "if_else": "Si no",
+      "lane_empty": "Sin pasos: aquí no ocurre nada.",
+      "lane_add": "Añadir paso",
+      "add_else_if": "Añadir Si no, si",
+      "stop_outcome": "Terminar la implementación como",
+      "stop_success": "Correcta: no hay nada que hacer",
+      "stop_failure": "Fallida",
+      "stop_message": "Mensaje",
+      "stop_message_placeholder": "Modelo no compatible",
+      "stop_help": "Después de este paso no se ejecuta nada, ni siquiera la comprobación de detección: Detener indica cómo termina la implementación en este equipo.",
+      "payload_only_if": "Descargar solo en algunos equipos",
+      "payload_only_if_help": "El archivo solo se descarga donde esto es verdadero: un paquete de controladores por modelo llega solo a ese modelo. Un paso que lo use en otro equipo falla, así que pon esos pasos dentro de un Si con la misma condición."
     },
     "deploy_editor": {
       "add_group": "Añadir un grupo",
@@ -2291,7 +2310,9 @@
       "confirm_redeploy": "{count} equipo(s) seleccionado(s). Cada uno recibe intentos nuevos con el paquete tal como está definido ahora, incluidos los equipos donde ya tuvo éxito.",
       "confirm_redeploy_ok": "Volver a desplegar",
       "retry_now": "Reintentar ahora",
-      "retry_now_none": "Ninguno de los equipos seleccionados está esperando para reintentar."
+      "retry_now_none": "Ninguno de los equipos seleccionados está esperando para reintentar.",
+      "branch_then": "Entonces",
+      "branch_else": "Si no"
     },
     "status": {
       "scheduled": "programado",
@@ -2328,6 +2349,14 @@
       "apk": {
         "label": "Instalar una app de Android",
         "description": "Instala un APK sin preguntar en un dispositivo Android totalmente administrado. Un paquete con este paso es solo para dispositivos Android, y cada carga debe estar fijada por sha256."
+      },
+      "if": {
+        "label": "Si / Si no",
+        "description": "Comprueba una condición en el equipo (modelo, fabricante, versión de Windows, un archivo, un valor del registro o una comprobación de PowerShell) y ejecuta los pasos de Entonces o los de Si no."
+      },
+      "stop": {
+        "label": "Detener",
+        "description": "Termina la implementación aquí, como correcta (nada que hacer en este equipo) o como fallida (por ejemplo, un modelo no compatible)."
       }
     },
     "detection": {
@@ -2346,6 +2375,138 @@
       "installed_version": {
         "label": "Versión instalada",
         "description": "Busca el producto en el registro de programas instalados de Windows y exige al menos una versión dada."
+      }
+    },
+    "cond": {
+      "var": {
+        "hw": {
+          "manufacturer": {
+            "label": "Fabricante"
+          },
+          "model": {
+            "label": "Modelo"
+          },
+          "model_name": {
+            "label": "Nombre del modelo (Lenovo: ThinkPad X1 …)"
+          },
+          "sku": {
+            "label": "SKU del sistema"
+          },
+          "serial_number": {
+            "label": "Número de serie"
+          },
+          "chassis": {
+            "label": "Tipo de chasis"
+          },
+          "memory_gb": {
+            "label": "Memoria (GB)"
+          },
+          "cpu": {
+            "label": "Procesador"
+          }
+        },
+        "os": {
+          "name": {
+            "label": "Edición de Windows"
+          },
+          "version": {
+            "label": "Versión de Windows"
+          },
+          "build": {
+            "label": "Compilación de Windows"
+          },
+          "display_version": {
+            "label": "Versión comercial de Windows (p. ej., 23H2)"
+          },
+          "arch": {
+            "label": "Arquitectura"
+          }
+        },
+        "bios": {
+          "version": {
+            "label": "Versión de BIOS"
+          }
+        },
+        "sys": {
+          "hostname": {
+            "label": "Nombre del equipo"
+          },
+          "domain": {
+            "label": "Dominio o grupo de trabajo"
+          },
+          "domain_joined": {
+            "label": "Unido a un dominio"
+          },
+          "agent_version": {
+            "label": "Versión del agente"
+          }
+        },
+        "ad": {
+          "ou": {
+            "label": "Unidad organizativa de AD"
+          },
+          "dn": {
+            "label": "Nombre distintivo de AD"
+          },
+          "owner": {
+            "label": "Propietario en AD"
+          }
+        },
+        "step": {
+          "last_exit_code": {
+            "label": "Código de salida del paso anterior"
+          }
+        }
+      },
+      "probe": {
+        "file_exists": {
+          "label": "Existe el archivo o la carpeta",
+          "description": "Verdadero si la ruta existe en el equipo."
+        },
+        "registry_value": {
+          "label": "Valor del registro",
+          "description": "Verdadero si el valor existe o, si pides una coincidencia exacta, si contiene exactamente ese dato."
+        },
+        "installed_version": {
+          "label": "El programa está instalado",
+          "description": "Verdadero si un programa cuyo nombre contiene este texto figura en los programas instalados de Windows, en la versión indicada o superior."
+        },
+        "powershell": {
+          "label": "Comprobación de PowerShell",
+          "description": "Ejecuta un script breve como SYSTEM: salir con 0 es verdadero, con 1 es falso y cualquier otro valor significa que el equipo no pudo determinarlo."
+        }
+      },
+      "mode_all": "Todas son verdaderas",
+      "mode_any": "Alguna es verdadera",
+      "mode_none": "Ninguna es verdadera",
+      "group": {
+        "hw": "Hardware",
+        "os": "Windows",
+        "bios": "BIOS",
+        "sys": "Sistema",
+        "ad": "Active Directory",
+        "step": "Paso anterior",
+        "field": "Campos personalizados",
+        "checks": "Comprobaciones en el equipo"
+      },
+      "add_clause": "Añadir condición",
+      "add_group": "Añadir grupo",
+      "empty_group": "Añade al menos una condición a este grupo.",
+      "yes": "Sí",
+      "no": "No",
+      "list_placeholder": "Separa los valores con comas",
+      "powershell_hint": "Sal con 0 para verdadero y con 1 para falso. Que sea rápido: se ejecuta antes del paso y detiene la implementación hasta que responde.",
+      "probe_timeout": "Tiempo de espera (segundos)",
+      "preview_machine": "Probar en un equipo",
+      "preview_placeholder": "Nombre del equipo",
+      "preview_button": "Probar",
+      "preview": {
+        "true": "En {machine} se ejecutaría Entonces.",
+        "false": "En {machine} se ejecutaría Si no.",
+        "unknown": "Para {machine}, el hub no puede saberlo: el equipo decide cuando se ejecuta la implementación.",
+        "on_machine": "se comprueba en el equipo",
+        "no_value": "el hub no lo conoce",
+        "caveat": "Según lo último que supo el hub. La implementación lee el equipo en directo, así que un modelo cambiado o una reinstalación pueden responder de otra forma."
       }
     }
   },

@@ -41,6 +41,17 @@ Four ideas carry the design, and each exists because the naive version is wrong:
     one-command recipe, still stored and still dispatched exactly as it was -- that is what
     lets an agent that predates this keep running every package written before it.
 
+  * **A step list can branch.** An `if` step holds a condition and two nested lists, `then`
+    and `else`; a `stop` step ends the deploy early, as a success ("nothing to do on this
+    model") or a failure ("unsupported model"); and a payload can carry `only_if`, so the
+    Latitude's driver pack is never downloaded onto the ThinkPad. The condition grammar is
+    package_conditions.py, and its docstring says why it is evaluated on the machine rather
+    than here. This does put an expression language on the endpoint, which the detection
+    paragraph above warns against -- deliberately, and narrowly: it is the rules engine's
+    comparison AST, evaluated by a hand-written interpreter on the agent, with nothing an
+    operator types ever compiled. The alternative operators were actually using was a
+    PowerShell step, which is arbitrary evaluation by definition.
+
   * **Scheduling layers on the existing command queue, it does not replace it.** A
     deployment is a set of per-machine target rows; the scheduler tick turns an eligible
     target into an ordinary `deploy_package` command with the usual TTL, then reads that
@@ -72,6 +83,7 @@ import uuid
 
 import capabilities
 import fleet
+import package_conditions
 
 # ================================
 # VOCABULARY
@@ -114,7 +126,17 @@ STEP_WINGET = "winget"          # winget install <id>
 STEP_EXTRACT = "extract"        # unpack a .zip into a directory
 STEP_PNPUTIL = "pnputil"        # stage/install driver packages
 STEP_APK = "apk"                # install an Android app (roadmap #23)
-STEP_KINDS = (STEP_RUN, STEP_POWERSHELL, STEP_WINGET, STEP_EXTRACT, STEP_PNPUTIL, STEP_APK)
+# Flow control (agent 3.54.0). Not installers, so they carry no timeout or exit codes of
+# their own -- see validate_steps -- and they are what package_conditions.py exists for.
+STEP_IF = "if"                  # condition, then: [steps], else: [steps]
+STEP_STOP = "stop"              # end the deploy here, as a success or a failure
+STEP_KINDS = (STEP_RUN, STEP_POWERSHELL, STEP_WINGET, STEP_EXTRACT, STEP_PNPUTIL, STEP_APK,
+              STEP_IF, STEP_STOP)
+FLOW_STEP_KINDS = frozenset({STEP_IF, STEP_STOP})
+
+STOP_SUCCESS = "success"
+STOP_FAILURE = "failure"
+STOP_OUTCOMES = (STOP_SUCCESS, STOP_FAILURE)
 
 # ================================
 # PLATFORM
@@ -181,10 +203,22 @@ _STEP_SUBSTITUTED = {
     STEP_EXTRACT: ("archive", "dest"),
     STEP_PNPUTIL: ("path",),
     STEP_APK: ("apk",),
+    # An if's substitutions live in its condition's probes (package_conditions.PROBE_SUBSTITUTED);
+    # a stop's message is shown, not executed, so it is left literal.
+    STEP_IF: (),
+    STEP_STOP: (),
 }
 
-MAX_STEPS = 25
+# Counted over EVERY step, nested ones included, because that count is also the highest
+# progress ordinal a deploy can report (_clean_progress) and the number of rows the console
+# draws. 25 was the flat-list cap; a driver package with an if per model needs more room
+# than that, and 60 is still a list a person can read.
+MAX_STEPS = 60
+# How deep ifs may nest. "Manufacturer, then model, then OS build" is three; a fourth level is
+# allowed for slack, and past that the package is a script that wants to be a PowerShell step.
+MAX_STEP_DEPTH = 4
 MAX_SCRIPT_CHARS = 10000
+MAX_MESSAGE_CHARS = 500
 
 # Post-install detection. Three kinds plus an explicit opt-out, held to that deliberately:
 # each one is code the C# agent must implement and keep working across Windows versions.
@@ -269,8 +303,14 @@ STEP_OK = "ok"
 STEP_FAILED = "failed"
 STEP_SKIPPED = "skipped"        # failed, but continue_on_error carried the deploy on
 STEP_ABORTED = "aborted"
-STEP_STATES = (STEP_RUNNING, STEP_OK, STEP_FAILED, STEP_SKIPPED, STEP_ABORTED)
-STEP_TERMINAL = frozenset({STEP_OK, STEP_FAILED, STEP_SKIPPED, STEP_ABORTED})
+# Never started, on purpose: the branch an `if` did not take, a payload whose `only_if` was
+# false, everything after a `stop`. NOT `skipped` -- that word already means "failed, and
+# continue_on_error carried on", and reusing it would paint a deliberately untaken branch in
+# the colours of a failure. Sent by agent 3.54.0 as each branch is decided, so the console
+# greys the other side while the deploy is still running rather than leaving it "pending".
+STEP_NOT_RUN = "not_run"
+STEP_STATES = (STEP_RUNNING, STEP_OK, STEP_FAILED, STEP_SKIPPED, STEP_ABORTED, STEP_NOT_RUN)
+STEP_TERMINAL = frozenset({STEP_OK, STEP_FAILED, STEP_SKIPPED, STEP_ABORTED, STEP_NOT_RUN})
 
 # The agent build that reports steps and honours an abort. **A compatibility API, not
 # trivia** (CLAUDE.md): an older agent installs exactly as before but says nothing until its
@@ -279,6 +319,14 @@ STEP_TERMINAL = frozenset({STEP_OK, STEP_FAILED, STEP_SKIPPED, STEP_ABORTED})
 # going. Mirrored as MIN_PROGRESS_AGENT in static/js/packages.js; this copy is the one that
 # refuses.
 MIN_PROGRESS_AGENT = (3, 53, 0)
+
+# The agent build that understands `if` / `stop` steps, payload `only_if` and the
+# `{model}`-style fact variables. **Also a compatibility API.** An older agent fails closed on
+# all of it -- "unsupported step kind 'if'", or a literal "{model}" in a path -- but only after
+# it has been sent the job, downloaded every payload and spent an attempt. So the scheduler
+# refuses such a package to such a machine up front, with the version in the reason
+# (dispatch_once). Mirrored as MIN_CONDITIONS_AGENT in static/js/packages.js.
+MIN_CONDITIONS_AGENT = (3, 54, 0)
 
 MAX_PROGRESS_MESSAGE_CHARS = 500
 
@@ -372,6 +420,10 @@ def init_packages_db(db_path):
             # keeps one code path for reading sources.
             conn.execute("UPDATE package_sources SET name = ? WHERE name IS NULL",
                          (DEFAULT_SOURCE_NAME,))
+        # A payload's download condition (package_conditions), as JSON. NULL means "always",
+        # which is what every payload stored before conditions existed has always meant.
+        if "only_if_json" not in source_columns:
+            conn.execute("ALTER TABLE package_sources ADD COLUMN only_if_json TEXT")
         # The old index was UNIQUE(package_id) -- one payload per package, which the
         # original docstring flagged as the seam extra payloads would land on. This is that
         # change: uniqueness is now per SLOT. Dropped by name rather than left in place,
@@ -592,12 +644,16 @@ def validate_name(value, field):
     return name
 
 
-def validate_source(source, default_name=DEFAULT_SOURCE_NAME):
+def validate_source(source, default_name=DEFAULT_SOURCE_NAME, extra_vars=None):
     """Normalize + validate a payload descriptor.
 
-    `source` is {name, kind, ref, sha256, file_name, file_size}. For an upload the caller
-    has already stored the blob and passes the hash the HUB computed -- this function never
-    treats a client-supplied digest as authoritative for an upload, it just checks shape.
+    `source` is {name, kind, ref, sha256, file_name, file_size, only_if}. For an upload the
+    caller has already stored the blob and passes the hash the HUB computed -- this function
+    never treats a client-supplied digest as authoritative for an upload, it just checks shape.
+
+    `only_if` is a package_conditions condition over what the machine IS: the payload is
+    downloaded only where it holds. No probes and no step results -- downloads happen before
+    any step runs.
     """
     if not isinstance(source, dict):
         raise ValueError("source must be an object")
@@ -607,6 +663,11 @@ def validate_source(source, default_name=DEFAULT_SOURCE_NAME):
         # that name would shadow it, and every step referring to {work} would silently
         # mean the file instead of the folder.
         raise ValueError(f"{WORK_VAR!r} is reserved -- it is the working directory")
+    if name in package_conditions.FACT_BINDINGS:
+        # Same reason as {work}: {model} is the machine's model, and a payload by that name
+        # would quietly turn every path built from it into the path of a downloaded file.
+        raise ValueError(f"{name!r} is reserved -- it is the machine's "
+                         f"{package_conditions.FACT_BINDINGS[name]}")
     kind = _clean(source.get("kind"))
     if kind not in SOURCE_KINDS:
         raise ValueError(f"unknown source kind: {kind!r}")
@@ -630,6 +691,26 @@ def validate_source(source, default_name=DEFAULT_SOURCE_NAME):
         if not ref.startswith("\\\\"):
             raise ValueError(r"a UNC package needs a path starting with \\")
 
+    only_if = source.get("only_if")
+    if isinstance(only_if, str) and only_if.strip():
+        try:
+            only_if = json.loads(only_if)
+        except ValueError:
+            raise ValueError(f"payload {name!r}: its download condition must be JSON")
+    if only_if in (None, "", {}):
+        only_if = None
+    else:
+        if kind == SOURCE_WINGET:
+            # A winget reference downloads nothing at deploy time, so "only download when"
+            # has nothing to govern; an If step around the winget step is the honest shape.
+            raise ValueError(f"payload {name!r}: a winget reference is not downloaded, so it "
+                             f"cannot have a download condition")
+        try:
+            only_if = package_conditions.validate(only_if, package_conditions.Context(
+                extra=extra_vars, allow_probes=False, allow_runtime=False))
+        except ValueError as e:
+            raise ValueError(f"payload {name!r}: {e}")
+
     size = source.get("file_size")
     return {
         "name": name,
@@ -638,10 +719,11 @@ def validate_source(source, default_name=DEFAULT_SOURCE_NAME):
         "sha256": sha256,
         "file_name": _clean(source.get("file_name"), MAX_NAME_CHARS) or None,
         "file_size": int(size) if size not in (None, "") else None,
+        "only_if": only_if,
     }
 
 
-def validate_sources(sources):
+def validate_sources(sources, extra_vars=None):
     """Normalize a package's whole payload list. Returns a list of source dicts.
 
     Accepts a single source dict as well as a list, because a one-payload package is still
@@ -661,7 +743,8 @@ def validate_sources(sources):
         # The default name is only unambiguous for the first slot; later ones must say what
         # they are, because "payload2" chosen by the hub is a name no step author expects.
         item = validate_source(
-            source, default_name=DEFAULT_SOURCE_NAME if index == 0 else "")
+            source, default_name=DEFAULT_SOURCE_NAME if index == 0 else "",
+            extra_vars=extra_vars)
         if item["name"] in seen:
             raise ValueError(f"two payloads are both named {item['name']!r}")
         seen.add(item["name"])
@@ -688,19 +771,31 @@ def _step_int(step, field, low, high, default=None):
     return parsed
 
 
-def validate_steps(steps, source_names=()):
-    """Normalize + validate an ordered step list against the payloads it may refer to.
+def validate_steps(steps, source_names=(), extra_vars=None):
+    """Normalize + validate a step list -- nested `if` branches included -- against the
+    payloads it may refer to.
 
     Returns [] for a package with no steps -- the original single-command recipe, which
     every caller still handles.
 
-    Two properties are worth more than the field checking:
+    Four properties are worth more than the field checking:
 
-      * **Every `{variable}` must already be bound when the step runs.** Payload names are
-        bound before step 1; a step that produces a path (`extract`) binds its `save_as`
-        for the steps AFTER it. So a typo, or a step ordered before the thing it needs, is
-        an error at save time rather than a path called literally "{drivers}" appearing in
-        an installer's arguments on 200 machines at 2am.
+      * **Every `{variable}` must already be bound when the step runs.** Payload names and
+        the machine's fact variables (`{model}`, `{arch}` ...) are bound before step 1; a step
+        that produces a path (`extract`) binds its `save_as` for the steps AFTER it. So a
+        typo, or a step ordered before the thing it needs, is an error at save time rather
+        than a path called literally "{drivers}" appearing in an installer's arguments on 200
+        machines at 2am.
+      * **A name bound inside a branch is bound after the `if` only if EVERY branch that
+        carries on binds it.** An extract in `then` and nothing in `else` means `{drivers}`
+        exists on some machines and not on others, which is the 2am path again with extra
+        steps. A branch that ends in `stop` never carries on, so it does not count against
+        the others -- "unpack on a Dell, otherwise stop" leaves `{drivers}` bound after.
+      * **Numbering is depth-first, and it is the progress ordinal.** Step 1 is the first
+        step, an `if`'s `then` steps follow it, then its `else` steps, then whatever comes
+        after the `if`. The agent counts the same way (PackageStepRunner) and the console's
+        step list is drawn from it (progress_skeleton), so the "step 7" in an error here is
+        the step 7 an operator will see go red. MAX_STEPS caps the whole tree.
       * **Unknown keys are dropped**, exactly as in validate_detection: these objects are
         handed to the agent and executed there, so preserving arbitrary fields would make
         the effective grammar whatever the agent happens to read.
@@ -716,17 +811,55 @@ def validate_steps(steps, source_names=()):
         raise ValueError("steps must be a list")
     if not steps:
         return []
-    if len(steps) > MAX_STEPS:
-        raise ValueError(f"a package may have at most {MAX_STEPS} steps")
 
-    bound = {WORK_VAR} | set(source_names)
+    bound = {WORK_VAR} | set(source_names) | set(package_conditions.FACT_BINDINGS)
     if len(source_names) == 1:
         # One payload, so `{file}` is unambiguous -- and it is what every package written
         # before steps existed already says. See LEGACY_FILE_VAR.
         bound.add(LEGACY_FILE_VAR)
 
-    validated = []
-    for index, raw in enumerate(steps, start=1):
+    walk = _StepWalk(source_names, extra_vars)
+    validated, _ = walk.steps(steps, bound, depth=0)
+    return validated
+
+
+class _StepWalk:
+    """One pass of validate_steps over a (possibly nested) list. Holds the running step
+    number, which has to be shared across branches -- see validate_steps on numbering."""
+
+    def __init__(self, source_names, extra_vars):
+        self.source_names = list(source_names)
+        self.extra = extra_vars
+        self.count = 0
+
+    def steps(self, steps, bound, depth):
+        """Validate one list. Returns (steps, bound_after), where bound_after is None when
+        the list never carries on past its end (it stops)."""
+        if not isinstance(steps, (list, tuple)):
+            raise ValueError("a branch must be a list of steps")
+        bound = set(bound)
+        validated = []
+        carries_on = True
+        for raw in steps:
+            self.count += 1
+            if self.count > MAX_STEPS:
+                raise ValueError(
+                    f"a package may have at most {MAX_STEPS} steps, counting the ones "
+                    f"inside If steps")
+            index = self.count
+            if not carries_on:
+                # Dead code in a package is a step an operator thinks runs. Refused rather
+                # than kept, the same way an unused payload is.
+                raise ValueError(f"step {index} comes after a Stop step and can never run")
+            step, after = self.step(raw, index, bound, depth)
+            validated.append(step)
+            if after is None:
+                carries_on = False
+            else:
+                bound = after
+        return validated, (bound if carries_on else None)
+
+    def step(self, raw, index, bound, depth):
         if not isinstance(raw, dict):
             raise ValueError(f"step {index} must be an object")
         kind = _clean(raw.get("kind"))
@@ -737,6 +870,18 @@ def validate_steps(steps, source_names=()):
         label = _clean(raw.get("name"), MAX_NAME_CHARS)
         if label:
             step["name"] = label
+
+        if kind == STEP_IF:
+            return self._if(raw, step, index, bound, depth)
+        if kind == STEP_STOP:
+            outcome = _clean(raw.get("outcome") or STOP_FAILURE)
+            if outcome not in STOP_OUTCOMES:
+                raise ValueError(f"step {index}: a Stop step ends as success or failure")
+            step["outcome"] = outcome
+            message = _clean(raw.get("message"), MAX_MESSAGE_CHARS)
+            if message:
+                step["message"] = message
+            return step, None
 
         if kind == STEP_RUN:
             command = _clean(raw.get("command"), MAX_COMMAND_CHARS)
@@ -768,9 +913,10 @@ def validate_steps(steps, source_names=()):
         elif kind == STEP_EXTRACT:
             archive = _clean(raw.get("archive"), MAX_COMMAND_CHARS)
             if not archive:
+                first = self.source_names[0] if self.source_names else DEFAULT_SOURCE_NAME
                 raise ValueError(
                     f"step {index}: an extract step needs the archive to unpack, "
-                    f"e.g. {{{source_names[0] if source_names else DEFAULT_SOURCE_NAME}}}")
+                    f"e.g. {{{first}}}")
             step["archive"] = archive
             dest = _clean(raw.get("dest"), MAX_COMMAND_CHARS)
             if dest:
@@ -779,9 +925,10 @@ def validate_steps(steps, source_names=()):
         elif kind == STEP_APK:
             apk = _clean(raw.get("apk"), MAX_COMMAND_CHARS)
             if not apk:
+                first = self.source_names[0] if self.source_names else DEFAULT_SOURCE_NAME
                 raise ValueError(
                     f"step {index}: an apk step needs the payload to install, "
-                    f"e.g. {{{source_names[0] if source_names else DEFAULT_SOURCE_NAME}}}")
+                    f"e.g. {{{first}}}")
             step["apk"] = apk
 
         else:  # STEP_PNPUTIL
@@ -818,6 +965,7 @@ def validate_steps(steps, source_names=()):
                 f"before it provides. Available here: "
                 f"{', '.join('{' + name + '}' for name in sorted(bound))}")
 
+        bound = set(bound)
         if kind == STEP_EXTRACT:
             # The unpacked directory is the whole point of the step, so it always binds a
             # name. Auto-numbered when the operator does not care, which is the common case.
@@ -832,18 +980,106 @@ def validate_steps(steps, source_names=()):
                 save_as = validate_name(save_as, "save_as")
             if save_as in bound:
                 raise ValueError(
-                    f"step {index}: {{{save_as}}} is already taken by an earlier step or a "
-                    f"payload -- give this one a different name")
+                    f"step {index}: {{{save_as}}} is already taken by an earlier step, a "
+                    f"payload or a machine variable -- give this one a different name")
             step["save_as"] = save_as
             bound.add(save_as)
+        return step, bound
 
-        validated.append(step)
-    return validated
+    def _if(self, raw, step, index, bound, depth):
+        if depth + 1 > MAX_STEP_DEPTH:
+            raise ValueError(
+                f"step {index}: If steps can be nested at most {MAX_STEP_DEPTH} deep")
+        if raw.get("condition") in (None, "", {}):
+            raise ValueError(f"step {index}: an If step needs a condition")
+        try:
+            step["condition"] = package_conditions.validate(
+                raw["condition"], package_conditions.Context(extra=self.extra, bound=bound))
+        except ValueError as e:
+            raise ValueError(f"step {index}: {e}")
+        on_unknown = _clean(raw.get("on_unknown") or package_conditions.ON_UNKNOWN_FAIL)
+        if on_unknown not in package_conditions.ON_UNKNOWN_CHOICES:
+            raise ValueError(f"step {index}: on_unknown must be "
+                             f"{' or '.join(package_conditions.ON_UNKNOWN_CHOICES)}")
+        if on_unknown != package_conditions.ON_UNKNOWN_FAIL:
+            step["on_unknown"] = on_unknown
+        if raw.get("continue_on_error"):
+            # Meaningful on an If: a condition the machine could not decide is the If's
+            # failure, and this is the operator saying "then skip the whole block".
+            step["continue_on_error"] = True
+
+        then_raw = raw.get("then") or []
+        else_raw = raw.get("else") or []
+        if not then_raw and not else_raw:
+            raise ValueError(f"step {index}: an If step needs at least one step in Then "
+                             f"or Else")
+        then_steps, then_bound = self.steps(then_raw, bound, depth + 1)
+        else_steps, else_bound = self.steps(else_raw, bound, depth + 1)
+        step["then"] = then_steps
+        step["else"] = else_steps
+
+        carrying_on = [b for b in (then_bound, else_bound) if b is not None]
+        if not carrying_on:
+            return step, None       # both branches stop, so nothing comes after this If
+        after = set(carrying_on[0])
+        for other in carrying_on[1:]:
+            after &= other
+        # A failed condition with continue_on_error skips BOTH branches and carries on, so
+        # only what was bound before the If is certain in that case.
+        if step.get("continue_on_error"):
+            after &= set(bound)
+        return step, after
+
+
+def iter_steps(steps, depth=0, parent=None, branch=None, _counter=None):
+    """Every step of a (possibly nested) list, depth-first, as
+    (ordinal, step, depth, parent_ordinal, branch) -- the numbering validate_steps and the
+    agent use. `branch` is "then"/"else" for a step inside an If, None at the top level."""
+    if _counter is None:
+        _counter = [0]
+    for step in steps or ():
+        if not isinstance(step, dict):
+            _counter[0] += 1
+            yield _counter[0], {}, depth, parent, branch
+            continue
+        _counter[0] += 1
+        ordinal = _counter[0]
+        yield ordinal, step, depth, parent, branch
+        if step.get("kind") == STEP_IF:
+            yield from iter_steps(step.get("then"), depth + 1, ordinal, "then", _counter)
+            yield from iter_steps(step.get("else"), depth + 1, ordinal, "else", _counter)
+
+
+def _all_conditions(sources, steps):
+    """Every condition a recipe carries -- payload download conditions and If conditions."""
+    found = [s["only_if"] for s in sources or () if s.get("only_if")]
+    found.extend(s["condition"] for _, s, _, _, _ in iter_steps(steps)
+                 if s.get("kind") == STEP_IF and s.get("condition"))
+    return found
+
+
+def needs_conditions_agent(package):
+    """Whether this recipe uses anything an agent older than MIN_CONDITIONS_AGENT cannot run:
+    If/Stop steps, a payload download condition, or a machine fact variable like {model}."""
+    sources = package.get("sources") or []
+    if any(s.get("only_if") for s in sources):
+        return True
+    facts = set(package_conditions.FACT_BINDINGS)
+    for _, step, _, _, _ in iter_steps(package.get("steps")):
+        kind = step.get("kind")
+        if kind in FLOW_STEP_KINDS:
+            return True
+        for field in _STEP_SUBSTITUTED.get(kind, ()):
+            if _referenced_variables(step.get(field)) & facts:
+                return True
+    return False
 
 
 def package_platform(steps):
-    """Which platform a recipe installs on -- see PLATFORM above."""
-    if any(s.get("kind") == STEP_APK for s in steps or ()):
+    """Which platform a recipe installs on -- see PLATFORM above. Walks into If branches: an
+    apk step anywhere makes the package Android, and _validate_platform then refuses the If
+    itself, rather than an apk hidden one level down going out to a PC."""
+    if any(s.get("kind") == STEP_APK for _, s, _, _, _ in iter_steps(steps)):
         return PLATFORM_ANDROID
     return PLATFORM_WINDOWS
 
@@ -864,12 +1100,18 @@ def _validate_platform(sources, steps, detection):
     """
     if package_platform(steps) != PLATFORM_ANDROID:
         return
-    others = sorted({s["kind"] for s in steps if s["kind"] != STEP_APK})
+    others = sorted({s["kind"] for _, s, _, _, _ in iter_steps(steps) if s["kind"] != STEP_APK})
     if others:
         raise ValueError(
             f"an Android package can only have apk steps -- {others[0]!r} is a Windows step, "
             f"and a phone has nowhere to run it")
     for source in sources:
+        if source.get("only_if"):
+            # The Android agent evaluates no conditions, and its device facts are not the
+            # Windows ones these variables read.
+            raise ValueError(
+                f"payload {source['name']!r}: an Android package cannot have download "
+                f"conditions")
         if source["kind"] not in (SOURCE_UPLOAD, SOURCE_URL):
             raise ValueError(
                 f"payload {source['name']!r}: an Android package needs an uploaded file or a "
@@ -909,10 +1151,14 @@ def _validate_recipe(install_command, install_args, sources, steps, timeout_seco
                 f"package cannot use as a payload -- add a winget step instead")
         # Same rule as {file} below, generalized: a payload the hub downloads onto every
         # target and no step ever opens is always a mistake, never an intent.
+        # Counted across every branch, and across the If conditions' own checks: a payload
+        # that only the Latitude branch opens is still opened.
         used = set()
-        for step in steps:
+        for _, step, _, _, _ in iter_steps(steps):
             for field in _STEP_SUBSTITUTED[step["kind"]]:
                 used |= _referenced_variables(step.get(field))
+            if step["kind"] == STEP_IF:
+                used |= package_conditions.substituted_variables(step.get("condition"))
         if len(sources) == 1 and LEGACY_FILE_VAR in used:
             used.add(sources[0]["name"])
         unused = [s["name"] for s in sources if s["name"] not in used]
@@ -923,6 +1169,12 @@ def _validate_recipe(install_command, install_args, sources, steps, timeout_seco
 
     elif not sources:
         raise ValueError("a package needs a payload, or a list of steps")
+
+    elif any(s.get("only_if") for s in sources):
+        # The single command line names {file}; if the one payload might not be downloaded,
+        # there is no command line left to run. That decision is an If step's to make.
+        raise ValueError("a download condition needs steps -- a single command line always "
+                         "runs, so its payload always has to be there")
 
     elif sources[0]["kind"] == SOURCE_WINGET:
         # The agent builds the winget command line from the package id; a custom command
@@ -1072,6 +1324,8 @@ def _package_row(row, source_rows=()):
         source.pop("package_id", None)
         # A row written before payloads had names is that package's single payload.
         source["name"] = source.get("name") or DEFAULT_SOURCE_NAME
+        only_if = source.pop("only_if_json", None)
+        source["only_if"] = json.loads(only_if) if only_if else None
         sources.append(source)
     pkg["sources"] = sources
     # `source` (singular) is the first payload, kept because every existing caller -- the
@@ -1117,7 +1371,7 @@ def get_package(db_path, package_id):
 
 def check_definition(*, name, source=None, sources=None, steps=None,
                      install_command=None, install_args=None, timeout_seconds=900,
-                     success_exit_codes=None, detection=None):
+                     success_exit_codes=None, detection=None, db_path=None):
     """Validate a package definition and return what would be stored. Writes nothing.
 
     Split out of `create_package` (hub 1.180.1) so the assistant can ask the same question
@@ -1128,13 +1382,17 @@ def check_definition(*, name, source=None, sources=None, steps=None,
     card gate and the route cannot drift apart. Raises ValueError with the sentence the
     route would have answered.
 
+    `db_path` is optional and only lends conditions the operator's custom fields
+    (`field.<name>`); without it a condition naming one is refused as unknown.
+
     Returns (name, payloads, plan, command, args, timeout, codes, rule).
     """
     name = _clean(name, MAX_NAME_CHARS)
     if not name:
         raise ValueError("a package name is required")
-    payloads = validate_sources(sources if sources is not None else source)
-    plan = validate_steps(steps, [s["name"] for s in payloads])
+    extra = package_conditions.field_variables(db_path) if db_path else None
+    payloads = validate_sources(sources if sources is not None else source, extra)
+    plan = validate_steps(steps, [s["name"] for s in payloads], extra)
     command, args, timeout = _validate_recipe(
         install_command, install_args, payloads, plan, timeout_seconds)
     codes = validate_exit_codes(success_exit_codes)
@@ -1160,7 +1418,7 @@ def create_package(db_path, *, name, source=None, sources=None, steps=None,
         name=name, source=source, sources=sources, steps=steps,
         install_command=install_command, install_args=install_args,
         timeout_seconds=timeout_seconds, success_exit_codes=success_exit_codes,
-        detection=detection)
+        detection=detection, db_path=db_path)
 
     package_id = uuid.uuid4().hex
     now = int(time.time())
@@ -1199,9 +1457,11 @@ def _write_sources(conn, package_id, payloads, now):
     conn.execute("DELETE FROM package_sources WHERE package_id = ?", (package_id,))
     conn.executemany(
         "INSERT INTO package_sources(id, package_id, name, kind, ref, sha256, file_name, "
-        "file_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "file_size, only_if_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [(uuid.uuid4().hex, package_id, source["name"], source["kind"], source["ref"],
-          source["sha256"], source["file_name"], source["file_size"], now)
+          source["sha256"], source["file_name"], source["file_size"],
+          json.dumps(source["only_if"], sort_keys=True) if source.get("only_if") else None,
+          now)
          for source in payloads],
     )
 
@@ -1226,9 +1486,10 @@ def update_package(db_path, package_id, *, name=None, source=None, sources=None,
     if existing is None:
         raise KeyError("unknown package")
 
+    extra = package_conditions.field_variables(db_path)
     old_sources = existing.get("sources") or []
     incoming = sources if sources is not None else source
-    new_sources = validate_sources(incoming) if incoming is not None else None
+    new_sources = validate_sources(incoming, extra) if incoming is not None else None
     payloads = new_sources if new_sources is not None else old_sources
 
     # Steps and payloads are validated together (a step may only name a payload that
@@ -1236,10 +1497,10 @@ def update_package(db_path, package_id, *, name=None, source=None, sources=None,
     # So a change to any of them re-checks the whole recipe rather than the field that
     # moved -- otherwise deleting a payload would leave the step that used it dangling.
     plan = (existing["steps"] if steps is None
-            else validate_steps(steps, [s["name"] for s in payloads]))
+            else validate_steps(steps, [s["name"] for s in payloads], extra))
     if steps is None and new_sources is not None:
         # Re-validate the kept steps against the new payload set for exactly that reason.
-        plan = validate_steps(plan, [s["name"] for s in payloads])
+        plan = validate_steps(plan, [s["name"] for s in payloads], extra)
 
     command = existing["install_command"] if install_command is None else install_command
     args = existing["install_args"] if install_args is None else install_args
@@ -1868,12 +2129,12 @@ def _skeleton_sources(params):
 def _skeleton_steps(params):
     steps = params.get("steps")
     if isinstance(steps, list) and steps:
-        entries = []
-        for ordinal, step in enumerate(steps, start=1):
-            step = step if isinstance(step, dict) else {}
-            entries.append({"phase": PHASE_STEP, "ordinal": ordinal,
-                            "kind": step.get("kind") or "", "label": step.get("name") or ""})
-        return entries
+        # Flattened depth-first -- iter_steps, the numbering the agent reports by. `depth`,
+        # `parent` and `branch` are what let the console indent an If's two lanes under it.
+        return [{"phase": PHASE_STEP, "ordinal": ordinal,
+                 "kind": step.get("kind") or "", "label": step.get("name") or "",
+                 "depth": depth, "parent": parent, "branch": branch}
+                for ordinal, step, depth, parent, branch in iter_steps(steps)]
     # Only the program, never its arguments: those can carry a licence key, and this
     # label is shown to anyone who can read the deployment.
     return [{"phase": PHASE_STEP, "ordinal": 1, "kind": "command",
@@ -2073,10 +2334,24 @@ def _summarise_steps(target, steps):
     """The furthest phase the agent has reached, and the first one that went wrong -- the
     "step 3 of 5" and the "More Info" of the PDQ view."""
     target["steps"] = steps
-    target["step_total"] = sum(1 for s in steps if s["phase"] == PHASE_STEP)
-    reached = [s for s in steps if s.get("state")]
+    # A branch not taken is not part of "step 3 of 7": counting it would leave a finished
+    # deploy forever two steps short of its total.
+    target["step_total"] = sum(1 for s in steps
+                               if s["phase"] == PHASE_STEP and s.get("state") != STEP_NOT_RUN)
+    # ...and not where the machine IS, either: an untaken branch is reported the moment its
+    # If decides, which is before the first step of the taken one starts.
+    reached = [s for s in steps if s.get("state") and s.get("state") != STEP_NOT_RUN]
     target["current_step"] = (
         {key: reached[-1][key] for key in _STEP_SUMMARY_KEYS} if reached else None)
+    if target["current_step"] and target["current_step"]["phase"] == PHASE_STEP:
+        # Its place among the steps that count, for "step 3 of 3". The ordinal is the step's
+        # depth-first number, which after a skipped Else of three steps is 6 -- and "step 6
+        # of 3" is what the console said until this was split out.
+        counted = [s for s in steps
+                   if s["phase"] == PHASE_STEP and s.get("state") != STEP_NOT_RUN]
+        target["current_step"]["position"] = next(
+            (i for i, s in enumerate(counted, start=1)
+             if s["ordinal"] == target["current_step"]["ordinal"]), None)
     failed = next((s for s in steps if s.get("state") in (STEP_FAILED, STEP_ABORTED)), None)
     target["failed_step"] = (
         {key: failed[key] for key in _STEP_SUMMARY_KEYS + ("exit_code", "message")}
@@ -2190,10 +2465,12 @@ def _wire_source(source, hub_url=""):
         # Optional for these kinds; when present the agent MUST enforce it.
         if source.get("sha256"):
             payload["sha256"] = source["sha256"]
+    if source.get("only_if"):
+        payload["only_if"] = source["only_if"]
     return payload
 
 
-def build_command_params(package, deployment, hub_url=""):
+def build_command_params(package, deployment, hub_url="", facts=None):
     """The params the agent receives for one `deploy_package` command.
 
     A full SNAPSHOT of the recipe, not a pointer to it. The agent could in principle be
@@ -2217,6 +2494,10 @@ def build_command_params(package, deployment, hub_url=""):
         agent resolves. Such an agent fails the deploy with "no install command" and the
         target retries until the update reaches it. Failing closed is the requirement --
         the alternative is an old agent silently running step 1 and reporting success.
+
+    `facts` are the hub-resolved condition variables (AD, custom fields) for THIS machine --
+    package_conditions.hub_facts. Sent only when the recipe reads one, so every package that
+    has no conditions keeps exactly the params it always had.
     """
     sources = package.get("sources") or ([package["source"]] if package.get("source") else [])
     steps = package.get("steps") or []
@@ -2229,7 +2510,7 @@ def build_command_params(package, deployment, hub_url=""):
         legacy_command = package["install_command"] or ""
         legacy_args = package["install_args"] or ""
 
-    return {
+    params = {
         "deployment_id": deployment["id"],
         "package_id": package["id"],
         "package_name": package["name"],
@@ -2243,6 +2524,27 @@ def build_command_params(package, deployment, hub_url=""):
         "success_exit_codes": package["success_exit_codes"],
         "detection": package["detection"],
     }
+    if facts:
+        params["facts"] = dict(facts)
+    return params
+
+
+def hub_condition_variables(package):
+    """The hub-resolved variables a package's conditions read (AD, custom fields) -- the only
+    ones dispatch has to look up per machine. Empty for nearly every package."""
+    return package_conditions.hub_variables(
+        _all_conditions(package.get("sources"), package.get("steps")))
+
+
+def _conditions_refusal(package, version):
+    """Why a machine on agent `version` cannot run `package`, or None -- see
+    MIN_CONDITIONS_AGENT."""
+    if not needs_conditions_agent(package) or _version_at_least(version, MIN_CONDITIONS_AGENT):
+        return None
+    minimum = ".".join(str(part) for part in MIN_CONDITIONS_AGENT)
+    return (f"this package uses If/Stop steps or machine conditions, which need agent "
+            f"{minimum} or newer -- this machine runs {version or 'an unknown version'}. "
+            f"Retry it once the agent has updated")
 
 
 # ================================
@@ -2454,6 +2756,8 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
                                (deployment_id,)).fetchone()
             if row is not None:
                 deployments[deployment_id] = dict(row)
+        # One read for every candidate, for _conditions_refusal below.
+        versions = _agent_versions(conn, [r["machine"] for r in rows])
 
     # ---- decide: retire what can't run, collect what can ----
     retire = []
@@ -2510,6 +2814,15 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
             retire.append((target["deployment_id"], target["machine"], TARGET_FAILED,
                            None, "the package definition was deleted"))
             continue
+        too_old = _conditions_refusal(package, versions.get(target["machine"]))
+        if too_old:
+            # Retired with the version in the reason, not dispatched to fail there: an old
+            # agent would download every payload first and then trip over the If, spending
+            # an attempt and a driver pack's worth of bandwidth to say the same thing. Retry
+            # failures picks it up again once the agent has updated (~15 minutes).
+            retire.append((target["deployment_id"], target["machine"], TARGET_FAILED, None,
+                           too_old))
+            continue
 
         ready.append((target, deployment, package))
 
@@ -2521,7 +2834,12 @@ def dispatch_once(db_path, now=None, ttl_seconds=fleet.DEFAULT_COMMAND_TTL_SECON
     for target, deployment, package in ready:
         if not _claim_target(db_path, target["deployment_id"], target["machine"], now):
             continue  # someone else took it
-        params = build_command_params(package, deployment, hub_url=hub_url)
+        # Looked up after the claim, outside every connection this function holds -- the
+        # resolver opens its own (see the NEVER note above the scheduler).
+        wanted = hub_condition_variables(package)
+        facts = (package_conditions.hub_facts(db_path, target["machine"], wanted)
+                 if wanted else None)
+        params = build_command_params(package, deployment, hub_url=hub_url, facts=facts)
         command_id = fleet.create_command(
             db_path, machine=target["machine"], command_type=COMMAND_TYPE,
             params=params, issued_by=deployment["created_by"], ttl_seconds=ttl_seconds,

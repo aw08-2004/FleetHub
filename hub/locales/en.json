@@ -2255,7 +2255,26 @@
       "choose_file": "Choose a file to upload.",
       "save": "Save package",
       "apk_payload": "APK to install",
-      "apk_hint": "the payload that holds the .apk, named in braces"
+      "apk_hint": "the payload that holds the .apk, named in braces",
+      "needs_agent": "If and Stop steps and download conditions need agent {version} or newer. A machine on an older agent is not sent this package; its row says why, and Retry failures sends it once the agent has updated.",
+      "if_condition": "Condition",
+      "on_unknown": "If the machine cannot tell",
+      "on_unknown_fail": "Fail this step (recommended)",
+      "on_unknown_else": "Run Else",
+      "if_continue_on_error": "If the condition cannot be decided, skip Then and Else and carry on",
+      "if_then": "Then",
+      "if_else": "Else",
+      "lane_empty": "No steps — nothing happens here.",
+      "lane_add": "Add step",
+      "add_else_if": "Add Else if",
+      "stop_outcome": "End the deploy as",
+      "stop_success": "Succeeded — nothing to do here",
+      "stop_failure": "Failed",
+      "stop_message": "Message",
+      "stop_message_placeholder": "Unsupported model",
+      "stop_help": "Nothing after this step runs, and neither does the detection check: a Stop is the package saying how this machine ends.",
+      "payload_only_if": "Only download on some machines",
+      "payload_only_if_help": "The file is downloaded only where this is true — a per-model driver pack reaches only that model. A step that uses it on any other machine fails, so put those steps inside an If with the same condition."
     },
     "deploy_editor": {
       "add_group": "Add a group",
@@ -2382,7 +2401,9 @@
       "confirm_redeploy": "{count} machine(s) selected. Each gets a fresh set of attempts with the package as it is defined now, including machines where it already succeeded.",
       "confirm_redeploy_ok": "Redeploy",
       "retry_now": "Retry now",
-      "retry_now_none": "None of the selected machines is waiting to retry."
+      "retry_now_none": "None of the selected machines is waiting to retry.",
+      "branch_then": "Then",
+      "branch_else": "Else"
     },
     "_status": [
       "Deployment and per-machine statuses. These are shown in tables and in the tally",
@@ -2428,6 +2449,14 @@
       "apk": {
         "label": "Install an Android app",
         "description": "Installs an APK on a fully managed Android device, silently. A package with this step is for Android devices only, and every payload must be pinned by sha256."
+      },
+      "if": {
+        "label": "If / Else",
+        "description": "Checks a condition on the machine — its model, manufacturer, Windows version, a file, a registry value or a PowerShell check — and runs the Then steps or the Else steps."
+      },
+      "stop": {
+        "label": "Stop",
+        "description": "Ends the deploy here, as a success (nothing to do on this machine) or a failure (for example, an unsupported model)."
       }
     },
     "_detection": [
@@ -2451,6 +2480,138 @@
       "installed_version": {
         "label": "Installed version",
         "description": "Look the product up in Windows' installed-programs registry and require at least a given version."
+      }
+    },
+    "cond": {
+      "var": {
+        "hw": {
+          "manufacturer": {
+            "label": "Manufacturer"
+          },
+          "model": {
+            "label": "Model"
+          },
+          "model_name": {
+            "label": "Model name (Lenovo: ThinkPad X1 …)"
+          },
+          "sku": {
+            "label": "System SKU"
+          },
+          "serial_number": {
+            "label": "Serial number"
+          },
+          "chassis": {
+            "label": "Chassis type"
+          },
+          "memory_gb": {
+            "label": "Memory (GB)"
+          },
+          "cpu": {
+            "label": "Processor"
+          }
+        },
+        "os": {
+          "name": {
+            "label": "Windows edition"
+          },
+          "version": {
+            "label": "Windows version"
+          },
+          "build": {
+            "label": "Windows build"
+          },
+          "display_version": {
+            "label": "Windows release (e.g. 23H2)"
+          },
+          "arch": {
+            "label": "Architecture"
+          }
+        },
+        "bios": {
+          "version": {
+            "label": "BIOS version"
+          }
+        },
+        "sys": {
+          "hostname": {
+            "label": "Computer name"
+          },
+          "domain": {
+            "label": "Domain or workgroup"
+          },
+          "domain_joined": {
+            "label": "Joined to a domain"
+          },
+          "agent_version": {
+            "label": "Agent version"
+          }
+        },
+        "ad": {
+          "ou": {
+            "label": "AD organizational unit"
+          },
+          "dn": {
+            "label": "AD distinguished name"
+          },
+          "owner": {
+            "label": "AD owner"
+          }
+        },
+        "step": {
+          "last_exit_code": {
+            "label": "Exit code of the previous step"
+          }
+        }
+      },
+      "probe": {
+        "file_exists": {
+          "label": "File or folder exists",
+          "description": "True when the path exists on the machine."
+        },
+        "registry_value": {
+          "label": "Registry value",
+          "description": "True when the value exists — or, if you ask for an exact match, has exactly that data."
+        },
+        "installed_version": {
+          "label": "Program is installed",
+          "description": "True when a program whose name contains this text is in Windows' installed programs, at or above the version if you give one."
+        },
+        "powershell": {
+          "label": "PowerShell check",
+          "description": "Runs a short script as SYSTEM: exit 0 means true, exit 1 means false, anything else means the machine could not tell."
+        }
+      },
+      "mode_all": "All of these are true",
+      "mode_any": "Any of these is true",
+      "mode_none": "None of these is true",
+      "group": {
+        "hw": "Hardware",
+        "os": "Windows",
+        "bios": "BIOS",
+        "sys": "System",
+        "ad": "Active Directory",
+        "step": "Previous step",
+        "field": "Custom fields",
+        "checks": "Checks on the machine"
+      },
+      "add_clause": "Add condition",
+      "add_group": "Add group",
+      "empty_group": "Add at least one condition to this group.",
+      "yes": "Yes",
+      "no": "No",
+      "list_placeholder": "Separate values with commas",
+      "powershell_hint": "Exit 0 for true, exit 1 for false. Keep it quick: it runs before the step and holds the deploy until it answers.",
+      "probe_timeout": "Timeout (seconds)",
+      "preview_machine": "Test on a machine",
+      "preview_placeholder": "Computer name",
+      "preview_button": "Test",
+      "preview": {
+        "true": "On {machine}, Then would run.",
+        "false": "On {machine}, Else would run.",
+        "unknown": "On {machine}, the hub cannot tell — the machine decides when the deploy runs.",
+        "on_machine": "checked on the machine",
+        "no_value": "not known to the hub",
+        "caveat": "From what the hub last heard. The deploy itself reads the machine live, so a changed model or a re-image can answer differently."
       }
     }
   },

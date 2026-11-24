@@ -49,6 +49,13 @@ public static class StepState
     /// <summary>Failed, but the step's continue_on_error carried the deploy on.</summary>
     public const string Skipped = "skipped";
     public const string Aborted = "aborted";
+    /// <summary>Never started, on purpose: the branch an If did not take, a payload whose
+    /// download condition was false, detection after a successful Stop (3.54.0). Distinct
+    /// from <see cref="Skipped"/>, which means a step FAILED and was carried past -- an
+    /// untaken branch must not read like a failure. A hub older than 1.187.0 refuses this
+    /// word with a 400, which ProgressReporter drops; the deploy order (hub first) is what
+    /// keeps that from happening in the field.</summary>
+    public const string NotRun = "not_run";
 }
 
 /// <summary>
@@ -79,4 +86,10 @@ public sealed class PhaseTracker(IStepProgress? sink)
     /// <summary>Close whatever is still open after an exception or an abort.</summary>
     public void Fail(string? message, bool aborted) =>
         End(aborted ? StepState.Aborted : StepState.Failed, message: message);
+
+    /// <summary>Report a phase that never opens -- <see cref="StepState.NotRun"/> for an
+    /// untaken branch. Leaves the open phase alone: an If marks its other lane while its
+    /// own row is already closed, and a lane's steps must never close someone else's.</summary>
+    public void Mark(string phase, int ordinal, string state, string? message = null) =>
+        sink?.Report(new StepEvent(phase, ordinal, state, Message: message));
 }

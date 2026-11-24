@@ -51,11 +51,42 @@ public sealed class DeployPackageExecutor : ICommandExecutor
 {
     private readonly ILogger<DeployPackageExecutor> _log;
     private readonly IPackageDownloader _downloader;
+    private readonly Func<IReadOnlyDictionary<string, string?>, IMachineFacts> _factsFactory;
 
     public DeployPackageExecutor(ILogger<DeployPackageExecutor> log, IPackageDownloader downloader)
+        : this(log, downloader, hub => new WindowsMachineFacts(hub))
+    {
+    }
+
+    /// <summary>With the machine's facts supplied -- the tests' seam, so an If can be
+    /// exercised against "a Latitude" on whatever machine runs the suite.
+    ///
+    /// Internal, not public: the service container only considers public constructors, and
+    /// it must keep building the one above.</summary>
+    internal DeployPackageExecutor(
+        ILogger<DeployPackageExecutor> log, IPackageDownloader downloader,
+        Func<IReadOnlyDictionary<string, string?>, IMachineFacts> factsFactory)
     {
         _log = log;
         _downloader = downloader;
+        _factsFactory = factsFactory;
+    }
+
+    /// <summary>The hub-resolved condition variables (AD, custom fields) for this machine,
+    /// from params.facts, as text. A bool arrives as JSON true/false and is kept lowercase
+    /// so it compares the way the hub's own literals do.</summary>
+    private static Dictionary<string, string?> HubFacts(FleetCommand cmd)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (cmd.Params.GetObject("facts") is not { } facts) return result;
+        foreach (var (name, value) in facts)
+        {
+            if (value is JsonValue v && v.TryGetValue<bool>(out var b))
+                result[name] = b ? "true" : "false";
+            else
+                result[name] = value?.ToString();
+        }
+        return result;
     }
 
     public string Type => "deploy_package";
@@ -121,17 +152,50 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         {
             Directory.CreateDirectory(workDir);
             var vars = new PackageVariables(workDir);
+            // What If conditions, download conditions and `{model}` read (3.54.0). Live and
+            // lazy -- see WindowsMachineFacts -- so a package with no conditions reads nothing.
+            var facts = _factsFactory(HubFacts(cmd));
+            vars.BindFacts(facts);
 
             // ---- 1. payloads ----
             // `download` counts FILE payloads only, in list order -- the same count as the
-            // hub's packages.progress_skeleton, or the events land on the wrong rows.
+            // hub's packages.progress_skeleton, or the events land on the wrong rows. A
+            // payload skipped by its download condition is still counted (and reported
+            // not_run), for the same reason.
             var download = 0;
             foreach (var source in sources)
             {
                 var kind = source.GetString("kind") ?? "";
                 if (kind is not ("upload" or "url" or "unc")) continue;
                 var name = source.GetString("name") ?? "payload";
-                phases.Begin(StepPhase.Download, ++download);
+                var ordinal = ++download;
+                if (source["only_if"] is JsonObject onlyIf)
+                {
+                    var wanted = await new ConditionEvaluator(
+                        facts, vars, () => null, Say, Emit, ct).EvaluateAsync(onlyIf);
+                    if (wanted == Tri.False)
+                    {
+                        Say($"[deploy] {name}: not needed on this machine, not downloaded");
+                        phases.Mark(StepPhase.Download, ordinal, StepState.NotRun,
+                                    "not needed on this machine");
+                        var reason = $"the payload {{{name}}} was not downloaded on this " +
+                                     "machine -- its download condition is false here";
+                        vars.Withhold(name, reason);
+                        if (sources.Count == 1) vars.Withhold("file", reason);
+                        continue;
+                    }
+                    if (wanted == Tri.Unknown)
+                    {
+                        // Fail closed, as an If does: guessing "download it anyway" would
+                        // put the wrong model's drivers one step from pnputil.
+                        var why = $"could not decide whether {name} is needed on this machine";
+                        Say("[deploy] FAILED: " + why);
+                        phases.Begin(StepPhase.Download, ordinal);
+                        phases.End(StepState.Failed, message: why);
+                        return new CommandResult(false, log + "\n[deploy] FAILED: " + why);
+                    }
+                }
+                phases.Begin(StepPhase.Download, ordinal);
                 var (path, error) = await ResolvePayloadAsync(source, kind, workDir, Say, ct);
                 if (error is not null)
                 {
@@ -149,9 +213,19 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             bool ran;
             if (multiStep)
             {
-                ran = await PackageStepRunner.RunAllAsync(
+                var end = await PackageStepRunner.RunTreeAsync(
                     steps!, vars, new PackageStepRunner.StepDefaults(timeout, successCodes),
-                    Say, Emit, phases, ct);
+                    Say, Emit, phases, facts, ct);
+                if (end == PackageStepRunner.RunEnd.StoppedSuccess)
+                {
+                    // The package said "nothing to do here". Detection is a claim that the
+                    // software IS installed, which a Stop has just said it is not meant to
+                    // be -- so it is not run, and the console shows it as not run.
+                    phases.Mark(StepPhase.Detect, 1, StepState.NotRun, "stopped before detection");
+                    Say($"[deploy] {packageName}: finished early, nothing to install here");
+                    return new CommandResult(true, log.ToString());
+                }
+                ran = end == PackageStepRunner.RunEnd.Completed;
             }
             else
             {
@@ -378,7 +452,21 @@ public sealed class DeployPackageExecutor : ICommandExecutor
     /// Any failure to evaluate counts as NOT detected, never as detected. A registry read
     /// that throws means we do not know whether the software is there, and "we don't
     /// know" must not be reported to the console as a successful install.</summary>
-    private (bool Passed, string Detail) EvaluateDetection(JsonObject? detection)
+    private static (bool Passed, string Detail) EvaluateDetection(JsonObject? detection)
+    {
+        var (passed, detail, _) = Detect(detection);
+        return (passed, detail);
+    }
+
+    /// <summary>The detection rule's verdict, plus whether it could be evaluated at all.
+    ///
+    /// <c>Errored</c> is what an If's file / registry / installed-program check needs and
+    /// detection does not: for detection, "could not tell" and "not there" both mean the
+    /// install is not proven, so both are a fail. For a condition they are different answers
+    /// -- "the key is absent" is false, "the registry threw" is unknown -- and conflating them
+    /// would send a machine down the Else branch over a read error. Shared rather than copied,
+    /// so the two can never disagree about what "installed" means.</summary>
+    internal static (bool Passed, string Detail, bool Errored) Detect(JsonObject? detection)
     {
         var kind = detection.GetString("kind") ?? "none";
         try
@@ -386,15 +474,15 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             switch (kind)
             {
                 case "none":
-                    return (true, "no check configured (exit code only)");
+                    return (true, "no check configured (exit code only)", false);
 
                 case "file_exists":
                 {
                     var path = detection.GetString("path");
                     if (string.IsNullOrWhiteSpace(path))
-                        return (false, "file_exists rule has no path");
+                        return (false, "file_exists rule has no path", true);
                     var found = File.Exists(path) || Directory.Exists(path);
-                    return (found, found ? $"found {path}" : $"NOT found: {path}");
+                    return (found, found ? $"found {path}" : $"NOT found: {path}", false);
                 }
 
                 case "registry_value":
@@ -403,12 +491,12 @@ public sealed class DeployPackageExecutor : ICommandExecutor
                     var keyPath = detection.GetString("key");
                     var name = detection.GetString("name");
                     if (root is null || string.IsNullOrWhiteSpace(keyPath) || string.IsNullOrWhiteSpace(name))
-                        return (false, "registry rule is incomplete");
+                        return (false, "registry rule is incomplete", true);
 
                     using var key = root.OpenSubKey(keyPath);
                     var value = key?.GetValue(name);
                     if (value is null)
-                        return (false, $"NOT found: {detection.GetString("root")}\\{keyPath}\\{name}");
+                        return (false, $"NOT found: {detection.GetString("root")}\\{keyPath}\\{name}", false);
 
                     // An absent `equals` means "must merely exist"; an empty one is a real
                     // exact match against the empty string, so check presence of the
@@ -419,37 +507,37 @@ public sealed class DeployPackageExecutor : ICommandExecutor
                         var want = wanted.ToString();
                         var got = value.ToString() ?? "";
                         return (string.Equals(got, want, StringComparison.OrdinalIgnoreCase),
-                                $"{name} = '{got}' (wanted '{want}')");
+                                $"{name} = '{got}' (wanted '{want}')", false);
                     }
-                    return (true, $"{name} present");
+                    return (true, $"{name} present", false);
                 }
 
                 case "installed_version":
                 {
                     var product = detection.GetString("name");
                     if (string.IsNullOrWhiteSpace(product))
-                        return (false, "installed_version rule has no product name");
+                        return (false, "installed_version rule has no product name", true);
                     var found = FindInstalledVersion(product);
                     if (found is null)
-                        return (false, $"NOT installed: no entry matching '{product}'");
+                        return (false, $"NOT installed: no entry matching '{product}'", false);
 
                     var min = detection.GetString("min_version");
                     if (string.IsNullOrWhiteSpace(min))
-                        return (true, $"installed: {product} {found}");
+                        return (true, $"installed: {product} {found}", false);
                     var ok = VersionUtil.Compare(found, min) >= 0;
-                    return (ok, $"installed {found}, required >= {min}");
+                    return (ok, $"installed {found}, required >= {min}", false);
                 }
 
                 default:
                     // A kind this build doesn't implement (an older agent against a newer
                     // hub). Fail closed: reporting success for a check we cannot perform
                     // is the one outcome that misleads.
-                    return (false, $"unsupported detection kind '{kind}' — update the agent");
+                    return (false, $"unsupported detection kind '{kind}' — update the agent", true);
             }
         }
         catch (Exception e)
         {
-            return (false, $"check failed: {e.Message}");
+            return (false, $"check failed: {e.Message}", true);
         }
     }
 

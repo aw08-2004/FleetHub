@@ -224,6 +224,7 @@ async function loadPackages() {
     try {
         const doc = await api('/api/packages');
         vocab = doc;
+        window.PackageConditions.setVocab(doc.conditions);
         renderPackages(doc.packages);
     } catch (e) {
         packagesPane.replaceChildren(el('p', 'setting__error', e.message));
@@ -268,6 +269,8 @@ const STEP_LABELS = {
     extract: () => [t('packages.step.extract.label'), t('packages.step.extract.description')],
     pnputil: () => [t('packages.step.pnputil.label'), t('packages.step.pnputil.description')],
     apk: () => [t('packages.step.apk.label'), t('packages.step.apk.description')],
+    if: () => [t('packages.step.if.label'), t('packages.step.if.description')],
+    stop: () => [t('packages.step.stop.label'), t('packages.step.stop.description')],
 };
 
 function stepText(kind) {
@@ -353,22 +356,38 @@ function row(...blocks) {
 
 // ---- payloads ----
 
-// Every name a step may use at this point in the list. Payload names are bound before
-// step 1; an extract step binds its own name for the steps after it. Mirrors
-// packages.validate_steps so the hint matches what the server will accept.
-function boundVariables(uptoStepIndex) {
+// Every name a step may use. Payload names and the machine's own values ({model}, {arch} ...)
+// are bound before step 1; an extract step binds its own name for the steps after it.
+// An approximation of packages.validate_steps for the hint only -- it lists names bound
+// anywhere in the tree, where the server knows which branch binds what, and the server's
+// refusal is what names a step that uses one too early.
+function boundVariables() {
     const names = [vocab.work_variable || 'work'];
     draftPayloads.forEach((p) => { if (p.name) names.push(p.name); });
     if (draftPayloads.length === 1 && draftPayloads[0].name !== 'file') names.push('file');
-    draftSteps.slice(0, uptoStepIndex === undefined ? draftSteps.length : uptoStepIndex)
-        .forEach((step) => {
-            if (step.kind !== 'extract') return;
-            // A blank save_as is not "no name" — the server picks one. Mirroring that
-            // choice here (packages.validate_steps) is what lets the hint name the folder
-            // the next step has to point at, instead of leaving the operator to guess.
-            names.push(step.save_as || autoExtractName(names));
-        });
+    Object.keys((vocab.conditions || {}).fact_bindings || {}).forEach((n) => names.push(n));
+    flatSteps(draftSteps).forEach(({ step }) => {
+        if (step.kind !== 'extract') return;
+        // A blank save_as is not "no name" — the server picks one. Mirroring that
+        // choice here (packages.validate_steps) is what lets the hint name the folder
+        // the next step has to point at, instead of leaving the operator to guess.
+        names.push(step.save_as || autoExtractName(names));
+    });
     return names;
+}
+
+// The step tree depth-first, the numbering the server validates by and the agent reports
+// progress by (packages.iter_steps): an If, then its Then steps, then its Else steps.
+function flatSteps(list, depth, out) {
+    const acc = out || [];
+    (list || []).forEach((step) => {
+        acc.push({ step, depth: depth || 0 });
+        if (step.kind === 'if') {
+            flatSteps(step.then, (depth || 0) + 1, acc);
+            flatSteps(step.else, (depth || 0) + 1, acc);
+        }
+    });
+    return acc;
 }
 
 function autoExtractName(taken) {
@@ -444,10 +463,40 @@ function renderPayloads() {
                     { hint: t('packages.editor.sha256_hint') }));
             }
         }
+        // "Only download on some machines": the per-model driver pack. Only for a file the
+        // agent actually fetches, and only in step mode -- the server refuses both others.
+        if (payload.kind !== 'winget' && installMode() === 'steps') {
+            card.appendChild(payloadConditionBlock(payload));
+        }
         host.appendChild(card);
     });
     syncVariableHint();
     syncInstallPanes();
+}
+
+function payloadConditionBlock(payload) {
+    const wrap = el('div', 'pkg-cond-block');
+    const host = el('div');
+    const help = el('p', 'setting__default', t('packages.editor.payload_only_if_help'));
+    const sync = () => {
+        host.hidden = !payload.only_if;
+        help.hidden = !payload.only_if;
+        if (payload.only_if) {
+            // No machine checks and no step results: a download happens before any step.
+            window.PackageConditions.render(host, payload.only_if,
+                { allowProbes: false, allowRuntime: false });
+        }
+    };
+    wrap.appendChild(checkboxField(t('packages.editor.payload_only_if'), !!payload.only_if,
+        (on) => {
+            payload.only_if = on ? (payload.only_if || window.PackageConditions.blank(false)) : null;
+            sync();
+            syncConditionsNote();
+        }));
+    wrap.appendChild(help);
+    wrap.appendChild(host);
+    sync();
+    return wrap;
 }
 
 function payloadState(payload) {
@@ -472,33 +521,69 @@ document.getElementById('add-payload').addEventListener('click', () => {
 
 // ---- steps ----
 
+// The step list is a TREE: an If step carries `then` and `else`, each another list drawn the
+// same way, one level in. Every card is numbered depth-first -- the number the server's errors
+// and the deployment view use -- so "step 7" means the same card everywhere.
 function renderSteps() {
     const host = document.getElementById('step-list');
     host.replaceChildren();
     if (!draftSteps.length) {
         host.appendChild(el('p', 'setting__default', t('packages.editor.no_steps')));
     }
-    draftSteps.forEach((step, index) => host.appendChild(renderStep(step, index)));
+    const counter = { n: 0 };
+    draftSteps.forEach((step, index) =>
+        host.appendChild(renderStep(step, index, draftSteps, 0, counter)));
     syncVariableHint();
+    syncConditionsNote();
 }
 
-function moveStep(from, to) {
-    if (to < 0 || to >= draftSteps.length) return;
-    const [moved] = draftSteps.splice(from, 1);
-    draftSteps.splice(to, 0, moved);
+function syncConditionsNote() {
+    // Says up front what the scheduler will otherwise say per machine: an agent too old for
+    // If / Stop is refused the deploy (packages.MIN_CONDITIONS_AGENT), not sent it to fail.
+    const note = document.getElementById('step-conditions-note');
+    if (!note) return;
+    const flowSteps = flatSteps(draftSteps).some(({ step }) => step.kind === 'if' || step.kind === 'stop');
+    const conditional = flowSteps || draftPayloads.some((p) => p.only_if);
+    note.hidden = !conditional;
+    note.textContent = conditional
+        ? t('packages.editor.needs_agent', { version: (vocab.conditions || {}).min_agent || '' })
+        : '';
+}
+
+function moveStep(list, from, to) {
+    if (to < 0 || to >= list.length) return;
+    const [moved] = list.splice(from, 1);
+    list.splice(to, 0, moved);
     renderSteps();
 }
 
-function renderStep(step, index) {
-    const card = el('div', 'pkg-card');
+function newStep(kind) {
+    if (kind === 'if') {
+        return { kind, condition: window.PackageConditions.blank(true), on_unknown: 'fail',
+                 then: [], else: [] };
+    }
+    if (kind === 'stop') return { kind, outcome: 'success', message: '' };
+    return { kind, subdirs: true };
+}
+
+function canAddStep() {
+    const max = vocab.max_steps || 60;
+    if (flatSteps(draftSteps).length < max) return true;
+    packageError.textContent = t('packages.editor.too_many_steps', { max });
+    return false;
+}
+
+function renderStep(step, index, list, depth, counter) {
+    const number = ++counter.n;
+    const card = el('div', `pkg-card${step.kind === 'if' ? ' pkg-card--if' : ''}`);
     const head = el('div', 'pkg-card__head');
     head.appendChild(el('span', 'pkg-card__title',
-        t('packages.editor.step_n', { number: index + 1, kind: stepText(step.kind)[0] })));
+        t('packages.editor.step_n', { number, kind: stepText(step.kind)[0] })));
 
     const buttons = el('span', 'pkg-card__actions');
-    [[t('packages.editor.move_up'), () => moveStep(index, index - 1)],
-     [t('packages.editor.move_down'), () => moveStep(index, index + 1)],
-     [t('common.delete'), () => { draftSteps.splice(index, 1); renderSteps(); }],
+    [[t('packages.editor.move_up'), () => moveStep(list, index, index - 1)],
+     [t('packages.editor.move_down'), () => moveStep(list, index, index + 1)],
+     [t('common.delete'), () => { list.splice(index, 1); renderSteps(); }],
     ].forEach(([label, action]) => {
         const button = el('button', 'btn pkg-card__btn', label);
         button.type = 'button';
@@ -510,6 +595,23 @@ function renderStep(step, index) {
 
     card.appendChild(textField(t('packages.editor.step_label'), step.name,
         (v) => { step.name = v; }, { placeholder: stepText(step.kind)[0] }));
+
+    if (step.kind === 'if') {
+        renderIfBody(card, step, depth, counter);
+        return card;
+    }
+    if (step.kind === 'stop') {
+        card.appendChild(row(
+            selectField(t('packages.editor.stop_outcome'), step.outcome || 'success',
+                [['success', t('packages.editor.stop_success')],
+                 ['failure', t('packages.editor.stop_failure')]],
+                (v) => { step.outcome = v; }),
+            textField(t('packages.editor.stop_message'), step.message,
+                (v) => { step.message = v; },
+                { placeholder: t('packages.editor.stop_message_placeholder') })));
+        card.appendChild(el('p', 'setting__default', t('packages.editor.stop_help')));
+        return card;
+    }
 
     stepFields(step).forEach((node) => card.appendChild(node));
 
@@ -531,6 +633,115 @@ function renderStep(step, index) {
     carryOn.style.marginTop = 'var(--space-3)';
     card.appendChild(carryOn);
     return card;
+}
+
+// An If card: the condition, what to do when the machine cannot answer it, then two lanes of
+// steps. The lanes are ordinary step lists, which is what lets an If hold an If.
+function renderIfBody(card, step, depth, counter) {
+    card.appendChild(el('div', 'setting__label', t('packages.editor.if_condition')));
+    const condHost = el('div');
+    window.PackageConditions.render(condHost, step.condition,
+        { allowProbes: true, allowRuntime: true });
+    card.appendChild(condHost);
+
+    card.appendChild(row(
+        selectField(t('packages.editor.on_unknown'), step.on_unknown || 'fail',
+            [['fail', t('packages.editor.on_unknown_fail')],
+             ['else', t('packages.editor.on_unknown_else')]],
+            (v) => { step.on_unknown = v; }),
+        conditionPreview(step)));
+
+    const carryOn = checkboxField(t('packages.editor.if_continue_on_error'),
+        step.continue_on_error, (v) => { step.continue_on_error = v; });
+    carryOn.style.marginTop = 'var(--space-3)';
+    card.appendChild(carryOn);
+
+    [['then', t('packages.editor.if_then')], ['else', t('packages.editor.if_else')]]
+        .forEach(([lane, title]) => {
+            step[lane] = step[lane] || [];
+            const box = el('div', `pkg-lane pkg-lane--${lane}`);
+            box.appendChild(el('div', 'pkg-lane__title', title));
+            if (!step[lane].length) {
+                box.appendChild(el('p', 'setting__default', t('packages.editor.lane_empty')));
+            }
+            step[lane].forEach((child, i) =>
+                box.appendChild(renderStep(child, i, step[lane], depth + 1, counter)));
+            box.appendChild(laneAdder(step[lane], depth + 1, lane === 'else'));
+            card.appendChild(box);
+        });
+}
+
+// The palette at the foot of a lane. Its own select per lane rather than the main one at the
+// bottom of the list: "which list does Add step add to" must never be a question.
+function laneAdder(list, depth, offerElseIf) {
+    const bar = el('div', 'pkg-lane__add');
+    const select = document.createElement('select');
+    select.className = 'input';
+    (vocab.step_kinds || []).forEach((kind) => {
+        // An If that would nest past the server's limit is not offered, rather than refused
+        // on save after the operator has filled it in.
+        if (kind.name === 'if' && depth >= ((vocab.conditions || {}).max_depth || 4)) return;
+        const option = document.createElement('option');
+        option.value = kind.name;
+        option.textContent = kind.label;
+        select.appendChild(option);
+    });
+    const add = el('button', 'btn pkg-card__btn', t('packages.editor.lane_add'));
+    add.type = 'button';
+    add.addEventListener('click', () => {
+        if (!canAddStep()) return;
+        list.push(newStep(select.value));
+        renderSteps();
+    });
+    bar.appendChild(select);
+    bar.appendChild(add);
+    if (offerElseIf && depth < ((vocab.conditions || {}).max_depth || 4)) {
+        const elseIf = el('button', 'btn pkg-card__btn', t('packages.editor.add_else_if'));
+        elseIf.type = 'button';
+        elseIf.addEventListener('click', () => {
+            if (!canAddStep()) return;
+            list.push(newStep('if'));
+            renderSteps();
+        });
+        bar.appendChild(elseIf);
+    }
+    return bar;
+}
+
+// "Test on a machine": what the hub's copy of that machine's facts says about this condition.
+// A preview, and labelled as one -- the deploy itself is decided on the machine.
+function conditionPreview(step) {
+    const wrap = el('div');
+    const label = el('label', 'setting__label', t('packages.cond.preview_machine'));
+    const line = el('div', 'pkg-cond__line');
+    const machine = document.createElement('input');
+    machine.className = 'input';
+    machine.id = `pkg-field-${++controlSeq}`;
+    machine.placeholder = t('packages.cond.preview_placeholder');
+    machine.autocomplete = 'off';
+    label.htmlFor = machine.id;
+    const go = el('button', 'btn pkg-card__btn', t('packages.cond.preview_button'));
+    go.type = 'button';
+    const out = el('div', 'pkg-cond__preview');
+    go.addEventListener('click', async () => {
+        out.replaceChildren();
+        if (!machine.value.trim()) return;
+        try {
+            const doc = await api('/api/packages/conditions/preview', json('POST', {
+                machine: machine.value.trim(),
+                condition: window.PackageConditions.toAst(step.condition),
+            }));
+            window.PackageConditions.renderPreview(out, doc);
+        } catch (e) {
+            out.appendChild(el('p', 'setting__error', e.message));
+        }
+    });
+    line.appendChild(machine);
+    line.appendChild(go);
+    wrap.appendChild(label);
+    wrap.appendChild(line);
+    wrap.appendChild(out);
+    return wrap;
 }
 
 function stepFields(step) {
@@ -603,17 +814,15 @@ function renderStepPalette() {
 
 document.getElementById('add-step').addEventListener('click', () => {
     const kind = document.getElementById('step-kind').value;
-    if (draftSteps.length >= (vocab.max_steps || 25)) {
-        packageError.textContent = t('packages.editor.too_many_steps',
-            { max: vocab.max_steps || 25 });
-        return;
-    }
-    draftSteps.push({ kind, subdirs: true });
+    if (!canAddStep()) return;
+    draftSteps.push(newStep(kind));
     renderSteps();
 });
 
 document.querySelectorAll('input[name="install-mode"]').forEach((radio) => {
-    radio.addEventListener('change', syncInstallPanes);
+    // Redraws the payloads, not just the panes: their "only download on some machines"
+    // control exists in step mode only.
+    radio.addEventListener('change', renderPayloads);
 });
 
 function syncInstallPanes() {
@@ -694,14 +903,10 @@ function openPackage(pkg) {
             file_name: source.file_name || '',
             file_size: source.file_size || 0,
             stored_sha256: source.sha256 || '',
+            only_if: source.only_if ? window.PackageConditions.fromAst(source.only_if) : null,
             file: null,
         }));
-    draftSteps = ((pkg && pkg.steps) || []).map((step) => ({
-        ...step,
-        // Both arrive typed from the server and are edited as text here.
-        timeout_seconds: step.timeout_seconds || '',
-        success_exit_codes: (step.success_exit_codes || []).join(', '),
-    }));
+    draftSteps = draftStepsFrom((pkg && pkg.steps) || []);
 
     const mode = draftSteps.length ? 'steps' : 'command';
     const modeRadio = document.querySelector(`input[name="install-mode"][value="${mode}"]`);
@@ -726,6 +931,26 @@ function openPackage(pkg) {
     syncDetectionPanes();
 
     packageModal.showModal();
+}
+
+// Server steps -> editable copies, recursively through If lanes.
+function draftStepsFrom(steps) {
+    return (steps || []).map((step) => {
+        const draft = {
+            ...step,
+            // Both arrive typed from the server and are edited as text here.
+            timeout_seconds: step.timeout_seconds || '',
+            success_exit_codes: (step.success_exit_codes || []).join(', '),
+        };
+        if (step.kind === 'if') {
+            draft.condition = window.PackageConditions.fromAst(step.condition)
+                || window.PackageConditions.blank(true);
+            draft.on_unknown = step.on_unknown || 'fail';
+            draft.then = draftStepsFrom(step.then);
+            draft.else = draftStepsFrom(step.else);
+        }
+        return draft;
+    });
 }
 
 function collectDetection() {
@@ -780,17 +1005,25 @@ async function uploadPayloads() {
 }
 
 function collectSources() {
+    // A download condition is a step-mode feature (the server refuses it on a one-command
+    // package); one left over from before a switch to command mode is dropped, not sent.
+    const conditional = installMode() === 'steps';
     return draftPayloads.map((payload) => {
+        let source;
         if (payload.kind === 'upload') {
             // The stored hash carries over untouched when no new file was chosen, so
             // editing a command line doesn't mean re-uploading 200 MB.
             if (!payload.stored_sha256) throw new Error(t('packages.editor.choose_file'));
-            return { name: payload.name, kind: 'upload', sha256: payload.stored_sha256,
-                     file_name: payload.file_name, file_size: payload.file_size };
+            source = { name: payload.name, kind: 'upload', sha256: payload.stored_sha256,
+                       file_name: payload.file_name, file_size: payload.file_size };
+        } else {
+            source = { name: payload.name, kind: payload.kind, ref: payload.ref };
+            const sha = (payload.sha256 || '').trim();
+            if (sha && payload.kind !== 'winget') source.sha256 = sha;
         }
-        const source = { name: payload.name, kind: payload.kind, ref: payload.ref };
-        const sha = (payload.sha256 || '').trim();
-        if (sha && payload.kind !== 'winget') source.sha256 = sha;
+        if (conditional && payload.only_if && payload.kind !== 'winget') {
+            source.only_if = window.PackageConditions.toAst(payload.only_if);
+        }
         return source;
     });
 }
@@ -803,8 +1036,27 @@ function collectSteps() {
     // single-command recipe and rejects for having no command — a message about a field
     // this operator cannot even see right now.
     if (!draftSteps.length) throw new Error(t('packages.editor.no_steps'));
-    return draftSteps.map((step) => {
+    return collectStepList(draftSteps);
+}
+
+function collectStepList(list) {
+    return list.map((step) => {
         const out = { kind: step.kind };
+        if (step.kind === 'if') {
+            if (step.name && step.name.trim()) out.name = step.name.trim();
+            out.condition = window.PackageConditions.toAst(step.condition);
+            if (step.on_unknown && step.on_unknown !== 'fail') out.on_unknown = step.on_unknown;
+            if (step.continue_on_error) out.continue_on_error = true;
+            out.then = collectStepList(step.then || []);
+            out.else = collectStepList(step.else || []);
+            return out;
+        }
+        if (step.kind === 'stop') {
+            if (step.name && step.name.trim()) out.name = step.name.trim();
+            out.outcome = step.outcome || 'success';
+            if (step.message && step.message.trim()) out.message = step.message.trim();
+            return out;
+        }
         ['name', 'command', 'args', 'script', 'id', 'archive', 'dest', 'save_as', 'path', 'apk']
             .forEach((field) => {
                 const value = (step[field] || '').trim ? (step[field] || '').trim() : step[field];
@@ -1270,11 +1522,18 @@ const STEP_STATE_LABELS = {
     failed: () => t('packages.progress.state.failed'),
     skipped: () => t('packages.progress.state.skipped'),
     aborted: () => t('packages.progress.state.aborted'),
+    not_run: () => t('packages.progress.state.not_run'),
 };
 
 // A glyph AND a word for every state: colour alone never carries "did it work" (see the
-// progress bar's CSS), and neither does a symbol someone has to learn.
-const STEP_GLYPHS = { running: '◐', ok: '✓', failed: '✕', skipped: '↷', aborted: '■' };
+// progress bar's CSS), and neither does a symbol someone has to learn. `not_run` is the
+// branch an If did not take (agent 3.54.0) -- a dash, not a cross, because nothing failed.
+const STEP_GLYPHS = { running: '◐', ok: '✓', failed: '✕', skipped: '↷', aborted: '■', not_run: '–' };
+
+const BRANCH_LABELS = {
+    then: () => t('packages.progress.branch_then'),
+    else: () => t('packages.progress.branch_else'),
+};
 
 let progressDeployment = null;
 const expandedTargets = new Set();
@@ -1344,8 +1603,10 @@ function currentStepText(target) {
         return t('packages.progress.all_done', { total: target.step_total });
     }
     if (current.phase === 'step' && current.state === 'running') {
+        // `position` (hub 1.187.0) counts only the steps that will run; the ordinal also
+        // counts an If's untaken lane, which made "step 6 of 3".
         return t('packages.progress.step_of', {
-            current: current.ordinal, total: target.step_total,
+            current: current.position || current.ordinal, total: target.step_total,
             what: current.label || stepKindLabel(current.kind) });
     }
     return phaseLabel(current);
@@ -1370,9 +1631,13 @@ function renderStepList(target) {
     const now = nowEpoch();
     target.steps.forEach((step) => {
         const item = el('li', `pkg-step pkg-step--${step.state || 'none'}`);
+        // A step inside an If is indented under it and says which lane it is in, so "step 5"
+        // reads as "the Else side of step 2" without counting.
+        if (step.depth) item.style.paddingInlineStart = `calc(${step.depth} * var(--space-6))`;
         item.appendChild(el('span', 'pkg-step__glyph', STEP_GLYPHS[step.state] || '○'));
         const main = el('div', 'pkg-step__main');
-        main.appendChild(el('div', 'pkg-step__label', phaseLabel(step)));
+        const lane = step.branch && BRANCH_LABELS[step.branch] ? `${BRANCH_LABELS[step.branch]()} · ` : '';
+        main.appendChild(el('div', 'pkg-step__label', lane + phaseLabel(step)));
         if (!target.agent_reports_steps) {
             // The plan, and nothing about it: an agent that reports no steps has not said
             // whether any of them ran, and "Not run" under each would be a claim it never made.
@@ -1388,7 +1653,9 @@ function renderStepList(target) {
             meta.push(fmtSeconds((step.finished_at || now) - step.started_at));
         }
         main.appendChild(el('div', 'stat-card__meta', meta.join(' · ')));
-        if (step.message && step.state !== 'ok') {
+        // An If's message is its answer ("Then: hw.model contains Latitude"), which is worth
+        // showing when it went fine too; for every other step a message on success is noise.
+        if (step.message && (step.state !== 'ok' || step.kind === 'if' || step.kind === 'stop')) {
             main.appendChild(el('div', 'pkg-target-error', step.message));
         }
         if (step.has_output) {

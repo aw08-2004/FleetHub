@@ -361,7 +361,11 @@ CURATED = (
      "detection rule so success is checked: {\"kind\": \"installed_version\", \"name\": "
      "\"<DisplayName in Programs and Features>\", \"min_version\": \"1.2.3\"}, or "
      "{\"kind\": \"file_exists\", \"path\": \"C:\\Program Files\\...\\app.exe\"}, or "
-     "registry_value {root, key, name, equals}. Needs the operator's confirmation.",
+     "registry_value {root, key, name, equals}. Steps can branch: {\"kind\": \"if\", "
+     "\"condition\": {\"var\": \"hw.model\", \"cmp\": \"contains\", \"value\": \"Latitude\"}, "
+     "\"then\": [...], \"else\": [...]} (and/or/not groups as {\"op\", \"nodes\"}), and "
+     "{\"kind\": \"stop\", \"outcome\": \"success\"|\"failure\", \"message\"} ends the deploy; "
+     "a payload's `only_if` takes the same condition. Needs the operator's confirmation.",
      "POST", _PACKAGES_ROUTE,
      _params(["name"], name={"type": "string"}, description={"type": "string"},
              version={"type": "string"},
