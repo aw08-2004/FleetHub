@@ -171,8 +171,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
     /// last_seen, and the console calls a machine offline after 90 seconds without one.
     /// </summary>
     public async Task<bool> HeartbeatAsync(CancellationToken ct, JsonObject? patches = null,
-                                           JsonObject? processes = null)
+                                           JsonObject? processes = null, JsonObject? software = null)
     {
+        SoftwareRejected = false;
         if (!_identity.IsEnrolled) return false;
         try
         {
@@ -208,6 +209,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
             // The Processes card's list (roadmap #22), only ever present while the hub has
             // said somebody is looking -- see ProcessReporter.
             if (processes is not null) body["processes"] = processes;
+            // Installed packages (roadmap #25 B), change-only and cloned for the patches
+            // block's reason. See SoftwareInventoryReporter.
+            if (software is not null) body["software"] = software.DeepClone();
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 
             using var resp = await _http.SendAsync(req, ct);
@@ -225,6 +229,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
             ApplyProcessesWanted(reply);
             ApplyUpdateChannel(reply);
             ApplyUpdatePolicy(reply);
+            if (software is not null) SoftwareRejected = ReadSoftwareRejected(reply);
             return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -237,6 +242,25 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
     /// <summary>What the last heartbeat reply said about the Processes card, or null before
     /// one has answered. Read by the process loop.</summary>
     public bool? ProcessesWanted { get; private set; }
+
+    /// <summary>Whether the last heartbeat's hub could not store the software block it carried
+    /// (`software_rejected`). The caller keeps the payload pending when it is true, so the next
+    /// heartbeat carries it again -- hub/fleet_web.py answers this instead of a 500 so a failed
+    /// write does not also read the machine offline.</summary>
+    public bool SoftwareRejected { get; private set; }
+
+    /// <summary>A reply that cannot be read counts as rejected: re-sending a list costs one
+    /// heartbeat body, and wrongly believing it stored costs a stale Software section until
+    /// the packages next change.</summary>
+    internal static bool ReadSoftwareRejected(string reply)
+    {
+        try
+        {
+            return JsonNode.Parse(reply)?["software_rejected"] is JsonValue v
+                   && v.TryGetValue<bool>(out var rejected) && rejected;
+        }
+        catch { return true; }
+    }
 
     /// <summary>The last parse failure each heartbeat handler logged at Warning.
     ///

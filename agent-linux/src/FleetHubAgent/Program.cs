@@ -66,8 +66,8 @@ try
         Uninstaller = sp.GetRequiredService<FleetHubAgent.Update.SelfUninstaller>(),
     });
 
-    // The executors, which are the whole of what this agent can be TOLD to do today. Five out
-    // of the hub's ~thirty command types, and the gap is deliberate rather than unfinished:
+    // The executors, which are the whole of what this agent can be TOLD to do today. Eight
+    // out of the hub's ~thirty command types, and the gap is deliberate rather than unfinished:
     // the console reads this machine's capability report (derived from exactly this list) and
     // offers nothing else. Anything that arrives anyway gets a result naming the platform --
     // see CommandDispatcher.
@@ -75,6 +75,12 @@ try
     builder.Services.AddSingleton<ICommandExecutor, ShutdownExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RenameExecutor>();
     builder.Services.AddSingleton<ICommandExecutor, RunScriptExecutor>();
+
+    // The Processes card's End task and Restart (0.5.0). Registering them is what puts
+    // kill_process and restart_process in the capability report, which is what switches the
+    // card's row menu on for this machine -- processes.js reads the report, not a version.
+    builder.Services.AddSingleton<ICommandExecutor, KillProcessExecutor>();
+    builder.Services.AddSingleton<ICommandExecutor, RestartProcessExecutor>();
 
     // The interactive terminal (0.4.0). Registering ShellOpenExecutor is what puts shell_open
     // in the capability report, and that report is what switches the console's Terminal tab
@@ -89,6 +95,12 @@ try
     // the hub calls a machine offline after ninety of them.
     builder.Services.AddSingleton<PatchScanner>();
     builder.Services.AddSingleton<PatchInventoryReporter>();
+    // Installing what that scan found (0.5.0): apt-get or dnf, for the updates a patch run
+    // names. Once registered, install_patches is in the capability report and the hub's patch
+    // scheduler stops skipping this machine.
+    builder.Services.AddSingleton<ICommandExecutor, FleetHubAgent.Patch.InstallPatchesExecutor>();
+    // What is installed (0.5.0), for the Software section and the report sheet.
+    builder.Services.AddSingleton<FleetHubAgent.Software.SoftwareInventoryReporter>();
     builder.Services.AddSingleton<ProcessReporter>();
 
     // Signed self-update (roadmap #22). Its own manifest and its own train -- the hub
