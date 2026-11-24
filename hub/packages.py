@@ -657,7 +657,26 @@ def validate_source(source, default_name=DEFAULT_SOURCE_NAME, extra_vars=None):
     """
     if not isinstance(source, dict):
         raise ValueError("source must be an object")
-    name = validate_name(source.get("name") or default_name, "a payload name")
+    name = _payload_name(source.get("name") or default_name)
+    kind = _clean(source.get("kind"))
+    if kind not in SOURCE_KINDS:
+        raise ValueError(f"unknown source kind: {kind!r}")
+    ref, sha256 = _source_reference(kind, _clean(source.get("ref"), MAX_COMMAND_CHARS),
+                                    normalize_sha256(source.get("sha256")))
+    size = source.get("file_size")
+    return {
+        "name": name,
+        "kind": kind,
+        "ref": ref or None,
+        "sha256": sha256,
+        "file_name": _clean(source.get("file_name"), MAX_NAME_CHARS) or None,
+        "file_size": int(size) if size not in (None, "") else None,
+        "only_if": _download_condition(name, kind, source.get("only_if"), extra_vars),
+    }
+
+
+def _payload_name(value):
+    name = validate_name(value, "a payload name")
     if name == WORK_VAR:
         # {work} is the attempt's own directory, bound by the agent. A payload claiming
         # that name would shadow it, and every step referring to {work} would silently
@@ -668,59 +687,48 @@ def validate_source(source, default_name=DEFAULT_SOURCE_NAME, extra_vars=None):
         # would quietly turn every path built from it into the path of a downloaded file.
         raise ValueError(f"{name!r} is reserved -- it is the machine's "
                          f"{package_conditions.FACT_BINDINGS[name]}")
-    kind = _clean(source.get("kind"))
-    if kind not in SOURCE_KINDS:
-        raise ValueError(f"unknown source kind: {kind!r}")
+    return name
 
-    ref = _clean(source.get("ref"), MAX_COMMAND_CHARS)
-    sha256 = normalize_sha256(source.get("sha256"))
 
+def _source_reference(kind, ref, sha256):
+    """(ref, sha256) as this kind of payload stores them, or ValueError."""
     if kind == SOURCE_UPLOAD:
         if not sha256:
             raise ValueError("an uploaded package needs its stored file's sha256")
-        ref = ""
-    elif kind == SOURCE_WINGET:
+        return "", sha256
+    if kind == SOURCE_WINGET:
         if not ref:
             raise ValueError("a winget package needs a package id")
         # winget resolves and verifies its own payload; a hash here would be meaningless.
-        sha256 = None
-    elif kind == SOURCE_URL:
+        return ref, None
+    if kind == SOURCE_URL:
         if not re.match(r"^https?://", ref, re.IGNORECASE):
             raise ValueError("a URL package needs an http:// or https:// address")
-    else:  # SOURCE_UNC
-        if not ref.startswith("\\\\"):
-            raise ValueError(r"a UNC package needs a path starting with \\")
+        return ref, sha256
+    if not ref.startswith("\\\\"):   # SOURCE_UNC
+        raise ValueError(r"a UNC package needs a path starting with \\")
+    return ref, sha256
 
-    only_if = source.get("only_if")
+
+def _download_condition(name, kind, only_if, extra_vars):
+    """A payload's validated `only_if`, or None for "always"."""
     if isinstance(only_if, str) and only_if.strip():
         try:
             only_if = json.loads(only_if)
         except ValueError:
             raise ValueError(f"payload {name!r}: its download condition must be JSON")
     if only_if in (None, "", {}):
-        only_if = None
-    else:
-        if kind == SOURCE_WINGET:
-            # A winget reference downloads nothing at deploy time, so "only download when"
-            # has nothing to govern; an If step around the winget step is the honest shape.
-            raise ValueError(f"payload {name!r}: a winget reference is not downloaded, so it "
-                             f"cannot have a download condition")
-        try:
-            only_if = package_conditions.validate(only_if, package_conditions.Context(
-                extra=extra_vars, allow_probes=False, allow_runtime=False))
-        except ValueError as e:
-            raise ValueError(f"payload {name!r}: {e}")
-
-    size = source.get("file_size")
-    return {
-        "name": name,
-        "kind": kind,
-        "ref": ref or None,
-        "sha256": sha256,
-        "file_name": _clean(source.get("file_name"), MAX_NAME_CHARS) or None,
-        "file_size": int(size) if size not in (None, "") else None,
-        "only_if": only_if,
-    }
+        return None
+    if kind == SOURCE_WINGET:
+        # A winget reference downloads nothing at deploy time, so "only download when"
+        # has nothing to govern; an If step around the winget step is the honest shape.
+        raise ValueError(f"payload {name!r}: a winget reference is not downloaded, so it "
+                         f"cannot have a download condition")
+    try:
+        return package_conditions.validate(only_if, package_conditions.Context(
+            extra=extra_vars, allow_probes=False, allow_runtime=False))
+    except ValueError as e:
+        raise ValueError(f"payload {name!r}: {e}")
 
 
 def validate_sources(sources, extra_vars=None):
@@ -874,116 +882,14 @@ class _StepWalk:
         if kind == STEP_IF:
             return self._if(raw, step, index, bound, depth)
         if kind == STEP_STOP:
-            outcome = _clean(raw.get("outcome") or STOP_FAILURE)
-            if outcome not in STOP_OUTCOMES:
-                raise ValueError(f"step {index}: a Stop step ends as success or failure")
-            step["outcome"] = outcome
-            message = _clean(raw.get("message"), MAX_MESSAGE_CHARS)
-            if message:
-                step["message"] = message
-            return step, None
+            return _stop_fields(raw, step, index), None
 
-        if kind == STEP_RUN:
-            command = _clean(raw.get("command"), MAX_COMMAND_CHARS)
-            if not command:
-                raise ValueError(f"step {index}: a run step needs a command")
-            step["command"] = command
-            args = _clean(raw.get("args"), MAX_COMMAND_CHARS)
-            if args:
-                step["args"] = args
-
-        elif kind == STEP_POWERSHELL:
-            script = str(raw.get("script") or "").strip()
-            if not script:
-                raise ValueError(f"step {index}: a PowerShell step needs a script")
-            if len(script) > MAX_SCRIPT_CHARS:
-                raise ValueError(
-                    f"step {index}: the script must be {MAX_SCRIPT_CHARS} characters or fewer")
-            step["script"] = script
-
-        elif kind == STEP_WINGET:
-            package_id = _clean(raw.get("id"), MAX_NAME_CHARS)
-            if not package_id:
-                raise ValueError(f"step {index}: a winget step needs a package id")
-            step["id"] = package_id
-            args = _clean(raw.get("args"), MAX_COMMAND_CHARS)
-            if args:
-                step["args"] = args
-
-        elif kind == STEP_EXTRACT:
-            archive = _clean(raw.get("archive"), MAX_COMMAND_CHARS)
-            if not archive:
-                first = self.source_names[0] if self.source_names else DEFAULT_SOURCE_NAME
-                raise ValueError(
-                    f"step {index}: an extract step needs the archive to unpack, "
-                    f"e.g. {{{first}}}")
-            step["archive"] = archive
-            dest = _clean(raw.get("dest"), MAX_COMMAND_CHARS)
-            if dest:
-                step["dest"] = dest
-
-        elif kind == STEP_APK:
-            apk = _clean(raw.get("apk"), MAX_COMMAND_CHARS)
-            if not apk:
-                first = self.source_names[0] if self.source_names else DEFAULT_SOURCE_NAME
-                raise ValueError(
-                    f"step {index}: an apk step needs the payload to install, "
-                    f"e.g. {{{first}}}")
-            step["apk"] = apk
-
-        else:  # STEP_PNPUTIL
-            path = _clean(raw.get("path"), MAX_COMMAND_CHARS)
-            if not path:
-                raise ValueError(
-                    f"step {index}: a pnputil step needs the folder or .inf to install")
-            step["path"] = path
-            # Driver packs nest by model and chipset far more often than not, so recursing
-            # is the default and turning it off is the deliberate act.
-            step["subdirs"] = bool(raw.get("subdirs", True))
-
-        # ---- shared options ----
-        timeout = _step_int(raw, "timeout_seconds", 30, 24 * 3600)
-        if timeout is not None:
-            step["timeout_seconds"] = timeout
-        if raw.get("success_exit_codes") not in (None, ""):
-            step["success_exit_codes"] = validate_exit_codes(raw["success_exit_codes"])
-        elif kind == STEP_PNPUTIL:
-            # Resolved HERE rather than defaulted in the agent, so the editor can show the
-            # operator the set their driver step will actually be judged by. See
-            # DEFAULT_PNPUTIL_EXIT_CODES for why 259 is in it.
-            step["success_exit_codes"] = list(DEFAULT_PNPUTIL_EXIT_CODES)
-        if raw.get("continue_on_error"):
-            step["continue_on_error"] = True
-
-        # ---- variables ----
-        unknown = set()
-        for field in _STEP_SUBSTITUTED[kind]:
-            unknown |= _referenced_variables(step.get(field)) - bound
-        if unknown:
-            raise ValueError(
-                f"step {index} refers to {'{'}{sorted(unknown)[0]}{'}'}, which nothing "
-                f"before it provides. Available here: "
-                f"{', '.join('{' + name + '}' for name in sorted(bound))}")
-
+        _ACTION_FIELDS[kind](raw, step, index, self.source_names)
+        _shared_options(raw, step, kind)
+        _check_step_variables(step, kind, index, bound)
         bound = set(bound)
         if kind == STEP_EXTRACT:
-            # The unpacked directory is the whole point of the step, so it always binds a
-            # name. Auto-numbered when the operator does not care, which is the common case.
-            save_as = raw.get("save_as")
-            if save_as in (None, ""):
-                save_as = "extracted"
-                suffix = 2
-                while save_as in bound:
-                    save_as = f"extracted{suffix}"
-                    suffix += 1
-            else:
-                save_as = validate_name(save_as, "save_as")
-            if save_as in bound:
-                raise ValueError(
-                    f"step {index}: {{{save_as}}} is already taken by an earlier step, a "
-                    f"payload or a machine variable -- give this one a different name")
-            step["save_as"] = save_as
-            bound.add(save_as)
+            bound.add(_bind_save_as(raw, step, index, bound))
         return step, bound
 
     def _if(self, raw, step, index, bound, depth):
@@ -1008,15 +914,15 @@ class _StepWalk:
             # failure, and this is the operator saying "then skip the whole block".
             step["continue_on_error"] = True
 
-        then_raw = raw.get("then") or []
-        else_raw = raw.get("else") or []
+        then_raw = raw.get("then_steps") or []
+        else_raw = raw.get("else_steps") or []
         if not then_raw and not else_raw:
             raise ValueError(f"step {index}: an If step needs at least one step in Then "
                              f"or Else")
         then_steps, then_bound = self.steps(then_raw, bound, depth + 1)
         else_steps, else_bound = self.steps(else_raw, bound, depth + 1)
-        step["then"] = then_steps
-        step["else"] = else_steps
+        step["then_steps"] = then_steps
+        step["else_steps"] = else_steps
 
         carrying_on = [b for b in (then_bound, else_bound) if b is not None]
         if not carrying_on:
@@ -1029,6 +935,143 @@ class _StepWalk:
         if step.get("continue_on_error"):
             after &= set(bound)
         return step, after
+
+
+def _first_payload(source_names):
+    return source_names[0] if source_names else DEFAULT_SOURCE_NAME
+
+
+def _stop_fields(raw, step, index):
+    outcome = _clean(raw.get("outcome") or STOP_FAILURE)
+    if outcome not in STOP_OUTCOMES:
+        raise ValueError(f"step {index}: a Stop step ends as success or failure")
+    step["outcome"] = outcome
+    message = _clean(raw.get("message"), MAX_MESSAGE_CHARS)
+    if message:
+        step["message"] = message
+    return step
+
+
+def _run_fields(raw, step, index, _source_names):
+    command = _clean(raw.get("command"), MAX_COMMAND_CHARS)
+    if not command:
+        raise ValueError(f"step {index}: a run step needs a command")
+    step["command"] = command
+    args = _clean(raw.get("args"), MAX_COMMAND_CHARS)
+    if args:
+        step["args"] = args
+
+
+def _powershell_fields(raw, step, index, _source_names):
+    script = str(raw.get("script") or "").strip()
+    if not script:
+        raise ValueError(f"step {index}: a PowerShell step needs a script")
+    if len(script) > MAX_SCRIPT_CHARS:
+        raise ValueError(
+            f"step {index}: the script must be {MAX_SCRIPT_CHARS} characters or fewer")
+    step["script"] = script
+
+
+def _winget_fields(raw, step, index, _source_names):
+    package_id = _clean(raw.get("id"), MAX_NAME_CHARS)
+    if not package_id:
+        raise ValueError(f"step {index}: a winget step needs a package id")
+    step["id"] = package_id
+    args = _clean(raw.get("args"), MAX_COMMAND_CHARS)
+    if args:
+        step["args"] = args
+
+
+def _extract_fields(raw, step, index, source_names):
+    archive = _clean(raw.get("archive"), MAX_COMMAND_CHARS)
+    if not archive:
+        raise ValueError(
+            f"step {index}: an extract step needs the archive to unpack, "
+            f"e.g. {{{_first_payload(source_names)}}}")
+    step["archive"] = archive
+    dest = _clean(raw.get("dest"), MAX_COMMAND_CHARS)
+    if dest:
+        step["dest"] = dest
+
+
+def _apk_fields(raw, step, index, source_names):
+    apk = _clean(raw.get("apk"), MAX_COMMAND_CHARS)
+    if not apk:
+        raise ValueError(
+            f"step {index}: an apk step needs the payload to install, "
+            f"e.g. {{{_first_payload(source_names)}}}")
+    step["apk"] = apk
+
+
+def _pnputil_fields(raw, step, index, _source_names):
+    path = _clean(raw.get("path"), MAX_COMMAND_CHARS)
+    if not path:
+        raise ValueError(
+            f"step {index}: a pnputil step needs the folder or .inf to install")
+    step["path"] = path
+    # Driver packs nest by model and chipset far more often than not, so recursing
+    # is the default and turning it off is the deliberate act.
+    step["subdirs"] = bool(raw.get("subdirs", True))
+
+
+# One field validator per installer kind. If and Stop are flow control and handled by
+# _StepWalk itself.
+_ACTION_FIELDS = {
+    STEP_RUN: _run_fields,
+    STEP_POWERSHELL: _powershell_fields,
+    STEP_WINGET: _winget_fields,
+    STEP_EXTRACT: _extract_fields,
+    STEP_APK: _apk_fields,
+    STEP_PNPUTIL: _pnputil_fields,
+}
+
+
+def _shared_options(raw, step, kind):
+    """Timeout, exit codes and continue_on_error -- what every installer step may set."""
+    timeout = _step_int(raw, "timeout_seconds", 30, 24 * 3600)
+    if timeout is not None:
+        step["timeout_seconds"] = timeout
+    if raw.get("success_exit_codes") not in (None, ""):
+        step["success_exit_codes"] = validate_exit_codes(raw["success_exit_codes"])
+    elif kind == STEP_PNPUTIL:
+        # Resolved HERE rather than defaulted in the agent, so the editor can show the
+        # operator the set their driver step will actually be judged by. See
+        # DEFAULT_PNPUTIL_EXIT_CODES for why 259 is in it.
+        step["success_exit_codes"] = list(DEFAULT_PNPUTIL_EXIT_CODES)
+    if raw.get("continue_on_error"):
+        step["continue_on_error"] = True
+
+
+def _check_step_variables(step, kind, index, bound):
+    unknown = set()
+    for field in _STEP_SUBSTITUTED[kind]:
+        unknown |= _referenced_variables(step.get(field)) - bound
+    if unknown:
+        raise ValueError(
+            f"step {index} refers to {'{'}{min(unknown)}{'}'}, which nothing "
+            f"before it provides. Available here: "
+            f"{', '.join('{' + name + '}' for name in sorted(bound))}")
+
+
+def _bind_save_as(raw, step, index, bound):
+    """The name an extract step binds its folder to -- always one, since the unpacked
+    directory is the whole point of the step. Auto-numbered when the operator does not
+    care, which is the common case."""
+    save_as = raw.get("save_as")
+    if save_as in (None, ""):
+        save_as = "extracted"
+        suffix = 2
+        while save_as in bound:
+            save_as = f"extracted{suffix}"
+            suffix += 1
+    else:
+        save_as = validate_name(save_as, "save_as")
+    if save_as in bound:
+        raise ValueError(
+            f"step {index}: {{{save_as}}} is already taken by an earlier step, a "
+            f"payload or a machine variable -- give this one a different name")
+    step["save_as"] = save_as
+    return save_as
 
 
 def iter_steps(steps, depth=0, parent=None, branch=None, _counter=None):
@@ -1046,8 +1089,8 @@ def iter_steps(steps, depth=0, parent=None, branch=None, _counter=None):
         ordinal = _counter[0]
         yield ordinal, step, depth, parent, branch
         if step.get("kind") == STEP_IF:
-            yield from iter_steps(step.get("then"), depth + 1, ordinal, "then", _counter)
-            yield from iter_steps(step.get("else"), depth + 1, ordinal, "else", _counter)
+            yield from iter_steps(step.get("then_steps"), depth + 1, ordinal, "then", _counter)
+            yield from iter_steps(step.get("else_steps"), depth + 1, ordinal, "else", _counter)
 
 
 def _all_conditions(sources, steps):

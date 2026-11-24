@@ -363,7 +363,7 @@ CURATED = (
      "{\"kind\": \"file_exists\", \"path\": \"C:\\Program Files\\...\\app.exe\"}, or "
      "registry_value {root, key, name, equals}. Steps can branch: {\"kind\": \"if\", "
      "\"condition\": {\"var\": \"hw.model\", \"cmp\": \"contains\", \"value\": \"Latitude\"}, "
-     "\"then\": [...], \"else\": [...]} (and/or/not groups as {\"op\", \"nodes\"}), and "
+     "\"then_steps\": [...], \"else_steps\": [...]} (and/or/not groups as {\"op\", \"nodes\"}), and "
      "{\"kind\": \"stop\", \"outcome\": \"success\"|\"failure\", \"message\"} ends the deploy; "
      "a payload's `only_if` takes the same condition. Needs the operator's confirmation.",
      "POST", _PACKAGES_ROUTE,

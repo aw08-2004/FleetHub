@@ -215,7 +215,7 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             {
                 var end = await PackageStepRunner.RunTreeAsync(
                     steps!, vars, new PackageStepRunner.StepDefaults(timeout, successCodes),
-                    Say, Emit, phases, facts, ct);
+                    new PackageStepRunner.StepSinks(Say, Emit, phases), facts, ct);
                 if (end == PackageStepRunner.RunEnd.StoppedSuccess)
                 {
                     // The package said "nothing to do here". Detection is a claim that the
@@ -471,74 +471,72 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         var kind = detection.GetString("kind") ?? "none";
         try
         {
-            switch (kind)
+            return kind switch
             {
-                case "none":
-                    return (true, "no check configured (exit code only)", false);
-
-                case "file_exists":
-                {
-                    var path = detection.GetString("path");
-                    if (string.IsNullOrWhiteSpace(path))
-                        return (false, "file_exists rule has no path", true);
-                    var found = File.Exists(path) || Directory.Exists(path);
-                    return (found, found ? $"found {path}" : $"NOT found: {path}", false);
-                }
-
-                case "registry_value":
-                {
-                    var root = OpenRoot(detection.GetString("root"));
-                    var keyPath = detection.GetString("key");
-                    var name = detection.GetString("name");
-                    if (root is null || string.IsNullOrWhiteSpace(keyPath) || string.IsNullOrWhiteSpace(name))
-                        return (false, "registry rule is incomplete", true);
-
-                    using var key = root.OpenSubKey(keyPath);
-                    var value = key?.GetValue(name);
-                    if (value is null)
-                        return (false, $"NOT found: {detection.GetString("root")}\\{keyPath}\\{name}", false);
-
-                    // An absent `equals` means "must merely exist"; an empty one is a real
-                    // exact match against the empty string, so check presence of the
-                    // property rather than emptiness of the string.
-                    if (detection is not null && detection.TryGetPropertyValue("equals", out var wanted)
-                        && wanted is not null)
-                    {
-                        var want = wanted.ToString();
-                        var got = value.ToString() ?? "";
-                        return (string.Equals(got, want, StringComparison.OrdinalIgnoreCase),
-                                $"{name} = '{got}' (wanted '{want}')", false);
-                    }
-                    return (true, $"{name} present", false);
-                }
-
-                case "installed_version":
-                {
-                    var product = detection.GetString("name");
-                    if (string.IsNullOrWhiteSpace(product))
-                        return (false, "installed_version rule has no product name", true);
-                    var found = FindInstalledVersion(product);
-                    if (found is null)
-                        return (false, $"NOT installed: no entry matching '{product}'", false);
-
-                    var min = detection.GetString("min_version");
-                    if (string.IsNullOrWhiteSpace(min))
-                        return (true, $"installed: {product} {found}", false);
-                    var ok = VersionUtil.Compare(found, min) >= 0;
-                    return (ok, $"installed {found}, required >= {min}", false);
-                }
-
-                default:
-                    // A kind this build doesn't implement (an older agent against a newer
-                    // hub). Fail closed: reporting success for a check we cannot perform
-                    // is the one outcome that misleads.
-                    return (false, $"unsupported detection kind '{kind}' — update the agent", true);
-            }
+                "none" => (true, "no check configured (exit code only)", false),
+                "file_exists" => DetectFile(detection),
+                "registry_value" => DetectRegistryValue(detection),
+                "installed_version" => DetectInstalledVersion(detection),
+                // A kind this build doesn't implement (an older agent against a newer hub).
+                // Fail closed: reporting success for a check we cannot perform is the one
+                // outcome that misleads.
+                _ => (false, $"unsupported detection kind '{kind}' — update the agent", true),
+            };
         }
         catch (Exception e)
         {
             return (false, $"check failed: {e.Message}", true);
         }
+    }
+
+    private static (bool Passed, string Detail, bool Errored) DetectFile(JsonObject? detection)
+    {
+        var path = detection.GetString("path");
+        if (string.IsNullOrWhiteSpace(path))
+            return (false, "file_exists rule has no path", true);
+        var found = File.Exists(path) || Directory.Exists(path);
+        return (found, found ? $"found {path}" : $"NOT found: {path}", false);
+    }
+
+    private static (bool Passed, string Detail, bool Errored) DetectRegistryValue(JsonObject? detection)
+    {
+        var root = OpenRoot(detection.GetString("root"));
+        var keyPath = detection.GetString("key");
+        var name = detection.GetString("name");
+        if (root is null || string.IsNullOrWhiteSpace(keyPath) || string.IsNullOrWhiteSpace(name))
+            return (false, "registry rule is incomplete", true);
+
+        using var key = root.OpenSubKey(keyPath);
+        var value = key?.GetValue(name);
+        if (value is null)
+            return (false, $"NOT found: {detection.GetString("root")}\\{keyPath}\\{name}", false);
+
+        // An absent `equals` means "must merely exist"; an empty one is a real exact match
+        // against the empty string, so check presence of the property rather than emptiness
+        // of the string.
+        if (detection is null || !detection.TryGetPropertyValue("equals", out var wanted)
+            || wanted is null)
+            return (true, $"{name} present", false);
+        var want = wanted.ToString();
+        var got = value.ToString() ?? "";
+        return (string.Equals(got, want, StringComparison.OrdinalIgnoreCase),
+                $"{name} = '{got}' (wanted '{want}')", false);
+    }
+
+    private static (bool Passed, string Detail, bool Errored) DetectInstalledVersion(JsonObject? detection)
+    {
+        var product = detection.GetString("name");
+        if (string.IsNullOrWhiteSpace(product))
+            return (false, "installed_version rule has no product name", true);
+        var found = FindInstalledVersion(product);
+        if (found is null)
+            return (false, $"NOT installed: no entry matching '{product}'", false);
+
+        var min = detection.GetString("min_version");
+        if (string.IsNullOrWhiteSpace(min))
+            return (true, $"installed: {product} {found}", false);
+        var ok = VersionUtil.Compare(found, min) >= 0;
+        return (ok, $"installed {found}, required >= {min}", false);
     }
 
     private static RegistryKey? OpenRoot(string? root) => (root ?? "").ToUpperInvariant() switch

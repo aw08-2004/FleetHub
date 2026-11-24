@@ -92,7 +92,7 @@ public class PackageConditionTests
         var step = new JsonObject
         {
             ["kind"] = "if", ["condition"] = condition,
-            ["then"] = then, ["else"] = otherwise ?? new JsonArray(),
+            ["then_steps"] = then, ["else_steps"] = otherwise ?? new JsonArray(),
         };
         if (onUnknown is not null) step["on_unknown"] = onUnknown;
         return step;

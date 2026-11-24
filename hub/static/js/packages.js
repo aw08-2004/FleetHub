@@ -383,8 +383,8 @@ function flatSteps(list, depth, out) {
     (list || []).forEach((step) => {
         acc.push({ step, depth: depth || 0 });
         if (step.kind === 'if') {
-            flatSteps(step.then, (depth || 0) + 1, acc);
-            flatSteps(step.else, (depth || 0) + 1, acc);
+            flatSteps(step.then_steps, (depth || 0) + 1, acc);
+            flatSteps(step.else_steps, (depth || 0) + 1, acc);
         }
     });
     return acc;
@@ -560,7 +560,7 @@ function moveStep(list, from, to) {
 function newStep(kind) {
     if (kind === 'if') {
         return { kind, condition: window.PackageConditions.blank(true), on_unknown: 'fail',
-                 then: [], else: [] };
+                 then_steps: [], else_steps: [] };
     }
     if (kind === 'stop') return { kind, outcome: 'success', message: '' };
     return { kind, subdirs: true };
@@ -656,17 +656,20 @@ function renderIfBody(card, step, depth, counter) {
     carryOn.style.marginTop = 'var(--space-3)';
     card.appendChild(carryOn);
 
-    [['then', t('packages.editor.if_then')], ['else', t('packages.editor.if_else')]]
-        .forEach(([lane, title]) => {
-            step[lane] = step[lane] || [];
+    // The lane lists are `then_steps` / `else_steps` on the wire, not `then` / `else`: an
+    // object with a `then` property is a thenable to every Promise it passes through.
+    [['then_steps', 'then', t('packages.editor.if_then')],
+     ['else_steps', 'else', t('packages.editor.if_else')]]
+        .forEach(([field, lane, title]) => {
+            step[field] = step[field] || [];
             const box = el('div', `pkg-lane pkg-lane--${lane}`);
             box.appendChild(el('div', 'pkg-lane__title', title));
-            if (!step[lane].length) {
+            if (!step[field].length) {
                 box.appendChild(el('p', 'setting__default', t('packages.editor.lane_empty')));
             }
-            step[lane].forEach((child, i) =>
-                box.appendChild(renderStep(child, i, step[lane], depth + 1, counter)));
-            box.appendChild(laneAdder(step[lane], depth + 1, lane === 'else'));
+            step[field].forEach((child, i) =>
+                box.appendChild(renderStep(child, i, step[field], depth + 1, counter)));
+            box.appendChild(laneAdder(step[field], depth + 1, lane === 'else'));
             card.appendChild(box);
         });
 }
@@ -946,8 +949,8 @@ function draftStepsFrom(steps) {
             draft.condition = window.PackageConditions.fromAst(step.condition)
                 || window.PackageConditions.blank(true);
             draft.on_unknown = step.on_unknown || 'fail';
-            draft.then = draftStepsFrom(step.then);
-            draft.else = draftStepsFrom(step.else);
+            draft.then_steps = draftStepsFrom(step.then_steps);
+            draft.else_steps = draftStepsFrom(step.else_steps);
         }
         return draft;
     });
@@ -1041,37 +1044,49 @@ function collectSteps() {
 
 function collectStepList(list) {
     return list.map((step) => {
-        const out = { kind: step.kind };
-        if (step.kind === 'if') {
-            if (step.name && step.name.trim()) out.name = step.name.trim();
-            out.condition = window.PackageConditions.toAst(step.condition);
-            if (step.on_unknown && step.on_unknown !== 'fail') out.on_unknown = step.on_unknown;
-            if (step.continue_on_error) out.continue_on_error = true;
-            out.then = collectStepList(step.then || []);
-            out.else = collectStepList(step.else || []);
-            return out;
-        }
-        if (step.kind === 'stop') {
-            if (step.name && step.name.trim()) out.name = step.name.trim();
-            out.outcome = step.outcome || 'success';
-            if (step.message && step.message.trim()) out.message = step.message.trim();
-            return out;
-        }
-        ['name', 'command', 'args', 'script', 'id', 'archive', 'dest', 'save_as', 'path', 'apk']
-            .forEach((field) => {
-                const value = (step[field] || '').trim ? (step[field] || '').trim() : step[field];
-                if (value) out[field] = value;
-            });
-        if (step.kind === 'pnputil') out.subdirs = step.subdirs !== false;
-        if (String(step.timeout_seconds || '').trim()) {
-            out.timeout_seconds = Number(step.timeout_seconds);
-        }
-        if (String(step.success_exit_codes || '').trim()) {
-            out.success_exit_codes = step.success_exit_codes;
-        }
-        if (step.continue_on_error) out.continue_on_error = true;
-        return out;
+        if (step.kind === 'if') return collectIfStep(step);
+        if (step.kind === 'stop') return collectStopStep(step);
+        return collectActionStep(step);
     });
+}
+
+function trimmed(value) {
+    return typeof value === 'string' ? value.trim() : value;
+}
+
+function collectIfStep(step) {
+    const out = { kind: 'if', condition: window.PackageConditions.toAst(step.condition) };
+    if (trimmed(step.name)) out.name = trimmed(step.name);
+    if (step.on_unknown && step.on_unknown !== 'fail') out.on_unknown = step.on_unknown;
+    if (step.continue_on_error) out.continue_on_error = true;
+    out.then_steps = collectStepList(step.then_steps || []);
+    out.else_steps = collectStepList(step.else_steps || []);
+    return out;
+}
+
+function collectStopStep(step) {
+    const out = { kind: 'stop', outcome: step.outcome || 'success' };
+    if (trimmed(step.name)) out.name = trimmed(step.name);
+    if (trimmed(step.message)) out.message = trimmed(step.message);
+    return out;
+}
+
+function collectActionStep(step) {
+    const out = { kind: step.kind };
+    ['name', 'command', 'args', 'script', 'id', 'archive', 'dest', 'save_as', 'path', 'apk']
+        .forEach((field) => {
+            const value = trimmed(step[field]);
+            if (value) out[field] = value;
+        });
+    if (step.kind === 'pnputil') out.subdirs = step.subdirs !== false;
+    if (String(step.timeout_seconds || '').trim()) {
+        out.timeout_seconds = Number(step.timeout_seconds);
+    }
+    if (String(step.success_exit_codes || '').trim()) {
+        out.success_exit_codes = step.success_exit_codes;
+    }
+    if (step.continue_on_error) out.continue_on_error = true;
+    return out;
 }
 
 document.getElementById('package-save').addEventListener('click', async () => {
@@ -1530,10 +1545,12 @@ const STEP_STATE_LABELS = {
 // branch an If did not take (agent 3.54.0) -- a dash, not a cross, because nothing failed.
 const STEP_GLYPHS = { running: '◐', ok: '✓', failed: '✕', skipped: '↷', aborted: '■', not_run: '–' };
 
-const BRANCH_LABELS = {
-    then: () => t('packages.progress.branch_then'),
-    else: () => t('packages.progress.branch_else'),
-};
+// A function rather than a { then: ... } lookup table, which would be a thenable.
+function branchLabel(branch) {
+    if (branch === 'then') return t('packages.progress.branch_then');
+    if (branch === 'else') return t('packages.progress.branch_else');
+    return '';
+}
 
 let progressDeployment = null;
 const expandedTargets = new Set();
@@ -1636,7 +1653,7 @@ function renderStepList(target) {
         if (step.depth) item.style.paddingInlineStart = `calc(${step.depth} * var(--space-6))`;
         item.appendChild(el('span', 'pkg-step__glyph', STEP_GLYPHS[step.state] || '○'));
         const main = el('div', 'pkg-step__main');
-        const lane = step.branch && BRANCH_LABELS[step.branch] ? `${BRANCH_LABELS[step.branch]()} · ` : '';
+        const lane = branchLabel(step.branch) ? `${branchLabel(step.branch)} · ` : '';
         main.appendChild(el('div', 'pkg-step__label', lane + phaseLabel(step)));
         if (!target.agent_reports_steps) {
             // The plan, and nothing about it: an agent that reports no steps has not said

@@ -52,6 +52,11 @@ public static class PackageStepRunner
     /// the package itself has said the software is not meant to be here.</summary>
     public enum RunEnd { Completed, Failed, StoppedSuccess }
 
+    /// <summary>Where a run says what it is doing: its own log lines, the installers' output,
+    /// and the console's phase events. One value so the entry points stay within a readable
+    /// parameter list.</summary>
+    public readonly record struct StepSinks(Action<string> Say, Action<string> Emit, PhaseTracker? Phases);
+
     /// <summary>Run every step in order. Returns false as soon as one fails without
     /// `continue_on_error` set, or the run is cancelled.</summary>
     public static Task<bool> RunAllAsync(
@@ -66,7 +71,8 @@ public static class PackageStepRunner
     public static async Task<bool> RunAllAsync(
         JsonArray steps, PackageVariables vars, StepDefaults defaults,
         Action<string> say, Action<string> emit, PhaseTracker? phases, CancellationToken ct) =>
-        await RunTreeAsync(steps, vars, defaults, say, emit, phases, null, ct) != RunEnd.Failed;
+        await RunTreeAsync(steps, vars, defaults, new StepSinks(say, emit, phases), null, ct)
+        != RunEnd.Failed;
 
     /// <summary>Run a step list that may branch (agent 3.54.0) -- what DeployPackageExecutor
     /// calls. <paramref name="facts"/> answers If conditions; without it every condition about
@@ -81,93 +87,105 @@ public static class PackageStepRunner
     /// that flag is for a step that failed, and an operator's Abort is not a failure to
     /// tolerate.</summary>
     public static Task<RunEnd> RunTreeAsync(
-        JsonArray steps, PackageVariables vars, StepDefaults defaults,
-        Action<string> say, Action<string> emit, PhaseTracker? phases, IMachineFacts? facts,
-        CancellationToken ct) =>
-        new TreeRun(vars, defaults, say, emit, phases, facts, ct).ListAsync(steps);
+        JsonArray steps, PackageVariables vars, StepDefaults defaults, StepSinks sinks,
+        IMachineFacts? facts, CancellationToken ct) =>
+        new TreeRun(vars, defaults, sinks, facts, ct).ListAsync(steps);
 
     /// <summary>One run's walk through the tree: the shared ordinal counter and the last exit
     /// code, which both have to survive descending into a lane and coming back out.</summary>
     private sealed class TreeRun(
-        PackageVariables vars, StepDefaults defaults, Action<string> say, Action<string> emit,
-        PhaseTracker? phases, IMachineFacts? facts, CancellationToken ct)
+        PackageVariables vars, StepDefaults defaults, StepSinks sinks, IMachineFacts? facts,
+        CancellationToken ct)
     {
         private int _ordinal;
         private int? _lastExitCode;
         private readonly IMachineFacts _facts = facts ?? new NoFacts();
+        private readonly Action<string> _say = sinks.Say;
+        private readonly PhaseTracker? _phases = sinks.Phases;
 
         public async Task<RunEnd> ListAsync(JsonArray? list)
         {
             if (list is null) return RunEnd.Completed;
             foreach (var node in list)
             {
-                var index = ++_ordinal;
-                if (ct.IsCancellationRequested)
-                {
-                    say($"[deploy] stopped before step {index}: the run was cancelled");
-                    return RunEnd.Failed;
-                }
-                phases?.Begin(StepPhase.Step, index);
-                if (node is not JsonObject step)
-                {
-                    say($"[deploy] step {index}: FAILED: not an object");
-                    phases?.End(StepState.Failed, message: "not an object");
-                    return RunEnd.Failed;
-                }
-
-                var kind = step.GetString("kind") ?? "";
-                var label = step.GetString("name");
-                say($"[deploy] step {index} — {kind}" +
-                    (string.IsNullOrWhiteSpace(label) ? "" : $": {label}"));
-
-                if (kind == "if")
-                {
-                    var end = await IfAsync(step, index);
-                    if (end != RunEnd.Completed) return end;
-                    continue;
-                }
-                if (kind == "stop")
-                {
-                    var success = step.GetString("outcome") == "success";
-                    var message = step.GetString("message");
-                    var text = string.IsNullOrWhiteSpace(message)
-                        ? (success ? "stopped: nothing to do on this machine" : "stopped by the package")
-                        : message!;
-                    say($"[deploy] {(success ? "STOP (success)" : "STOP (failure)")}: {text}");
-                    phases?.End(success ? StepState.Ok : StepState.Failed, message: text);
-                    return success ? RunEnd.StoppedSuccess : RunEnd.Failed;
-                }
-
-                var outcome = await RunOneAsync(step, kind, vars, defaults.Timeout,
-                                                defaults.ExitCodes, say, emit, ct);
-                if (outcome.ExitCode is { } code) _lastExitCode = code;
-                if (outcome.Aborted || (!outcome.Succeeded && ct.IsCancellationRequested))
-                {
-                    phases?.Fail(null, aborted: phases.AbortRequested);
-                    say($"[deploy] stopped at step {index}: the run was cancelled");
-                    return RunEnd.Failed;
-                }
-                if (outcome.Succeeded)
-                {
-                    phases?.End(StepState.Ok, outcome.ExitCode);
-                    continue;
-                }
-                if (outcome.Continue)
-                {
-                    phases?.End(StepState.Skipped, outcome.ExitCode, outcome.Why);
-                    say($"[deploy] step {index} failed, carrying on as configured");
-                    continue;
-                }
-                phases?.End(StepState.Failed, outcome.ExitCode, outcome.Why);
-                say($"[deploy] FAILED at step {index}");
-                return RunEnd.Failed;
+                var end = await StepAsync(node, ++_ordinal);
+                if (end != RunEnd.Completed) return end;
             }
             return RunEnd.Completed;
         }
 
+        private async Task<RunEnd> StepAsync(JsonNode? node, int index)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                _say($"[deploy] stopped before step {index}: the run was cancelled");
+                return RunEnd.Failed;
+            }
+            _phases?.Begin(StepPhase.Step, index);
+            if (node is not JsonObject step)
+            {
+                _say($"[deploy] step {index}: FAILED: not an object");
+                _phases?.End(StepState.Failed, message: "not an object");
+                return RunEnd.Failed;
+            }
+
+            var kind = step.GetString("kind") ?? "";
+            var label = step.GetString("name");
+            _say($"[deploy] step {index} — {kind}" +
+                 (string.IsNullOrWhiteSpace(label) ? "" : $": {label}"));
+            return kind switch
+            {
+                "if" => await IfAsync(step, index),
+                "stop" => Stop(step),
+                _ => await ActionAsync(step, kind, index),
+            };
+        }
+
+        private RunEnd Stop(JsonObject step)
+        {
+            var success = step.GetString("outcome") == "success";
+            var text = step.GetString("message") is { Length: > 0 } message
+                ? message
+                : DefaultStopMessage(success);
+            _say($"[deploy] STOP ({(success ? "success" : "failure")}): {text}");
+            _phases?.End(success ? StepState.Ok : StepState.Failed, message: text);
+            return success ? RunEnd.StoppedSuccess : RunEnd.Failed;
+        }
+
+        private static string DefaultStopMessage(bool success) =>
+            success ? "stopped: nothing to do on this machine" : "stopped by the package";
+
+        private async Task<RunEnd> ActionAsync(JsonObject step, string kind, int index)
+        {
+            var outcome = await RunOneAsync(step, kind, vars, defaults.Timeout,
+                                            defaults.ExitCodes, _say, sinks.Emit, ct);
+            if (outcome.ExitCode is { } code) _lastExitCode = code;
+            if (outcome.Aborted || (!outcome.Succeeded && ct.IsCancellationRequested))
+            {
+                _phases?.Fail(null, aborted: _phases.AbortRequested);
+                _say($"[deploy] stopped at step {index}: the run was cancelled");
+                return RunEnd.Failed;
+            }
+            if (outcome.Succeeded)
+            {
+                _phases?.End(StepState.Ok, outcome.ExitCode);
+                return RunEnd.Completed;
+            }
+            if (outcome.Continue)
+            {
+                _phases?.End(StepState.Skipped, outcome.ExitCode, outcome.Why);
+                _say($"[deploy] step {index} failed, carrying on as configured");
+                return RunEnd.Completed;
+            }
+            _phases?.End(StepState.Failed, outcome.ExitCode, outcome.Why);
+            _say($"[deploy] FAILED at step {index}");
+            return RunEnd.Failed;
+        }
+
         private async Task<RunEnd> IfAsync(JsonObject step, int index)
         {
-            var evaluator = new ConditionEvaluator(_facts, vars, () => _lastExitCode, say, emit, ct);
+            var evaluator = new ConditionEvaluator(
+                _facts, vars, () => _lastExitCode, _say, sinks.Emit, ct);
             Tri answer;
             try
             {
@@ -175,53 +193,51 @@ public static class PackageStepRunner
             }
             catch (OperationCanceledException)
             {
-                phases?.Fail(null, aborted: phases.AbortRequested);
-                say($"[deploy] stopped at step {index}: the run was cancelled");
+                _phases?.Fail(null, aborted: _phases.AbortRequested);
+                _say($"[deploy] stopped at step {index}: the run was cancelled");
                 return RunEnd.Failed;
             }
             var seen = string.Join("; ", evaluator.Notes.Distinct().Take(6));
-            say($"[deploy] condition is {answer.ToString().ToLowerInvariant()}" +
-                (seen.Length > 0 ? $" ({seen})" : ""));
+            _say($"[deploy] condition is {answer.ToString().ToLowerInvariant()}" +
+                 (seen.Length > 0 ? $" ({seen})" : ""));
+
+            // UNKNOWN never quietly becomes Else -- see hub/package_conditions.py. Only the
+            // operator's own on_unknown: "else" turns it into one.
+            if (answer == Tri.Unknown && step.GetString("on_unknown") != "else")
+                return Undecided(step, index, seen);
+            if (answer == Tri.Unknown)
+                _say("[deploy] the machine could not tell; running Else as configured");
 
             var takeThen = answer == Tri.True;
-            if (answer == Tri.Unknown)
+            _phases?.End(StepState.Ok, message: Trim($"{(takeThen ? "Then" : "Else")}: {seen}"));
+            if (!takeThen)
             {
-                // UNKNOWN never quietly becomes Else -- see hub/package_conditions.py. Only
-                // the operator's own on_unknown: "else" turns it into one.
-                if (step.GetString("on_unknown") == "else")
-                {
-                    say("[deploy] the machine could not tell; running Else as configured");
-                }
-                else
-                {
-                    var why = "could not decide: " + (seen.Length > 0 ? seen : "the condition is unknown here");
-                    var carryOn = step.GetBool("continue_on_error");
-                    phases?.End(carryOn ? StepState.Skipped : StepState.Failed, message: Trim(why));
-                    // Both lanes are left unrun either way; count them so later ordinals
-                    // stay where the console expects them.
-                    MarkNotRun(step["then"] as JsonArray);
-                    MarkNotRun(step["else"] as JsonArray);
-                    if (carryOn)
-                    {
-                        say($"[deploy] step {index}: {why} -- skipping both branches as configured");
-                        return RunEnd.Completed;
-                    }
-                    say($"[deploy] FAILED at step {index}: {why}");
-                    return RunEnd.Failed;
-                }
+                MarkNotRun(step["then_steps"] as JsonArray);
+                return await ListAsync(step["else_steps"] as JsonArray);
             }
+            var end = await ListAsync(step["then_steps"] as JsonArray);
+            if (end == RunEnd.Completed) MarkNotRun(step["else_steps"] as JsonArray);
+            return end;
+        }
 
-            var lane = takeThen ? "Then" : "Else";
-            phases?.End(StepState.Ok, message: Trim($"{lane}: {seen}"));
-            if (takeThen)
+        /// <summary>An If the machine could not answer: a failed step, or -- with
+        /// continue_on_error -- a skipped one that runs neither lane.</summary>
+        private RunEnd Undecided(JsonObject step, int index, string seen)
+        {
+            var why = "could not decide: " + (seen.Length > 0 ? seen : "the condition is unknown here");
+            var carryOn = step.GetBool("continue_on_error");
+            _phases?.End(carryOn ? StepState.Skipped : StepState.Failed, message: Trim(why));
+            // Both lanes are left unrun either way; count them so later ordinals stay where
+            // the console expects them.
+            MarkNotRun(step["then_steps"] as JsonArray);
+            MarkNotRun(step["else_steps"] as JsonArray);
+            if (carryOn)
             {
-                var end = await ListAsync(step["then"] as JsonArray);
-                if (end != RunEnd.Completed) return end;
-                MarkNotRun(step["else"] as JsonArray);
+                _say($"[deploy] step {index}: {why} -- skipping both branches as configured");
                 return RunEnd.Completed;
             }
-            MarkNotRun(step["then"] as JsonArray);
-            return await ListAsync(step["else"] as JsonArray);
+            _say($"[deploy] FAILED at step {index}: {why}");
+            return RunEnd.Failed;
         }
 
         /// <summary>Count -- and report as not_run -- every step of a lane that will not run,
@@ -232,22 +248,22 @@ public static class PackageStepRunner
             foreach (var node in list)
             {
                 var index = ++_ordinal;
-                phases?.Mark(StepPhase.Step, index, StepState.NotRun);
+                _phases?.Mark(StepPhase.Step, index, StepState.NotRun);
                 if (node is JsonObject step && step.GetString("kind") == "if")
                 {
-                    MarkNotRun(step["then"] as JsonArray);
-                    MarkNotRun(step["else"] as JsonArray);
+                    MarkNotRun(step["then_steps"] as JsonArray);
+                    MarkNotRun(step["else_steps"] as JsonArray);
                 }
             }
         }
 
         private static string Trim(string text) => text.Length <= 400 ? text : text[..400] + "…";
-    }
 
-    /// <summary>The facts a run has when it was given none: every one unknown.</summary>
-    private sealed class NoFacts : IMachineFacts
-    {
-        public string? Get(string name) => null;
+        /// <summary>The facts a run has when it was given none: every one unknown.</summary>
+        private sealed class NoFacts : IMachineFacts
+        {
+            public string? Get(string name) => null;
+        }
     }
 
     private static async Task<StepOutcome> RunOneAsync(

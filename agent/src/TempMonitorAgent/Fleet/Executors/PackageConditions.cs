@@ -41,7 +41,10 @@ public sealed class WindowsMachineFacts(IReadOnlyDictionary<string, string?>? hu
     : IMachineFacts
 {
     private readonly Dictionary<string, string?> _cache = new(StringComparer.Ordinal);
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
+
+    private const string ComputerSystem = "Win32_ComputerSystem";
+    private const string OperatingSystem = "Win32_OperatingSystem";
 
     /// <summary>Values an OEM ships in unset SMBIOS strings. Same idea as SystemInfo's
     /// placeholder list -- a "System Version" model name identifies nothing.</summary>
@@ -70,38 +73,50 @@ public sealed class WindowsMachineFacts(IReadOnlyDictionary<string, string?>? hu
 
     private static string? Read(string name) => name switch
     {
-        "hw.manufacturer" => Wmi("Win32_ComputerSystem", "Manufacturer") is { } m
-                             && SystemInfo.IsRealManufacturer(m) ? m : null,
-        "hw.model" => Wmi("Win32_ComputerSystem", "Model"),
+        "hw.manufacturer" => RealManufacturer(Wmi(ComputerSystem, "Manufacturer")),
+        "hw.model" => Wmi(ComputerSystem, "Model"),
         "hw.model_name" => NotPlaceholder(Wmi("Win32_ComputerSystemProduct", "Version")),
-        "hw.sku" => NotPlaceholder(Wmi("Win32_ComputerSystem", "SystemSKUNumber")),
+        "hw.sku" => NotPlaceholder(Wmi(ComputerSystem, "SystemSKUNumber")),
         "hw.serial_number" => NotPlaceholder(Wmi("Win32_BIOS", "SerialNumber")),
         "hw.chassis" => Chassis(),
         "hw.memory_gb" => MemoryGb(),
         "hw.cpu" => Wmi("Win32_Processor", "Name"),
-        "os.name" => Wmi("Win32_OperatingSystem", "Caption"),
-        "os.version" => Wmi("Win32_OperatingSystem", "Version"),
-        "os.build" => Wmi("Win32_OperatingSystem", "BuildNumber"),
+        "os.name" => Wmi(OperatingSystem, "Caption"),
+        "os.version" => Wmi(OperatingSystem, "Version"),
+        "os.build" => Wmi(OperatingSystem, "BuildNumber"),
         "os.display_version" => DisplayVersion(),
         "os.arch" => Arch(),
         "bios.version" => Wmi("Win32_BIOS", "SMBIOSBIOSVersion"),
         "sys.hostname" => Environment.MachineName,
-        "sys.domain" => Wmi("Win32_ComputerSystem", "Domain"),
-        "sys.domain_joined" => Wmi("Win32_ComputerSystem", "PartOfDomain") is { } joined
-                               ? (bool.TryParse(joined, out var b) ? (b ? "true" : "false") : null)
-                               : null,
+        "sys.domain" => Wmi(ComputerSystem, "Domain"),
+        "sys.domain_joined" => BoolWord(Wmi(ComputerSystem, "PartOfDomain")),
         "sys.agent_version" => AgentConfig.Version,
         _ => null,
     };
 
+    private static string? RealManufacturer(string? value) =>
+        value is not null && SystemInfo.IsRealManufacturer(value) ? value : null;
+
+    /// <summary>"True"/"False" from WMI as the lowercase words a condition compares.</summary>
+    private static string? BoolWord(string? value)
+    {
+        if (!bool.TryParse(value, out var b)) return null;
+        return b ? "true" : "false";
+    }
+
+    /// <summary>The first instance of a WMI class, or null. Every class read here has one
+    /// instance per machine.</summary>
+    private static ManagementObject? FirstInstance(string query)
+    {
+        using var searcher = new ManagementObjectSearcher(query);
+        using var results = searcher.Get();
+        return results.OfType<ManagementObject>().FirstOrDefault();
+    }
+
     private static string? Wmi(string wmiClass, string property)
     {
-        using var searcher = new ManagementObjectSearcher($"SELECT {property} FROM {wmiClass}");
-        foreach (ManagementObject obj in searcher.Get())
-        {
-            using (obj) return obj[property]?.ToString();
-        }
-        return null;
+        using var obj = FirstInstance($"SELECT {property} FROM {wmiClass}");
+        return obj?[property]?.ToString();
     }
 
     private static string? NotPlaceholder(string? value)
@@ -126,23 +141,15 @@ public sealed class WindowsMachineFacts(IReadOnlyDictionary<string, string?>? hu
 
     private static string? Chassis()
     {
-        using var searcher = new ManagementObjectSearcher("SELECT ChassisTypes FROM Win32_SystemEnclosure");
-        foreach (ManagementObject obj in searcher.Get())
-        {
-            using (obj)
-            {
-                if (obj["ChassisTypes"] is ushort[] types && types.Length > 0)
-                    return ChassisWord(types[0]);
-            }
-        }
-        return null;
+        using var obj = FirstInstance("SELECT ChassisTypes FROM Win32_SystemEnclosure");
+        return obj?["ChassisTypes"] is ushort[] { Length: > 0 } types ? ChassisWord(types[0]) : null;
     }
 
     private static string? MemoryGb()
     {
         // Rounded to the nearest whole GB: a "16 GB" machine reports 15.7 after the firmware
         // reserves its share, and `hw.memory_gb >= 16` has to mean what the operator meant.
-        var raw = Wmi("Win32_ComputerSystem", "TotalPhysicalMemory");
+        var raw = Wmi(ComputerSystem, "TotalPhysicalMemory");
         return ulong.TryParse(raw, out var bytes)
             ? Math.Round(bytes / (1024.0 * 1024 * 1024)).ToString(CultureInfo.InvariantCulture)
             : null;
@@ -189,14 +196,19 @@ public sealed partial class ConditionEvaluator(
 {
     /// <summary>The kind of each variable, as the hub's catalog declares it. A name absent
     /// here (a custom field) takes its kind from the value the hub sent.</summary>
+    private const string KindNumber = "number";
+    private const string KindBool = "bool";
+    private const string KindVersion = "version";
+    private const string KindText = "text";
+
     private static readonly Dictionary<string, string> Kinds = new(StringComparer.Ordinal)
     {
-        ["hw.memory_gb"] = "number",
-        ["os.build"] = "number",
-        ["step.last_exit_code"] = "number",
-        ["sys.domain_joined"] = "bool",
-        ["os.version"] = "version",
-        ["sys.agent_version"] = "version",
+        ["hw.memory_gb"] = KindNumber,
+        ["os.build"] = KindNumber,
+        ["step.last_exit_code"] = KindNumber,
+        ["sys.domain_joined"] = KindBool,
+        ["os.version"] = KindVersion,
+        ["sys.agent_version"] = KindVersion,
     };
 
     /// <summary>Short "what was looked at" notes, for the If's message in the console.</summary>
@@ -206,35 +218,32 @@ public sealed partial class ConditionEvaluator(
     {
         if (node is not JsonObject obj) return Tri.Unknown;
         var op = obj.GetString("op");
-        if (op is "and" or "or")
+        var children = obj["nodes"] as JsonArray;
+        return op switch
         {
-            var children = obj["nodes"] as JsonArray;
-            if (children is null || children.Count == 0) return Tri.Unknown;
-            var sawUnknown = false;
-            foreach (var child in children)
-            {
-                var r = await EvaluateAsync(child);
-                if (op == "and" && r == Tri.False) return Tri.False;
-                if (op == "or" && r == Tri.True) return Tri.True;
-                if (r == Tri.Unknown) sawUnknown = true;
-            }
-            if (sawUnknown) return Tri.Unknown;
-            return op == "and" ? Tri.True : Tri.False;
-        }
-        if (op == "not")
+            "and" or "or" => await GroupAsync(op, children),
+            "not" => children is { Count: 1 } ? Not(await EvaluateAsync(children[0])) : Tri.Unknown,
+            null when obj.GetString("probe") is { } probe => await ProbeAsync(probe, obj),
+            null => Leaf(obj),
+            _ => Tri.Unknown,
+        };
+    }
+
+    /// <summary>Kleene and/or, stopping at the first decisive answer: FALSE settles an and,
+    /// TRUE settles an or.</summary>
+    private async Task<Tri> GroupAsync(string op, JsonArray? children)
+    {
+        if (children is null || children.Count == 0) return Tri.Unknown;
+        var decisive = op == "or" ? Tri.True : Tri.False;
+        var sawUnknown = false;
+        foreach (var child in children)
         {
-            var children = obj["nodes"] as JsonArray;
-            if (children is null || children.Count != 1) return Tri.Unknown;
-            return await EvaluateAsync(children[0]) switch
-            {
-                Tri.True => Tri.False,
-                Tri.False => Tri.True,
-                _ => Tri.Unknown,
-            };
+            var r = await EvaluateAsync(child);
+            if (r == decisive) return decisive;
+            sawUnknown |= r == Tri.Unknown;
         }
-        if (op is not null) return Tri.Unknown;
-        if (obj.GetString("probe") is { } probe) return await ProbeAsync(probe, obj);
-        return Leaf(obj);
+        if (sawUnknown) return Tri.Unknown;
+        return decisive == Tri.True ? Tri.False : Tri.True;
     }
 
     // ---------------------------------------------------------------- variables
@@ -259,55 +268,53 @@ public sealed partial class ConditionEvaluator(
         var sample = right is JsonArray list && list.Count > 0 ? list[0] : right;
         if (sample is JsonValue v)
         {
-            if (v.TryGetValue<bool>(out _)) return "bool";
-            if (v.TryGetValue<double>(out _)) return "number";
+            if (v.TryGetValue<bool>(out _)) return KindBool;
+            if (v.TryGetValue<double>(out _)) return KindNumber;
         }
-        return "text";
+        return KindText;
     }
 
     /// <summary>One comparison. Public for the tests, which pin it against the hub's.</summary>
     public static Tri Compare(string kind, string cmp, string? left, JsonNode? right)
     {
-        if (cmp == "is_known") return left is null ? Tri.False : Tri.True;
-        if (cmp == "is_unknown") return left is null ? Tri.True : Tri.False;
+        if (cmp == "is_known") return Of(left is not null);
+        if (cmp == "is_unknown") return Of(left is null);
         if (left is null) return Tri.Unknown;
-
-        if (cmp is "in" or "not_in")
-        {
-            if (right is not JsonArray items) return Tri.Unknown;
-            var hit = false;
-            foreach (var item in items)
-            {
-                if (Equal(kind, left, Text(item)) == Tri.True) { hit = true; break; }
-            }
-            return (hit == (cmp == "in")) ? Tri.True : Tri.False;
-        }
+        if (cmp is "in" or "not_in") return Membership(kind, cmp, left, right);
 
         var wanted = Text(right);
         if (wanted is null) return Tri.Unknown;
-        switch (cmp)
+        return cmp switch
         {
-            case "==": return Equal(kind, left, wanted);
-            case "!=": return Not(Equal(kind, left, wanted));
-            case ">" or ">=" or "<" or "<=":
-            {
-                int? order = kind switch
-                {
-                    "version" => CompareVersions(left, wanted),
-                    "number" => TryNumber(left, out var a) && TryNumber(wanted, out var b)
-                                ? a.CompareTo(b) : null,
-                    _ => null,
-                };
-                if (order is not { } o) return Tri.Unknown;
-                return Of(cmp switch { ">" => o > 0, ">=" => o >= 0, "<" => o < 0, _ => o <= 0 });
-            }
-            case "contains": return Of(left.Contains(wanted, StringComparison.OrdinalIgnoreCase));
-            case "not_contains": return Of(!left.Contains(wanted, StringComparison.OrdinalIgnoreCase));
-            case "starts_with": return Of(left.StartsWith(wanted, StringComparison.OrdinalIgnoreCase));
-            case "ends_with": return Of(left.EndsWith(wanted, StringComparison.OrdinalIgnoreCase));
-            case "matches": return Of(WildcardMatch(wanted, left));
-            default: return Tri.Unknown;   // an operator this build does not know
-        }
+            "==" => Equal(kind, left, wanted),
+            "!=" => Not(Equal(kind, left, wanted)),
+            ">" or ">=" or "<" or "<=" => Ordered(kind, cmp, left, wanted),
+            "contains" => Of(left.Contains(wanted, StringComparison.OrdinalIgnoreCase)),
+            "not_contains" => Of(!left.Contains(wanted, StringComparison.OrdinalIgnoreCase)),
+            "starts_with" => Of(left.StartsWith(wanted, StringComparison.OrdinalIgnoreCase)),
+            "ends_with" => Of(left.EndsWith(wanted, StringComparison.OrdinalIgnoreCase)),
+            "matches" => Of(WildcardMatch(wanted, left)),
+            _ => Tri.Unknown,   // an operator this build does not know
+        };
+    }
+
+    private static Tri Membership(string kind, string cmp, string left, JsonNode? right)
+    {
+        if (right is not JsonArray items) return Tri.Unknown;
+        var hit = items.Any(item => Equal(kind, left, Text(item)) == Tri.True);
+        return Of(hit == (cmp == "in"));
+    }
+
+    private static Tri Ordered(string kind, string cmp, string left, string wanted)
+    {
+        int? order = kind switch
+        {
+            KindVersion => CompareVersions(left, wanted),
+            KindNumber when TryNumber(left, out var a) && TryNumber(wanted, out var b) => a.CompareTo(b),
+            _ => null,
+        };
+        if (order is not { } o) return Tri.Unknown;
+        return Of(cmp switch { ">" => o > 0, ">=" => o >= 0, "<" => o < 0, _ => o <= 0 });
     }
 
     private static Tri Equal(string kind, string left, string? right)
@@ -315,13 +322,15 @@ public sealed partial class ConditionEvaluator(
         if (right is null) return Tri.Unknown;
         switch (kind)
         {
-            case "number":
+            case KindNumber:
+                // A tolerance, not ==: "16" parsed twice is the same double, but a value that
+                // went through arithmetic (a rounded memory size) need not be bit-identical.
                 return TryNumber(left, out var a) && TryNumber(right, out var b)
-                    ? Of(a == b) : Tri.Unknown;
-            case "bool":
+                    ? Of(Math.Abs(a - b) < 1e-9) : Tri.Unknown;
+            case KindBool:
                 return bool.TryParse(left, out var x) && bool.TryParse(right, out var y)
                     ? Of(x == y) : Tri.Unknown;
-            case "version":
+            case KindVersion:
                 return CompareVersions(left, right) is { } order ? Of(order == 0) : Tri.Unknown;
             default:
                 // Case-insensitive and trimmed, as rules._loose_equal: "LENOVO" is "Lenovo".

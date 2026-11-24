@@ -429,7 +429,9 @@
                 text = `${probeText(n.probe)[0]} — ${t('packages.cond.preview.on_machine')}`;
             } else {
                 const actual = n.known ? String(n.actual) : t('packages.cond.preview.no_value');
-                const wanted = n.value === undefined ? '' : ` ${Array.isArray(n.value) ? n.value.join(', ') : n.value}`;
+                let wanted = '';
+                if (Array.isArray(n.value)) wanted = ` ${n.value.join(', ')}`;
+                else if (n.value !== undefined) wanted = ` ${n.value}`;
                 text = `${variableLabel(n.var)} ${operatorLabel(n.cmp)}${wanted} — ${actual}`;
             }
             list.appendChild(node('li', null, `${RESULT_GLYPHS[n.result] || ''} ${text}`));

@@ -79,7 +79,7 @@ def run(args, **extra):
 
 def model_if(then, otherwise=None, **extra):
     return {"kind": "if", "condition": leaf("hw.model", "contains", "Latitude"),
-            "then": then, "else": otherwise or [], **extra}
+            "then_steps": then, "else_steps": otherwise or [], **extra}
 
 
 def fake_login_required(view):
@@ -165,7 +165,7 @@ def test_steps():
         model_if([run("/c echo a")], [run("/c echo b")]),
         run("/c echo after"),
     ])
-    check("an If keeps its two lanes", len(plan[0]["then"]) == 1 and len(plan[0]["else"]) == 1)
+    check("an If keeps its two lanes", len(plan[0]["then_steps"]) == 1 and len(plan[0]["else_steps"]) == 1)
     check("on_unknown defaults to fail and is not stored", "on_unknown" not in plan[0])
     numbering = [(o, s["kind"], d, p, b) for o, s, d, p, b in packages.iter_steps(plan)]
     check("numbering is depth-first: If, Then, Else, after",
@@ -173,7 +173,7 @@ def test_steps():
                         (3, "run", 1, 1, "else"), (4, "run", 0, None, None)])
 
     check("an If needs a condition",
-          refused(packages.validate_steps, [{"kind": "if", "then": [run("x")]}],
+          refused(packages.validate_steps, [{"kind": "if", "then_steps": [run("x")]}],
                   contains="needs a condition"))
     check("an If needs at least one step",
           refused(packages.validate_steps, [model_if([])], contains="at least one step"))
@@ -231,8 +231,8 @@ def test_packages(db_path):
          "only_if": json.dumps(leaf("hw.manufacturer", "starts_with", "Lenovo"))},
     ]
     steps = [{"kind": "if", "condition": leaf("hw.manufacturer", "starts_with", "Dell"),
-              "then": [{"kind": "extract", "archive": "{dell}", "save_as": "drivers"}],
-              "else": [{"kind": "extract", "archive": "{lenovo}", "save_as": "drivers"}]},
+              "then_steps": [{"kind": "extract", "archive": "{dell}", "save_as": "drivers"}],
+              "else_steps": [{"kind": "extract", "archive": "{lenovo}", "save_as": "drivers"}]},
              {"kind": "pnputil", "path": "{drivers}"}]
     pkg_id = packages.create_package(db_path, name="Drivers", sources=sources, steps=steps,
                                      actor="op@x.com")
@@ -265,16 +265,16 @@ def test_packages(db_path):
     pkg2 = packages.create_package(
         db_path, name="Site tools", steps=[{"kind": "if",
                                             "condition": leaf("field.site", "==", "Hospital"),
-                                            "then": [run("/c echo h")]}], actor="op@x.com")
+                                            "then_steps": [run("/c echo h")]}], actor="op@x.com")
     check("a condition may read a custom field the hub knows", pkg2 is not None)
     check("...and an unknown one is refused by name",
           refused(packages.create_package, db_path, name="Bad field",
                   steps=[{"kind": "if", "condition": leaf("field.nope", "==", "x"),
-                          "then": [run("/c x")]}], contains="no custom field called 'nope'"))
+                          "then_steps": [run("/c x")]}], contains="no custom field called 'nope'"))
     check("the assistant's pre-check, with no database, lets a field clause through",
           packages.check_definition(
               name="Pre", steps=[{"kind": "if", "condition": leaf("field.nope", "==", "x"),
-                                  "then": [run("/c x")]}])[2][0]["kind"] == "if")
+                                  "then_steps": [run("/c x")]}])[2][0]["kind"] == "if")
 
     print("\n== packages: needs agent 3.54.0 ==")
     plain = packages.get_package(db_path, packages.create_package(

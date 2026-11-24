@@ -170,6 +170,7 @@ VAR_TEXT_KEY = "packages.cond.var"
 PROBE_TEXT_KEY = "packages.cond.probe"
 
 _VERSION_RE = re.compile(r"^\s*(\d+(?:\.\d+)*)")
+FIELD_PREFIX = "field."
 _FIELD_NAME_RE = re.compile(r"^field\.[a-z][a-z0-9_]{0,63}$")
 
 
@@ -186,7 +187,8 @@ def field_variables(db_path):
         return {}
     try:
         fields = rules.field_variables(db_path)
-    except Exception:  # noqa: BLE001 -- see the docstring: no fields beats no packages
+    except Exception:  # noqa: BLE001
+        # See the docstring: no fields beats no packages.
         return {}
     return {name: PackageVar(name, var.kind, GROUP_FIELD, SOURCE_HUB)
             for name, var in fields.items()}
@@ -278,17 +280,7 @@ def _validate_leaf(node, ctx):
     name = str(node.get("var") or "").strip()
     var = lookup(name, ctx.extra)
     if var is None:
-        if _FIELD_NAME_RE.match(name) and ctx.fields_unknown:
-            cmp_op = node.get("cmp")
-            if cmp_op not in rules.ALL_OPERATORS:
-                raise ValueError(f"unknown operator {cmp_op!r}")
-            leaf = {"var": name, "cmp": cmp_op}
-            if cmp_op not in rules.NULLARY_OPERATORS:
-                leaf["value"] = node.get("value")
-            return leaf
-        if _FIELD_NAME_RE.match(name):
-            raise ValueError(f"there is no custom field called {name[len('field.'):]!r}")
-        raise ValueError(f"unknown variable: {name or '(missing)'}")
+        return _unlisted_leaf(node, name, ctx)
     if var.source == SOURCE_RUNTIME and not ctx.allow_runtime:
         raise ValueError(f"{name} is not known yet here -- no step has run")
 
@@ -299,27 +291,46 @@ def _validate_leaf(node, ctx):
                          f"allowed: {', '.join(allowed)}")
     if cmp_op in rules.NULLARY_OPERATORS:
         return {"var": name, "cmp": cmp_op}
-
     raw = node.get("value")
     if cmp_op in rules.LIST_OPERATORS:
-        if isinstance(raw, str):
-            # The builder's value box is one line of text; "a, b, c" is the obvious way to
-            # type a list into it, and refusing it would only send the operator to JSON.
-            raw = [part.strip() for part in raw.split(",") if part.strip()]
-        if not isinstance(raw, (list, tuple)) or not raw:
-            raise ValueError(f"operator {cmp_op!r} needs a list of values")
-        if len(raw) > rules.MAX_LIST_ITEMS:
-            raise ValueError(f"too many values (limit {rules.MAX_LIST_ITEMS})")
-        return {"var": name, "cmp": cmp_op, "value": [_literal(var, item) for item in raw]}
-
+        return {"var": name, "cmp": cmp_op, "value": _list_literal(var, cmp_op, raw)}
     if cmp_op == rules.CMP_MATCHES:
         pattern = str(raw if raw is not None else "")
         err = rules.validate_pattern(pattern)
         if err:
             raise ValueError(err)
         return {"var": name, "cmp": cmp_op, "value": pattern}
-
     return {"var": name, "cmp": cmp_op, "value": _literal(var, raw)}
+
+
+def _unlisted_leaf(node, name, ctx):
+    """A clause naming no variable in the catalog: a custom field the caller could not look
+    up (passed through as written -- see Context), or an error that says which kind of name
+    it was."""
+    is_field = bool(_FIELD_NAME_RE.match(name))
+    if is_field and ctx.fields_unknown:
+        cmp_op = node.get("cmp")
+        if cmp_op not in rules.ALL_OPERATORS:
+            raise ValueError(f"unknown operator {cmp_op!r}")
+        leaf = {"var": name, "cmp": cmp_op}
+        if cmp_op not in rules.NULLARY_OPERATORS:
+            leaf["value"] = node.get("value")
+        return leaf
+    if is_field:
+        raise ValueError(f"there is no custom field called {name[len(FIELD_PREFIX):]!r}")
+    raise ValueError(f"unknown variable: {name or '(missing)'}")
+
+
+def _list_literal(var, cmp_op, raw):
+    if isinstance(raw, str):
+        # The builder's value box is one line of text; "a, b, c" is the obvious way to
+        # type a list into it, and refusing it would only send the operator to JSON.
+        raw = [part.strip() for part in raw.split(",") if part.strip()]
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise ValueError(f"operator {cmp_op!r} needs a list of values")
+    if len(raw) > rules.MAX_LIST_ITEMS:
+        raise ValueError(f"too many values (limit {rules.MAX_LIST_ITEMS})")
+    return [_literal(var, item) for item in raw]
 
 
 def _literal(var, raw):
@@ -340,8 +351,9 @@ def _literal(var, raw):
         return text
     # Handed a rules.Var rather than our own tuple: the coercion reads `unit` (for duration
     # literals), which no package variable has -- so "7d" against a number is refused there
-    # as "not a duration" rather than tripping over a missing attribute here.
-    err, value = rules._coerce_literal(   # noqa: SLF001 -- one coercion, one place
+    # as "not a duration" rather than tripping over a missing attribute here. Private, and
+    # used anyway: one coercion in one place beats a copy that drifts from the Rules page.
+    err, value = rules._coerce_literal(  # noqa: SLF001
         rules.Var(var.name, var.kind, var.group, None), raw)
     if err:
         raise ValueError(f"{var.name}: {err}")
@@ -356,38 +368,50 @@ def _validate_probe(node, ctx):
         raise ValueError("a download condition can only test what the machine is -- move "
                          "file, registry and script checks into an If step")
     if probe == PROBE_POWERSHELL:
-        script = str(node.get("script") or "").strip()
-        if not script:
-            raise ValueError("a PowerShell check needs a script")
-        if len(script) > MAX_PROBE_SCRIPT_CHARS:
-            raise ValueError(f"a PowerShell check must be {MAX_PROBE_SCRIPT_CHARS} "
-                             f"characters or fewer")
-        out = {"probe": probe, "script": script}
-        timeout = node.get("timeout_seconds")
-        if timeout not in (None, ""):
-            try:
-                timeout = int(timeout)
-            except (TypeError, ValueError):
-                raise ValueError("a PowerShell check's timeout must be a whole number")
-            if not (5 <= timeout <= MAX_PROBE_TIMEOUT):
-                raise ValueError(f"a PowerShell check's timeout must be between 5 and "
-                                 f"{MAX_PROBE_TIMEOUT} seconds")
-            out["timeout_seconds"] = timeout
+        out = _validate_powershell_probe(node)
     else:
         import packages   # function-level: packages imports this module at load time
         rule = packages.validate_detection({**node, "kind": probe})
         rule.pop("kind")
         out = {"probe": probe, **rule}
+    _check_probe_variables(probe, out, ctx.bound)
+    return out
 
+
+def _validate_powershell_probe(node):
+    script = str(node.get("script") or "").strip()
+    if not script:
+        raise ValueError("a PowerShell check needs a script")
+    if len(script) > MAX_PROBE_SCRIPT_CHARS:
+        raise ValueError(f"a PowerShell check must be {MAX_PROBE_SCRIPT_CHARS} "
+                         f"characters or fewer")
+    out = {"probe": PROBE_POWERSHELL, "script": script}
+    timeout = node.get("timeout_seconds")
+    if timeout in (None, ""):
+        return out
+    try:
+        timeout = int(timeout)
+    except (TypeError, ValueError):
+        raise ValueError("a PowerShell check's timeout must be a whole number")
+    if not (5 <= timeout <= MAX_PROBE_TIMEOUT):
+        raise ValueError(f"a PowerShell check's timeout must be between 5 and "
+                         f"{MAX_PROBE_TIMEOUT} seconds")
+    out["timeout_seconds"] = timeout
+    return out
+
+
+def _check_probe_variables(probe, out, bound):
+    """Every `{name}` a check substitutes must be bound where it sits. None skips the check
+    (see Context)."""
+    if bound is None:
+        return
     unknown = set()
-    if ctx.bound is not None:
-        for field in PROBE_SUBSTITUTED[probe]:
-            unknown |= variables_in(out.get(field)) - ctx.bound
+    for field in PROBE_SUBSTITUTED[probe]:
+        unknown |= variables_in(out.get(field)) - bound
     if unknown:
         raise ValueError(
-            f"the {probe.replace('_', ' ')} check refers to {{{sorted(unknown)[0]}}}, which "
+            f"the {probe.replace('_', ' ')} check refers to {{{min(unknown)}}}, which "
             f"nothing before it provides")
-    return out
 
 
 _VARIABLE_RE = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
@@ -431,7 +455,7 @@ def hub_variables(conditions, extra=None):
     for condition in conditions:
         for name in referenced_variables(condition):
             var = lookup(name, extra)
-            if (var is not None and var.source == SOURCE_HUB) or name.startswith("field."):
+            if (var is not None and var.source == SOURCE_HUB) or name.startswith(FIELD_PREFIX):
                 names.add(name)
     return names
 
@@ -474,23 +498,35 @@ def evaluate(node, facts, extra=None):
         return UNKNOWN
     op = node.get("op")
     if op in ("and", "or"):
-        results = [evaluate(child, facts, extra) for child in node.get("nodes") or ()]
-        if not results:
-            return UNKNOWN
-        if op == "and":
-            if any(r is False for r in results):
-                return False
-            return UNKNOWN if any(r is UNKNOWN for r in results) else True
-        if any(r is True for r in results):
-            return True
-        return UNKNOWN if any(r is UNKNOWN for r in results) else False
+        return _kleene(op, [evaluate(child, facts, extra) for child in node.get("nodes") or ()])
     if op == "not":
         inner = node.get("nodes") or []
         result = evaluate(inner[0], facts, extra) if len(inner) == 1 else UNKNOWN
         return UNKNOWN if result is UNKNOWN else (not result)
     if "probe" in node:
         return UNKNOWN
+    return _evaluate_leaf(node, facts, extra)
 
+
+def _kleene(op, results):
+    """Kleene and/or: TRUE settles an or, FALSE settles an and, otherwise one UNKNOWN makes
+    the whole thing UNKNOWN."""
+    if not results:
+        return UNKNOWN
+    decisive = op == "or"
+    if any(r is decisive for r in results):
+        return decisive
+    return UNKNOWN if any(r is UNKNOWN for r in results) else (not decisive)
+
+
+_VERSION_ORDER = {
+    rules.CMP_GT: lambda o: o > 0, rules.CMP_GTE: lambda o: o >= 0,
+    rules.CMP_LT: lambda o: o < 0, rules.CMP_LTE: lambda o: o <= 0,
+    rules.CMP_EQ: lambda o: o == 0, rules.CMP_NE: lambda o: o != 0,
+}
+
+
+def _evaluate_leaf(node, facts, extra):
     name = node.get("var")
     cmp_op = node.get("cmp")
     value = (facts or {}).get(name, UNKNOWN)
@@ -502,16 +538,13 @@ def evaluate(node, facts, extra=None):
         return value is UNKNOWN
     if value is UNKNOWN:
         return UNKNOWN
-
     var = lookup(name, extra)
-    if var is not None and var.kind == KIND_VERSION:
-        order = compare_versions(value, node.get("value"))
-        if order is None:
-            return UNKNOWN
-        return {rules.CMP_GT: order > 0, rules.CMP_GTE: order >= 0,
-                rules.CMP_LT: order < 0, rules.CMP_LTE: order <= 0,
-                rules.CMP_EQ: order == 0, rules.CMP_NE: order != 0}.get(cmp_op, UNKNOWN)
-    return rules._compare(cmp_op, value, node.get("value"))   # noqa: SLF001 -- same semantics
+    if var is None or var.kind != KIND_VERSION:
+        # Private, and used anyway: the same comparison as the Rules page, not a copy of it.
+        return rules._compare(cmp_op, value, node.get("value"))  # noqa: SLF001
+    order = compare_versions(value, node.get("value"))
+    test = _VERSION_ORDER.get(cmp_op)
+    return UNKNOWN if order is None or test is None else test(order)
 
 
 def result_name(result):
@@ -540,21 +573,12 @@ def explain(node, facts, extra=None):
 # ================================
 # The hub's own (possibly stale) answer for each agent variable it has a copy of. Used only
 # by the console's preview -- what the deploy acts on is the agent's live reading.
-_HUB_COPY = {
-    "hw.manufacturer": "hw.manufacturer",
-    "hw.model": "hw.model",
-    "hw.serial_number": "hw.serial_number",
-    "os.name": "os.name",
-    "os.version": "os.version",
-    "os.build": "os.build",
-    "bios.version": "bios.version",
-    "sys.agent_version": "sys.agent_version",
-    "sys.hostname": "sys.machine",
-    "ad.ou": "ad.ou",
-    "ad.dn": "ad.dn",
-    "ad.owner": "ad.owner",
-}
-
+# The same name on both sides for every variable the rules engine also has, except the
+# hostname, which it calls sys.machine, and the architecture, whose raw "64-bit" is turned
+# into the agent's slug by _arch_slug instead.
+_HUB_COPY = {v.name: v.name for v in STATIC_VARIABLES
+             if v.name in rules.STATIC_BY_NAME and v.name != "os.arch"}
+_HUB_COPY["sys.hostname"] = "sys.machine"
 
 def _arch_slug(value):
     """Win32_OperatingSystem.OSArchitecture ("64-bit", "ARM 64-bit Processor") as the choice
@@ -572,35 +596,26 @@ def _arch_slug(value):
     return None
 
 
+def _known_value(resolved, rule_name):
+    entry = resolved.get(rule_name)
+    value = entry.value if isinstance(entry, rules.Value) else entry
+    return None if value is UNKNOWN or value in (None, "") else value
+
+
 def resolve_hub_facts(db_path, machine, names=None):
     """{variable: value} for one machine from what the hub has stored. UNKNOWN values are
     left out. `names` limits it to the variables a caller actually needs."""
     try:
         resolved = rules.resolve_machine_vars(db_path, machine)
-    except Exception:  # noqa: BLE001 -- a preview with no facts is still a preview
+    except Exception:  # noqa: BLE001
+        # A preview with no facts is still a preview: every clause reads unknown.
         return {}
-
-    def known(rule_name):
-        entry = resolved.get(rule_name)
-        value = entry.value if isinstance(entry, rules.Value) else entry
-        return None if value is UNKNOWN or value in (None, "") else value
-
-    facts = {}
-    for ours, theirs in _HUB_COPY.items():
-        value = known(theirs)
-        if value is not None:
-            facts[ours] = value
-    arch = _arch_slug(known("os.arch"))
-    if arch:
-        facts["os.arch"] = arch
-    for rule_name in resolved:
-        if rule_name.startswith("field."):
-            value = known(rule_name)
-            if value is not None:
-                facts[rule_name] = value
-    if names is not None:
-        facts = {k: v for k, v in facts.items() if k in names}
-    return facts
+    pairs = [(ours, _known_value(resolved, theirs)) for ours, theirs in _HUB_COPY.items()]
+    pairs.append(("os.arch", _arch_slug(_known_value(resolved, "os.arch"))))
+    pairs.extend((name, _known_value(resolved, name))
+                 for name in resolved if name.startswith(FIELD_PREFIX))
+    return {name: value for name, value in pairs
+            if value is not None and (names is None or name in names)}
 
 
 def hub_facts(db_path, machine, names):
@@ -608,7 +623,7 @@ def hub_facts(db_path, machine, names):
     and only those the package reads. Agent variables are never sent -- the agent's own live
     answer is the point, and a hub copy riding along would be one more value to disagree
     with it."""
-    wanted = {n for n in names if n.startswith("field.")
+    wanted = {n for n in names if n.startswith(FIELD_PREFIX)
               or (n in STATIC_BY_NAME and STATIC_BY_NAME[n].source == SOURCE_HUB)}
     if not wanted:
         return {}
