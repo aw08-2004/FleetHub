@@ -223,6 +223,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
             // ApplyProcessesWanted for why a bad reply changes nothing.
             var reply = await resp.Content.ReadAsStringAsync(ct);
             ApplyProcessesWanted(reply);
+            ApplyUpdateChannel(reply);
             ApplyUpdatePolicy(reply);
             return true;
         }
@@ -236,6 +237,31 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
     /// <summary>What the last heartbeat reply said about the Processes card, or null before
     /// one has answered. Read by the process loop.</summary>
     public bool? ProcessesWanted { get; private set; }
+
+    /// <summary>Which release channel the hub says this machine follows (roadmap #21).
+    ///
+    /// **Absent means stable**, unlike the pin below, where absent changes nothing. That is the
+    /// Windows agent's asymmetry and its reason: a hub too old to send the field never had a
+    /// beta for this machine to be on, while a pin exists to STOP an install and one heartbeat
+    /// that failed to resolve it must not release the hold. The hub sends the DELIVERED
+    /// channel, so a beta box is told stable while stable is strictly newer -- nothing here
+    /// needs to know that. Persisted only when it changed.</summary>
+    private void ApplyUpdateChannel(string reply)
+    {
+        try
+        {
+            var sent = JsonNode.Parse(reply)?["update_channel"]?.GetValue<string>();
+            var channel = Channels.Normalize(sent);
+            if (channel == AgentState.LoadUpdateChannel()) return;
+            _state.SaveUpdateChannel(channel);
+            _log.LogInformation("Release channel is now {Channel}; updates will come from {Url}",
+                                channel, AgentConfig.ManifestUrlFor(channel));
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning("Ignoring malformed channel from the hub: {Msg}", e.Message);
+        }
+    }
 
     /// <summary>The hub's update policy (roadmap #21): automatic, or pinned to one exact
     /// version. **An absent block changes nothing** -- the Windows agent's rule, for the

@@ -55,7 +55,7 @@ if command -v curl >/dev/null; then curl -fsSL '<hub>/onboarding/run/<CODE>.sh';
 It installs the agent with `agent-linux/install/install.sh`, which checks the build against the
 fleet's signed Linux manifest. Only when that succeeds does it spend the code, and it writes
 the machine's credential to `/var/lib/fleethub/agent/agent.json` (0600, root). An account that
-is not in sudoers (usual on OpenMediaVault) runs `su -` first and drops the `sudo`. The machine
+is not in sudoers (usual on NAS and appliance distros) runs `su -` first and drops the `sudo`. The machine
 is enrolled under its hostname up to the first dot, which is the name the agent reports. The
 same requirements as a technician's install apply: x86-64, glibc, systemd and OpenSSL 3.
 

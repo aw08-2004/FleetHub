@@ -102,7 +102,7 @@ def linux_command(script_url):
     curl or wget, whichever is there, chosen with `if` rather than `curl ... || wget ...`: an
     `||` would run wget after a curl that failed HALFWAY, and bash would read the start of one
     download followed by the whole of another. `sudo` is the common case; the wizard says to
-    drop it after `su -` on an appliance like OpenMediaVault, whose accounts are not sudoers.
+    drop it after `su -` on a NAS or appliance distro, whose accounts are often not sudoers.
 
     Piped rather than saved and run, unlike the Windows command, because there is no antivirus
     heuristic to step around here and no per-user folder to race: the script is read by the

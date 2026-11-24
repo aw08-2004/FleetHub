@@ -5468,7 +5468,7 @@
       "os_windows": "Windows",
       "os_linux": "Linux",
       "linux_intro": "En el equipo Linux, pegue este comando en una terminal. Pide su contraseña y luego instala el agente y registra el equipo:",
-      "linux_hint": "Si su cuenta no puede usar sudo, algo habitual en OpenMediaVault, ejecute primero su - y pegue el comando sin la palabra sudo del final. El instalador necesita systemd y un equipo de 64 bits con procesador Intel o AMD.",
+      "linux_hint": "Si su cuenta no puede usar sudo, algo habitual en sistemas NAS y appliances, ejecute primero su - y pegue el comando sin la palabra sudo del final. El instalador necesita systemd y un equipo de 64 bits con procesador Intel o AMD.",
       "install_intro": "Descargue el instalador y ábralo. Windows pedirá permisos de administrador; permítalo. La ventana muestra cada paso y termina con una línea de éxito.",
       "download": "Descargar instalador",
       "download_hint": "Si Windows avisa de que el archivo no es reconocido, elija Más información y luego Ejecutar de todas formas.",

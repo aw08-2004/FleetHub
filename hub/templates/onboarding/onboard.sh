@@ -39,8 +39,8 @@ main() {
         https://*|http://localhost|http://localhost:*|http://localhost/*|http://127.0.0.1|http://127.0.0.1:*|http://127.0.0.1/*) ;;
         *) fail "the hub address is not https ($hub_url). Ask your administrator to set HUB_URL to the hub's https address." ;;
     esac
-    # curl or wget, whichever the machine has -- Debian minimal and OpenMediaVault ship only
-    # wget. The command that fetched THIS script needed one of them already.
+    # curl or wget, whichever the machine has -- Debian minimal and the appliance distros built
+    # on it ship only wget. The command that fetched THIS script needed one of them already.
     have curl || have wget || fail "neither curl nor wget is installed."
 
     # A private working folder: mktemp -d is 0700 and root's, so nothing else on the machine

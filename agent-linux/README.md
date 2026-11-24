@@ -111,7 +111,7 @@ report rather than onto a version number.
 ```
 src/FleetHubAgent/        the agent
   AgentConfig.cs          version, endpoints, cadence, state paths
-  Worker.cs               the five loops
+  Worker.cs               the six loops
   Fleet/                  hub client, dispatcher, executors, capability report, output streaming
   Fleet/Shell/            the interactive terminal's pty: UnixPty and PtySession (the runner,
                           registry and hub calls are ../agent-shared/Pty, shared with Windows)
@@ -150,8 +150,8 @@ The Linux counterpart of `irm .../install.ps1 | iex`:
 curl -fsSL https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'
 ```
 
-`curl` or `wget`, whichever the box has — Debian's minimal images and appliance distros built
-on them (OpenMediaVault, for one) ship `wget` and no `curl`:
+`curl` or `wget`, whichever the box has — Debian's minimal images and the NAS and appliance
+distros built on them ship `wget` and no `curl`:
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'
