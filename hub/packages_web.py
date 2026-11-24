@@ -211,8 +211,12 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         `on_machine: true`, never guessed.
 
         The machine arrives in the body, so the scope check is inline -- require_machine
-        reads a URL argument (see permissions_web) -- and it is the same check, answering
-        with the same message as a missing capability so a hostname cannot be probed.
+        reads a URL argument (see permissions_web). The check is the same one, and like
+        require_machine it gives a scoped operator the same 403 for a machine that does not
+        exist as for one outside their scope, so it cannot be used to learn which hostnames
+        exist. An unscoped operator, who can see every machine anyway, gets a preview with no
+        facts for a name the hub has never heard of. (A caller without the capability
+        is stopped earlier, by can_deploy, with that gate's own message.)
         """
         data = request.get_json(silent=True) or {}
         machine = str(data.get("machine") or "").strip()

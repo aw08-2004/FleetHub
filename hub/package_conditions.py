@@ -94,6 +94,8 @@ GROUP_FIELD = rules.GROUP_FIELD
 # their Version is usually empty, which reads UNKNOWN here like any other absent value.
 CHASSIS_CHOICES = ("laptop", "desktop", "server", "tablet", "other")
 ARCH_CHOICES = ("x64", "x86", "arm64")
+# Named once: the catalog, the hub-copy exclusion and the preview's slug all mean this one.
+VAR_OS_ARCH = "os.arch"
 
 STATIC_VARIABLES = (
     PackageVar("hw.manufacturer", KIND_TEXT, GROUP_HW, SOURCE_AGENT, "manufacturer"),
@@ -108,7 +110,7 @@ STATIC_VARIABLES = (
     PackageVar("os.version", KIND_VERSION, GROUP_OS, SOURCE_AGENT),
     PackageVar("os.build", KIND_NUMBER, GROUP_OS, SOURCE_AGENT, "os_build"),
     PackageVar("os.display_version", KIND_TEXT, GROUP_OS, SOURCE_AGENT),
-    PackageVar("os.arch", KIND_CHOICE, GROUP_OS, SOURCE_AGENT, "arch", ARCH_CHOICES),
+    PackageVar(VAR_OS_ARCH, KIND_CHOICE, GROUP_OS, SOURCE_AGENT, "arch", ARCH_CHOICES),
     PackageVar("bios.version", KIND_TEXT, GROUP_BIOS, SOURCE_AGENT),
     PackageVar("sys.hostname", KIND_TEXT, GROUP_SYS, SOURCE_AGENT, "hostname"),
     PackageVar("sys.domain", KIND_TEXT, GROUP_SYS, SOURCE_AGENT),
@@ -577,7 +579,7 @@ def explain(node, facts, extra=None):
 # hostname, which it calls sys.machine, and the architecture, whose raw "64-bit" is turned
 # into the agent's slug by _arch_slug instead.
 _HUB_COPY = {v.name: v.name for v in STATIC_VARIABLES
-             if v.name in rules.STATIC_BY_NAME and v.name != "os.arch"}
+             if v.name in rules.STATIC_BY_NAME and v.name != VAR_OS_ARCH}
 _HUB_COPY["sys.hostname"] = "sys.machine"
 
 def _arch_slug(value):
@@ -611,7 +613,7 @@ def resolve_hub_facts(db_path, machine, names=None):
         # A preview with no facts is still a preview: every clause reads unknown.
         return {}
     pairs = [(ours, _known_value(resolved, theirs)) for ours, theirs in _HUB_COPY.items()]
-    pairs.append(("os.arch", _arch_slug(_known_value(resolved, "os.arch"))))
+    pairs.append((VAR_OS_ARCH, _arch_slug(_known_value(resolved, VAR_OS_ARCH))))
     pairs.extend((name, _known_value(resolved, name))
                  for name in resolved if name.startswith(FIELD_PREFIX))
     return {name: value for name, value in pairs
