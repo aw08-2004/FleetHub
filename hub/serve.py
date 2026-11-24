@@ -26,15 +26,31 @@ Rejected:
     and the hub already learned that a thread pool sized for held requests is not optional
     (install.ps1's service block explains the 128).
 
+TWO LISTENERS, ONE PROCESS (1.187.0). FLEETHUB_AGENT_PORT starts a second cheroot server in
+this same process, serving the same application through agent_listener.AgentSurfaceFilter:
+the agent routes, the onboarding wizard, the APK download and the peer API, and a 404 for
+everything else. The reverse proxy publishes that port to the internet and stops publishing
+this one, so the console leaves the internet while agents outside the LAN keep reporting.
+agent_listener.py has why it is a path filter in one process and not a second process.
+**Unset means no split** -- every install that never sets it serves exactly as before.
+
+Each listener gets its own 128-thread pool. That is deliberate, not doubled by accident: a
+held agent long-poll can no longer take a thread a console tab was waiting for.
+
 Configuration, all read AFTER the app import so the hub's .env has been loaded:
-  FLEETHUB_PORT      default 29443
-  FLEETHUB_TLS       default on; "0" serves plain HTTP (the Docker image's legacy default,
-                     so an existing compose file mapping 3001 keeps working on pull)
-  FLEETHUB_TLS_CERT  default <STATE_ROOT>/tls/hub.crt  -- an operator's PEM goes here
-  FLEETHUB_TLS_KEY   default <STATE_ROOT>/tls/hub.key
+  FLEETHUB_PORT        default 29443 -- the console (and, unsplit, everything)
+  FLEETHUB_HOST        default 0.0.0.0 -- bind address of that listener
+  FLEETHUB_AGENT_PORT  default unset -- the agent-only listener; unset = one listener
+  FLEETHUB_AGENT_HOST  default 0.0.0.0 -- bind address of the agent-only listener
+  FLEETHUB_TLS         default on; "0" serves plain HTTP (the Docker image's legacy default,
+                       so an existing compose file mapping 3001 keeps working on pull).
+                       Applies to both listeners, which share one certificate.
+  FLEETHUB_TLS_CERT    default <STATE_ROOT>/tls/hub.crt  -- an operator's PEM goes here
+  FLEETHUB_TLS_KEY     default <STATE_ROOT>/tls/hub.key
 """
 import os
 import sys
+import threading
 from urllib.parse import urlparse
 
 DEFAULT_PORT = 29443
@@ -69,17 +85,53 @@ def server_config(environ, state_root):
         port = DEFAULT_PORT
     tls_dir = os.path.join(state_root, "tls")
     hub_url_host = urlparse(environ.get("HUB_URL") or "").hostname
+    console_url_host = urlparse(environ.get("CONSOLE_URL") or "").hostname
+    names = []
+    # Console host before the HUB_URL host, so the public name stays last as it always was.
+    for name in (_machine_name(), console_url_host, hub_url_host):
+        if name and name not in names:
+            names.append(name)
     return {
-        "host": "0.0.0.0",
+        "host": (environ.get("FLEETHUB_HOST") or "").strip() or "0.0.0.0",
         "port": port,
+        # Kept raw, not parsed here: a typo must stop the hub in config_error(), not quietly
+        # fall back to one listener that the proxy is no longer pointed at.
+        "agent_port": (environ.get("FLEETHUB_AGENT_PORT") or "").strip() or None,
+        "agent_host": (environ.get("FLEETHUB_AGENT_HOST") or "").strip() or "0.0.0.0",
         "tls": _truthy(environ.get("FLEETHUB_TLS"), True),
         "cert": environ.get("FLEETHUB_TLS_CERT") or os.path.join(tls_dir, "hub.crt"),
         "key": environ.get("FLEETHUB_TLS_KEY") or os.path.join(tls_dir, "hub.key"),
         # The names the self-signed certificate covers, beyond localhost/127.0.0.1 which
-        # tls.py always adds: this machine's name (what a proxy on another box dials) and
-        # the public HUB_URL host (what an operator browsing the origin directly types).
-        "hostnames": [n for n in (_machine_name(), hub_url_host) if n],
+        # tls.py always adds: this machine's name (what a proxy on another box dials), the
+        # internal CONSOLE_URL host and the public HUB_URL host (what an operator browsing
+        # the origin directly types).
+        "hostnames": names,
     }
+
+
+def config_error(cfg):
+    """Pure: why `cfg` must not be served, or None. Refusing to start is the point -- a hub
+    that came up on one listener after the operator asked for two looks healthy from the
+    console while every agent behind the proxy gets connection refused."""
+    raw = cfg.get("agent_port")
+    if raw is None:
+        return None
+    try:
+        agent_port = int(raw)
+    except ValueError:
+        return f"FLEETHUB_AGENT_PORT={raw!r} is not a port number."
+    if not 0 < agent_port < 65536:
+        return f"FLEETHUB_AGENT_PORT={agent_port} is outside 1-65535."
+    if agent_port == cfg["port"]:
+        return (f"FLEETHUB_AGENT_PORT and FLEETHUB_PORT are both {agent_port}. The agent "
+                "listener needs its own port, or the console is served on it.")
+    return None
+
+
+def agent_server_config(cfg):
+    """The agent listener's settings: the console's, on its own host and port. Call only
+    after config_error(cfg) returned None."""
+    return dict(cfg, host=cfg["agent_host"], port=int(cfg["agent_port"]))
 
 
 def key_dir_to_protect(cfg, state_root):
@@ -139,6 +191,10 @@ def main():
     import tls
 
     cfg = server_config(os.environ, hub_app.STATE_ROOT)
+    problem = config_error(cfg)
+    if problem:
+        print(f"[serve] Refusing to start: {problem}", flush=True)
+        return 2
     if cfg["tls"]:
         _, _, created = tls.ensure_certificate(cfg["cert"], cfg["key"], cfg["hostnames"])
         # The private key sits under STATE_ROOT, beneath C:\Program Files on Windows, whose
@@ -158,13 +214,30 @@ def main():
               f"{cfg['cert']} (sans={summary.get('sans')}, expires {summary.get('not_after')}, "
               f"self-signed={summary.get('self_signed')})", flush=True)
     scheme = "https" if cfg["tls"] else "http"
+    agent_server = None
+    if cfg["agent_port"]:
+        from agent_listener import AgentSurfaceFilter
+
+        agent_cfg = agent_server_config(cfg)
+        agent_server = build_server(AgentSurfaceFilter(application), agent_cfg)
+        # prepare() binds on THIS thread, so a port already in use stops the hub here with
+        # the real error, rather than dying inside a daemon thread nobody reads.
+        agent_server.prepare()
+        threading.Thread(target=agent_server.serve, name="agent-listener", daemon=True).start()
+        print(f"[serve] FleetHub hub {hub_app.HUB_VERSION} agent listener on "
+              f"{scheme}://{agent_cfg['host']}:{agent_cfg['port']}/ ({THREADS} threads) -- "
+              "agent, onboarding, APK and peer routes only", flush=True)
+    surface = ("console -- keep this port off the internet and publish the agent port"
+               if agent_server else "console and agents")
     print(f"[serve] FleetHub hub {hub_app.HUB_VERSION} on {scheme}://{cfg['host']}:{cfg['port']}/ "
-          f"({THREADS} threads)", flush=True)
+          f"({THREADS} threads) -- {surface}", flush=True)
     server = build_server(application, cfg)
     try:
         server.start()
     except KeyboardInterrupt:
         server.stop()
+        if agent_server:
+            agent_server.stop()
     return 0
 
 

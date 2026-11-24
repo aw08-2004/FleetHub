@@ -188,6 +188,24 @@ auto-update off and is updated by hand once the test hub has checked out.
   agent and client *Beta* choices stay: those manifests live on `main` (the client's is
   served from `hub/`).
 
+**Hub 1.187.0: the console off the internet, agents still on it** (*Console and agent channel
+on separate listeners* below). Confirm on the test hub, behind nginx:
+- [ ] **Unsplit hub unchanged.** The test hub updates to 1.187.0 with neither new key set: one
+  `[serve]` listener line, sign-in, live updates and agents exactly as on 1.186.0.
+- [ ] **Console address.** With `CONSOLE_URL` set and its redirect URI registered, Google or
+  OIDC sign-in through the internal name returns to the internal name, and a console tab's
+  live updates work (Socket.IO origin).
+- [ ] **Agent listener.** With `FLEETHUB_AGENT_PORT=29444`, `/login` on 29444 is `404`, and
+  `/api/agent/commands` is `401`. A typo in the port stops the hub with *Refusing to start*.
+- [ ] **Agents through the public block.** After repointing nginx, an internet PC (phone
+  hotspot) keeps its heartbeat, runs a queued script within the long-poll, pulls a file over
+  100 MB, opens a terminal and a Remote View session, and finishes a backup.
+- [ ] **Onboarding from outside.** A new PC on a phone hotspot opens the `/onboarding` link
+  with its styling and enrols with a code.
+- [ ] **From outside, nothing of the console.** `/`, `/login`, `/socket.io/` and
+  `/static/js/app.js` on the public name are `404`, and the internal name does not resolve.
+- [ ] **Invite link** copied after the split carries `CONSOLE_URL` and opens on the LAN.
+
 `main` and `beta` were both at hub **1.185.0** on 2026-11-24 (agent 3.53.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
@@ -1469,6 +1487,52 @@ but not the operator's `.env`; `example.env` opts new deployments in.
   exports PFX, which cheroot cannot load without openssl.
 
 **Still open:** the Windows installer path (*Owed locally* item 20) and the beta boxes above.
+
+---
+
+## 🚧 Console and agent channel on separate listeners   ·   hub 1.187.0 (opt-in)   ·   `agent_listener.py`, `serve.py`
+
+**Why.** One listener served everything, so the public hostname that agents on internet PCs
+need also published the console's sign-in page, the operator API and Socket.IO. The
+operator wanted the console off the internet without cutting off PCs outside the network.
+
+**How.** `FLEETHUB_AGENT_PORT` makes `serve.py` start a second cheroot server **in the same
+process**, over the same WSGI application wrapped in `agent_listener.AgentSurfaceFilter`.
+That filter serves only the agent surface (`/api/agent/*`, `/api/report`, the onboarding
+wizard with its scripts and nine static files, `/provisioning/apk/*`, `/api/peer/*`) and
+answers everything else with a `404` before Flask sees it. Paths are matched by whole segments,
+and traversal shapes are refused outright. nginx publishes the agent port under the unchanged
+`HUB_URL`, so **no agent changes**. The new `CONSOLE_URL` (default `HUB_URL`) takes over every
+browser-facing use of the old single URL: the cookie's `Secure` flag, the Socket.IO CORS
+origin, the OAuth/OIDC `redirect_uri`, invite links and the assistant's links. Everything
+handed to an agent, an enrolling PC, a device or a peer keeps `HUB_URL`, because the agent
+attaches its bearer only to its own `FLEETHUB_HUB` origin (`IsHubUrl`). Each listener has its
+own 128-thread pool, so held agent long-polls no longer compete with console tabs.
+`tests/test_agent_listener.py` walks the live url_map and the agents' own path literals, and
+fails if a new route outside `/api/agent/` and `/api/peer/` becomes public without a decision.
+
+**Decisions.** Agents keep today's public address, because the hub cannot repoint an agent
+(#15, `RuntimeConfig.cs`). The agent port also serves onboarding, APK provisioning and the peer
+API, so remote enrolment and cross-hub sharing keep working from outside. Unset means no split,
+so no existing hub moves on update. A malformed agent port stops the hub rather than falling
+back to one listener.
+
+**Rejected.**
+- *A second OS process for agents.* The remote relay, PTY, folder copy, command wakeups, the
+  Socket.IO emits from `after_request` and the schedulers all live in process memory. The
+  hub runs as one process for that reason.
+- *A second Flask app holding the agent blueprints.* `fleet`, `files`, `backups`, `bios`,
+  `remote`, `tickets` and others mix agent and operator routes on one blueprint. The clean
+  boundary is the path, not the blueprint.
+- *nginx `location` rules alone.* One mistyped block re-exposes the console with no symptom.
+  They stay documented as an optional second layer.
+- *Moving agents to a new hostname.* There is no remote way to change `FLEETHUB_HUB`, so every
+  PC would need a reinstall.
+- *VPN for agents.* PCs outside the network without a tunnel are the case this is for.
+- *mTLS or certificate pinning for agents.* They are separate decisions. Neither is needed to
+  take the console off the internet, and pinning would tie the fleet to one certificate.
+
+**Still open:** the test-hub boxes in *Waiting for confirmation*.
 
 ---
 

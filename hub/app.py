@@ -177,11 +177,23 @@ if _env_acl_note:
 # the beta branch, which this once counted from, was retired on 2026-11-24).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.186.0"
+HUB_VERSION = "1.187.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
+# The address AGENTS reach this hub on, and so the base of every URL the hub hands an agent,
+# an enrolling PC, an Android device or a peer hub. The agent attaches its bearer only to a
+# URL on exactly this origin (IsHubUrl), so this must stay what FLEETHUB_HUB says on the PCs.
 HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
+# The address OPERATORS reach the console on (1.187.0). Equal to HUB_URL unless the console
+# and the agent channel are split (serve.py, FLEETHUB_AGENT_PORT), in which case HUB_URL is
+# the public agent listener and this is the internal console. Everything a browser checks
+# against its own origin uses it: the cookie's Secure flag, the Socket.IO CORS origin, the
+# OAuth redirect_uri, invite links and the assistant's links. **Defaulting to HUB_URL is what
+# keeps every unsplit install byte-for-byte unchanged**; a split hub that forgot to set it
+# would send operators' OAuth callbacks and invite links to the public listener, which 404s
+# every console route -- the release notes say to set it before the proxy is repointed.
+CONSOLE_URL = (os.environ.get("CONSOLE_URL") or "").strip() or HUB_URL
 # Opt-in hub self-update. Off by default so a dev clone never resets itself; the
 # operator sets HUB_AUTO_UPDATE=1 in the real hub's .env. The Settings tab can
 # override this per-hub -- see hub_auto_update_enabled() and hub_update_watcher().
@@ -2195,7 +2207,8 @@ app.secret_key = FLASK_SECRET_KEY
 #     and Chrome exempts cookies <2min old from it on top-level POSTs). Lax, not
 #     Strict: the Google OAuth callback is a top-level cross-site GET redirect and
 #     needs the cookie to find its state.
-#   Secure -- derived from HUB_URL so http://localhost dev still signs in.
+#   Secure -- derived from CONSOLE_URL (the address the browser holding this cookie
+#     actually uses; HUB_URL unless split) so http://localhost dev still signs in.
 #   HttpOnly -- Flask's default, pinned here so it is visible next to the others. No
 #     script needs to read this cookie, and one that could would be reading the perimeter.
 #   PERMANENT_SESSION_LIFETIME + SESSION_REFRESH_EACH_REQUEST -- the session survives
@@ -2208,7 +2221,7 @@ app.secret_key = FLASK_SECRET_KEY
 #     so an operator cannot extend their own session by editing it.
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=HUB_URL.startswith("https://"),
+    SESSION_COOKIE_SECURE=CONSOLE_URL.startswith("https://"),
     SESSION_COOKIE_HTTPONLY=True,
     PERMANENT_SESSION_LIFETIME=timedelta(days=SESSION_LIFETIME_DAYS),
     SESSION_REFRESH_EACH_REQUEST=True,
@@ -2226,6 +2239,8 @@ rate_limiter = RateLimiter(app)
 # the port reachable from the proxy only.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 print(f"[hub] Configured public URL: {HUB_URL}")
+if CONSOLE_URL != HUB_URL:
+    print(f"[hub] Configured console URL: {CONSOLE_URL}")
 # cors_allowed_origins is pinned to our own origin, NOT "*". engine.io does not send a
 # literal "*": on "*" it reflects the caller's Origin back in Access-Control-Allow-Origin
 # and pairs it with Access-Control-Allow-Credentials: true (see engineio's
@@ -2242,9 +2257,11 @@ print(f"[hub] Configured public URL: {HUB_URL}")
 # of 4 (cheroot's: 10) starves the hub outright; serve.py and install.ps1 pass 128 explicitly
 # and explain why. Don't drop the transport pin to "fix" this: neither cheroot nor waitress
 # has WebSocket support, so allowing upgrades here just breaks the socket.
+# CONSOLE_URL, not HUB_URL: on a split hub only the console's origin ever opens a socket, and
+# the agent listener refuses /socket.io/ outright (agent_listener.py).
 socketio = SocketIO(
     app,
-    cors_allowed_origins=[HUB_URL.rstrip("/")],
+    cors_allowed_origins=[CONSOLE_URL.rstrip("/")],
     async_mode="threading",
     transports=["polling"],
     allow_upgrades=False
@@ -2579,13 +2596,15 @@ app.register_blueprint(create_permissions_blueprint(DB_PATH, login_required, acc
 # permission-group administration so a profile edit isn't the same trust as a grant.
 app.register_blueprint(create_users_blueprint(DB_PATH, login_required, access))
 # Invite links (roadmap #22). Gated by manage_permission_groups, because an invite hands
-# out capabilities -- it is group administration reached by a different door. HUB_URL is
-# needed because the link is assembled server-side: an admin reaching the console over an
-# internal hostname would otherwise copy a link that works only from inside, and would have
-# no way to tell. This blueprint also owns the hub's ONLY unauthenticated console route,
-# GET /invite/<code> -- see invites_web.py for what that page is and is not allowed to say.
+# out capabilities -- it is group administration reached by a different door. The base URL
+# is needed because the link is assembled server-side: an admin reaching the console over an
+# unexpected hostname would otherwise copy a link that works only from there, and would have
+# no way to tell. CONSOLE_URL, not HUB_URL (1.187.0): an invite ends in a console sign-in, and
+# on a split hub the public HUB_URL listener serves no console route at all. This blueprint
+# also owns the hub's ONLY unauthenticated console route, GET /invite/<code> -- see
+# invites_web.py for what that page is and is not allowed to say.
 app.register_blueprint(create_invites_blueprint(
-    DB_PATH, login_required, access, hub_url=HUB_URL))
+    DB_PATH, login_required, access, hub_url=CONSOLE_URL))
 # Onboarding codes (roadmap #29): the Onboarding admin page, and the public /onboarding
 # wizard an unenrolled PC is set up through. HUB_URL for the same reason invites need it --
 # the link and the install script both have to name the hub's public address. The machine
@@ -2917,7 +2936,8 @@ app.register_blueprint(create_assistant_blueprint(
     translate=lambda key: i18n.translate(key, current_language()),
     language=lambda: current_language(),
     setting=lambda key: settings.get(DB_PATH, key),
-    public_url=HUB_URL,
+    # CONSOLE_URL: the links the assistant writes (/machine/PC-12) are console pages.
+    public_url=CONSOLE_URL,
 ))
 
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
@@ -3131,8 +3151,10 @@ def _callback_url(endpoint):
     # Anchor the callback to HUB_URL rather than url_for(_external=True): behind a TLS
     # terminator (nginx/Cloudflare) the request can reach the hub as plain http, so the
     # _external form emits http://.../auth/callback -- which the provider rejects as a
-    # redirect_uri mismatch. HUB_URL is the authoritative public origin (https://...).
-    return HUB_URL.rstrip("/") + url_for(endpoint)
+    # redirect_uri mismatch. CONSOLE_URL is the authoritative console origin (https://...):
+    # HUB_URL unless split, and on a split hub the provider must send the operator back to
+    # the console listener, since the public one refuses /auth/* (agent_listener.py).
+    return CONSOLE_URL.rstrip("/") + url_for(endpoint)
 
 
 @app.route("/login/google")

@@ -103,6 +103,36 @@ def test_config_defaults():
           serve.key_dir_to_protect(shared, "/srv/hub") is None)
 
 
+def test_agent_listener_config():
+    # 1.187.0: the split is opt-in. The silent failures here are a hub that splits on its own
+    # (the proxy still points at the one port, now console-only... or the reverse), and a
+    # typo'd FLEETHUB_AGENT_PORT that quietly serves one listener while the proxy dials the
+    # other and every agent behind it gets connection refused.
+    print("\n-- server_config: the optional agent listener --")
+    cfg = serve.server_config({}, "/srv/hub")
+    check("unset, there is no agent listener", cfg["agent_port"] is None)
+    check("...and nothing to refuse", serve.config_error(cfg) is None)
+    check("both bind addresses default to 0.0.0.0",
+          cfg["host"] == "0.0.0.0" and cfg["agent_host"] == "0.0.0.0")
+    cfg = serve.server_config({"FLEETHUB_AGENT_PORT": "29444", "FLEETHUB_HOST": "10.0.0.5",
+                               "FLEETHUB_AGENT_HOST": "127.0.0.1"}, "/srv/hub")
+    check("a valid agent port is accepted", serve.config_error(cfg) is None)
+    agent = serve.agent_server_config(cfg)
+    check("the agent listener gets its own host and port",
+          agent["host"] == "127.0.0.1" and agent["port"] == 29444)
+    check("...and the console keeps its own", cfg["host"] == "10.0.0.5" and cfg["port"] == 29443)
+    check("...sharing one TLS setting and certificate",
+          agent["tls"] == cfg["tls"] and agent["cert"] == cfg["cert"] and agent["key"] == cfg["key"])
+    for raw, why in (("29443", "the console's own port"), ("abc", "a typo"),
+                     ("0", "port zero"), ("70000", "past 65535")):
+        bad = serve.server_config({"FLEETHUB_AGENT_PORT": raw}, "/srv/hub")
+        check(f"refused: {why} ({raw})", serve.config_error(bad) is not None)
+    cfg = serve.server_config({"HUB_URL": "https://fleet.example.com",
+                               "CONSOLE_URL": "https://console.corp.lan"}, "/srv/hub")
+    check("the CONSOLE_URL host is offered to the certificate too",
+          "console.corp.lan" in cfg["hostnames"] and cfg["hostnames"][-1] == "fleet.example.com")
+
+
 def test_certificate(work):
     print("\n-- tls.ensure_certificate: generate once, never overwrite --")
     cert, key = os.path.join(work, "tls", "hub.crt"), os.path.join(work, "tls", "hub.key")
@@ -180,6 +210,7 @@ def main():
     work = tempfile.mkdtemp(prefix="hub-serve-test-")
     try:
         test_config_defaults()
+        test_agent_listener_config()
         cert, key = test_certificate(work)
         test_server(cert, key)
     finally:
