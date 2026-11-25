@@ -9,6 +9,8 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import fleet
+import gpo
+import pc_tree
 import permissions
 import remote
 import settings
@@ -47,6 +49,11 @@ def main():
         remote.init_remote_db(db_path)
         permissions.init_permissions_db(db_path)
         settings.init_settings_db(db_path)
+        # The start routes resolve the machine's Group Policy (remote view mode per OU/folder),
+        # so the tables app.py always creates have to exist here too.
+        pc_tree.init_pc_tree_db(db_path)
+        gpo.init_gpo_db(db_path)
+        gpo.invalidate()
         settings.invalidate()
         SECRET = "hub-enroll-secret"
 

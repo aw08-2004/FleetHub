@@ -33,6 +33,8 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "hub"))
 import fleet
+import gpo
+import pc_tree
 import permissions
 import recordings
 import remote
@@ -76,6 +78,11 @@ def build():
     remote.init_remote_db(db)
     permissions.init_permissions_db(db)
     settings.init_settings_db(db)
+    # The remote start route resolves the machine's Group Policy (remote view mode per
+    # OU/folder), so the tables app.py always creates have to exist here too.
+    pc_tree.init_pc_tree_db(db)
+    gpo.init_gpo_db(db)
+    gpo.invalidate()
     settings.invalidate()
     settings.set_many(db, {"remote.enabled": True})
     settings.invalidate()

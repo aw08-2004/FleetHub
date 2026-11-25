@@ -67,12 +67,17 @@ Setting = namedtuple("Setting", [
     "unit",      # a UNIT SLUG ("seconds", "celsius") resolved through settings.unit.*
     "choices",   # for "enum"/"str_list": a list, or callable(db_path) -> list
     "agent",     # True => shipped to agents over the heartbeat config channel
+    "policy",    # True => a Group Policy may set it per OU/folder, resolved ON THE HUB
 ])
+# `policy` exists for settings the hub enforces per machine but the agent never needs to know
+# about -- the remote view mode is the first (roadmap #2 follow-up, done through #32). A
+# policy-settable key is NOT `agent`: shipping it would move the config version of every PC under
+# the OU and push a config that changes nothing on the PC. gpo.config_overrides() filters them out.
 
 
 def _s(key, section, type, default, *, minimum=None, maximum=None,
-       unit="", choices=None, agent=False):
-    return Setting(key, section, type, default, minimum, maximum, unit, choices, agent)
+       unit="", choices=None, agent=False, policy=False):
+    return Setting(key, section, type, default, minimum, maximum, unit, choices, agent, policy)
 
 
 # ------------------------------------------------------- where the words live
@@ -500,9 +505,12 @@ REGISTRY = (
        unit="pcs"),
 
     # ---------------- Remote view/control (roadmap #2) ----------------
-    _s("remote.enabled", "remote", "bool", True),
+    # Both may be set per OU/folder by a Group Policy (policy=True). The fleet-wide
+    # `remote.enabled` stays a hard kill switch: a policy can turn remote off for its OU, never
+    # on over a fleet-wide off -- see remote_web._remote_policy.
+    _s("remote.enabled", "remote", "bool", True, policy=True),
     _s("remote.consent_mode", "remote", "enum", "unattended",
-       choices=["unattended", "attended"]),
+       choices=["unattended", "attended"], policy=True),
     _s("remote.session_ttl_seconds", "remote", "int", 4 * 60 * 60, minimum=300,
        maximum=86400, unit="seconds"),
     _s("remote.turn_ttl_seconds", "remote", "int", 600, minimum=60, maximum=86400,
@@ -1398,6 +1406,7 @@ def schema(db_path, lang=None):
                 "choice_labels": {c: choice_label(setting, c, lang)
                                   for c in (choices or [])},
                 "agent": setting.agent,
+                "policy": setting.policy,
                 "placeholder": field_placeholder(setting, lang),
             })
         if fields:

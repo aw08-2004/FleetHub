@@ -421,6 +421,10 @@
                     return;
                 }
                 sessionId = res.session_id;
+                // Attended (fleet setting or the PC's Group Policy): nothing arrives until the
+                // person at the PC approves, and a refusal only shows as the session ending --
+                // say what the wait is, or it reads as a hang.
+                if (res.consent_mode === 'attended') hint(t('machine.remote.waiting_consent'));
                 createPeer(res.ice_servers || []);
                 schedulePoll();
             } catch (e) {

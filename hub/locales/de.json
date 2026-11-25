@@ -262,8 +262,9 @@
       "name": "Name",
       "description": "Beschreibung",
       "enabled": "Aktiviert",
-      "agent_settings": "Agent-Einstellungen",
+      "agent_settings": "Einstellungen",
       "agent_help": "Überschreibt den hubweiten Wert dieser Einstellungen auf den PCs, für die diese Richtlinie gilt. Funktioniert mit jeder Agent-Version.",
+      "hub_side": "Vom Hub durchgesetzt",
       "add_setting": "Einstellung hinzufügen…",
       "registry": "Registrierungswerte",
       "hive": "Struktur",
@@ -1305,11 +1306,11 @@
       },
       "remote.enabled": {
         "label": "Fernansicht/-steuerung erlauben",
-        "help": "Hauptschalter für Remotesitzungen. Ist er aus, lässt sich keine Sitzung starten, auch nicht mit der Berechtigung dafür."
+        "help": "Hauptschalter für Remotesitzungen. Ist er aus, lässt sich keine Sitzung starten, auch nicht mit der Berechtigung dafür. Eine Gruppenrichtlinie kann die Fernsteuerung zusätzlich für eine OU oder einen Ordner abschalten, aber nie wieder einschalten, solange dieser Schalter aus ist."
       },
       "remote.consent_mode": {
         "label": "Einwilligungsmodus",
-        "help": "Unbeaufsichtigt verbindet sofort, das übliche Verhalten eines RMM. Beaufsichtigt fragt die angemeldete Person und lehnt von selbst ab, wenn niemand antwortet – funktioniert also nicht an einem Computer, an dem niemand sitzt."
+        "help": "Unbeaufsichtigt verbindet sofort, das übliche Verhalten eines RMM. Beaufsichtigt fragt die angemeldete Person und lehnt von selbst ab, wenn niemand antwortet – funktioniert also nicht an einem Computer, an dem niemand sitzt. Eine Gruppenrichtlinie an einer OU oder einem Ordner kann für die PCs darunter einen anderen Modus festlegen."
       },
       "remote.session_ttl_seconds": {
         "label": "Sitzung automatisch beenden nach",
@@ -3053,6 +3054,7 @@
       "vdd_remove": "Virtuelle Anzeige entfernen",
       "starting": "Wird gestartet…",
       "waiting_helper": "Warten, bis der Agent seinen Aufnahme-Helfer startet…",
+      "waiting_consent": "Beaufsichtigter Modus: Warten, bis die am PC angemeldete Person zustimmt…",
       "start_failed": "Start nicht möglich: {error}",
       "connecting": "Verbindung wird hergestellt…",
       "reconnecting": "Neuverbindung…",
