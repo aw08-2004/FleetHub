@@ -495,7 +495,9 @@
       "10s": "10s",
       "1m": "1m",
       "5m": "5m",
-      "unknown": "--"
+      "unknown": "--",
+      "15m": "15m",
+      "1h": "1h"
     },
     "in_use": "In use: {value}",
     "dynamic_on_zoom": "Dynamic on zoom",
@@ -3058,7 +3060,19 @@
       "title": "Historical",
       "day": "Day:",
       "zoom_hint": "Wheel or drag to zoom a panel; the time range stays in sync across every chart.",
-      "no_readings": "No readings found for this day."
+      "no_readings": "No readings found for this day.",
+      "range": "Time range",
+      "range_live": "Live",
+      "range_1h": "1 h",
+      "range_6h": "6 h",
+      "range_24h": "24 h",
+      "expand": "Expand chart",
+      "shrink": "Shrink chart",
+      "steady": "steady",
+      "vs_avg": "{delta} vs avg",
+      "min_peak": "min {min} · peak {peak} at {time}",
+      "range_7d": "7 d",
+      "range_30d": "30 d"
     },
     "terminal": {
       "title": "Terminal",
@@ -3488,9 +3502,7 @@
       },
       "no_answer_note": "The magic packet was sent and the PC has not checked in since."
     },
-    "fold": {
-      "stats": "At a glance"
-    },
+    "fold": {},
     "open": {
       "label": "Open in Tools:",
       "terminal": "Terminal",
@@ -3580,7 +3592,27 @@
       }
     },
     "breadcrumb_label": "Breadcrumb",
-    "settings_title": "Machine settings"
+    "settings_title": "Machine settings",
+    "bento": {
+      "clock": "Clock",
+      "power": "Power",
+      "hot_at": "Hot at {value} °C",
+      "memory": "Memory",
+      "memory_used": "{used} of {total} GB",
+      "profile": "Device profile",
+      "copy": "Copy",
+      "copied": "Copied",
+      "f": {
+        "manufacturer": "Manufacturer",
+        "model": "Model",
+        "serial": "Serial",
+        "service_tag": "Service tag",
+        "asset_tag": "Asset tag",
+        "os": "OS",
+        "ou": "OU",
+        "owner": "Managed by"
+      }
+    }
   },
   "remote": {
     "title": "Remote",
@@ -5394,12 +5426,6 @@
     "read_failed": "This machine's encryption state could not be read: {error}",
     "load_error": "Encryption data could not be loaded.",
     "retry": "Retry",
-    "column": {
-      "volume": "Volume",
-      "protection": "Protection",
-      "method": "Method",
-      "key": "Recovery key"
-    },
     "protection": {
       "on": "Protected",
       "off": "Not protected",

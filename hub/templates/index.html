@@ -27,50 +27,64 @@
 
 <p class="setting__error" id="summary-error" hidden></p>
 
-<details class="card fold" data-fold-key="dashboard:health" open>
-    <summary class="fold__summary">
-        <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.health.title') }}</span>
-        <span class="stat-card__meta" id="health-generated"></span>
-    </summary>
-    <div class="tile-grid-host"><div class="tile-grid" id="health-tiles"></div></div>
-</details>
+{# The bento (hub 1.189.0, variant "D2" of the layout review).
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   One hero tile for the question every visit starts with -- how much of the fleet is up --
+   as a ring of online against offline with the total in the middle, and five smaller tiles
+   around it for temperature, load, disk, activity and OS. It replaces four folds of six
+   equal tiles each, in which "0 backup failures" was exactly as large as "142 online" and
+   the page had no first thing to read.
 
-<details class="card fold" data-fold-key="dashboard:os" open>
-    <summary class="fold__summary">
-        <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.os.title') }}</span>
-    </summary>
-    <p class="stat-card__meta">{{ t('dashboard.os.help') }}</p>
-    <div id="os-breakdown"></div>
-</details>
+   Every number the folds showed is still here, as a row in the tile it belongs to; nothing
+   was dropped to make the layout fit. The coverage sentence sits in the load tile because
+   it qualifies the AVERAGES, and only those.
 
-<details class="card fold" data-fold-key="dashboard:telemetry" open>
-    <summary class="fold__summary">
-        <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.telemetry.title') }}</span>
-    </summary>
-    <p class="stat-card__meta">{{ t('dashboard.telemetry.help') }}</p>
-    {# How many machines the averages below are OF. It was a seventh tile ("Reporting"),
-       which made it look like one more measurement and left it alone on a second row; it
-       qualifies the six numbers, so it sits with the caption that introduces them. #}
-    <p class="stat-card__meta dashboard__coverage" id="telemetry-coverage"></p>
-    <div class="tile-grid-host"><div class="tile-grid" id="telemetry-tiles"></div></div>
-</details>
+   Rejected: a row of gauges with a tall attention column (D1), because a ring around
+   "Open alerts" or "Agents behind" has no meaningful 100%; and a three-column command
+   centre (D3), which pushed the OS breakdown into a narrow column where long bucket names
+   wrapped. Live-ness and the single request are unchanged -- see dashboard.js. #}
+<div class="dash-bento-host">
+<div class="dash-bento">
+    <section class="card stat-card dash-hero" aria-labelledby="dash-hero-title">
+        <div class="dash-hero__head">
+            <span class="stat-card__label" id="dash-hero-title">{{ t('dashboard.health.title') }}</span>
+            <span class="stat-card__meta" id="health-generated"></span>
+        </div>
+        <div class="dash-hero__body">
+            <svg class="donut" viewBox="0 0 120 120" aria-hidden="true">
+                <circle class="donut__track" cx="60" cy="60" r="46"/>
+                <circle class="donut__seg donut__seg--online" id="donut-online" cx="60" cy="60" r="46"/>
+                <circle class="donut__seg donut__seg--offline" id="donut-offline" cx="60" cy="60" r="46"/>
+            </svg>
+            <div class="donut__center">
+                <div class="donut__total" id="health-total">--</div>
+                <div class="stat-card__meta">{{ t('dashboard.health.total') }}</div>
+            </div>
+            <dl class="dash-kv dash-hero__list" id="health-list"></dl>
+        </div>
+    </section>
 
-<details class="card fold" data-fold-key="dashboard:activity" open>
-    <summary class="fold__summary">
-        <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.activity.title') }}</span>
-    </summary>
+    <section class="card stat-card dash-tile" id="tile-temp"></section>
+    <section class="card stat-card dash-tile" id="tile-cpu"></section>
+
     {# data-can-deploy, not a field of /api/fleet/summary: that answer is cached per SCOPE,
        and two operators with the same machines but different capabilities share it. #}
-    <div class="tile-grid-host"><div class="tile-grid" id="activity-tiles"
-         data-can-deploy="{{ 'yes' if cap.DEPLOY_PACKAGES in user_capabilities else '' }}"></div></div>
-    <div id="activity-alerts"></div>
-</details>
+    <section class="card stat-card dash-tile" id="activity-tiles"
+             data-can-deploy="{{ 'yes' if cap.DEPLOY_PACKAGES in user_capabilities else '' }}"></section>
+    <section class="card stat-card dash-tile" id="tile-disk"></section>
+    <section class="card stat-card dash-tile" aria-labelledby="dash-os-title">
+        <span class="stat-card__label" id="dash-os-title" title="{{ t('dashboard.os.help') }}">{{ t('dashboard.os.title') }}</span>
+        <div id="os-breakdown"></div>
+    </section>
+</div>
+</div>
 
 <details class="card fold" data-fold-key="dashboard:attention" open>
     <summary class="fold__summary">
         <span class="section-title" style="margin-bottom: 0;">{{ t('dashboard.attention.title') }}</span>
     </summary>
     <p class="stat-card__meta">{{ t('dashboard.attention.help') }}</p>
+    <div id="activity-alerts"></div>
     <div class="attention-grid" id="attention-lists"></div>
 </details>
 {% endblock %}
