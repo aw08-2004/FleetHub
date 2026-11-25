@@ -456,10 +456,18 @@ def _bounded_list(raw, what, limit):
 
 
 def _agent_settings(raw):
+    """The settings a policy sets: agent settings (shipped in the heartbeat config) and, since
+    hub 1.190, **hub-side** settings marked `policy=True` (the remote view mode), which the hub
+    resolves per PC when a remote session starts (remote_web._remote_policy) and never ships.
+
+    Both live in the one `agent_settings` bucket of the stored policy. Rejected: a separate
+    `hub_settings` bucket -- it would double the validation, merge, editor and RSoP code for two
+    keys, and migrate nothing anyone could see. The bucket's name is the cost; config_overrides()
+    is what keeps the hub-side keys off the wire."""
     clean = {}
     for key, value in (raw or {}).items():
         setting = settings.BY_KEY.get(str(key))
-        if setting is None or not setting.agent:
+        if setting is None or not (setting.agent or setting.policy):
             raise PolicyRejected(f"{key} is not a setting a policy can set")
         # coerce_and_validate raises ValueError with an operator-facing sentence; validate()
         # renders it through refusals.message, never str(e).
@@ -1101,8 +1109,14 @@ def rsop(db_path, machine, **cached):
 
 
 def config_overrides(db_path, machine):
-    """{setting key: value} a policy sets for this PC, for the heartbeat config block."""
-    return {key: entry["value"] for key, entry in rsop(db_path, machine)["agent_settings"].items()}
+    """{setting key: value} a policy sets for this PC, for the heartbeat config block.
+
+    **Agent settings only.** A hub-side (`policy=True`) key would otherwise reach the agent --
+    which ignores it -- and move the config version of every PC under the OU, pushing a config
+    that changes nothing. A setting that is neither (one whose flag was dropped since the policy
+    was saved) is left out the same way."""
+    return {key: entry["value"] for key, entry in rsop(db_path, machine)["agent_settings"].items()
+            if getattr(settings.BY_KEY.get(key), "agent", False)}
 
 
 def resolve_for(db_path, machine, features=()):

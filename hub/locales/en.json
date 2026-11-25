@@ -292,8 +292,9 @@
       "name": "Name",
       "description": "Description",
       "enabled": "Enabled",
-      "agent_settings": "Agent settings",
+      "agent_settings": "Settings",
       "agent_help": "Overrides the hub-wide value of these settings on the PCs this policy applies to. Works with every agent version.",
+      "hub_side": "Enforced by the hub",
       "add_setting": "Add a setting…",
       "registry": "Registry values",
       "hive": "Hive",
@@ -1382,11 +1383,11 @@
       },
       "remote.enabled": {
         "label": "Allow remote view/control",
-        "help": "Master switch for starting remote sessions from a machine's Remote tab. Off means the Start button is refused fleet-wide, regardless of who holds the remote_control capability."
+        "help": "Master switch for starting remote sessions from a machine's Remote tab. Off means the Start button is refused fleet-wide, regardless of who holds the remote_control capability. A Group Policy can also turn remote off for an OU or folder, but never back on while this is off."
       },
       "remote.consent_mode": {
         "label": "Consent mode",
-        "help": "Unattended connects immediately (standard RMM). Attended prompts the logged-in user to approve first, and does nothing if no one is signed in. A per-machine override lives on the machine's Remote tab."
+        "help": "Unattended connects immediately (standard RMM). Attended prompts the logged-in user to approve first, and does nothing if no one is signed in. A Group Policy linked to an OU or folder can set a different mode for the PCs under it."
       },
       "remote.session_ttl_seconds": {
         "label": "End a session automatically after",
@@ -3167,6 +3168,7 @@
       "vdd_remove": "Remove virtual display",
       "starting": "Starting…",
       "waiting_helper": "Waiting for the agent to bring up its capture helper…",
+      "waiting_consent": "Attended mode: waiting for the person signed in on the PC to approve…",
       "start_failed": "Could not start: {error}",
       "connecting": "Connecting…",
       "reconnecting": "Reconnecting…",

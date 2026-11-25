@@ -28,6 +28,7 @@ from flask import Blueprint, Response, jsonify, request, session
 import auth_helpers
 import envfile
 import fleet
+import gpo
 import permissions
 import permissions_web
 import recordings
@@ -72,6 +73,28 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
 
     def _current_email():
         return permissions_web.current_actor()
+
+    def _remote_policy(machine):
+        """(enabled, consent_mode) for one machine: the fleet settings, narrowed by the Group
+        Policy that wins for the machine's OU/folder (roadmap #2 follow-up, through #32).
+
+        **The fleet-wide `remote.enabled` is a hard kill switch.** A policy can turn remote off
+        for its OU and, by a higher-precedence link, back on over an inherited off -- but never
+        on over the fleet-wide off, which is the switch somebody flips in an incident and must
+        mean what it says. Rejected: a policy that overrides it outright, Windows-style; that
+        leaves the kill switch silently not killing.
+
+        Both start routes call this, after their scope check: a caller who may not touch the
+        machine learns nothing about which policy covers it."""
+        if not settings.get_bool(db_path, "remote.enabled"):
+            return False, None
+        resolved = gpo.rsop(db_path, machine)["agent_settings"]
+        enabled = (resolved.get("remote.enabled") or {}).get("value")
+        if enabled is False:
+            return False, None
+        consent = ((resolved.get("remote.consent_mode") or {}).get("value")
+                   or settings.get(db_path, "remote.consent_mode") or "unattended")
+        return True, consent
 
     def _ice_servers(session_id, peer_ip=None):
         """Assemble the ICE server list for ONE PEER of a session, from settings + the .env TURN
@@ -386,13 +409,17 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
         if not access.in_scope(machine):
             return jsonify({"error": "You do not have access to that machine."}), 403
 
+        enabled, consent_mode = _remote_policy(machine)
+        if not enabled:
+            return jsonify({"error": "Remote control is disabled for this machine by "
+                                     "Group Policy."}), 403
+
         data = request.get_json(silent=True) or {}
         try:
             stream = _stream_params(data)
         except ValueError as e:
             return refusals.refuse(e)
 
-        consent_mode = settings.get(db_path, "remote.consent_mode") or "unattended"
         session_id = remote.create_session(
             db_path, machine, _current_email(), consent_mode,
             ttl_seconds=settings.get_int(db_path, "remote.session_ttl_seconds"),
@@ -645,19 +672,24 @@ def create_remote_blueprint(db_path, login_required, access, env_path=None):
     def peer_start_session(peer, state):
         """Start a session on a borrowed machine. The peer plane's copy of start_session.
 
-        The consent mode is THIS hub's setting, not a parameter: whether the person at the
+        The consent mode is THIS hub's setting (and Group Policy), not a parameter: whether the person at the
         desk is asked before their screen is shared is a policy of the fleet the machine
         belongs to, and it would be exactly the wrong thing to let the borrowing hub choose.
         """
         if not settings.get_bool(db_path, "remote.enabled"):
             return jsonify({"error": "Remote control is disabled on the owning hub."}), 403
+        # The owning hub's Group Policy too: an OU this fleet keeps attended, or off, stays so
+        # for a borrower.
+        enabled, consent_mode = _remote_policy(state["machine"])
+        if not enabled:
+            return jsonify({"error": "Remote control is disabled for this machine on the "
+                                     "owning hub."}), 403
         data = request.get_json(silent=True) or {}
         try:
             stream = _stream_params(data)
         except ValueError as e:
             return refusals.refuse(e)
 
-        consent_mode = settings.get(db_path, "remote.consent_mode") or "unattended"
         issued_by = sharing_web.peer_actor(peer, data)
         session_id = remote.create_session(
             db_path, state["machine"], issued_by, consent_mode,

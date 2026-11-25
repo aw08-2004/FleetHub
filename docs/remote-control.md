@@ -85,7 +85,16 @@ the operator's scope; every session start/stop is in the audit log.
   starting level. View-only is an accident guard on the viewer, not a permission: it stops
   *this browser* sending input, and does not stop anyone else driving the machine.
 - **Consent** is `unattended` by default (connects immediately, standard RMM) or `attended`
-  (the logged-in user must approve first). Set it in **Settings → Remote Control**.
+  (the logged-in user must approve first). Set it fleet-wide in **Settings → Remote Control**.
+- **Per OU or folder.** A [Group Policy](group-policy.md) linked to an AD OU or a hub folder can
+  set *Consent mode* (attended or unattended) and *Allow remote view/control* for the PCs under
+  it, with the usual link order, block inheritance and enforced links; the PC's Resultant Set
+  of Policy names the policy that won. The hub resolves both when a session starts -- nothing
+  reaches the agent, so every agent version honours it. **The fleet-wide switch is a hard
+  kill switch:** a policy can turn remote off for its OU, and back on over an inherited off,
+  but never on while **Settings → Remote Control** has it off. Attended mode cannot work at a
+  logon screen with nobody signed in: the prompt times out and the session is denied. A
+  borrowed machine (roadmap #15) follows the owning hub's policy.
 - **TURN.** Agents sit behind arbitrary NATs, so WebRTC media usually needs a TURN relay.
   **The hub is the TURN server by default** (coturn from [`turn/`](../turn/README.md)), but it does
   not have to be — the relay can live on any Windows box you can forward ports to. Install it

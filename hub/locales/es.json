@@ -262,8 +262,9 @@
       "name": "Nombre",
       "description": "Descripción",
       "enabled": "Habilitada",
-      "agent_settings": "Ajustes del agente",
+      "agent_settings": "Ajustes",
       "agent_help": "Sustituye el valor general del hub de estos ajustes en los PC a los que se aplica esta directiva. Funciona con cualquier versión del agente.",
+      "hub_side": "Aplicado por el hub",
       "add_setting": "Añadir un ajuste…",
       "registry": "Valores del registro",
       "hive": "Subárbol",
@@ -1305,11 +1306,11 @@
       },
       "remote.enabled": {
         "label": "Permitir la visualización/control remoto",
-        "help": "Interruptor general de las sesiones remotas. Con esto desactivado, no se puede iniciar ninguna sesión aunque se tenga la capacidad."
+        "help": "Interruptor general de las sesiones remotas. Con esto desactivado, no se puede iniciar ninguna sesión aunque se tenga la capacidad. Una directiva de grupo también puede desactivar el control remoto para una OU o carpeta, pero nunca volver a activarlo mientras esto esté desactivado."
       },
       "remote.consent_mode": {
         "label": "Modo de consentimiento",
-        "help": "Desatendido conecta de inmediato, el comportamiento habitual de un RMM. Atendido pide permiso a la persona que ha iniciado sesión y deniega por sí solo si nadie responde, así que no sirve en un equipo sin nadie delante."
+        "help": "Desatendido conecta de inmediato, el comportamiento habitual de un RMM. Atendido pide permiso a la persona que ha iniciado sesión y deniega por sí solo si nadie responde, así que no sirve en un equipo sin nadie delante. Una directiva de grupo vinculada a una OU o carpeta puede fijar otro modo para los PC que contiene."
       },
       "remote.session_ttl_seconds": {
         "label": "Finalizar una sesión automáticamente tras",
@@ -3053,6 +3054,7 @@
       "vdd_remove": "Quitar la pantalla virtual",
       "starting": "Iniciando…",
       "waiting_helper": "Esperando a que el agente levante su ayudante de captura…",
+      "waiting_consent": "Modo atendido: esperando a que la persona que ha iniciado sesión en el PC lo apruebe…",
       "start_failed": "No se pudo iniciar: {error}",
       "connecting": "Conectando…",
       "reconnecting": "Reconectando…",

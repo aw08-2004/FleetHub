@@ -188,6 +188,18 @@ auto-update off and is updated by hand once the test hub has checked out.
   agent and client *Beta* choices stay: those manifests live on `main` (the client's is
   served from `hub/`).
 
+**Hub 1.190.0: remote view attended / unattended / off per OU or folder** (#2 through #32).
+Confirm on the test hub:
+- [ ] **Attended by policy.** A policy with *Consent mode = Attended* linked to an OU (or folder)
+  holding a test PC: starting remote on it shows the consent prompt on the PC and *waiting for
+  the person at the PC to approve* in the viewer; a PC outside that OU still connects unattended.
+- [ ] **Off by policy.** *Allow remote view/control = off* in a policy on that OU: Start is refused
+  with the Group Policy message; the PC's Resultant Set of Policy names the policy.
+- [ ] **Kill switch.** Fleet-wide *Allow remote view/control* off, a policy setting it on: still
+  refused.
+- [ ] **No config churn.** Linking either remote setting does not push a new agent config to the
+  PCs under the OU (their config version is unchanged).
+
 **Hub 1.188.0: the console off the internet, agents still on it** (*Console and agent channel
 on separate listeners* below). Confirm on the test hub, behind nginx:
 - [ ] **Unsplit hub unchanged.** The test hub updates to 1.188.0 with neither new key set: one
@@ -3643,10 +3655,24 @@ released under Cmd, so the viewer releases those keys itself when Cmd comes up.
   only lets a page read the clipboard on a gesture, so a keystroke or a click is the trigger).
   **Owed:** see *Owed locally*, item 14.
 
+**Consent per OU or folder · hub 1.190.0.** A Group Policy may set `remote.consent_mode` and
+`remote.enabled` for an OU or hub folder. They are the first *hub-side* policy settings
+(`settings.Setting.policy`): the hub resolves them in both start routes
+(`remote_web._remote_policy`), they never ride the heartbeat config, and so no agent change or
+gate was needed -- every agent already obeyed `consent_mode` in the start command. The fleet-wide
+`remote.enabled` stays a hard kill switch that no policy can override. **Rejected:** a separate
+remote-rules table over device groups (a second precedence model beside #32, which #32 already
+rejected); linking policies to device groups (filters have no order to inherit by); a separate
+`hub_settings` bucket in the stored policy (doubles validation, merge, editor and RSoP code for
+two keys); shipping the keys as agent settings (moves the config version of every PC under the
+OU for a value the agent ignores); a policy that can override the fleet-wide off (a kill switch
+that silently does not kill).
+
 **Open, on-hardware follow-ups** (validate/tune together, as agreed): the **secure desktop**
 (capturing/injecting on Winlogon during UAC — the SYSTEM-in-session enabler is in place, the
 DXGI re-duplication + SendInput-to-Winlogon is the piece to confirm); **hardware H.264** encode
-(async MFT + shared D3D11); **per-machine consent override** (global setting works today);
+(async MFT + shared D3D11); ~~per-machine consent override~~ **done in hub 1.190.0 through
+Group Policy (#32)** -- see *Consent per OU or folder* above;
 multi-monitor UX; and the software-encode fallback threshold.
 
 <details>
