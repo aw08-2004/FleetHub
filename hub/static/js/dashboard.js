@@ -41,8 +41,8 @@
     // The OS buckets the stacked bar has a colour for (dashboard.css .os-seg--*). The class
     // is built from this list, never from the server's string, so an unexpected bucket gets
     // the "unknown" grey rather than a class name somebody else chose.
-    const OS_BUCKETS = ['windows_11', 'windows_10', 'windows_legacy', 'windows_server',
-                        'linux', 'android'];
+    const OS_BUCKETS = new Set(['windows_11', 'windows_10', 'windows_legacy',
+                                'windows_server', 'linux', 'android']);
 
     // A switch of literal keys rather than one key built by concatenating the bucket name
     // onto a prefix. A computed key is invisible to tests/test_i18n.py, which can only scan
@@ -201,7 +201,7 @@
             // Linux does not need a permanent Linux row, and the list stays as long as the
             // fleet is varied.
             if (!entry.count) continue;
-            const bucket = OS_BUCKETS.includes(entry.bucket) ? entry.bucket : 'unknown';
+            const bucket = OS_BUCKETS.has(entry.bucket) ? entry.bucket : 'unknown';
             const pct = Math.round(100 * entry.count / total);
             const seg = el('span', `os-seg os-seg--${bucket}`);
             seg.style.width = `${100 * entry.count / total}%`;

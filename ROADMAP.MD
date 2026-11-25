@@ -241,7 +241,10 @@ OS names. Confirm on the test hub:
   auto picks 1h past eight days (unchanged below), and a multi-day window imports at most 31
   days of archive per request (`MAX_HISTORY_IMPORT_DAYS`). Live readings are not appended
   to a 7 d or 30 d chart -- a raw point per second on an hourly series drew a fringe -- so
-  those cards refresh on the next range change or Reset.
+  those cards refresh on the next range change or Reset. Time the FIRST 30 d request after a
+  hub restart on a hub with archives: it imports up to 31 CSV days inside the request (each
+  is then marked imported), so it may be slow once. If it is too slow, the import belongs in
+  the background, not in the request.
 - [ ] **Dashboard numbers agree** with the 1.188.0 Dashboard: online + offline is the ring's
   total, and every count the old folds showed appears once in a tile.
 - [ ] **Both themes and narrow widths.** Light and dark, the sidebar collapsed and expanded, and

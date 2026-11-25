@@ -65,6 +65,13 @@
         return '';
     }
 
+    // The icon for a protection state: closed, open, or a dash for one not reported.
+    function lockKind(protection) {
+        if (protection === 'on') return 'lock';
+        if (protection === 'off') return 'unlock';
+        return 'unknown';
+    }
+
     function volumeName(volume) {
         return volume.mount || volume.device_id;
     }
@@ -169,8 +176,7 @@
         // unchanged.
         const list = el('ul', 'volume-list');
         volumes.forEach((volume) => {
-            const kind = volume.protection === 'on' ? 'lock'
-                : volume.protection === 'off' ? 'unlock' : 'unknown';
+            const kind = lockKind(volume.protection);
             const row = el('li', `volume-row volume-row--${kind}`);
             row.appendChild(icon(kind, 'volume-row__icon'));
             const text = el('div', 'volume-row__text');

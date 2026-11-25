@@ -442,73 +442,93 @@ function formatMetricValue(metric, y) {
 // gets a neutral badge, because "more network than usual" is not good or bad by itself.
 const WORSE_WHEN_HIGH = new Set(['temp', 'gpu_temp', 'cpu_load', 'memory', 'gpu_load', 'disk']);
 
+// The visible part of a series in one pass: count, sum, the lowest and highest point. The
+// axis bounds `lo`/`hi` are +/-Infinity when the chart has none (a past day shown whole).
+function summarizeVisible(points, lo, hi) {
+    const out = { n: 0, sum: 0, min: null, peak: null };
+    for (const pt of points) {
+        if (pt.x < lo || pt.x > hi || !Number.isFinite(pt.y)) continue;
+        out.sum += pt.y;
+        out.n += 1;
+        if (!out.min || pt.y < out.min.y) out.min = pt;
+        if (!out.peak || pt.y > out.peak.y) out.peak = pt;
+    }
+    return out;
+}
+
+// The badge's modifier: neutral for a metric where higher is not worse, else up or down.
+function deltaModifier(metric, delta) {
+    if (!WORSE_WHEN_HIGH.has(metric.key)) return 'metric-card__delta--flat';
+    return delta > 0 ? 'metric-card__delta--up' : 'metric-card__delta--down';
+}
+
+// The latest reading against the visible average. Hidden with fewer than two points: one
+// reading has no average to differ from.
+function renderDelta(panel, latest, summary) {
+    const el = panel.deltaEl;
+    el.hidden = !(latest && summary.n > 1);
+    if (el.hidden) return;
+    const metric = panel.metric;
+    const delta = latest.y - summary.sum / summary.n;
+    const span = summary.peak.y - summary.min.y;
+    el.className = 'metric-card__delta';
+    // "Steady" when the difference is under 5% of the visible spread -- a 0.1 °C wobble on
+    // a flat line badged "+0.1 vs avg" in amber was noise dressed as news.
+    if (span === 0 || Math.abs(delta) < span * 0.05) {
+        el.textContent = t('machine.history.steady');
+        el.classList.add('metric-card__delta--flat');
+        return;
+    }
+    const sign = delta > 0 ? '+' : '−';
+    const magnitude = metric.rate
+        ? formatRate(Math.abs(delta), metric.bits)
+        : `${Math.abs(delta).toFixed(metric.decimals ?? 1)} ${metric.unit}`;
+    el.textContent = t('machine.history.vs_avg', { delta: sign + magnitude });
+    el.classList.add(deltaModifier(metric, delta));
+}
+
+// When the peak was. 24-hour, like the charts' own axis and tooltip (HH:mm) -- the locale
+// default put "09:23 PM" under a chart whose axis said 21:23. With the date too once the
+// visible range is longer than a day: "peak at 07:55" over 30 days names no day.
+function peakTimeLabel(peakMs, visibleSpanMs) {
+    const parts = { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
+    const withDay = visibleSpanMs > DAY_MS ? { ...parts, month: 'short', day: 'numeric' } : parts;
+    return new Date(peakMs).toLocaleString([], withDay);
+}
+
 // The numbers around a card's chart, all over what is ON SCREEN: the latest reading, its
 // difference from the visible average, and the visible minimum and peak (with its time).
 // "Visible" rather than "the whole day" so a zoom into a spike re-captions the spike.
+// Split into the helpers above in hub 1.189.0's review, when SonarCloud measured this one
+// function at three times its complexity limit.
 function updatePanelStats(panel) {
     const ds = panel.chart.data.datasets[0];
     const all = ds._data || ds.data;   // the decimation plugin keeps the originals in _data
     const opts = panel.chart.options.scales.x;
     const lo = Number.isFinite(opts.min) ? opts.min : -Infinity;
     const hi = Number.isFinite(opts.max) ? opts.max : Infinity;
-    let sum = 0;
-    let n = 0;
-    let min = null;
-    let peak = null;
-    for (const pt of all) {
-        if (pt.x < lo || pt.x > hi || !Number.isFinite(pt.y)) continue;
-        sum += pt.y;
-        n += 1;
-        if (!min || pt.y < min.y) min = pt;
-        if (!peak || pt.y > peak.y) peak = pt;
-    }
+    const summary = summarizeVisible(all, lo, hi);
     const latest = all.length ? all[all.length - 1] : null;
     const metric = panel.metric;
     // Memory's headline stays a percentage: the card title already says how much 100% is
     // ("Memory (16 GB)"), and the GB form belongs to the hover tooltip.
     panel.valueEl.textContent = latest ? formatMetricValue(metric, latest.y) : t('machine.unknown');
+    renderDelta(panel, latest, summary);
 
-    panel.deltaEl.hidden = !(latest && n > 1);
-    if (!panel.deltaEl.hidden) {
-        const avg = sum / n;
-        const delta = latest.y - avg;
-        const span = peak.y - min.y;
-        // "Steady" when the difference is under 5% of the visible spread -- a 0.1 °C
-        // wobble on a flat line badged "+0.1 vs avg" in amber was noise dressed as news.
-        const steady = span === 0 || Math.abs(delta) < span * 0.05;
-        panel.deltaEl.className = 'metric-card__delta';
-        if (steady) {
-            panel.deltaEl.textContent = t('machine.history.steady');
-            panel.deltaEl.classList.add('metric-card__delta--flat');
-        } else {
-            const sign = delta > 0 ? '+' : '−';
-            const magnitude = metric.rate
-                ? formatRate(Math.abs(delta), metric.bits)
-                : `${Math.abs(delta).toFixed(metric.decimals ?? 1)} ${metric.unit}`;
-            panel.deltaEl.textContent = t('machine.history.vs_avg', { delta: sign + magnitude });
-            const worse = WORSE_WHEN_HIGH.has(metric.key);
-            panel.deltaEl.classList.add(!worse ? 'metric-card__delta--flat'
-                : delta > 0 ? 'metric-card__delta--up' : 'metric-card__delta--down');
-        }
-    }
-
-    // The axis bounds when the chart has them; otherwise (a past day shown whole) what the
-    // data covers.
-    const visibleSpan = Number.isFinite(hi - lo) ? hi - lo
-        : (all.length ? all[all.length - 1].x - all[0].x : 0);
+    const { min, peak } = summary;
     panel.chart.$peak = peak && min && peak.y > min.y ? peak : null;
-    panel.rangeEl.textContent = (min && peak)
-        ? t('machine.history.min_peak', {
-            min: formatMetricValue(metric, min.y),
-            peak: formatMetricValue(metric, peak.y),
-            // 24-hour, like the charts' own axis and tooltip (HH:mm) -- the locale default
-            // put "09:23 PM" under a chart whose axis said 21:23. With the date too once the
-            // visible range is longer than a day: "peak at 07:55" over 30 days names no day.
-            time: new Date(peak.x).toLocaleString([], Object.assign(
-                { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
-                visibleSpan > DAY_MS ? { month: 'short', day: 'numeric' } : {})),
-        })
-        : '';
+    if (!min || !peak) {
+        panel.rangeEl.textContent = '';
+        return;
+    }
+    // The axis bounds when the chart has them; otherwise what the data covers.
+    let visibleSpan = hi - lo;
+    if (!Number.isFinite(visibleSpan)) visibleSpan = all[all.length - 1].x - all[0].x;
+    panel.rangeEl.textContent = t('machine.history.min_peak', {
+        min: formatMetricValue(metric, min.y),
+        peak: formatMetricValue(metric, peak.y),
+        time: peakTimeLabel(peak.x, visibleSpan),
+    });
 }
 
 // Live readings arrive once a second per panel; the captions only need to keep up with a
@@ -687,7 +707,9 @@ async function loadHistoryRange(minMs, maxMs, resolution, resetZoom) {
         if (pendingHistoryLoad) {
             const next = pendingHistoryLoad;
             pendingHistoryLoad = null;
-            loadHistoryRange(...next);
+            // Not awaited: this finally must not wait on the next load. A failed fetch
+            // leaves the last good series on the cards, as it always has.
+            void loadHistoryRange(...next);
         }
     }
 }
@@ -765,7 +787,7 @@ document.getElementById('reset-zoom').addEventListener('click', () => {
 });
 dayPicker.addEventListener('change', () => {
     if (dayPicker.value !== getLocalDateString()) setActiveRange(24 * 60 * 60 * 1000);
-    loadSelectedDay();
+    void loadSelectedDay();
 });
 
 const rangePills = Array.from(document.querySelectorAll('#history-range [data-window]'));
@@ -788,7 +810,7 @@ for (const pill of rangePills) {
         dayPicker.value = getLocalDateString();
         // Through loadSelectedDay, not loadInitialRange: the pan bound itself changes when a
         // range crosses midnight (7 d, 30 d) or comes back inside it.
-        loadSelectedDay();
+        void loadSelectedDay();
     });
 }
 
@@ -1222,7 +1244,8 @@ function ouPath(dn) {
         if (type === 'DC') dcs.push(value);
         else if (type === 'OU' || type === 'CN') ous.push(value);
     }
-    const segments = ous.reverse();
+    ous.reverse();   // top-down, the order ADUC's tree shows them in
+    const segments = ous;
     if (dcs.length) segments.unshift(dcs.join('.'));
     return segments.length ? segments.join(' / ') : dn;
 }
@@ -1234,7 +1257,7 @@ function ouPath(dn) {
 const profileEl = document.querySelector('.bento__profile');
 if (profileEl) {
     const ou = document.getElementById('stat-ad-ou');
-    if (ou) ou.setAttribute('data-copy', '');
+    if (ou) ou.dataset.copy = '';
     for (const dd of profileEl.querySelectorAll('dd[data-copy]')) {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -1249,7 +1272,7 @@ if (profileEl) {
         const btn = event.target.closest('.kv__copy');
         if (!btn) return;
         const dd = btn.previousElementSibling;
-        const value = dd && dd.dataset.copyValue;
+        const value = dd?.dataset.copyValue;
         if (!value) return;
         try {
             await navigator.clipboard.writeText(value);
@@ -1259,7 +1282,8 @@ if (profileEl) {
                 btn.title = t('machine.bento.copy');
                 btn.classList.remove('kv__copy--done');
             }, 1500);
-        } catch (e) {
+        } catch {
+            // Deliberately not rethrown or logged: a refusal is expected, not a fault.
             // Clipboard refused (an http:// hub, or a browser policy): select the value
             // instead, so Ctrl+C is one keystroke away.
             const range = document.createRange();

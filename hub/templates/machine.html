@@ -375,14 +375,17 @@
            charting rewrite for one shared axis. The range pills sit with the day picker; the
            sampling controls below them are the old toolbar, unchanged, on a quieter row. #}
         <div class="history-head">
-            <div class="seg" id="history-range" role="group" aria-label="{{ t('machine.history.range') }}">
+            {# A fieldset, not a div with role="group": the native element carries the
+               grouping to every assistive technology without an ARIA role to trust. #}
+            <fieldset class="seg" id="history-range">
+                <legend class="sr-only">{{ t('machine.history.range') }}</legend>
                 <button type="button" class="seg__item seg__item--on" data-window="live" aria-pressed="true">{{ t('machine.history.range_live') }}</button>
                 <button type="button" class="seg__item" data-window="3600" aria-pressed="false">{{ t('machine.history.range_1h') }}</button>
                 <button type="button" class="seg__item" data-window="21600" aria-pressed="false">{{ t('machine.history.range_6h') }}</button>
                 <button type="button" class="seg__item" data-window="86400" aria-pressed="false">{{ t('machine.history.range_24h') }}</button>
                 <button type="button" class="seg__item" data-window="604800" aria-pressed="false">{{ t('machine.history.range_7d') }}</button>
                 <button type="button" class="seg__item" data-window="2592000" aria-pressed="false">{{ t('machine.history.range_30d') }}</button>
-            </div>
+            </fieldset>
             <label for="day-picker" class="sr-only">{{ t('machine.history.day') }}</label>
             <input id="day-picker" class="input history-head__day" type="date">
         </div>

@@ -7391,55 +7391,65 @@ def _import_days_for_window(start_dt, end_dt):
         ensure_day_loaded_from_csv((first + timedelta(days=offset)).strftime("%Y-%m-%d"))
 
 
+def _dated_history_window(date, from_raw, to_raw):
+    """One calendar day, optionally narrowed by from/to: (start_dt, end_dt). Imports that
+    day's CSV archive first."""
+    day_start = parse_request_datetime(date)
+    if day_start is None:
+        raise ValueError("Invalid date format; use YYYY-MM-DD.")
+    day_start = day_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    start_dt = max(parse_request_datetime(from_raw) or day_start, day_start)
+    end_dt = min(parse_request_datetime(to_raw) or day_end, day_end)
+    # The day as the hub formats it, never the raw query string. That string becomes a
+    # file name in LOG_DIR (CodeQL py/path-injection, alerts #3/#4), and anything
+    # parse_request_datetime accepts beyond a bare date -- "2026-10-08T05:00Z", a padded
+    # " 2026-10-08" -- named a CSV that does not exist and marked the day imported
+    # without reading the one that does.
+    ensure_day_loaded_from_csv(day_start.strftime("%Y-%m-%d"))
+    return start_dt, end_dt
+
+
+def _undated_history_window(from_raw, to_raw):
+    """A free from/to window, which can span days: (start_dt, end_dt), in order. Imports
+    the CSV archive of every day it covers, bounded by MAX_HISTORY_IMPORT_DAYS."""
+    end_dt = parse_request_datetime(to_raw) or datetime.now()
+    start_dt = parse_request_datetime(from_raw)
+    if start_dt is None:
+        # A caller that names no start gets the configured default window, not the whole
+        # archive. The oldest reading is a FLOOR, not the start: it stops us asking for
+        # time that predates the data, but on a hub with months of history it used to
+        # make "no from=" mean "everything", which is unbounded and nothing wants.
+        window = settings.get_int(DB_PATH, "hub.live_default_window_seconds")
+        start_dt = end_dt - timedelta(seconds=window)
+        oldest = get_oldest_reading_datetime()
+        if oldest is not None and oldest > start_dt:
+            start_dt = oldest
+    if start_dt > end_dt:
+        start_dt, end_dt = end_dt, start_dt
+    # Such a window can span days (the machine page's 7 d and 30 d ranges), and each may
+    # still be sitting in its CSV archive -- the dated path has always imported its one day
+    # first, and a range that skipped it showed a gap exactly where the archive was.
+    _import_days_for_window(start_dt, end_dt)
+    return start_dt, end_dt
+
+
 def _resolve_history_window(args):
     """Parse the date/from/to/resolution/limit query params into
     (start_epoch, end_epoch, resolution, limit). Raises ValueError with a user-facing
-    message on a bad date."""
+    message on a bad date.
+
+    The two kinds of window are separate functions since hub 1.189.0, when the undated one
+    gained its per-day archive import and this one passed SonarCloud's complexity limit."""
     date = args.get("date")
-    from_raw = args.get("from")
-    to_raw = args.get("to")
     limit = parse_history_limit(args.get("limit"))
     requested_resolution = (args.get("resolution") or "auto").strip().lower()
-
     if date:
-        day_start = parse_request_datetime(date)
-        if day_start is None:
-            raise ValueError("Invalid date format; use YYYY-MM-DD.")
-        day_start = day_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
-        start_dt = parse_request_datetime(from_raw) or day_start
-        end_dt = parse_request_datetime(to_raw) or day_end
-        start_dt = max(start_dt, day_start)
-        end_dt = min(end_dt, day_end)
-        # The day as the hub formats it, never the raw query string. That string becomes a
-        # file name in LOG_DIR (CodeQL py/path-injection, alerts #3/#4), and anything
-        # parse_request_datetime accepts beyond a bare date -- "2026-10-08T05:00Z", a padded
-        # " 2026-10-08" -- named a CSV that does not exist and marked the day imported
-        # without reading the one that does.
-        ensure_day_loaded_from_csv(day_start.strftime("%Y-%m-%d"))
+        start_dt, end_dt = _dated_history_window(date, args.get("from"), args.get("to"))
     else:
-        end_dt = parse_request_datetime(to_raw) or datetime.now()
-        start_dt = parse_request_datetime(from_raw)
-        if start_dt is None:
-            # A caller that names no start gets the configured default window, not the whole
-            # archive. The oldest reading is a FLOOR, not the start: it stops us asking for
-            # time that predates the data, but on a hub with months of history it used to
-            # make "no from=" mean "everything", which is unbounded and nothing wants.
-            window = settings.get_int(DB_PATH, "hub.live_default_window_seconds")
-            start_dt = end_dt - timedelta(seconds=window)
-            oldest = get_oldest_reading_datetime()
-            if oldest is not None and oldest > start_dt:
-                start_dt = oldest
-
+        start_dt, end_dt = _undated_history_window(args.get("from"), args.get("to"))
     if start_dt > end_dt:
         start_dt, end_dt = end_dt, start_dt
-
-    if not date:
-        # A window with no `date` can span days (the machine page's 7 d and 30 d ranges), and
-        # each of them may still be sitting in its CSV archive -- the `date` branch above has
-        # always imported its one day first, and a range that skipped it showed a gap exactly
-        # where the archive was. Bounded by MAX_HISTORY_IMPORT_DAYS; see there.
-        _import_days_for_window(start_dt, end_dt)
 
     start_epoch = to_epoch_seconds(start_dt)
     end_epoch = to_epoch_seconds(end_dt)
