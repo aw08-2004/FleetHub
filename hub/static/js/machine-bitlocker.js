@@ -69,13 +69,42 @@
         return volume.mount || volume.device_id;
     }
 
+    // A 16px stroke icon, built with createElementNS rather than an innerHTML string so the
+    // file keeps its one rule without an exception: nothing here is ever parsed as markup.
+    // The paths are fixed shapes, chosen by `kind`, never by anything the machine sent.
+    const ICON_PATHS = {
+        lock: ['M7 11V7a5 5 0 0 1 10 0v4', 'M5 11h14v10H5z'],
+        unlock: ['M7 11V7a5 5 0 0 1 9.9-1', 'M5 11h14v10H5z'],
+        unknown: ['M6 12h12'],
+    };
+    function icon(kind, className) {
+        const NS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('width', '16');
+        svg.setAttribute('height', '16');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2.2');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('class', className);
+        for (const d of ICON_PATHS[kind] || []) {
+            const path = document.createElementNS(NS, 'path');
+            path.setAttribute('d', d);
+            svg.appendChild(path);
+        }
+        return svg;
+    }
+
     // What the hub holds for one volume, as a sentence rather than a count. "1 of 2 escrowed"
     // is a number nobody can act on; "no recovery key is escrowed" is the finding.
     function escrowCell(volume) {
         const recovery = (volume.protectors || [])
             .filter((p) => p.kind === 'recovery_password');
         const held = recovery.filter((p) => p.escrowed);
-        const cell = el('td');
+        const cell = el('div', 'volume-row__escrow');
 
         if (recovery.length === 0) {
             // The case the whole feature exists for. A volume with a TPM protector and no
@@ -133,35 +162,33 @@
             return;
         }
 
-        const table = el('table', 'data-table');
-        const head = el('thead');
-        const headRow = el('tr');
-        [t('bitlocker.column.volume'), t('bitlocker.column.protection'),
-         t('bitlocker.column.method'), t('bitlocker.column.key')]
-            .forEach((label) => headRow.appendChild(el('th', null, label)));
-        head.appendChild(headRow);
-        table.appendChild(head);
-
-        const body = el('tbody');
+        // One row per volume (hub 1.189.0) rather than a four-column table, which did not
+        // fit a tile: a closed lock for protection on, an open one for off, a dash for a state
+        // the machine did not report -- with the protection WORD beside it, because a lock
+        // icon alone is a colour-and-shape test. The escrow line and its Reveal button are
+        // unchanged.
+        const list = el('ul', 'volume-list');
         volumes.forEach((volume) => {
-            const tr = el('tr');
-            tr.appendChild(el('td', null, volumeName(volume)));
-
-            const state = el('td');
-            state.appendChild(el('span', null, protectionLabel(volume.protection)));
-            const conversion = conversionLabel(volume.conversion);
+            const kind = volume.protection === 'on' ? 'lock'
+                : volume.protection === 'off' ? 'unlock' : 'unknown';
+            const row = el('li', `volume-row volume-row--${kind}`);
+            row.appendChild(icon(kind, 'volume-row__icon'));
+            const text = el('div', 'volume-row__text');
+            const head = el('div', 'volume-row__head');
+            head.appendChild(el('span', 'volume-row__name', volumeName(volume)));
+            head.appendChild(el('span', 'volume-row__state', protectionLabel(volume.protection)));
+            text.appendChild(head);
             // The second line is where a suspended volume stops looking encrypted: protection
             // reads `off` while conversion still reads `fully_encrypted`, which is exactly the
             // state Windows leaves a machine in after a firmware update.
-            if (conversion) state.appendChild(el('div', 'stat-card__meta', conversion));
-            tr.appendChild(state);
-
-            tr.appendChild(el('td', null, volume.method || ''));
-            tr.appendChild(escrowCell(volume));
-            body.appendChild(tr);
+            const facts = [conversionLabel(volume.conversion), volume.method || '']
+                .filter(Boolean).join(' · ');
+            if (facts) text.appendChild(el('div', 'stat-card__meta', facts));
+            text.appendChild(escrowCell(volume));
+            row.appendChild(text);
+            list.appendChild(row);
         });
-        table.appendChild(body);
-        bodyEl.appendChild(table);
+        bodyEl.appendChild(list);
 
         // Keys the hub holds for protectors no volume claims any more. Shown rather than
         // hidden: "we still have a key for a disk that is gone" is a fact somebody should be

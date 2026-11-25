@@ -459,7 +459,9 @@
       "10s": "10 s",
       "1m": "1 Min",
       "5m": "5 Min",
-      "unknown": "--"
+      "unknown": "--",
+      "15m": "15 Min",
+      "1h": "1 Std"
     },
     "in_use": "Verwendet: {value}",
     "dynamic_on_zoom": "Dynamisch beim Zoomen",
@@ -2944,7 +2946,19 @@
       "title": "Verlauf",
       "day": "Tag:",
       "zoom_hint": "Mit dem Mausrad oder Ziehen ein Panel zoomen; der Zeitbereich bleibt über alle Diagramme hinweg synchron.",
-      "no_readings": "Für diesen Tag wurden keine Messwerte gefunden."
+      "no_readings": "Für diesen Tag wurden keine Messwerte gefunden.",
+      "range": "Zeitraum",
+      "range_live": "Live",
+      "range_1h": "1 Std.",
+      "range_6h": "6 Std.",
+      "range_24h": "24 Std.",
+      "expand": "Diagramm vergrößern",
+      "shrink": "Diagramm verkleinern",
+      "steady": "stabil",
+      "vs_avg": "{delta} ggü. Ø",
+      "min_peak": "min. {min} · Spitze {peak} um {time}",
+      "range_7d": "7 T.",
+      "range_30d": "30 T."
     },
     "terminal": {
       "title": "Terminal",
@@ -3370,9 +3384,7 @@
       },
       "no_answer_note": "Das Magic Packet wurde gesendet, und der PC hat sich seitdem nicht gemeldet."
     },
-    "fold": {
-      "stats": "Auf einen Blick"
-    },
+    "fold": {},
     "open": {
       "label": "In Werkzeugen öffnen:",
       "terminal": "Terminal",
@@ -3462,7 +3474,27 @@
       }
     },
     "breadcrumb_label": "Navigationspfad",
-    "settings_title": "Geräteeinstellungen"
+    "settings_title": "Geräteeinstellungen",
+    "bento": {
+      "clock": "Takt",
+      "power": "Leistung",
+      "hot_at": "Heiß ab {value} °C",
+      "memory": "Arbeitsspeicher",
+      "memory_used": "{used} von {total} GB",
+      "profile": "Geräteprofil",
+      "copy": "Kopieren",
+      "copied": "Kopiert",
+      "f": {
+        "manufacturer": "Hersteller",
+        "model": "Modell",
+        "serial": "Seriennummer",
+        "service_tag": "Service-Tag",
+        "asset_tag": "Anlagenkennzeichen",
+        "os": "Betriebssystem",
+        "ou": "OU",
+        "owner": "Verwaltet von"
+      }
+    }
   },
   "remote": {
     "title": "Remote",
@@ -5271,12 +5303,6 @@
     "read_failed": "Der Verschlüsselungszustand dieses Geräts konnte nicht gelesen werden: {error}",
     "load_error": "Verschlüsselungsdaten konnten nicht geladen werden.",
     "retry": "Erneut versuchen",
-    "column": {
-      "volume": "Volume",
-      "protection": "Schutz",
-      "method": "Verfahren",
-      "key": "Wiederherstellungsschlüssel"
-    },
     "protection": {
       "on": "Geschützt",
       "off": "Nicht geschützt",

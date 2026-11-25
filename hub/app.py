@@ -177,7 +177,7 @@ if _env_acl_note:
 # the beta branch, which this once counted from, was retired on 2026-11-24).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.188.0"
+HUB_VERSION = "1.189.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -277,7 +277,15 @@ RETENTION_PRUNE_BATCH = 50000
 DEFAULT_HISTORY_LIMIT = 1200
 MAX_HISTORY_POINTS_PER_MACHINE = 2000
 MAX_HISTORY_MACHINE_MULTIPLIER = 16
-VALID_RESOLUTIONS = {"raw": None, "10s": 10, "1m": 60, "5m": 300}
+# 15m and 1h exist for the machine page's 7 d and 30 d History ranges (hub 1.189.0). At the
+# old coarsest bucket, 5m, thirty days is 8,640 points per metric and fourteen metrics in one
+# response -- about five megabytes of JSON for a chart 300 px wide. 1h brings that to 720.
+VALID_RESOLUTIONS = {"raw": None, "10s": 10, "1m": 60, "5m": 300, "15m": 900, "1h": 3600}
+# How many days of CSV archive one history request may pull into the DB. A multi-day
+# window imports each day it covers, the way a single-day request always has; past this it
+# imports nothing, so a hand-typed from=2019-01-01 cannot make one request read years of
+# files. 31 covers the 30 d range with a day of slack for the partial day at its start.
+MAX_HISTORY_IMPORT_DAYS = 31
 
 LOCAL_MACHINE = socket.gethostname()
 
@@ -3428,7 +3436,11 @@ def pick_resolution(requested_resolution, span_seconds):
         return "10s"
     if span_seconds <= 72 * 3600:
         return "1m"
-    return "5m"
+    # Up to eight days keeps the bucket it always had; only longer spans change, and those
+    # used to come back as one 5m point per bucket for as far as the caller asked.
+    if span_seconds <= 8 * 86400:
+        return "5m"
+    return "1h"
 
 def get_db_conn():
     conn = sqlite3.connect(DB_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
@@ -7365,6 +7377,20 @@ def post_hub_update():
     return jsonify({"status": "updating", "from": HUB_VERSION, "to": latest}), 202
 
 
+def _import_days_for_window(start_dt, end_dt):
+    """Run ensure_day_loaded_from_csv for every calendar day [start_dt, end_dt] touches, or
+    for none of them when that is more than MAX_HISTORY_IMPORT_DAYS. **The day string is
+    formatted here, never taken from the request** -- the CodeQL path-injection reasoning
+    in the `date` branch of _resolve_history_window applies to every day this names."""
+    first = start_dt.date()
+    last = end_dt.date()
+    days = (last - first).days + 1
+    if days > MAX_HISTORY_IMPORT_DAYS:
+        return
+    for offset in range(days):
+        ensure_day_loaded_from_csv((first + timedelta(days=offset)).strftime("%Y-%m-%d"))
+
+
 def _resolve_history_window(args):
     """Parse the date/from/to/resolution/limit query params into
     (start_epoch, end_epoch, resolution, limit). Raises ValueError with a user-facing
@@ -7407,6 +7433,13 @@ def _resolve_history_window(args):
 
     if start_dt > end_dt:
         start_dt, end_dt = end_dt, start_dt
+
+    if not date:
+        # A window with no `date` can span days (the machine page's 7 d and 30 d ranges), and
+        # each of them may still be sitting in its CSV archive -- the `date` branch above has
+        # always imported its one day first, and a range that skipped it showed a gap exactly
+        # where the archive was. Bounded by MAX_HISTORY_IMPORT_DAYS; see there.
+        _import_days_for_window(start_dt, end_dt)
 
     start_epoch = to_epoch_seconds(start_dt)
     end_epoch = to_epoch_seconds(end_dt)

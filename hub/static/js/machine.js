@@ -99,17 +99,47 @@ function getDayRange(dateString) {
 // is one pan away, it just isn't what you land on. A past day has no live edge to sit at, so
 // it opens on the whole day exactly as before.
 function getInitialRange(dateString) {
-    const day = getDayRange(dateString);
+    const day = getBoundRange(dateString);
     if (!day) return null;
     if (dateString !== getLocalDateString()) return day;
-    return { startMs: Math.max(day.startMs, day.endMs - LIVE_WINDOW_MS), endMs: day.endMs };
+    return { startMs: Math.max(day.startMs, day.endMs - openWindowMs), endMs: day.endMs };
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Whether the chosen range reaches past today's midnight -- the 7 d and 30 d pills. Those
+// requests go out WITHOUT `date` (the server clamps a dated request to that one day) and
+// their pan bound is the whole window rather than the calendar day.
+function isMultiDay() {
+    return openWindowMs > DAY_MS && dayPicker.value === getLocalDateString();
+}
+
+// Where panning and zooming may reach: the calendar day, or for a multi-day range the last
+// 7 or 30 days up to now. getDayRange stays the one-day answer the day picker means.
+function getBoundRange(dateString) {
+    if (!(openWindowMs > DAY_MS && dateString === getLocalDateString())) {
+        return getDayRange(dateString);
+    }
+    const now = Date.now();
+    return { startMs: now - openWindowMs, endMs: now };
+}
+
+// The window the cards open on and follow, set by the range pills (hub 1.189.0): Live (the
+// hub's live window, a minute by default), 1 h, 6 h, 24 h, 7 d or 30 d -- all "the last N up
+// to now". A past day always shows the whole day, so picking one lights 24 h, and a pill
+// pressed while on a past day jumps back to today: "the last hour" of a day that is over
+// has no meaning.
+let openWindowMs = LIVE_WINDOW_MS;
 
 function chooseResolutionForSpan(spanMs) {
     if (spanMs <= 45 * 60 * 1000) return 'raw';
     if (spanMs <= 6 * 60 * 60 * 1000) return '10s';
     if (spanMs <= 18 * 60 * 60 * 1000) return '1m';
-    return '5m';
+    // About 700-900 points per metric at every step below: 3 days of 5m, 8 of 15m, 30 of
+    // 1h. 15m and 1h are new with the 7 d and 30 d ranges (app.py VALID_RESOLUTIONS).
+    if (spanMs <= 3 * DAY_MS) return '5m';
+    if (spanMs <= 8 * DAY_MS) return '15m';
+    return '1h';
 }
 
 function syncResolutionControl() {
@@ -144,7 +174,8 @@ function toChartTimestamp(value) {
 
 function buildHistoryUrl(date, minMs, maxMs, resolution) {
     const params = new URLSearchParams();
-    params.set('date', date);
+    // A dated request is clamped to that day on the server; a 7 d or 30 d window must not be.
+    if (!isMultiDay()) params.set('date', date);
     params.set('from', formatDateForApi(new Date(minMs)));
     params.set('to', formatDateForApi(new Date(maxMs)));
     params.set('resolution', resolution);
@@ -312,7 +343,11 @@ function panelConfig(metric) {
         data: {
             datasets: [{
                 label: metricLabel(metric), data: [], parsing: false,
-                borderColor: metric.color, backgroundColor: 'transparent',
+                // The soft area under the line (variant M1): the metric's colour at ~15%
+                // alpha, filled to the axis. `origin` rather than `start` so a rate panel
+                // whose axis is pinned at 0 fills to 0 and not to its lowest point.
+                borderColor: metric.color, backgroundColor: `${metric.color}26`,
+                fill: 'origin',
                 borderWidth: 2, tension: 0.25, pointRadius: 0,
                 pointHoverRadius: 6, pointHitRadius: 20,
             }],
@@ -327,8 +362,12 @@ function panelConfig(metric) {
                 // 12-hour "5:33:01 p.m." -- a grey hatch under every chart, and a different
                 // clock from the tooltip above it. Seconds only appear once zoomed in far
                 // enough for the ticks to be seconds apart.
+                // Compact by default: a card's chart is a shape, not a reading -- the value,
+                // the minimum and the peak are printed above and below it. setPanelExpanded()
+                // turns both axes back on for the full-size chart.
                 x: {
                     type: 'time',
+                    display: false,
                     time: {
                         tooltipFormat: 'HH:mm:ss',
                         displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' },
@@ -336,11 +375,12 @@ function panelConfig(metric) {
                     ticks: { maxTicksLimit: 6, maxRotation: 0, autoSkip: true },
                     grid: { color: chartGridColor },
                 },
-                y: yScale,
+                y: Object.assign(yScale, { display: false }),
             },
             plugins: {
                 decimation: { enabled: true, algorithm: 'lttb', samples: 400 },
                 legend: { display: false },
+                peakMarker: { color: metric.color },
                 tooltip: {
                     mode: 'index', intersect: false,
                     callbacks: {
@@ -366,28 +406,183 @@ function panelConfig(metric) {
     };
 }
 
+// The peak dot: drawn by a tiny plugin rather than as a styled data point, because the
+// decimation plugin hands Chart.js a resampled array whose indexes are not the data's -- a
+// scriptable pointRadius keyed on "the index of the max" marked a different point on every
+// zoom. The peak itself is computed by updatePanelStats() from the real data and stored on
+// the chart, so the dot and the "peak" caption cannot disagree.
+const peakMarkerPlugin = {
+    id: 'peakMarker',
+    afterDatasetsDraw(chart, args, options) {
+        const peak = chart.$peak;
+        if (!peak) return;
+        const xs = chart.scales.x;
+        const ys = chart.scales.y;
+        if (!xs || !ys || peak.x < xs.min || peak.x > xs.max) return;
+        const { ctx } = chart;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(xs.getPixelForValue(peak.x), ys.getPixelForValue(peak.y), 3.5, 0, 2 * Math.PI);
+        ctx.fillStyle = options.color || '#888';
+        ctx.fill();
+        ctx.restore();
+    },
+};
+Chart.register(peakMarkerPlugin);
+
+// One reading in the metric's own unit, the way the tooltip already wrote it.
+function formatMetricValue(metric, y) {
+    if (!Number.isFinite(y)) return t('machine.unknown');
+    if (metric.rate) return formatRate(y, metric.bits);
+    return `${y.toFixed(metric.decimals ?? 1)} ${metric.unit}`;
+}
+
+// The metrics where a HIGHER number is the worse one. Their badge goes amber above the
+// average and green below it; every other metric (throughput, battery, power, fan speed)
+// gets a neutral badge, because "more network than usual" is not good or bad by itself.
+const WORSE_WHEN_HIGH = new Set(['temp', 'gpu_temp', 'cpu_load', 'memory', 'gpu_load', 'disk']);
+
+// The numbers around a card's chart, all over what is ON SCREEN: the latest reading, its
+// difference from the visible average, and the visible minimum and peak (with its time).
+// "Visible" rather than "the whole day" so a zoom into a spike re-captions the spike.
+function updatePanelStats(panel) {
+    const ds = panel.chart.data.datasets[0];
+    const all = ds._data || ds.data;   // the decimation plugin keeps the originals in _data
+    const opts = panel.chart.options.scales.x;
+    const lo = Number.isFinite(opts.min) ? opts.min : -Infinity;
+    const hi = Number.isFinite(opts.max) ? opts.max : Infinity;
+    let sum = 0;
+    let n = 0;
+    let min = null;
+    let peak = null;
+    for (const pt of all) {
+        if (pt.x < lo || pt.x > hi || !Number.isFinite(pt.y)) continue;
+        sum += pt.y;
+        n += 1;
+        if (!min || pt.y < min.y) min = pt;
+        if (!peak || pt.y > peak.y) peak = pt;
+    }
+    const latest = all.length ? all[all.length - 1] : null;
+    const metric = panel.metric;
+    // Memory's headline stays a percentage: the card title already says how much 100% is
+    // ("Memory (16 GB)"), and the GB form belongs to the hover tooltip.
+    panel.valueEl.textContent = latest ? formatMetricValue(metric, latest.y) : t('machine.unknown');
+
+    panel.deltaEl.hidden = !(latest && n > 1);
+    if (!panel.deltaEl.hidden) {
+        const avg = sum / n;
+        const delta = latest.y - avg;
+        const span = peak.y - min.y;
+        // "Steady" when the difference is under 5% of the visible spread -- a 0.1 °C
+        // wobble on a flat line badged "+0.1 vs avg" in amber was noise dressed as news.
+        const steady = span === 0 || Math.abs(delta) < span * 0.05;
+        panel.deltaEl.className = 'metric-card__delta';
+        if (steady) {
+            panel.deltaEl.textContent = t('machine.history.steady');
+            panel.deltaEl.classList.add('metric-card__delta--flat');
+        } else {
+            const sign = delta > 0 ? '+' : '−';
+            const magnitude = metric.rate
+                ? formatRate(Math.abs(delta), metric.bits)
+                : `${Math.abs(delta).toFixed(metric.decimals ?? 1)} ${metric.unit}`;
+            panel.deltaEl.textContent = t('machine.history.vs_avg', { delta: sign + magnitude });
+            const worse = WORSE_WHEN_HIGH.has(metric.key);
+            panel.deltaEl.classList.add(!worse ? 'metric-card__delta--flat'
+                : delta > 0 ? 'metric-card__delta--up' : 'metric-card__delta--down');
+        }
+    }
+
+    // The axis bounds when the chart has them; otherwise (a past day shown whole) what the
+    // data covers.
+    const visibleSpan = Number.isFinite(hi - lo) ? hi - lo
+        : (all.length ? all[all.length - 1].x - all[0].x : 0);
+    panel.chart.$peak = peak && min && peak.y > min.y ? peak : null;
+    panel.rangeEl.textContent = (min && peak)
+        ? t('machine.history.min_peak', {
+            min: formatMetricValue(metric, min.y),
+            peak: formatMetricValue(metric, peak.y),
+            // 24-hour, like the charts' own axis and tooltip (HH:mm) -- the locale default
+            // put "09:23 PM" under a chart whose axis said 21:23. With the date too once the
+            // visible range is longer than a day: "peak at 07:55" over 30 days names no day.
+            time: new Date(peak.x).toLocaleString([], Object.assign(
+                { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
+                visibleSpan > DAY_MS ? { month: 'short', day: 'numeric' } : {})),
+        })
+        : '';
+}
+
+// Live readings arrive once a second per panel; the captions only need to keep up with a
+// person reading them, so they are recomputed at most once a second for the whole grid.
+let statsTimer = null;
+function scheduleStats() {
+    if (statsTimer !== null) return;
+    statsTimer = setTimeout(() => {
+        statsTimer = null;
+        for (const p of panels) updatePanelStats(p);
+    }, 1000);
+}
+
+// A card's chart at full size, with both axes -- the old panel, for reading actual values
+// off the gridlines. Spans the whole grid row so it is as wide as the old two-up panel was.
+function setPanelExpanded(panel, expanded) {
+    panel.container.classList.toggle('metric-card--expanded', expanded);
+    panel.expandBtn.setAttribute('aria-pressed', expanded ? 'true' : 'false');
+    const label = expanded ? t('machine.history.shrink') : t('machine.history.expand');
+    panel.expandBtn.title = label;
+    panel.expandBtn.setAttribute('aria-label', label);
+    panel.chart.options.scales.x.display = expanded;
+    panel.chart.options.scales.y.display = expanded;
+    panel.chart.resize();
+    panel.chart.update('none');
+}
+
 function buildPanels() {
     gridEl.replaceChildren();
     panels.length = 0;
     for (const metric of METRICS) {
         if (!metricEnabled(metric)) continue;
 
+        // A metric CARD (hub 1.189.0, variant M1): label and expand button, the latest value
+        // with its badge, the chart, then the visible minimum and peak. Still one card per
+        // enabled metric -- all fourteen when the machine reports them -- built from METRICS.
         const container = document.createElement('div');
-        container.className = 'metric-panel';
+        container.className = 'metric-panel metric-card';
 
         const head = document.createElement('div');
         head.className = 'metric-panel__head';
         const title = document.createElement('span');
         title.className = 'metric-panel__title';
         title.textContent = metricLabel(metric);
-        head.appendChild(title);
+        const expandBtn = document.createElement('button');
+        expandBtn.type = 'button';
+        expandBtn.className = 'metric-card__expand';
+        expandBtn.setAttribute('aria-pressed', 'false');
+        expandBtn.title = t('machine.history.expand');
+        expandBtn.setAttribute('aria-label', t('machine.history.expand'));
+        expandBtn.textContent = '\u2922';
+        head.append(title, expandBtn);
         container.appendChild(head);
+
+        const valueRow = document.createElement('div');
+        valueRow.className = 'metric-card__value-row';
+        const valueEl = document.createElement('span');
+        valueEl.className = 'metric-card__value';
+        valueEl.textContent = t('machine.unknown');
+        const deltaEl = document.createElement('span');
+        deltaEl.className = 'metric-card__delta';
+        deltaEl.hidden = true;
+        valueRow.append(valueEl, deltaEl);
+        container.appendChild(valueRow);
 
         const chartBox = document.createElement('div');
         chartBox.className = 'metric-panel__chart';
         const canvas = document.createElement('canvas');
         chartBox.appendChild(canvas);
         container.appendChild(chartBox);
+
+        const rangeEl = document.createElement('div');
+        rangeEl.className = 'stat-card__meta metric-card__range';
+        container.appendChild(rangeEl);
 
         const emptyEl = document.createElement('div');
         emptyEl.className = 'stat-card__meta metric-panel__empty';
@@ -397,7 +592,11 @@ function buildPanels() {
 
         gridEl.appendChild(container);
         const chart = new Chart(canvas.getContext('2d'), panelConfig(metric));
-        panels.push({ metric, chart, emptyEl, titleEl: title, container });
+        const panel = { metric, chart, emptyEl, titleEl: title, container,
+                        valueEl, deltaEl, rangeEl, expandBtn };
+        expandBtn.addEventListener('click', () => setPanelExpanded(
+            panel, !container.classList.contains('metric-card--expanded')));
+        panels.push(panel);
     }
     // If diagnostics already told us the RAM size before the panels existed, apply it now.
     if (Number.isFinite(memTotalGb)) updateMemoryTotal(memTotalGb);
@@ -413,6 +612,9 @@ function onPanelRangeChanged(sourceChart) {
     // under them. Reset is how they say they're done looking.
     followLive = false;
     applyXRangeToAll(Number(xs.min), Number(xs.max), sourceChart);
+    sourceChart.options.scales.x.min = Number(xs.min);
+    sourceChart.options.scales.x.max = Number(xs.max);
+    for (const p of panels) updatePanelStats(p);
     scheduleViewportReload();
 }
 
@@ -443,8 +645,18 @@ function applyRange(chart, minMs, maxMs, resetZoom) {
     }
 }
 
+// The newest load asked for while another was running. Dropping it was harmless while only
+// scroll-zooms called this (the next wheel tick asked again), but a range pill pressed during
+// the page's opening load was silently lost -- the 6 h pill lit, the cards kept showing the
+// live minute. Found in the preview. Only the latest request is kept: it supersedes the rest.
+let pendingHistoryLoad = null;
+
 async function loadHistoryRange(minMs, maxMs, resolution, resetZoom) {
-    if (historyLoadInFlight || !dayPicker.value || panels.length === 0) return;
+    if (!dayPicker.value || panels.length === 0) return;
+    if (historyLoadInFlight) {
+        pendingHistoryLoad = [minMs, maxMs, resolution, resetZoom];
+        return;
+    }
     historyLoadInFlight = true;
     try {
         const historyRes = await fetch(buildHistoryUrl(dayPicker.value, minMs, maxMs, resolution));
@@ -465,12 +677,18 @@ async function loadHistoryRange(minMs, maxMs, resolution, resetZoom) {
             if (points.length) anyData = true;
             setPanelVisible(p, panelHasSubject(p, points.length));
             applyRange(p.chart, minMs, maxMs, resetZoom);
+            updatePanelStats(p);
         }
         noDataEl.style.display = anyData ? 'none' : 'block';
         setResolutionInUse(resolution);
         lastHistoryRequest = { minMs, maxMs, resolution };
     } finally {
         historyLoadInFlight = false;
+        if (pendingHistoryLoad) {
+            const next = pendingHistoryLoad;
+            pendingHistoryLoad = null;
+            loadHistoryRange(...next);
+        }
     }
 }
 
@@ -499,7 +717,7 @@ async function loadVisibleViewport() {
 async function loadSelectedDay() {
     const date = dayPicker.value;
     if (!date) return;
-    const range = getDayRange(date);
+    const range = getBoundRange(date);
     if (!range) return;
     viewingToday = date === getLocalDateString();
     // The day stays the PAN BOUND; only the opening view narrows. loadVisibleViewport clamps
@@ -545,7 +763,34 @@ document.getElementById('reset-zoom').addEventListener('click', () => {
     // which is what an operator who has finished inspecting a spike actually wants back.
     loadInitialRange(dayPicker.value);
 });
-dayPicker.addEventListener('change', loadSelectedDay);
+dayPicker.addEventListener('change', () => {
+    if (dayPicker.value !== getLocalDateString()) setActiveRange(24 * 60 * 60 * 1000);
+    loadSelectedDay();
+});
+
+const rangePills = Array.from(document.querySelectorAll('#history-range [data-window]'));
+function setActiveRange(windowMs) {
+    openWindowMs = windowMs;
+    for (const pill of rangePills) {
+        const on = pillWindowMs(pill) === windowMs;
+        pill.classList.toggle('seg__item--on', on);
+        pill.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+}
+// `live` is the hub's own live window, not a fixed minute, so the pill and the page's
+// opening view are always the same thing.
+function pillWindowMs(pill) {
+    return pill.dataset.window === 'live' ? LIVE_WINDOW_MS : Number(pill.dataset.window) * 1000;
+}
+for (const pill of rangePills) {
+    pill.addEventListener('click', () => {
+        setActiveRange(pillWindowMs(pill));
+        dayPicker.value = getLocalDateString();
+        // Through loadSelectedDay, not loadInitialRange: the pan bound itself changes when a
+        // range crosses midnight (7 d, 30 d) or comes back inside it.
+        loadSelectedDay();
+    });
+}
 
 // The range currently on screen, clamped to the selected day. Both resolution controls reload
 // through this rather than through selectedDayRange: re-fetching the whole day would throw
@@ -596,6 +841,37 @@ function applyTemp(temp) {
         ? t('machine.temp_c', { value: value.toFixed(1) })
         : t('machine.temp_c', { value: t('machine.unknown') });
     tempCard.classList.toggle('stat-card--high-temp', value >= HOT_THRESHOLD_C);
+    // The ring is drawn against a fixed 0-100 °C scale, not against the hot threshold: a
+    // ring that is full at 80 °C on one hub and at 95 °C on another would make the same
+    // reading look different from console to console. The threshold is the tile's caption.
+    setGauge('gauge-temp', value > 0 ? value : null);
+}
+
+// ---- Bento gauges and meters --------------------------------------------------------
+// A ring is one SVG circle whose dash is the fraction; a meter is one span whose width is.
+// Both take a 0-100 value and clamp it, and both go EMPTY rather than vanishing on a
+// missing reading -- the number beside them already says "--", and a tile that changes
+// shape between readings is the row-jumping this layout exists to stop.
+const GAUGE_CIRCUMFERENCE = 2 * Math.PI * 26;   // r="26" in machine.html
+
+function clampPct(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+    return Math.max(0, Math.min(100, value));
+}
+
+function setGauge(id, pct) {
+    const arc = document.getElementById(id);
+    if (!arc) return;
+    const len = GAUGE_CIRCUMFERENCE * clampPct(pct) / 100;
+    arc.style.strokeDasharray = `${len} ${GAUGE_CIRCUMFERENCE}`;
+    // A zero-length dash still draws its round cap, which left a dot at twelve o'clock on
+    // a machine with no reading -- a "0 %" that was never measured.
+    arc.style.visibility = len > 0 ? '' : 'hidden';
+}
+
+function setMeter(id, pct) {
+    const fill = document.getElementById(id);
+    if (fill) fill.style.width = `${clampPct(pct)}%`;
 }
 
 function formatMetric(value, suffix) {
@@ -776,9 +1052,13 @@ function applyPresence(d) {
     setCardVisible('card-gpu',
                    hasReading(d.gpu_temp, d.gpu_load_pct, d.gpu_clock_mhz, d.gpu_power_w));
     if (!d.has_sensors) return;
-    setCardVisible('card-cpu-load', hasReading(d.cpu_load_pct));
+    // The CPU tile goes only when ALL three readings are absent; a missing clock or power
+    // hides that one line inside it, which is what keeps the tiles from jumping rows
+    // between a desktop and a laptop.
+    setCardVisible('card-cpu', hasReading(d.cpu_load_pct, d.cpu_clock_mhz, d.cpu_power_w));
     setCardVisible('card-cpu-clock', hasReading(d.cpu_clock_mhz));
     setCardVisible('card-cpu-power', hasReading(d.cpu_power_w));
+    setCardVisible('card-memory', hasReading(d.memory_load_pct));
     setCardVisible('card-storage', Array.isArray(d.disks) && d.disks.length > 0);
     setCardVisible('card-cooling', Array.isArray(d.fans) && d.fans.length > 0);
     for (const p of panels) setPanelVisible(p, panelHasSubject(p));
@@ -816,6 +1096,8 @@ function applyDiagnostics(diagnostics) {
     if (typeof d.mem_total_gb === 'number') updateMemoryTotal(d.mem_total_gb);
     lastCpuLoadPct = typeof d.cpu_load_pct === 'number' ? d.cpu_load_pct : null;
     document.getElementById('stat-cpu-load').textContent = formatMetric(d.cpu_load_pct, '%');
+    setGauge('gauge-cpu', d.cpu_load_pct);
+    showMemory(d);
     document.getElementById('stat-cpu-clock').textContent = formatClock(d.cpu_clock_mhz);
     document.getElementById('stat-cpu-power').textContent = formatMetric(d.cpu_power_w, 'W');
     // Through the catalog, like the template's server-rendered first paint: the row labels
@@ -829,12 +1111,40 @@ function applyDiagnostics(diagnostics) {
     const gpuHot = typeof d.gpu_temp === 'number' && d.gpu_temp >= HOT_THRESHOLD_C;
     document.getElementById('card-gpu').classList.toggle('stat-card--high-temp', gpuHot);
     gpuTempEl.classList.toggle('stat-card__meta--alert', gpuHot);
-    document.getElementById('stat-gpu-load').textContent =
-        t('machine.gpu_load', { value: formatMetric(d.gpu_load_pct, '%') });
+    // Load is the GPU tile's headline and bar, so it is not repeated as a fourth fact line.
+    document.getElementById('stat-gpu-load-value').textContent = formatMetric(d.gpu_load_pct, '%');
+    setMeter('bar-gpu', d.gpu_load_pct);
     document.getElementById('stat-gpu-clock').textContent =
         t('machine.gpu_clock', { value: formatClock(d.gpu_clock_mhz) });
     document.getElementById('stat-gpu-power').textContent =
         t('machine.gpu_power', { value: formatMetric(d.gpu_power_w, 'W') });
+}
+
+// Memory: the load percentage as the headline, used/total under it when the agent reports
+// a total. Used GB comes from the same two numbers the Memory chart's tooltip uses.
+function showMemory(d) {
+    const pct = d.memory_load_pct;
+    document.getElementById('stat-memory').textContent = formatMetric(pct, '%');
+    setMeter('bar-memory', pct);
+    const detail = document.getElementById('stat-memory-detail');
+    if (hasReading(pct) && typeof d.mem_total_gb === 'number' && d.mem_total_gb > 0) {
+        detail.textContent = t('machine.bento.memory_used', {
+            used: (d.mem_total_gb * pct / 100).toFixed(1),
+            total: d.mem_total_gb.toFixed(1),
+        });
+    } else {
+        detail.textContent = '';
+    }
+}
+
+// One profile value: the text, and the same text as the title, because the row is
+// ellipsised at the tile's width and a serial cut to "9BVQ1..." is worth nothing.
+function setProfileValue(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = value || t('machine.unknown');
+    el.title = value || '';
+    el.dataset.copyValue = value || '';
 }
 
 async function loadMachineInfo() {
@@ -852,16 +1162,11 @@ async function loadMachineInfo() {
         }
         const dash = t('machine.unknown');
         document.getElementById('stat-version').textContent = info.companion_version || dash;
-        document.getElementById('stat-manufacturer').textContent =
-            t('machine.manufacturer', { value: info.manufacturer || dash });
-        document.getElementById('stat-model').textContent =
-            t('machine.model', { value: info.model || dash });
-        document.getElementById('stat-serial').textContent =
-            t('machine.serial', { value: info.serial_number || dash });
-        document.getElementById('stat-service').textContent =
-            t('machine.service_tag', { value: info.service_tag || dash });
-        document.getElementById('stat-asset').textContent =
-            t('machine.asset_tag', { value: info.asset_tag || dash });
+        setProfileValue('stat-manufacturer', info.manufacturer);
+        setProfileValue('stat-model', info.model);
+        setProfileValue('stat-serial', info.serial_number);
+        setProfileValue('stat-service', info.service_tag);
+        setProfileValue('stat-asset', info.asset_tag);
         showOperatingSystem(info);
         showDirectoryFacts(info);
     } catch (e) { /* non-critical */ }
@@ -880,14 +1185,90 @@ async function loadMachineInfo() {
 // which is precisely when seeing both is worth something.
 function showOperatingSystem(info) {
     const el = document.getElementById('stat-os');
-    if (!el) return;
+    const row = document.getElementById('row-os');
+    if (!el || !row) return;
     const os = info.os || {};
-    if (!os.label) { el.hidden = true; return; }
-    el.hidden = false;
+    if (!os.label) { row.hidden = true; return; }
+    row.hidden = false;
     const build = info.os_build ? t('machine.os_build', { build: info.os_build }) : '';
-    el.textContent = t('machine.os', { value: os.label + build });
-    // Where it came from. Only worth saying when it is NOT the machine's own answer.
-    el.title = os.source === 'ad' ? t('inventory.os_from_directory') : '';
+    el.textContent = os.label + build;
+    // Where it came from, when it is NOT the machine's own answer; otherwise the full text,
+    // because the row is ellipsised.
+    el.title = os.source === 'ad' ? t('inventory.os_from_directory') : os.label + build;
+}
+
+// "OU=PC_WSUS_TEST_W10,OU=FILADELFIA,DC=ccmf,DC=com,DC=py" -> "ccmf.com.py / FILADELFIA /
+// PC_WSUS_TEST_W10": the domain first, then the OUs from the top down, which is the order
+// ADUC's tree shows them in. A DN escapes a comma inside a name as "\,", so this splits on
+// unescaped commas only -- a naive split(',') turns "OU=Smith\, J" into two OUs. A DN that
+// does not parse as RDNs is shown as it came, never as an empty row.
+function ouPath(dn) {
+    const parts = [];
+    let cur = '';
+    for (let i = 0; i < dn.length; i++) {
+        const ch = dn[i];
+        if (ch === '\\' && i + 1 < dn.length) { cur += dn[++i]; continue; }
+        if (ch === ',') { parts.push(cur); cur = ''; continue; }
+        cur += ch;
+    }
+    parts.push(cur);
+    const ous = [];
+    const dcs = [];
+    for (const part of parts) {
+        const eq = part.indexOf('=');
+        if (eq < 0) return dn;
+        const type = part.slice(0, eq).trim().toUpperCase();
+        const value = part.slice(eq + 1).trim();
+        if (type === 'DC') dcs.push(value);
+        else if (type === 'OU' || type === 'CN') ous.push(value);
+    }
+    const segments = ous.reverse();
+    if (dcs.length) segments.unshift(dcs.join('.'));
+    return segments.length ? segments.join(' / ') : dn;
+}
+
+// Click-to-copy on the profile values that get typed somewhere else: serial, service tag,
+// asset tag and the OU. One delegated listener, so rows filled later need no wiring. What
+// is copied is data-copy-value, never the visible text -- the OU row SHOWS a path but must
+// copy the DN, and an unknown value ("--") copies nothing.
+const profileEl = document.querySelector('.bento__profile');
+if (profileEl) {
+    const ou = document.getElementById('stat-ad-ou');
+    if (ou) ou.setAttribute('data-copy', '');
+    for (const dd of profileEl.querySelectorAll('dd[data-copy]')) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'kv__copy';
+        btn.setAttribute('aria-label', t('machine.bento.copy'));
+        btn.title = t('machine.bento.copy');
+        // Two overlapping squares, the usual copy glyph; inline so it needs no icon font.
+        btn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>';
+        dd.after(btn);
+    }
+    profileEl.addEventListener('click', async (event) => {
+        const btn = event.target.closest('.kv__copy');
+        if (!btn) return;
+        const dd = btn.previousElementSibling;
+        const value = dd && dd.dataset.copyValue;
+        if (!value) return;
+        try {
+            await navigator.clipboard.writeText(value);
+            btn.title = t('machine.bento.copied');
+            btn.classList.add('kv__copy--done');
+            setTimeout(() => {
+                btn.title = t('machine.bento.copy');
+                btn.classList.remove('kv__copy--done');
+            }, 1500);
+        } catch (e) {
+            // Clipboard refused (an http:// hub, or a browser policy): select the value
+            // instead, so Ctrl+C is one keystroke away.
+            const range = document.createRange();
+            range.selectNodeContents(dd);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+    });
 }
 
 // Active Directory facts (roadmap #4). Each row appears only when the directory actually
@@ -899,11 +1280,20 @@ function showDirectoryFacts(info) {
     const statusEl = document.getElementById('stat-ad-status');
     if (!ouEl || !ownerEl || !statusEl) return;
 
-    ouEl.hidden = !info.ad_ou;
-    if (info.ad_ou) ouEl.textContent = t('machine.ad_ou', { value: info.ad_ou });
+    document.getElementById('row-ad-ou').hidden = !info.ad_ou;
+    if (info.ad_ou) {
+        // Readable path in the row, the exact DN on hover and on copy: the DN is what an
+        // operator pastes into ADUC or a script, the path is what they read.
+        ouEl.textContent = ouPath(info.ad_ou);
+        ouEl.title = info.ad_ou;
+        ouEl.dataset.copyValue = info.ad_ou;
+    }
 
-    ownerEl.hidden = !info.ad_owner;
-    if (info.ad_owner) ownerEl.textContent = t('machine.ad_owner', { value: info.ad_owner });
+    document.getElementById('row-ad-owner').hidden = !info.ad_owner;
+    if (info.ad_owner) {
+        ownerEl.textContent = info.ad_owner;
+        ownerEl.title = info.ad_owner;
+    }
 
     // Worth calling out: a machine still reporting telemetry whose computer account has
     // been disabled is usually a half-finished decommission, and nothing else on this
@@ -1309,7 +1699,9 @@ const LIVE_TAIL_MS = 2 * 60 * 60 * 1000;
 
 function trimLiveTail(chart, newestMs) {
     const data = chart.data.datasets[0].data;
-    const cutoff = newestMs - LIVE_TAIL_MS;
+    // Never shorter than the window on screen: with the 6 h or 24 h pill the two-hour tail
+    // would trim points the operator is looking at.
+    const cutoff = newestMs - Math.max(LIVE_TAIL_MS, openWindowMs);
     if (!data.length || data[0].x >= cutoff) return;
     let drop = 0;
     while (drop < data.length && data[drop].x < cutoff) drop += 1;
@@ -1352,6 +1744,11 @@ socket.on('new_temp', (msg) => {
         document.getElementById('stat-version').textContent = msg.companion_version;
     }
     if (!viewingToday) return;
+    // A 7 d or 30 d series is 15-minute or hourly averages. Appending a raw point every
+    // second to it drew a hairy fringe at the right edge of a smooth line, and an hour of
+    // them outnumbered the whole month on the chart. The tiles above stay live; these cards
+    // catch up on the next range change or Reset.
+    if (isMultiDay()) return;
 
     const x = toChartTimestamp(msg.timestamp_ms ?? msg.timestamp_epoch ?? msg.timestamp);
     if (x === null) return;
@@ -1368,7 +1765,7 @@ socket.on('new_temp', (msg) => {
     const followMax = followLive ? Math.max(x, Date.now()) : null;
     for (const p of panels) {
         if (followLive) {
-            p.chart.options.scales.x.min = followMax - LIVE_WINDOW_MS;
+            p.chart.options.scales.x.min = followMax - openWindowMs;
             p.chart.options.scales.x.max = followMax;
         }
         const y = p.metric.key === 'temp' ? toNumber(msg.temp) : toNumber(diagnostics[p.metric.diag]);
@@ -1381,6 +1778,7 @@ socket.on('new_temp', (msg) => {
         p.emptyEl.style.display = 'none';
         p.chart.update('none');
     }
+    scheduleStats();
     if (selectedDayRange) selectedDayRange.endMs = Math.max(selectedDayRange.endMs, x);
     noDataEl.style.display = 'none';
 });

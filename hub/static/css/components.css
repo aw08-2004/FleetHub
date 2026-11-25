@@ -2440,3 +2440,99 @@ td > .btn + .btn {
 .tabs__tab[hidden] {
     display: none;
 }
+
+/* ============ Bento tiles, gauges and meters ============ */
+/* Shared by the machine Overview and the Dashboard (hub 1.189.0), which are the two bento
+   pages. A gauge is an SVG ring whose arc length the page script sets as a dash; a meter is
+   a track with a fill whose width it sets. Both are drawn from the status and accent tokens
+   so they follow the theme, and both are decoration beside a printed number -- the number
+   is the reading, so neither carries an accessible name of its own. */
+.bento-tile {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+}
+
+.bento-tile--bar {
+    display: block;
+}
+
+/* Both display values above out-rank the UA's [hidden] rule, so without this the GPU tile
+   machine.js hides on a PC with no GPU was drawn anyway -- found in the first preview. */
+.bento-tile[hidden] {
+    display: none;
+}
+
+.bento-tile__body {
+    min-width: 0;
+}
+
+.bento-tile__value {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: var(--space-1);
+}
+
+.bento-tile__facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+    margin-top: var(--space-2);
+}
+
+.gauge {
+    flex: none;
+    width: 72px;
+    height: 72px;
+    /* Start the arc at twelve o'clock rather than at three. */
+    transform: rotate(-90deg);
+}
+
+.gauge circle {
+    fill: none;
+    stroke-width: 7;
+}
+
+.gauge__track {
+    stroke: var(--control-bg);
+}
+
+/* Starts empty (0 of the circumference); machine.js sets the dash on every reading. */
+.gauge__arc {
+    stroke: var(--accent);
+    stroke-linecap: round;
+    stroke-dasharray: 0 200;
+    transition: stroke-dasharray 0.4s ease;
+}
+
+.gauge__arc--temp {
+    stroke: var(--warning);
+}
+
+.stat-card--high-temp .gauge__arc {
+    stroke: var(--danger);
+}
+
+.meter {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--control-bg);
+    overflow: hidden;
+    margin: var(--space-2) 0;
+}
+
+.meter__fill {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width 0.4s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gauge__arc,
+    .meter__fill { transition: none; }
+}

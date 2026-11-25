@@ -206,6 +206,47 @@ on separate listeners* below). Confirm on the test hub, behind nginx:
   `/static/js/app.js` on the public name are `404`, and the internal name does not resolve.
 - [ ] **Invite link** copied after the split carries `CONSOLE_URL` and opens on the LAN.
 
+**Hub 1.189.0: bento Dashboard and machine Overview.** Chosen from a layout review
+(2026-11-24): variant B for the Overview (ring gauges, one tall *Device profile* tile) and D2
+for the Dashboard (a fleet-health ring as the hero). Rejected: a CPU sparkline in the Overview,
+because it repeated the history charts lower on the same page, and a one-line metadata strip,
+because it truncated the model and OU at laptop width. On the Dashboard, a row of gauges was
+rejected because "open alerts" has no 100%, and a three-column layout because it squeezed the
+OS names. Confirm on the test hub:
+- [ ] **No row jumping.** A desktop that reports CPU clock and power and a laptop that does not
+  show the profile tile in the same place, and only the missing *line* is gone from the CPU tile.
+- [ ] **Gauges move live.** CPU load and temperature rings follow the readings without a
+  refresh; a CPU at or over the hot threshold turns its tile red as before.
+- [ ] **OU and copy.** A long OU reads as `domain / OU / OU` with the DN on hover; the copy
+  buttons put the serial, the tags and the full DN on the clipboard (and select the text on an
+  `http://` hub, where the clipboard API is refused).
+- [ ] **Lower Overview tiles (G1).** Storage, Cooling, Posture and Drive encryption are tiles
+  with no fold; on a PC without posture, BitLocker or fans the grid closes up rather than
+  leaving holes. The posture checklist lists failed checks first and the CIS safeguard shows
+  on hover; Reveal on a BitLocker row still shows and audits the key. Rejected for this part:
+  rings for every panel (F), which made a disk, a checklist and a fan look alike, and themed
+  headings (E2), which were the old sections again. An always-visible "top processes" tile
+  was dropped from G1 as drawn: it would keep the agent sampling for every open page.
+- [ ] **Drawers.** History opens by default as before; Processes and Sensors still start
+  sampling only when opened and stop when closed; Lock and wipe is last and starts closed.
+- [ ] **History cards (M1).** Every metric the PC reports has a card; the badge, minimum and
+  peak follow a zoom; the peak dot matches the peak caption; Expand shows the axes; Live, 1 h,
+  6 h and 24 h follow new readings without dropping points older than two hours; a past day
+  lights 24 h. Rejected: sparkline rows (H1, too flat at 26 px), one chart with tabs (M2, one
+  metric at a time) and stacked strips (M3, a charting rewrite).
+- [ ] **7 d and 30 d.** On a PC with a month of readings, 30 d draws the whole month at 1h
+  (about 720 points per card) and 7 d at 15m; neither request carries `date`; the peak
+  caption names the day; zoom and pan stay inside the 30 days. A day that only exists in a
+  CSV archive appears in the range rather than as a gap. Server side: `15m` and `1h` buckets,
+  auto picks 1h past eight days (unchanged below), and a multi-day window imports at most 31
+  days of archive per request (`MAX_HISTORY_IMPORT_DAYS`). Live readings are not appended
+  to a 7 d or 30 d chart -- a raw point per second on an hourly series drew a fringe -- so
+  those cards refresh on the next range change or Reset.
+- [ ] **Dashboard numbers agree** with the 1.188.0 Dashboard: online + offline is the ring's
+  total, and every count the old folds showed appears once in a tile.
+- [ ] **Both themes and narrow widths.** Light and dark, the sidebar collapsed and expanded, and
+  a phone width: no tile overflows and the hero's list drops under its ring.
+
 `main` and `beta` were both at hub **1.185.0** on 2026-11-24 (agent 3.53.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.

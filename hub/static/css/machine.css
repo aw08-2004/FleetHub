@@ -1,10 +1,271 @@
-.identity-block .stat-card__meta {
-    display: block;
+/* ============ Overview bento (hub 1.189.0) ============ */
+/* Live tiles in a two-column grid on the left, the device profile as one tall tile on the
+   right. The profile is its own grid column rather than a tile spanning rows, so a GPU or
+   Memory tile appearing or vanishing reflows the LEFT side only -- the old flat grid moved
+   the identity card between rows from one machine to the next.
+
+   A container query, not a media query, for the reason dashboard.css gives: the width
+   that matters moves with the sidebar independently of the viewport. */
+.bento-host {
+    container-type: inline-size;
+}
+
+.bento {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+}
+
+.bento__live {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+    align-content: start;
+}
+
+@container (min-width: 520px) {
+    .bento__live { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container (min-width: 860px) {
+    .bento { grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); }
+}
+
+.bento .stat-card {
+    padding: var(--space-4) var(--space-5);
+}
+
+/* The hot-temperature tint keeps its colour, not its 32px value size, inside a tile. */
+.bento .bento-tile__value.stat-card__value {
+    font-size: var(--text-lg);
     margin-bottom: var(--space-1);
 }
 
-.identity-block .stat-card__meta:last-child {
+/* Key-value rows: label left, value right in mono, ONE line each. Ellipsis rather than
+   wrapping is what stops the OU overflowing the tile; the full value is the title. */
+.kv {
+    margin: 0;
+}
+
+.kv__row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: 3px 0;
+    font-size: var(--text-sm);
+}
+
+.kv__row[hidden] {
+    display: none;
+}
+
+.kv__row dt {
+    flex: none;
+    color: var(--muted);
+}
+
+.kv__row dd {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kv__copy {
+    flex: none;
+    align-self: center;
+    display: inline-flex;
+    padding: 2px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    opacity: 0.55;
+}
+
+.kv__row:hover .kv__copy,
+.kv__copy:focus-visible {
+    opacity: 1;
+}
+
+.kv__copy:hover {
+    color: var(--accent);
+}
+
+.kv__copy--done {
+    color: var(--success);
+    opacity: 1;
+}
+
+.bento__rule {
+    border: 0;
+    border-top: 1px solid var(--card-border);
+    margin: var(--space-3) 0;
+}
+
+.bento__note {
+    margin-top: var(--space-1);
+    font-size: var(--text-xs);
+}
+
+#stat-ad-status:not([hidden]) {
+    margin-top: var(--space-2);
+}
+
+/* ============ The tiles under the live bento (hub 1.189.0, variant G1) ============ */
+/* Storage, Cooling, Posture and BitLocker as tiles in one grid. `dense` lets a narrow tile
+   back-fill the hole a hidden one leaves -- most PCs report no posture and no BitLocker,
+   many laptops no fans -- so the grid closes up instead of keeping a gap per absent tile. */
+.ov-tiles {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-flow: row dense;
+    gap: var(--space-4);
+    margin-top: var(--space-4);
+}
+
+@container (min-width: 620px) {
+    .ov-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container (min-width: 860px) {
+    .ov-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .ov-tile--wide { grid-column: span 2; }
+}
+
+.ov-tile[hidden] {
+    display: none;
+}
+
+.ov-tile__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.ov-tile__head .stat-card__label {
     margin-bottom: 0;
+}
+
+/* Disks and fans inside a tile: rows, not boxes in a box. The bordered sub-tiles were drawn
+   for a full-width card; nested inside a tile they were a second frame around every bar. */
+.ov-tile .disk-grid,
+.ov-tile .fan-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--space-3) var(--space-5);
+}
+
+.ov-tile .disk-tile,
+.ov-tile .fan-tile {
+    border: 0;
+    padding: 0;
+}
+
+/* The posture checklist and the BitLocker volume rows: an icon column, then the text. */
+.checklist,
+.volume-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+/* Two columns in the wide posture tile -- nine checks in one column made it the tallest
+   thing on the page; two keep it level with the BitLocker tile beside it. */
+@container (min-width: 860px) {
+    .ov-tile--wide .checklist {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: var(--space-5);
+    }
+}
+
+.checklist__item,
+.volume-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: 5px 0;
+    min-width: 0;
+}
+
+.checklist__icon,
+.volume-row__icon {
+    flex: none;
+    margin-top: 2px;
+}
+
+.checklist__item--pass .checklist__icon,
+.volume-row--lock .volume-row__icon { color: var(--success); }
+.checklist__item--fail .checklist__icon { color: var(--danger); }
+.volume-row--unlock .volume-row__icon { color: var(--warning); }
+.checklist__item--unknown .checklist__icon,
+.volume-row--unknown .volume-row__icon { color: var(--muted); }
+
+.checklist__text,
+.volume-row__text {
+    min-width: 0;
+    font-size: var(--text-sm);
+}
+
+.checklist__title {
+    display: block;
+}
+
+/* A failed check is the reason anybody opens this tile, so it is the one line in bold. */
+.checklist__item--fail .checklist__title {
+    font-weight: 600;
+}
+
+.checklist__detail {
+    display: block;
+    font-size: var(--text-xs);
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.volume-row__head {
+    display: flex;
+    gap: var(--space-2);
+    align-items: baseline;
+}
+
+.volume-row__name {
+    font-weight: 600;
+}
+
+.volume-row__state {
+    color: var(--muted);
+}
+
+.volume-row__escrow {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    margin-top: 2px;
+}
+
+/* The drawers: full-width tiles that still fold. One gap for the whole stack, so the
+   per-card top margins below (.fold, .chart-card, .sensor-card) do not add up between them. */
+.ov-drawers {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+}
+
+.ov-drawers > .ov-drawer {
+    margin-top: 0;
+}
+
+.ov-drawer[hidden] {
+    display: none;
 }
 
 /* Cards stacked below the stat grid supply their own top separation. .card-grid has an
@@ -363,44 +624,170 @@
     cursor: not-allowed;
 }
 
-/* ============ Historical metric grid ============ */
-/* Komodo-style multi-panel dashboard: one chart per enabled metric, two-up on desktop and
-   single-column on narrow screens. Each panel's canvas needs an explicitly sized parent
-   because the charts run with maintainAspectRatio:false. */
+/* ============ History: metric cards (hub 1.189.0, variant M1) ============ */
+/* One card per enabled metric, three-up on a wide page, two on a laptop, one on a phone --
+   auto-fill rather than a fixed count, because the number of cards is the number of metrics
+   THIS machine reports (four on a basic PC, fourteen on a workstation). Each canvas needs an
+   explicitly sized parent because the charts run with maintainAspectRatio:false.
+
+   They were 220 px panels two-up with full axes, which put fourteen charts and about 1,800 px
+   of page under the tiles; the cards are ~170 px each and expand to the old panel on demand. */
 .metric-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-4);
-}
-
-@media (max-width: 900px) {
-    .metric-grid {
-        grid-template-columns: 1fr;
-    }
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--space-3);
+    grid-auto-flow: row dense;
 }
 
 .metric-panel {
     border: 1px solid var(--card-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-4);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3) var(--space-4);
     min-width: 0;   /* let the canvas shrink inside the grid track instead of overflowing */
+    background: var(--card);
+}
+
+.metric-panel[hidden] {
+    display: none;
 }
 
 .metric-panel__head {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: var(--space-2);
-    margin-bottom: var(--space-3);
 }
 
 .metric-panel__title {
-    font-weight: 600;
     font-size: var(--text-sm);
+    color: var(--muted);
+}
+
+.metric-card__expand {
+    border: 0;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: var(--text-md);
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+}
+
+.metric-card__expand:hover,
+.metric-card__expand:focus-visible {
+    color: var(--accent);
+}
+
+.metric-card__value-row {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 2px 0 var(--space-2);
+}
+
+.metric-card__value {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+}
+
+/* The change against the visible average. Coloured only for the metrics where higher is
+   worse (machine.js WORSE_WHEN_HIGH); the rest are neutral. */
+.metric-card__delta {
+    font-size: var(--text-xs);
+    padding: 1px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+    background: var(--control-bg);
+    color: var(--muted);
+}
+
+.metric-card__delta[hidden] {
+    display: none;
+}
+
+.metric-card__delta--up {
+    background: var(--warning-bg);
+    color: var(--warning);
+}
+
+.metric-card__delta--down {
+    background: var(--success-bg);
+    color: var(--success);
 }
 
 .metric-panel__chart {
     position: relative;
-    height: 220px;
+    height: 72px;
+}
+
+.metric-card__range {
+    font-size: var(--text-xs);
+    margin-top: var(--space-1);
+    min-height: 1.4em;
+}
+
+/* Expanded: the old full panel, axes on, as wide as the grid. */
+.metric-card--expanded {
+    grid-column: 1 / -1;
+}
+
+.metric-card--expanded .metric-panel__chart {
+    height: 240px;
+}
+
+/* The range pills and the day, above the cards; the old sampling toolbar under them, in
+   small type, because it is for the operator tuning a zoom and not for every visit. */
+.history-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin: var(--space-3) 0 var(--space-2);
+}
+
+.history-head__day {
+    width: auto;
+}
+
+.history-tools {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    margin-bottom: var(--space-1);
+}
+
+/* A segmented control: one rounded track, the chosen segment raised out of it. */
+.seg {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--control-bg);
+}
+
+.seg__item {
+    border: 1px solid transparent;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-sm);
+    padding: 3px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+.seg__item:hover {
+    color: var(--text);
+}
+
+.seg__item--on {
+    background: var(--card);
+    color: var(--text);
+    border-color: var(--card-border);
 }
 
 .metric-panel__empty {

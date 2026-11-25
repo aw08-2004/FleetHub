@@ -27,14 +27,22 @@
 
     const errorEl = document.getElementById('summary-error');
     const generatedEl = document.getElementById('health-generated');
-    const healthEl = document.getElementById('health-tiles');
+    const healthListEl = document.getElementById('health-list');
+    const healthTotalEl = document.getElementById('health-total');
     const osEl = document.getElementById('os-breakdown');
-    const telemetryEl = document.getElementById('telemetry-tiles');
-    const coverageEl = document.getElementById('telemetry-coverage');
+    const tempEl = document.getElementById('tile-temp');
+    const cpuEl = document.getElementById('tile-cpu');
+    const diskEl = document.getElementById('tile-disk');
     const activityEl = document.getElementById('activity-tiles');
     const alertsEl = document.getElementById('activity-alerts');
     const attentionEl = document.getElementById('attention-lists');
-    if (!healthEl) return;
+    if (!healthListEl) return;
+
+    // The OS buckets the stacked bar has a colour for (dashboard.css .os-seg--*). The class
+    // is built from this list, never from the server's string, so an unexpected bucket gets
+    // the "unknown" grey rather than a class name somebody else chose.
+    const OS_BUCKETS = ['windows_11', 'windows_10', 'windows_legacy', 'windows_server',
+                        'linux', 'android'];
 
     // A switch of literal keys rather than one key built by concatenating the bucket name
     // onto a prefix. A computed key is invisible to tests/test_i18n.py, which can only scan
@@ -65,38 +73,86 @@
         return (value === null || value === undefined) ? DASH : String(value);
     }
 
-    /**
-     * One number with a label under it.
-     *
-     * `tone` colours the number and is used sparingly: a count of zero failures must not be
-     * red just because the tile is about failures, so callers pass a tone only when the
-     * value itself is the news.
-     */
-    function tile(label, value, { tone = null, hint = null, href = null } = {}) {
-        // A link when there is somewhere to go: a number nobody can drill into is how
-        // "1 deployment in flight" sat unexplained for weeks (roadmap #26).
-        const node = el(href ? 'a' : 'div', href ? 'tile tile--link' : 'tile');
-        if (href) node.href = href;
-        const v = el('div', 'tile__value', num(value));
-        if (tone) v.classList.add(`tile__value--${tone}`);
-        // A zero (or a dash) with no tone is "nothing to see", so it steps back and the
-        // numbers that ARE news carry the row. Every tile used to be the same 28px white,
-        // which made "0 failures" exactly as loud as "3 not enrolled".
+    // ---- Bento building blocks (hub 1.189.0) --------------------------------------------
+    //
+    // The six-tile rows became one hero and five tiles, each a headline number and a few
+    // label/value rows under it. The TONE rules are the ones tile() had and are kept word for
+    // word in spirit: a value is coloured only when it is itself the news, and a zero or a
+    // dash with no tone steps back (tile__value--quiet) so "0 failures" is never as loud as
+    // "3 not enrolled".
+
+    /** The value's classes: its tone, or quiet when it is nothing to see. */
+    function toneValue(node, value, tone) {
+        if (tone) node.classList.add(`tile__value--${tone}`);
         else if (value === 0 || value === null || value === undefined) {
-            v.classList.add('tile__value--quiet');
+            node.classList.add('tile__value--quiet');
         }
-        node.append(v, el('div', 'tile__label', label));
-        if (hint) node.appendChild(el('div', 'tile__hint', hint));
         return node;
+    }
+
+    /**
+     * One label/value row. A link when there is somewhere to go: a number nobody can drill
+     * into is how "1 deployment in flight" sat unexplained for weeks (roadmap #26). `hint`
+     * is a second, muted line under the label.
+     */
+    function kvRow(label, value, { tone = null, hint = null, href = null } = {}) {
+        const row = el('div', 'dash-kv__row');
+        const dt = el('dt', null, label);
+        if (hint) dt.appendChild(el('span', 'dash-kv__hint', hint));
+        const dd = el('dd');
+        const v = el(href ? 'a' : 'span', 'dash-kv__value', num(value));
+        if (href) v.href = href;
+        dd.appendChild(toneValue(v, value, tone));
+        row.append(dt, dd);
+        return row;
+    }
+
+    function kvList(...rows) {
+        const dl = el('dl', 'dash-kv');
+        dl.append(...rows);
+        return dl;
+    }
+
+    /** A tile's head: its label and its headline number. */
+    function tileHead(label, value, tone = null) {
+        return [el('span', 'stat-card__label', label),
+                toneValue(el('div', 'dash-tile__value', num(value)), value, tone)];
+    }
+
+    /** A 0-100 bar. Empty, not absent, on a missing value, so the tile keeps its shape. */
+    function meter(pct, tone = null) {
+        const track = el('div', 'meter');
+        track.setAttribute('aria-hidden', 'true');
+        const fill = el('span', tone ? `meter__fill meter__fill--${tone}` : 'meter__fill');
+        const n = Number(pct);
+        fill.style.width = `${Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0}%`;
+        track.appendChild(fill);
+        return track;
+    }
+
+    // The hero ring: online from twelve o'clock, offline after it. online + offline is the
+    // total by construction (app.py counts every row as one or the other), so the two arcs
+    // close the ring; "not enrolled" overlaps both and is a row beside it, not a third arc.
+    const DONUT_C = 2 * Math.PI * 46;   // r="46" in index.html
+    function setDonut(online, offline, total) {
+        const on = document.getElementById('donut-online');
+        const off = document.getElementById('donut-offline');
+        if (!on || !off) return;
+        const onLen = total ? DONUT_C * (online || 0) / total : 0;
+        const offLen = total ? DONUT_C * (offline || 0) / total : 0;
+        on.style.strokeDasharray = `${onLen} ${DONUT_C}`;
+        off.style.strokeDasharray = `${offLen} ${DONUT_C}`;
+        off.style.strokeDashoffset = `${-onLen}`;
     }
 
     function renderHealth(summary) {
         const c = summary.counts;
-        healthEl.replaceChildren(
-            tile(t('dashboard.health.total'), c.total),
-            tile(t('dashboard.health.online'), c.online, { tone: c.online ? 'ok' : null }),
-            tile(t('dashboard.health.offline'), c.offline,
-                 { tone: c.offline ? 'warn' : null }),
+        healthTotalEl.textContent = num(c.total);
+        setDonut(c.online, c.offline, c.total);
+        healthListEl.replaceChildren(
+            kvRow(t('dashboard.health.online'), c.online, { tone: c.online ? 'ok' : null }),
+            kvRow(t('dashboard.health.offline'), c.offline,
+                  { tone: c.offline ? 'warn' : null }),
             // Not a fault, but the thing that most often explains "why did nothing happen
             // when I clicked that": an unenrolled agent reports telemetry and accepts no
             // commands, so it looks perfectly healthy and does nothing.
@@ -104,20 +160,21 @@
             // Its own tone, not Offline's amber: the two shared a colour, so "1 offline" and
             // "3 not enrolled" read as the same kind of problem, and a colour-blind operator
             // had nothing else to tell them apart by. Info-blue says "worth knowing".
-            tile(t('dashboard.health.never_enrolled'), c.never_enrolled,
-                 { tone: c.never_enrolled ? 'info' : null,
-                   hint: t('dashboard.health.never_enrolled_hint') }),
-            tile(t('dashboard.health.open_alerts'), c.open_alerts,
-                 { tone: c.open_alerts ? 'warn' : null }),
+            kvRow(t('dashboard.health.never_enrolled'), c.never_enrolled,
+                  { tone: c.never_enrolled ? 'info' : null,
+                    hint: t('dashboard.health.never_enrolled_hint') }),
+            kvRow(t('dashboard.health.open_alerts'), c.open_alerts,
+                  { tone: c.open_alerts ? 'warn' : null,
+                    href: c.open_alerts ? '/alerts' : null }),
             // With no published release to measure against, nothing can be "behind" -- and
             // a 0 there read as "the whole fleet is current", the one claim the hub had no
             // grounds for. A dash and the reason, instead.
-            tile(t('dashboard.health.agents_outdated'),
-                 c.agent_latest ? c.agents_outdated : null,
-                 { tone: c.agent_latest && c.agents_outdated ? 'warn' : null,
-                   hint: c.agent_latest
-                     ? t('dashboard.health.agent_latest', { version: c.agent_latest })
-                     : t('dashboard.health.agent_latest_none') })
+            kvRow(t('dashboard.health.agents_outdated'),
+                  c.agent_latest ? c.agents_outdated : null,
+                  { tone: c.agent_latest && c.agents_outdated ? 'warn' : null,
+                    hint: c.agent_latest
+                      ? t('dashboard.health.agent_latest', { version: c.agent_latest })
+                      : t('dashboard.health.agent_latest_none') })
         );
         generatedEl.textContent = summary.generated_at
             ? t('dashboard.generated_at', {
@@ -125,6 +182,10 @@
             : '';
     }
 
+    // One stacked bar for the whole fleet, then a legend row per bucket. It was a bar per
+    // bucket; a single bar answers "how much of the fleet is still on X" in one glance and
+    // takes a tile, not a fold. Lengths are still what is compared -- the reason it was
+    // never a pie, and the reason the hero ring stops at two segments.
     function renderOs(summary) {
         const total = summary.counts.total || 0;
         osEl.replaceChildren();
@@ -132,72 +193,97 @@
             osEl.appendChild(el('p', 'stat-card__meta', t('dashboard.empty')));
             return;
         }
+        const bar = el('div', 'os-bar');
+        bar.setAttribute('aria-hidden', 'true');
+        const legend = el('dl', 'dash-kv');
         for (const entry of summary.os) {
             // Buckets nobody has are dropped rather than shown as zero: a fleet with no
             // Linux does not need a permanent Linux row, and the list stays as long as the
             // fleet is varied.
             if (!entry.count) continue;
-            const row = el('div', 'breakdown__row');
-            row.appendChild(el('span', 'breakdown__label', osBucketLabel(entry.bucket)));
-            const barWrap = el('span', 'breakdown__bar');
-            const bar = el('span', 'breakdown__fill');
-            bar.style.width = `${Math.round(100 * entry.count / total)}%`;
-            barWrap.appendChild(bar);
-            row.appendChild(barWrap);
-            row.appendChild(el('span', 'breakdown__count',
-                               t('dashboard.os.count', { count: entry.count,
-                                                         pct: Math.round(100 * entry.count / total) })));
-            osEl.appendChild(row);
+            const bucket = OS_BUCKETS.includes(entry.bucket) ? entry.bucket : 'unknown';
+            const pct = Math.round(100 * entry.count / total);
+            const seg = el('span', `os-seg os-seg--${bucket}`);
+            seg.style.width = `${100 * entry.count / total}%`;
+            bar.appendChild(seg);
+            const row = el('div', 'dash-kv__row');
+            const dt = el('dt');
+            dt.append(el('span', `os-swatch os-seg--${bucket}`),
+                      document.createTextNode(osBucketLabel(entry.bucket)));
+            const dd = el('dd', null, t('dashboard.os.count', { count: entry.count, pct }));
+            row.append(dt, dd);
+            legend.appendChild(row);
         }
+        osEl.append(bar, legend);
     }
 
     function renderTelemetry(summary) {
         const s = summary.telemetry;
         const gb = (value) => (value === null || value === undefined || !value)
             ? DASH : t('dashboard.telemetry.gb', { value: Math.round(value) });
-        telemetryEl.replaceChildren(
-            tile(t('dashboard.telemetry.avg_temp'),
-                 s.avg_cpu_temp === null ? DASH : celsius(s.avg_cpu_temp)),
-            // Red at or over the hub's hot threshold -- the same >= the tile after it counts
-            // with. Uncoloured, 95 °C looked exactly as calm as the average beside it.
-            tile(t('dashboard.telemetry.peak_temp'),
-                 s.peak_cpu_temp === null ? DASH : celsius(s.peak_cpu_temp),
-                 { tone: (s.peak_cpu_temp !== null && s.threshold_c
-                          && s.peak_cpu_temp >= s.threshold_c) ? 'bad' : null }),
-            // The threshold is IN the label, not implied by it: this is a filter somebody
-            // chose in Settings, not the hub declaring these machines faulty.
-            tile(t('dashboard.telemetry.over_threshold', { threshold: s.threshold_c }),
-                 s.over_threshold, { tone: s.over_threshold ? 'warn' : null }),
-            tile(t('dashboard.telemetry.avg_load'),
-                 s.avg_cpu_load_pct === null ? DASH : t('dashboard.telemetry.percent', { value: s.avg_cpu_load_pct })),
-            tile(t('dashboard.telemetry.disk_free'), gb(s.disk_free_gb),
-                 { hint: s.disk_total_gb ? t('dashboard.telemetry.of_total', { value: gb(s.disk_total_gb) }) : null }),
-            tile(t('dashboard.telemetry.low_disk', { threshold: s.low_disk_free_pct }),
-                 s.low_disk_machines, { tone: s.low_disk_machines ? 'warn' : null })
+
+        // Temperature: the average as the headline, on a fixed 0-100 °C bar (the machine
+        // page's ring uses the same scale), with the peak and the over-threshold count
+        // under it. Red at or over the hub's hot threshold -- the same >= the count uses.
+        // Uncoloured, 95 °C looked exactly as calm as the average beside it.
+        const peakHot = s.peak_cpu_temp !== null && s.threshold_c
+            && s.peak_cpu_temp >= s.threshold_c;
+        tempEl.replaceChildren(
+            ...tileHead(t('dashboard.telemetry.avg_temp'),
+                        s.avg_cpu_temp === null ? null : celsius(s.avg_cpu_temp)),
+            meter(s.avg_cpu_temp, 'warn'),
+            kvList(
+                kvRow(t('dashboard.telemetry.peak_temp'),
+                      s.peak_cpu_temp === null ? null : celsius(s.peak_cpu_temp),
+                      { tone: peakHot ? 'bad' : null }),
+                // The threshold is IN the label, not implied by it: this is a filter somebody
+                // chose in Settings, not the hub declaring these machines faulty.
+                kvRow(t('dashboard.telemetry.over_threshold', { threshold: s.threshold_c }),
+                      s.over_threshold, { tone: s.over_threshold ? 'warn' : null })
+            )
         );
+
         // Says how much of the fleet these averages are actually OF. An average over three
         // of two hundred machines is not a fleet average, and a page that showed it without
-        // saying so would be quietly lying. A sentence under the caption rather than a tile:
-        // it qualifies the six numbers rather than being a seventh.
-        if (coverageEl) {
-            coverageEl.textContent = t('dashboard.telemetry.coverage', {
-                reporting: s.reporting ?? 0, online: summary.counts.online ?? 0 });
-        }
+        // saying so would be quietly lying. It sits in the load tile, under the average.
+        cpuEl.replaceChildren(
+            ...tileHead(t('dashboard.telemetry.avg_load'),
+                        s.avg_cpu_load_pct === null ? null
+                            : t('dashboard.telemetry.percent', { value: s.avg_cpu_load_pct })),
+            meter(s.avg_cpu_load_pct),
+            el('p', 'stat-card__meta', t('dashboard.telemetry.coverage', {
+                reporting: s.reporting ?? 0, online: summary.counts.online ?? 0 }))
+        );
+
+        // Disk: free space as the headline, the bar as the free FRACTION of the total.
+        const freePct = s.disk_total_gb ? 100 * s.disk_free_gb / s.disk_total_gb : null;
+        diskEl.replaceChildren(
+            ...tileHead(t('dashboard.telemetry.disk_free'),
+                        s.disk_free_gb ? gb(s.disk_free_gb) : null),
+            el('p', 'stat-card__meta', s.disk_total_gb
+                ? t('dashboard.telemetry.of_total', { value: gb(s.disk_total_gb) }) : ''),
+            meter(freePct, 'ok'),
+            kvList(kvRow(t('dashboard.telemetry.low_disk', { threshold: s.low_disk_free_pct }),
+                         s.low_disk_machines, { tone: s.low_disk_machines ? 'warn' : null }))
+        );
     }
 
     function renderActivity(summary) {
         const a = summary.activity;
         activityEl.replaceChildren(
-            tile(t('dashboard.activity.deployments_running'), a.deployments_running,
-                 { href: a.deployments_running && activityEl.dataset.canDeploy
-                     ? '/packages#deployments-pane' : null }),
-            tile(t('dashboard.activity.deployments_failed'), a.deployments_failed_24h,
-                 { tone: a.deployments_failed_24h ? 'bad' : null }),
-            tile(t('dashboard.activity.backups_ok'), a.backups_ok_24h),
-            tile(t('dashboard.activity.backups_failed'), a.backups_failed_24h,
-                 { tone: a.backups_failed_24h ? 'bad' : null }),
-            tile(t('dashboard.activity.firmware_jobs'), a.firmware_jobs_active),
-            tile(t('dashboard.activity.wake_requests'), a.wake_requests_open)
+            el('span', 'stat-card__label', t('dashboard.activity.title')),
+            kvList(
+                kvRow(t('dashboard.activity.deployments_running'), a.deployments_running,
+                      { href: a.deployments_running && activityEl.dataset.canDeploy
+                          ? '/packages#deployments-pane' : null }),
+                kvRow(t('dashboard.activity.deployments_failed'), a.deployments_failed_24h,
+                      { tone: a.deployments_failed_24h ? 'bad' : null }),
+                kvRow(t('dashboard.activity.backups_ok'), a.backups_ok_24h),
+                kvRow(t('dashboard.activity.backups_failed'), a.backups_failed_24h,
+                      { tone: a.backups_failed_24h ? 'bad' : null }),
+                kvRow(t('dashboard.activity.firmware_jobs'), a.firmware_jobs_active),
+                kvRow(t('dashboard.activity.wake_requests'), a.wake_requests_open)
+            )
         );
 
         alertsEl.replaceChildren();

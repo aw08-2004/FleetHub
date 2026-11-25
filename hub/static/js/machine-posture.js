@@ -35,37 +35,70 @@
         return node;
     }
 
-    function pill(status) {
-        const variant = status === 'pass' ? 'status-pill--ok'
-            : status === 'fail' ? 'status-pill--danger' : 'status-pill--muted';
-        const node = el('span', `status-pill ${variant}`);
-        node.appendChild(el('span', 'status-pill__dot'));
-        node.appendChild(document.createTextNode(labels.statusLabel(status)));
-        return node;
+
+    // A 16px stroke icon, built with createElementNS rather than an innerHTML string so the
+    // file keeps its one rule without an exception: nothing here is ever parsed as markup.
+    // The paths are fixed shapes, chosen by `kind`, never by anything the machine sent.
+    const ICON_PATHS = {
+        pass: ['M5 12l5 5L20 7'],
+        fail: ['M6 6l12 12', 'M18 6L6 18'],
+        unknown: ['M6 12h12'],
+    };
+    function icon(kind, className) {
+        const NS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('width', '16');
+        svg.setAttribute('height', '16');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2.2');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('class', className);
+        for (const d of ICON_PATHS[kind] || []) {
+            const path = document.createElementNS(NS, 'path');
+            path.setAttribute('d', d);
+            svg.appendChild(path);
+        }
+        return svg;
     }
 
-    function draw(data) {
-        const table = el('table', 'data-table');
-        const headRow = el('tr');
-        [t('posture.col.check'), t('posture.col.result'), t('posture.col.detail'),
-         t('posture.col.cis')].forEach((label) => headRow.appendChild(el('th', null, label)));
-        table.appendChild(el('thead')).appendChild(headRow);
+    // Failed first, then unknown, then passed -- stable within each, so the agent's own order
+    // survives. The tile is a checklist an operator reads top-down for "what is wrong", and a
+    // fail at row 8 of 9 was the one row the old table made them hunt for.
+    const STATUS_ORDER = { fail: 0, unknown: 1, pass: 2 };
 
-        const body = el('tbody');
-        data.checks.forEach((check) => {
-            const tr = el('tr');
-            tr.appendChild(el('td', null, labels.checkTitle(check.id)));
-            const result = el('td');
-            result.appendChild(pill(check.status));
-            tr.appendChild(result);
+    // A checklist (hub 1.189.0), not a table: one line per check with a tick, a cross or a
+    // dash, the detail under it. The four-column table it replaces did not fit a tile, and
+    // its Result column was a pill per row restating what a coloured icon says. The status
+    // WORD is still there for a screen reader and on hover (the icon is aria-hidden), and the
+    // CIS safeguard moved to the row's title -- it is evidence for an auditor, not something
+    // a helpdesk reads on every visit.
+    function draw(data) {
+        const list = el('ul', 'checklist');
+        const checks = data.checks.slice()
+            .sort((a, b) => (STATUS_ORDER[a.status] ?? 1) - (STATUS_ORDER[b.status] ?? 1));
+        checks.forEach((check) => {
+            const kind = check.status === 'pass' || check.status === 'fail'
+                ? check.status : 'unknown';
+            const item = el('li', `checklist__item checklist__item--${kind}`);
+            item.title = check.cis
+                ? `${labels.statusLabel(check.status)} · CIS ${check.cis}`
+                : labels.statusLabel(check.status);
+            item.appendChild(icon(kind, 'checklist__icon'));
+            const text = el('div', 'checklist__text');
+            text.appendChild(el('span', 'checklist__title', labels.checkTitle(check.id)));
+            text.appendChild(el('span', 'sr-only', ` (${labels.statusLabel(check.status)})`));
             // Text from the machine (product and account names) arrives inside the detail's
             // parameters and is set with textContent like everything else here.
-            tr.appendChild(el('td', null, labels.detailText(check)));
-            tr.appendChild(el('td', null, check.cis || ''));
-            body.appendChild(tr);
+            const detail = labels.detailText(check);
+            if (detail) text.appendChild(el('span', 'checklist__detail', detail));
+            item.appendChild(text);
+            list.appendChild(item);
         });
-        table.appendChild(body);
-        bodyEl.replaceChildren(table);
+        bodyEl.replaceChildren(list);
     }
 
     function showError(text) {
