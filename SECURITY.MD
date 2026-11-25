@@ -23,6 +23,9 @@ system administration use cases:
   "Device tokens" below)
 - **Signed Releases:** Authenticode-signed executables
 - **HTTPS-only:** All hub-to-agent communication over TLS
+- **Console off the internet (optional):** The hub can serve agents on a listener of their own
+  that answers no console route (see "The agent listener" below), so only that port is
+  published
 
 ## RMM Legitimate Use
 
@@ -230,6 +233,37 @@ authenticated. What is worth knowing about it:
   ten megabytes to anyone holding the token. It sits under a single stable `/provisioning/apk/`
   prefix so a reverse proxy can throttle or block it in one rule, and "Stop hosting" on the
   provisioning page takes it offline entirely.
+
+## The agent listener (hub 1.188.0)
+
+**The perimeter can be the network, not only the sign-in.** With `FLEETHUB_AGENT_PORT` set,
+the hub serves a second listener in the same process. That listener answers only:
+
+- `/api/agent/*` and `/api/report`, the agent's own routes;
+- `/onboarding`, `/onboarding/run/*`, `/api/onboarding/{check,redeem,status}` and the few
+  static files that page loads;
+- `/provisioning/apk/*`, the Android device-owner APK;
+- `/api/peer/*`, cross-hub sharing.
+
+Everything else gets a bare 404 before the Flask app sees the request. That covers the
+console, `/login` and the OAuth callbacks, the operator API, Socket.IO and the console's
+scripts. The reverse proxy publishes this listener as `HUB_URL` and the console's listener
+only on an internal hostname (`CONSOLE_URL`).
+
+- **It is a second fence, not a replacement gate.** Every route it lets through keeps its own
+  agent bearer, onboarding code, APK token or peer token. Nothing is trusted because it
+  arrived on that port.
+- **Paths are matched exactly, by whole segments.** `..`, `.`, empty segments, backslashes,
+  NULs and leftover percent-escapes are refused before matching. The filter checks the same
+  `PATH_INFO` werkzeug routes on, so the filter and the router cannot disagree about a path.
+  `tests/test_agent_listener.py` fails if a route outside `/api/agent/` and `/api/peer/` becomes
+  public without someone deciding it.
+- **Turn on `security.require_enrolled_telemetry` once every PC is enrolled.** `/api/report`
+  still accepts an unsigned report while it is off, and on a split hub that route is one of the
+  few the internet can reach.
+- **The proxy must overwrite `X-Forwarded-For`, not append to it.** The hub trusts one hop of
+  `X-Forwarded-*`, and the per-IP limit on `/api/report` and `/api/agent/enroll` keys on that
+  header (see the onboarding note below). Keep both hub ports reachable from the proxy only.
 
 ## Onboarding codes and signed telemetry (roadmap #29)
 

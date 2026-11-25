@@ -63,8 +63,9 @@ VOLUME ["/state"]
 # existing deployment publishes 3001 to a proxy that dials http://. Defaulting the image to
 # HTTPS on 29443 would take every one of them dark on the next pull. New deployments opt in
 # through example.env (FLEETHUB_PORT=29443, FLEETHUB_TLS=1); serve.py then generates the
-# certificate under /state/tls/ on first start.
-EXPOSE 3001 29443
+# certificate under /state/tls/ on first start. 29444 is the conventional agent-only
+# listener (FLEETHUB_AGENT_PORT, hub 1.188.0), unused unless an operator sets it.
+EXPOSE 3001 29443 29444
 
 # The same probe install.ps1 makes after starting the Windows service, on whichever port and
 # scheme serve.py was told to use. Python rather than curl because the slim base has no curl,

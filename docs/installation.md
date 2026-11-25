@@ -533,6 +533,130 @@ changed is that the proxy's own connection to the hub is encrypted too.
 - **Keep 29443 reachable from the proxy only.** TLS encrypts the hop, it does not
   authenticate the caller, and the hub trusts one hop of `X-Forwarded-*` headers.
 
+## Keeping the console off the internet
+
+Since hub 1.188.0 the hub can answer agents on a port of its own. Agents on PCs outside the
+LAN then keep reporting, and the console, its sign-in page, the operator API and Socket.IO
+are no longer published at all. Operators and the desktop client reach the console on the
+LAN or over a VPN.
+
+**How it works.** `FLEETHUB_AGENT_PORT` starts a second listener inside the same hub process.
+It serves only what a PC, a device or a peer hub calls:
+
+- the agent routes (`/api/agent/*`, `/api/report`);
+- the onboarding wizard and its install scripts;
+- the Android APK download;
+- the cross-hub sharing API (`/api/peer/*`).
+
+Everything else answers `404`. The original port keeps serving everything, as before. The
+proxy publishes the agent port under the existing public `HUB_URL`, so **agents need no
+change**: they never learn that the console moved. `hub/agent_listener.py` explains why this
+is one process with two listeners and not two processes. `SECURITY.MD`, *The agent listener*,
+lists exactly what the agent port serves.
+
+**Two addresses after the split.**
+
+| Setting | Means | Example |
+|---|---|---|
+| `HUB_URL` | The public address agents use. **Leave it as it is.** The hub builds every URL it hands an agent from it. | `https://fleethub.example.com` |
+| `CONSOLE_URL` | The internal address operators use. Sign-in callbacks, invite links and the assistant's links use it. Unset means `HUB_URL`. | `https://fleethub.corp.example.com` |
+
+**Cutover, in this order.** Each step can be undone on its own, and nothing changes for
+agents at any step.
+
+1. **Update the hub to 1.188.0 or later.** Nothing changes until step 3.
+2. **Give the console its internal address.** Create the internal DNS name and the console's
+   nginx server block (below), set `CONSOLE_URL` in the hub's `.env`, and register
+   `<CONSOLE_URL>/auth/callback` (Google) or `<CONSOLE_URL>/auth/oidc/callback` (OIDC) as an
+   allowed redirect URI at the identity provider. Restart the hub and sign in through
+   `CONSOLE_URL`. **Do this before step 4**, or no operator can sign in once the public name
+   stops serving the console.
+3. **Start the agent listener.** Set `FLEETHUB_AGENT_PORT=29444` in the hub's `.env` and
+   restart. The log shows two `[serve]` lines, one per listener. From the hub machine,
+   `curl -k https://127.0.0.1:29444/login` answers `404`, and
+   `curl -k https://127.0.0.1:29444/api/agent/commands` answers `401`. A `401` here is the
+   right answer: the route is reachable and wants an agent token.
+4. **Repoint the public server block** from port 29443 to 29444 and reload nginx. **To roll
+   back**, point it back at 29443.
+5. **Check from outside the LAN** (a phone off Wi-Fi is enough): the public name shows `404`
+   for `/` and `/login`, and the console's internal name does not resolve or connect. On the
+   console, every PC that is online keeps its live heartbeat.
+
+**nginx.** Two server blocks. The first is published to the internet. The second is
+internal only and is never port-forwarded.
+
+```nginx
+# Public: the agent channel only. HUB_URL's host.
+server {
+    listen 443 ssl;
+    server_name fleethub.example.com;
+    # ssl_certificate / ssl_certificate_key: a publicly trusted certificate. Agents use the
+    # Windows machine trust store and pin nothing.
+
+    location / {
+        proxy_pass https://127.0.0.1:29444;
+        proxy_ssl_verify off;               # or proxy_ssl_trusted_certificate .../hub.crt
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        # OVERWRITE, never append ($proxy_add_x_forwarded_for): the hub trusts one hop, and its
+        # per-IP limits on /api/report and enrollment key on this header.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        # Agents long-poll for commands (25 s) and stream file and backup transfers.
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 300s;
+        client_max_body_size 1g;            # the hub's own per-request cap
+    }
+}
+
+# Internal: the console. Resolvable only on the LAN or VPN.
+server {
+    listen 443 ssl;
+    server_name fleethub.corp.example.com;
+
+    location / {
+        proxy_pass https://127.0.0.1:29443;
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;                # Socket.IO long-polls too
+        proxy_read_timeout 300s;
+        client_max_body_size 600m;          # >= deploy.max_upload_mb, see packages.md
+    }
+}
+```
+
+The hub's filter makes the console unreachable on 29444 whatever the proxy does, so a
+`location` allow-list in the public block is optional. If you add one as a second layer,
+copy the path list from `SECURITY.MD` exactly. A missing entry fails silently: agents retry
+and fall quiet, and no error tells you why.
+
+**Notes.**
+
+- **Windows service.** The hub reads `FLEETHUB_AGENT_PORT` and `CONSOLE_URL` from its `.env`
+  (`C:\Program Files\FleetHub\Hub\.env`). Restart the `FleetHub - Hub` service after editing
+  it. A hub that still runs waitress on 3001 does not run `serve.py`, so move it first with
+  `install.ps1 -MigrateHubServer` (*The hub's HTTPS listener* above). If nginx runs on another
+  machine, allow 29443 and 29444 inbound in Windows Firewall **from that machine only**.
+- **Docker.** `compose.yaml` publishes 29444 on loopback next to the console port. Set the two
+  keys in `deploy/docker/.env` and run `docker compose up -d`.
+- **The hub refuses to start** when `FLEETHUB_AGENT_PORT` is not a port number or equals
+  `FLEETHUB_PORT`. That is deliberate: a hub that fell back to one listener would look healthy
+  from the console while every agent behind the proxy got *connection refused*.
+- **What moves behind the LAN** is everything an operator uses: the console, the desktop and
+  mobile client (point it at `CONSOLE_URL`), and invite links, which now carry `CONSOLE_URL`.
+  An invited colleague therefore has to be on the LAN or VPN to accept one. Onboarding links
+  keep `HUB_URL`, because the PC being onboarded may be anywhere.
+- **TURN** for Remote View is a separate service on its own ports and is not affected.
+- **Bind addresses.** `FLEETHUB_HOST` and `FLEETHUB_AGENT_HOST` (both default `0.0.0.0`)
+  choose where each listener binds, for example `127.0.0.1` when nginx runs on the same
+  machine.
+
 ## Signing releases
 
 One artifact in this repo is Ed25519-signed so a compromised hub or repo commit
