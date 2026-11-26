@@ -106,7 +106,7 @@ Environment:
                      reaches the hub but not GitHub. The manifest and binary from it are
                      checked exactly as from GitHub. Not needed when --hub is given or a
                      previous install set the hub: the mirror on that hub is used.
-  --uninstall       Stop, disable and remove the agent. Keeps /etc/fleethub so a reinstall
+  --uninstall        Stop, disable and remove the agent. Keeps /etc/fleethub so a reinstall
                      does not need the secret again; delete it by hand to remove that too.
   -h, --help         This text.
 USAGE
