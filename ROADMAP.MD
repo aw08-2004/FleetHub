@@ -943,7 +943,9 @@ warned, and Defender was more suspicious of an unsigned LocalSystem service. Wor
 and the hub's `onboard.ps1` download `agent-install.ps1` from `main` and run it unchecked, and
 `onboard.sh` does the same with `install.sh`. **Stage 1 (this change) signs; stage 2 makes
 those downloaders check, and must wait until stage 1's signed scripts are on `main`.** The
-downloaders read `main`, so a check that shipped first would refuse every install.
+downloaders read `main`, so a check that shipped first would refuse every install. "No hub
+version" holds for stage 1 only: stage 2 changes the hub's onboarding templates, so it carries
+a `HUB_VERSION` bump and its release notes, and gets its own entry here.
 
 - One signer, `tools/codesign.ps1`, using **Azure Trusted Signing** (account in East US,
   endpoint `https://eus.codesigning.azure.net/`). It fails closed on missing setup and re-reads
