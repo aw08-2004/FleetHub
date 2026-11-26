@@ -279,6 +279,35 @@ def main():
                      extra={"UNIT_URL": f"{dead}/unit", "MIRROR_URL": f"{base}/m-good"})
             check("GitHub unreachable: the unit file comes from the mirror", r.returncode == 0
                   and os.path.exists(unit_dest) and "/m-good/repo/" in r.stdout)
+
+            # A hand-run install finds the mirror from the hub address alone. Silent failure:
+            # a machine with a hub configured that still installs from GitHub only, and fails
+            # behind the firewall exactly as it did before #33.
+            def resolved(**extra):
+                extra.setdefault("MIRROR_URL", "")
+                extra.setdefault("CONF_DIR", os.path.join(work, "no-conf").replace("\\", "/"))
+                r = call("eval", 'resolve_mirror_url; echo "mirror=$MIRROR_URL"', extra=extra)
+                return r.returncode, r.stdout.strip().rpartition("mirror=")[2]
+
+            check("--hub gives that hub's /api/agent/dist",
+                  resolved(HUB="https://hub.example.com/") ==
+                  (0, "https://hub.example.com/api/agent/dist"))
+            check("an explicit FLEETHUB_MIRROR_URL wins over --hub",
+                  resolved(HUB="https://hub.example.com", MIRROR_URL="https://m.example/x")
+                  == (0, "https://m.example/x"))
+            conf = os.path.join(work, "conf")
+            os.makedirs(conf)
+            pwned = os.path.join(work, "pwned").replace("\\", "/")
+            with open(os.path.join(conf, "agent.env"), "w", newline="\n") as fh:
+                fh.write(f'touch "{pwned}"\nFLEETHUB_HUB=https://hub2:8443\n')
+            check("no --hub: the FLEETHUB_HUB a previous install left in agent.env",
+                  resolved(CONF_DIR=conf.replace("\\", "/")) ==
+                  (0, "https://hub2:8443/api/agent/dist"))
+            check("...read, never sourced: nothing else in agent.env runs",
+                  not os.path.exists(pwned))
+            check("a hub without a scheme gives no mirror rather than a broken one",
+                  resolved(HUB="hub.example.com") == (0, ""))
+            check("no hub anywhere: no mirror, rather than a guessed one", resolved() == (0, ""))
         finally:
             server.shutdown()
 

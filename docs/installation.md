@@ -78,9 +78,11 @@ installers try GitHub first and the hub second for every file. Everything from t
 checked on the PC against the fleet's signing key, exactly as it is from GitHub.
 **Administration → Onboarding** shows what the hub holds, when it last copied, and any errors.
 
-To use the copy for an install by hand, set `FLEETHUB_MIRROR_URL` to
-`https://<your hub>/api/agent/dist` before running `agent-install.ps1` (or pass `-MirrorUrl`)
-or `install.sh`.
+An install by hand uses the copy on its own. The installers take the hub address you give them
+(`-HubUrl` for `agent-install.ps1`, `--hub` for `install.sh`), or on a PC that already had the
+agent, the hub address that install saved. They then use `https://<that hub>/api/agent/dist`
+and print it as the fallback. Set `FLEETHUB_MIRROR_URL` (or pass `-MirrorUrl`) only to use a
+different hub's copy. With no hub address at all, there is no fallback.
 
 **Agent updates use the hub's copy too, from the next Windows and Linux agent releases.** An
 agent from those releases on looks for its signed manifest and its new build on GitHub first

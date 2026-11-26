@@ -104,8 +104,9 @@ Environment:
   FLEETHUB_MIRROR_URL  The hub's release mirror (https://<hub>/api/agent/dist). Tried after
                      GitHub for the manifest, the binary and the unit, for a machine that
                      reaches the hub but not GitHub. The manifest and binary from it are
-                     checked exactly as from GitHub.
-  --uninstall        Stop, disable and remove the agent. Keeps /etc/fleethub so a reinstall
+                     checked exactly as from GitHub. Not needed when --hub is given or a
+                     previous install set the hub: the mirror on that hub is used.
+  --uninstall       Stop, disable and remove the agent. Keeps /etc/fleethub so a reinstall
                      does not need the secret again; delete it by hand to remove that too.
   -h, --help         This text.
 USAGE
@@ -383,6 +384,29 @@ fetch_unit() {
     die "could not fetch the unit file: $UNIT_URL${MIRROR_URL:+ or $MIRROR_URL}"
 }
 
+# The hub's release mirror for this install, when FLEETHUB_MIRROR_URL gave none: the mirror
+# path on --hub, else on the FLEETHUB_HUB a previous install wrote to $CONF_DIR/agent.env.
+#
+# **The mirror follows the hub address on its own**, for the reason agent-install.ps1 gives at
+# Resolve-MirrorUrl: a hand-run install on a machine that cannot reach GitHub should not need
+# a URL nobody has seen, when every hub serves its mirror at the same path and this script
+# already knows the hub. agent.env is READ, never sourced -- running a file as root to learn
+# one value from it would execute whatever else it holds. No hub, no mirror: the agent's
+# compiled-in default is a placeholder, not an address worth asking.
+resolve_mirror_url() {
+    [[ -n "$MIRROR_URL" ]] && return 0
+    local hub="$HUB"
+    if [[ -z "$hub" && -r "$CONF_DIR/agent.env" ]]; then
+        hub="$(sed -n 's/^FLEETHUB_HUB=//p' "$CONF_DIR/agent.env" | tail -n 1)"
+    fi
+    hub="${hub%$'\r'}"; hub="${hub#\"}"; hub="${hub%\"}"; hub="${hub%/}"
+    local url_re='^https?://[^[:space:]/]+(/[^[:space:]]*)?$'
+    if [[ "$hub" =~ $url_re ]]; then
+        MIRROR_URL="$hub/api/agent/dist"
+    fi
+    return 0
+}
+
 # ---------------------------------------------------------------- uninstall
 
 do_uninstall() {
@@ -447,6 +471,8 @@ main() {
     fi
 
     echo "Installing the FleetHub Linux agent..."
+    resolve_mirror_url
+    [[ -n "$MIRROR_URL" ]] && say "fallback when GitHub is unreachable: $MIRROR_URL"
 
     local tmp
     tmp="$(mktemp -d)"
