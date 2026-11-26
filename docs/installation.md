@@ -59,6 +59,33 @@ is not in sudoers (usual on NAS and appliance distros) runs `su -` first and dro
 is enrolled under its hostname up to the first dot, which is the name the agent reports. The
 same requirements as a technician's install apply: x86-64, glibc, systemd and OpenSSL 3.
 
+### PCs that cannot reach GitHub
+
+The agent installers normally download from GitHub: the signed manifest from
+`raw.githubusercontent.com`, the agent from a GitHub release, and on Windows the PawnIO driver.
+On a network that blocks the internet by default, the onboarding script reaches the hub and then
+fails with *Unable to connect to the remote server*. Running the command through
+`Invoke-Command` makes this worse: even when your own account may use the internet, the remote
+session's traffic comes from the PC, not from you.
+
+Since hub 1.192.0 the hub keeps its own copy of these files (roadmap #33). The setting is
+**Settings → Fleet → Agent downloads through this hub**, and it is on by default. The hub
+copies the files from GitHub shortly after it starts and every 15 minutes after that. It
+needs the hub itself to reach GitHub, and about 450 MB of disk under `logs/release_mirror`.
+
+With the copy in place, the onboarding scripts download the installer from the hub, and the
+installers try GitHub first and the hub second for every file. Everything from the hub is
+checked on the PC against the fleet's signing key, exactly as it is from GitHub.
+**Administration → Onboarding** shows what the hub holds, when it last copied, and any errors.
+
+To use the copy for an install by hand, set `FLEETHUB_MIRROR_URL` to
+`https://<your hub>/api/agent/dist` before running `agent-install.ps1` (or pass `-MirrorUrl`)
+or `install.sh`.
+
+**Agents that are already installed still update from GitHub only.** The fallback for the
+agents' own updates comes with the next Windows and Linux agent releases. Until then, a PC that
+cannot reach GitHub stays on the version it was installed with.
+
 ### Telemetry only from enrolled agents
 
 Agents sign every telemetry report with their own credential. **Settings → Security → Only
@@ -545,6 +572,7 @@ It serves only what a PC, a device or a peer hub calls:
 
 - the agent routes (`/api/agent/*`, `/api/report`);
 - the onboarding wizard and its install scripts;
+- the hub's copy of the agent releases (`/api/agent/dist/*`, hub 1.192.0);
 - the Android APK download;
 - the cross-hub sharing API (`/api/peer/*`).
 

@@ -68,6 +68,17 @@ AGENT_INSTALLER_URL = (
 #: verifies the binary against the signed Linux manifest. From main for the reason above.
 AGENT_LINUX_INSTALLER_URL = (
     "https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh")
+#: The same two installers as repository paths, which is how the hub's release mirror (roadmap
+#: #33) names them. **When the mirror holds the installer, the script fetches it from the hub
+#: first** and GitHub second: the PC fetching this script has just reached the hub, and may be
+#: on a network that reaches nothing else. That adds no trust -- the hub already serves the
+#: script that runs the installer elevated. The mirror's address also goes to the installer, as
+#: FLEETHUB_MIRROR_URL, so the manifest and binary it fetches fall back the same way; those are
+#: still checked against the release key, wherever they came from.
+AGENT_INSTALLER_PATH = "agent/install/agent-install.ps1"
+AGENT_LINUX_INSTALLER_PATH = "agent-linux/install/install.sh"
+#: Under the hub's own origin -- see release_mirror_web.py for the layout beneath it.
+MIRROR_PREFIX = "/api/agent/dist"
 
 _code_limiter = RateLimiter()
 _SAFE_URL = re.compile(r"https?://[A-Za-z0-9.\-:\[\]/_]+")
@@ -162,7 +173,7 @@ def run_command(script_url):
 
 def create_onboarding_blueprint(db_path, login_required, access, hub_url="",
                                 valid_machine_name=None, unsigned_reporters=None,
-                                machine_record=None):
+                                machine_record=None, mirror_has=None):
     """Build the onboarding Blueprint.
 
     `hub_url` is the hub's public origin, used for the link the admin copies and the URL the
@@ -172,12 +183,13 @@ def create_onboarding_blueprint(db_path, login_required, access, hub_url="",
     app.unsigned_reporters: the machines that would be cut off by enrolled-only telemetry,
     which is the list an operator needs codes for. `machine_record` is app's view of
     machine_info, which redeem uses to bind a name with history to its BIOS serial -- see
-    onboarding._check_known_machine.
+    onboarding._check_known_machine. `mirror_has(repo_path)` says whether the hub's release
+    mirror holds that file right now (roadmap #33); absent, the scripts use GitHub alone.
     """
     bp = Blueprint("onboarding", __name__)
     base = str(hub_url or "").rstrip("/")
     _add_admin_routes(bp, db_path, login_required, access, base, unsigned_reporters)
-    _add_public_routes(bp, db_path, base, valid_machine_name, machine_record)
+    _add_public_routes(bp, db_path, base, valid_machine_name, machine_record, mirror_has)
     return bp
 
 
@@ -237,7 +249,7 @@ def _add_admin_routes(bp, db_path, login_required, access, base, unsigned_report
 
 
 
-def _add_public_routes(bp, db_path, base, valid_machine_name, machine_record):
+def _add_public_routes(bp, db_path, base, valid_machine_name, machine_record, mirror_has):
     """The unauthenticated wizard and the routes its install script calls. See the module
     docstring for what each may return. Each route is one line over a module-level function,
     so the decorators -- the limits -- are what is read here."""
@@ -258,7 +270,7 @@ def _add_public_routes(bp, db_path, base, valid_machine_name, machine_record):
     @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
     @_code_limiter.limit(f"{PER_CLIENT_PER_MINUTE}/minute", key_func=_client_key)
     def run_script(code):
-        return _script_response(db_path, base, code)
+        return _script_response(db_path, base, code, mirror_has)
 
     @bp.route("/onboarding/run/<code>.cmd", methods=["GET"])
     @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
@@ -270,7 +282,7 @@ def _add_public_routes(bp, db_path, base, valid_machine_name, machine_record):
     @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
     @_code_limiter.limit(f"{PER_CLIENT_PER_MINUTE}/minute", key_func=_client_key)
     def run_shell(code):
-        return _shell_response(db_path, base, code)
+        return _shell_response(db_path, base, code, mirror_has)
 
     @bp.route("/api/onboarding/redeem", methods=["POST"])
     @_code_limiter.limit(f"{GLOBAL_PER_MINUTE}/minute", key_func=_global_key)
@@ -312,7 +324,23 @@ def _live_code(db_path, code):
     return norm
 
 
-def _script_response(db_path, base, code):
+def installer_sources(base, repo_path, github_url, mirror_has):
+    """(first url, fallback url, mirror base) for one installer. With the hub's mirror holding
+    the installer: the hub first, GitHub second, and the mirror handed to the installer. Without
+    it: GitHub alone and no mirror, exactly as before roadmap #33 -- a mirror that has not
+    synced yet must not turn a working onboarding into a 404."""
+    held = False
+    if mirror_has and base:
+        try:
+            held = bool(mirror_has(repo_path))
+        except Exception:
+            held = False
+    if not held:
+        return github_url, "", ""
+    return f"{base}{MIRROR_PREFIX}/repo/{repo_path}", github_url, f"{base}{MIRROR_PREFIX}"
+
+
+def _script_response(db_path, base, code, mirror_has=None):
     """The install script for one live code, as text/plain, fetched by run_command.
 
     Rendered only for a code that is live right now, so a guessed or spent code gets a 404
@@ -323,15 +351,19 @@ def _script_response(db_path, base, code):
     norm = _live_code(db_path, code)
     if norm is None:
         return _refused()
+    first, fallback, mirror = installer_sources(base, AGENT_INSTALLER_PATH, AGENT_INSTALLER_URL,
+                                                mirror_has)
     body = render_template("onboarding/onboard.ps1",
                            hub_url=_ps_quote(base), code=_ps_quote(norm),
-                           installer_url=_ps_quote(AGENT_INSTALLER_URL))
+                           installer_url=_ps_quote(first),
+                           installer_fallback_url=_ps_quote(fallback),
+                           mirror_url=_ps_quote(mirror))
     resp = Response(body, mimetype="text/plain")
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
 
-def _shell_response(db_path, base, code):
+def _shell_response(db_path, base, code, mirror_has=None):
     """The Linux install script for one live code, as text/plain, piped into bash by
     linux_command. Same rules as _script_response: rendered only for a live code, and nothing
     interpolated but the normalised code and two URLs, each through _sh_quote.
@@ -343,9 +375,13 @@ def _shell_response(db_path, base, code):
     norm = _live_code(db_path, code)
     if norm is None:
         return _refused()
+    first, fallback, mirror = installer_sources(base, AGENT_LINUX_INSTALLER_PATH,
+                                                AGENT_LINUX_INSTALLER_URL, mirror_has)
     body = render_template("onboarding/onboard.sh",
                            hub_url=_sh_quote(base), code=_sh_quote(norm),
-                           installer_url=_sh_quote(AGENT_LINUX_INSTALLER_URL))
+                           installer_url=_sh_quote(first),
+                           installer_fallback_url=_sh_quote(fallback),
+                           mirror_url=_sh_quote(mirror))
     resp = Response(body.replace("\r\n", "\n"), mimetype="text/plain")
     resp.headers["Cache-Control"] = "no-store"
     return resp

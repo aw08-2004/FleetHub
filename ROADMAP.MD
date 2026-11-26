@@ -188,6 +188,22 @@ auto-update off and is updated by hand once the test hub has checked out.
   agent and client *Beta* choices stay: those manifests live on `main` (the client's is
   served from `hub/`).
 
+**Hub 1.192.0: agent downloads through the hub, for PCs that cannot reach GitHub** (#33,
+phase 1). Confirm on the test hub, then on a PC behind the blocking firewall (FSUP1109 was the
+one that failed on 2026-11-26):
+- [ ] **The copy fills.** A minute or two after the hub starts, **Administration → Onboarding**
+  shows the Windows and Linux stable (and beta) versions, the installers, PawnIO, no errors, and
+  about 450 MB. `logs/release_mirror/index.json` exists.
+- [ ] **Blocked PC onboards.** The same `Invoke-Command` one-liner that failed on FSUP1109 now
+  installs: the installer comes from `<hub>/api/agent/dist/repo/...`, the manifest and binary
+  from the hub after GitHub fails, PawnIO from the hub, and the PC enrols.
+- [ ] **Unblocked PC unchanged.** A PC with internet access onboards with every file from GitHub
+  (its output names the GitHub URLs).
+- [ ] **Agent port.** On a hub with `FLEETHUB_AGENT_PORT`, `/api/agent/dist/repo/agent/agent.manifest.json`
+  answers on the agent port, and `/api/release-mirror/status` does not.
+- [ ] **Switch off.** Turning **Settings → Fleet → Agent downloads through this hub** off makes
+  the dist routes 404 at once, the card says *Off*, and the next round deletes the copy.
+
 **Hub 1.191.0: the S3 destination test checks the PCs' pre-signed upload links** (#1b).
 Confirm on the test hub, against the MinIO AIStor destination:
 - [ ] **Wrong case caught.** With the access key entered in mixed case, *Test connection* fails
@@ -1708,6 +1724,192 @@ the wire.
   service runs the new one.
 - **Next agent release:** `release.ps1` now publishes `FleetHubAgent.exe`; check the asset name
   on the release and that a PC still on `TempMonitorAgent.exe` self-updates and keeps that name.
+
+---
+
+## 🚧 33. Agent downloads through the hub -- installs and updates on PCs without internet   ·   phase 1 **hub 1.192.0** · Windows agent (next MINOR) + Linux agent (next MINOR) to come   ·   `release_mirror.py` / `release_mirror_web.py`
+
+**The problem, found in the field on 2026-11-26.** An onboarding run against FSUP1109 through
+`Invoke-Command` reached the hub, downloaded `onboard.ps1`, and then failed at "Installing the
+FleetHub agent" with *Unable to connect to the remote server*. The site blocks internet by
+default and allows it per user. The PC could reach `agents.ccmf.com.py` but not
+`raw.githubusercontent.com`, where `AGENT_INSTALLER_URL` points. A remoting session cannot
+carry the operator's internet allowance (a network logon, the Kerberos double hop, and a
+firewall that maps users to IPs all see FSUP1109, not the operator), so `-Credential` does not
+help.
+
+**The bigger half of the same problem: a PC can't update without GitHub.** Even an onboarding
+that succeeds (run at the console instead) leaves an agent that runs as LocalSystem and reads its
+manifest from `raw.githubusercontent.com` and its binary from GitHub releases
+(`AgentConfig.StableManifestUrl`; the Linux agent the same). Per-user internet does not cover
+SYSTEM. A failed update check is silent by design, so such a PC simply stays on the version it was
+installed with, forever, with no alert. Today the only fix is a per-machine firewall exception
+for four GitHub hosts on every managed PC.
+
+### The design in one sentence
+
+**The hub keeps a copy of the signed release files and serves them, and every agent and installer
+tries GitHub first and falls back to its own hub.** The hub is a dumb mirror, not a new trust
+root.
+
+### Why this keeps the release trust root intact
+
+The agent already trusts no download source. It verifies the manifest's Ed25519 signature
+against `UpdatePublicKeyHex`, compiled in, over the exact bytes, and then accepts the binary only
+if its SHA-256 equals the **signed** value (`Update/SelfUpdater.cs` steps 1-6;
+`agent-install.ps1` does the same in PowerShell). Where the bytes come from is therefore not a
+security property, and a compromised hub that serves altered files gets them refused exactly as
+a compromised GitHub would.
+
+Two rules keep the #21 argument ("the hub sends a NAME, never a URL") true:
+- **The fallback address is not supplied by the hub at runtime.** The agent builds it as
+  `HubBase` + a compiled-in path + the compiled-in file name. `HubBase` is the agent's own local
+  configuration and already decides where telemetry and commands go. Nothing in a hub response
+  can name a download location, and `RuntimeConfig`'s allow-list is unchanged.
+- **From the mirror, the agent ignores the manifest's `url` field** and fetches the binary from
+  the mirror's path for that version. The SHA-256 check is what makes the binary trustworthy, not
+  its address, so substituting the address loses nothing.
+
+**What a malicious hub can still do: withhold updates.** It can keep serving an older, validly
+signed manifest. It cannot downgrade anything, because every updater installs only a strictly
+newer version, and it can already hold a machine back with a pin (#21). So this adds no power,
+but SECURITY.MD must say it in the same change.
+
+### Phase 1 · hub only -- the mirror, and onboarding that uses it
+
+- **`release_mirror.py` / `release_mirror_web.py`** (a new pair, per the hub convention). The
+  sync rides on the existing version watcher, which already GETs every channel's agent manifest
+  every 15 minutes (`AGENT_MANIFEST_URLS`). When a manifest changes, the hub fetches its `.sig`,
+  **verifies the signature itself before keeping anything**, then downloads the binary and keeps
+  it only if the signed SHA-256 matches. A mirror that holds a file the agents would refuse is a
+  fleet that fails at the second source too, so the hub uses the same checks as the agents and
+  doesn't defer them to the agents alone.
+- **What it keeps:** Windows and Linux, stable and beta, plus the per-version manifest of every
+  version a pin currently names (`agent/manifests/`, `agent-linux/manifests/`), plus
+  `agent-install.ps1` and `install.sh` from `main`. Anything no channel or pin names is deleted
+  after the next sync. That is two platforms times (two channels + pins), each a self-contained
+  binary -- **measure it before shipping**, but expect a few hundred MB at most. It lives in the
+  hub's data directory, which the container already keeps on a volume.
+- **Bytes on disk and on the wire are exactly the bytes GitHub served.** Written and served in
+  binary mode, never through a text path. A signature covers exact bytes, and a rewritten line
+  ending is indistinguishable from tampering (the `.gitattributes` rule, again).
+- **Routes under `/api/agent/dist/<platform>/...`**, so the agent listener (hub 1.188.0) serves
+  them through its existing `/api/agent/` prefix and an internet-facing hub can mirror for
+  internet agents without exposing the console. **They are unauthenticated on purpose:** the files
+  are public on GitHub, the signature protects them, and an installer has no credential yet. The
+  route docstring must say so, because `agent_listener.py` warns that its filter is never a gate.
+- **Onboarding stops fetching the installer from GitHub.** `onboard.ps1` and `onboard.sh` fetch it
+  from `<hub>/api/agent/dist/...`. This adds no trust: the hub already serves the onboarding
+  script that runs elevated, so a hub that could forge the installer could already forge the
+  script that runs it. The installer gets `-MirrorUrl` (`FLEETHUB_MIRROR_URL` for `install.sh`,
+  an environment variable for the #29 reason: an older `install.sh` dies on an unknown flag). It
+  tries GitHub, then the mirror, for the manifest and the binary.
+- **Settings → a mirror status line:** the last sync, what it holds and its size, and the last
+  error. Without it, a hub that can't reach GitHub itself would mirror nothing and nobody would
+  know until an onboarding failed.
+- **This phase alone fixes onboarding on a blocked PC**, but not its updates. That is phase 2.
+
+### Built · hub 1.192.0 -- phase 1: the mirror, and onboarding that uses it
+
+Built as planned above, with these differences, each decided while building it:
+- **Its own thread, not a step in the version watcher.** The first sync downloads two or three
+  self-contained agents, and the version hints must not wait behind that. Same 15-minute cadence.
+- **Two route shapes instead of `/<platform>/...`:** `/api/agent/dist/repo/<repository path>`
+  for manifests, signatures and installers, and `/api/agent/dist/bin/<sha256>` for binaries. A
+  client swaps `https://raw.githubusercontent.com/<repo>/main/` for `<hub>/api/agent/dist/repo/`
+  and changes nothing else, and a binary is fetched by the hash the signed manifest already
+  gave it, so the hub never names a location. Storage is content-addressed under
+  `logs/release_mirror/blobs/`, with an atomically replaced `index.json`; only paths in the
+  index resolve, so a request path never touches the filesystem.
+- **PawnIO moved from phase 2 into this phase.** Building it showed `agent-install.ps1` dies when
+  the PawnIO download fails, so a blocked PC could not be onboarded without it. It is now pinned
+  by SHA-256 in the installer and in `release_mirror.PAWNIO_SHA256` (a test fails if they
+  differ), fetched from GitHub then the hub, and a missing or mismatched PawnIO installs the
+  agent without sensors instead of failing. It runs from a SYSTEM/Administrators-only folder,
+  no longer `%TEMP%`.
+- **The Linux unit file is mirrored too.** `install.sh` fetches it from `main`, which would have
+  been the same dead end as PawnIO.
+- **The status is a card on Administration → Onboarding, not a line in Settings.** That page is
+  where an onboarding that failed on *Unable to connect* sends an operator. The setting itself
+  (`fleet.release_mirror`, **on by default**) is in Settings → Fleet; turning it off makes the
+  routes 404 at once and deletes the copy on the next round.
+- **The installer address travels as `FLEETHUB_MIRROR_URL` on Windows too.** `agent-install.ps1`
+  also takes `-MirrorUrl` (defaulting to the variable) for a technician, but the onboarding
+  script uses the variable, because an older installer dies on a parameter it does not know.
+- **Measured: 437 MB** on 2026-11-26 (Windows 3.50.0 and beta 3.53.0, Linux 0.5.0 and beta 0.4.1,
+  three installers, PawnIO), synced in 85 s with every real signature verified. The docs say
+  about 450 MB.
+- Not rate limited per client: every PC behind an office NAT shares an address. SECURITY.MD
+  says to limit bandwidth at the proxy.
+
+Tests: `tests/test_release_mirror.py` (new; sync against a fake GitHub, refusals, carry-over,
+pins, PawnIO, the routes, the agent listener), plus mirror cases in `test_windows_installer.py`
+(PowerShell 5.1 and 7), `test_linux_installer.py` and `test_onboarding_web.py`.
+
+### Phase 2 · Windows agent MINOR -- updates fall back to the hub
+
+- **The source is decided per file, not per attempt.** GitHub first for each file (manifest,
+  `.sig`, binary), then the mirror. A site that allows `raw.githubusercontent.com` but blocks the
+  release download host still updates. Each file is verified exactly as today whichever source
+  served it, and a file that fails verification from both is refused.
+- **Fall back on any failure to get a verified file**: DNS, connect, TLS (an inspecting proxy),
+  timeout, an HTTP error (a block page), a bad signature. Narrowing this to "connection refused"
+  was considered and rejected: firewalls fail in all of these ways, and nothing is gained by
+  being picky, since the mirror's copy is checked just as strictly.
+- **A short connect timeout on the GitHub attempt** (about 10 s). A firewall that drops packets
+  instead of refusing would otherwise stall every 15-minute check for the default 100 s.
+- **The update check reports which source served it** in the heartbeat, so the console can show
+  "updating through the hub" and a blocked site becomes visible instead of silent.
+- **This one is not gated by the hub**, so no `MIN_*` constant is needed, but it gets a MINOR
+  release anyway: it changes where the fleet gets its code from.
+- **The bootstrap problem.** Agents already on blocked PCs don't have this code and can't
+  update to it. They need one push through the command channel: a fleet script that downloads
+  `agent-install.ps1` from the hub mirror and runs it with `FLEETHUB_MIRROR_URL` set (hub 1.192.0
+  already lets the installer take every file from the hub). Write it as a script in
+  the Scripts library and document it, and don't depend on operators finding it. After that one
+  run, those PCs update normally.
+- ~~**PawnIO.**~~ Done in phase 1 (hub 1.192.0), see above.
+
+### Phase 3 · Linux agent MINOR -- the same fallback
+
+Same rules as phase 2, in `agent-linux/src/FleetHubAgent/Update/SelfUpdater.cs`, which already
+splits manifest and binary downloads (`_http` / `_download`). The Android agent is out of scope:
+it does not self-update from these manifests.
+
+### Release order
+
+Hub first (phase 1, its own `HUB_VERSION` and release notes), confirmed on the test hub. Then the
+Windows agent on beta, confirmed on a beta PC **behind the same firewall as FSUP1109**, then
+stable. Then Linux. The reverse order would leave agents falling back to a hub that answers 404.
+
+### Rejected
+
+- **A per-machine firewall exception for GitHub as the only answer.** It is the right fix where
+  the network team agrees, and the docs will say so, but it needs four hostnames on every PC at
+  every site. GitHub's download hosts have changed before (`release-assets.githubusercontent.com`
+  arrived in 2025), so the exception breaks silently when GitHub moves.
+- **Hub only, never GitHub.** Simpler, and it removes the 15-minute GitHub attempt from blocked
+  PCs. But it makes every agent update depend on the hub's own GitHub access and its disk, and a
+  hub restored from an old backup would hold the fleet back. A per-hub setting "hub first" may
+  come later if the GitHub attempt on blocked PCs proves to be noise.
+- **The hub sending a download URL in a heartbeat.** This is exactly what #21 refuses: it would
+  make the hub the trust root. The fallback path is compiled in and the base is local config.
+- **Re-signing on the hub.** The offline key must stay offline. A mirror that only copies signed
+  files needs no key.
+- **Proxy support in the agent** (a configured HTTP proxy for SYSTEM). It solves the sites that
+  have a proxy, not the ones that simply block, and it puts proxy credentials on every PC.
+- **CredSSP for `Invoke-Command`.** It leaves the operator's credentials on the remote PC to get
+  around the double hop. It fixes onboarding only, and never updates.
+
+### Not done
+
+- **Phase 2**, the Windows agent's own updates through the hub, and the catch-up script for PCs
+  already stuck. Until it ships, a PC that cannot reach GitHub onboards but stays on the version
+  it was installed with.
+- **Phase 3**, the same for the Linux agent.
+- **Moving the PawnIO pin** when LibreHardwareMonitor ships a new PawnIO: check the file, then
+  change `$PawnIoSha256` and `release_mirror.PAWNIO_SHA256` together. Until then, the mirror keeps
+  serving the pinned copy, and an install from GitHub alone installs without sensors.
 
 ---
 

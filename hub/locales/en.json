@@ -1609,6 +1609,10 @@
         "label": "Pinned Android agent version",
         "help": "The exact Android agent version to install while updates are pinned, as MAJOR.MINOR.PATCH."
       },
+      "fleet.release_mirror": {
+        "label": "Agent downloads through this hub",
+        "help": "Keep a copy of the agent releases and installers on this hub, so PCs that cannot reach GitHub can still be installed and updated. Everything served is still checked against the fleet's signing key on the PC. Uses a few hundred MB of disk; turning it off frees that space."
+      },
       "sharing.enabled": {
         "label": "Share machines with other hubs",
         "help": "Lets this hub answer requests from hubs you have paired with, and make requests to hubs that have shared a machine with you. Off means neither direction works, whatever is already paired — what is paired stays visible so you can revoke it."
@@ -5725,6 +5729,23 @@
       "unsigned_heading": "Machines reporting without enrollment",
       "unsigned_intro": "These machines sent telemetry without an agent credential in the last day. While enrolled-only telemetry is on, it is being refused. Update their agent, or onboard them with a code.",
       "unsigned_last": "last report {when}",
+      "mirror": {
+        "heading": "Agent downloads through this hub",
+        "intro": "PCs that cannot reach GitHub install and update from this hub's copy of the agent releases. Everything is still checked on the PC against the fleet's signing key.",
+        "off": "Off. A PC that cannot reach GitHub cannot be onboarded or updated. Turn on 'Agent downloads through this hub' in Settings, on the Fleet tab.",
+        "never": "Not copied yet. The hub copies the releases from GitHub shortly after it starts, and every 15 minutes after that.",
+        "never_complete": "No complete copy yet ({size} on disk). Some files could not be copied; see below.",
+        "synced": "Last complete copy {when}, {size} on disk.",
+        "windows_stable": "Windows agent {version}",
+        "windows_beta": "Windows agent {version} (beta)",
+        "windows_pinned": "Windows agent {version} (pinned)",
+        "linux_stable": "Linux agent {version}",
+        "linux_beta": "Linux agent {version} (beta)",
+        "linux_pinned": "Linux agent {version} (pinned)",
+        "no_installers": "The installers are not copied yet, so onboarding still downloads them from GitHub.",
+        "no_pawnio": "The PawnIO driver is not copied, so a PC without internet access installs without temperature and fan readings.",
+        "errors": "The last attempt, {when}, had problems. The previous copy of each file is still served:"
+      },
       "editor_title": "New onboarding code",
       "label": "Label",
       "label_placeholder": "e.g. Reception PC for Maria",

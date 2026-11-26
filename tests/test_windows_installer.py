@@ -256,6 +256,70 @@ def battery(shell, work):
         check("no manifest published is a clear refusal, not an unverified fallback",
               r.returncode == 3 and f"{base}/missing.json" in r.stderr
               and "-AgentExe" in r.stderr and not os.path.exists(dest))
+
+        # The hub's release mirror (roadmap #33): GitHub unreachable, the hub reachable. The
+        # mirror is laid out as release_mirror_web serves it -- repo/<path> and bin/<sha256>.
+        # "GitHub" here is a port nothing listens on, which is what a blocked site looks like.
+        dead = "http://127.0.0.1:9"
+        good_sha = hashlib.sha256(binary).hexdigest()
+
+        def mirror(tag, manifest_sha, signer=key, bin_bytes=binary, bin_url=None):
+            root = os.path.join(site, tag)
+            os.makedirs(os.path.join(root, "repo", "agent"), exist_ok=True)
+            os.makedirs(os.path.join(root, "bin"), exist_ok=True)
+            body = ('{"sha256":"%s","url":"%s","version":"3.99.0"}'
+                    % (manifest_sha, bin_url or f"{dead}/FleetHubAgent.exe")).encode()
+            with open(os.path.join(root, "repo", "agent", "agent.manifest.json"), "wb") as fh:
+                fh.write(body)
+            with open(os.path.join(root, "repo", "agent", "agent.manifest.json.sig"), "w") as fh:
+                fh.write(signer.sign(body).hex() + "\n")
+            with open(os.path.join(root, "bin", manifest_sha), "wb") as fh:
+                fh.write(bin_bytes)
+            return f"{base}/{tag}"
+
+        def install_via_mirror(stable_url, mirror_base, tag):
+            dest = os.path.join(work, f"out-{tag}.exe")
+            r = run_ps(shell, work,
+                       f"$StableManifestUrl = '{stable_url}'\n"
+                       f"try {{ $v = Get-VerifiedAgent '{dest}' $null '{mirror_base}'; "
+                       "'version=' + $v.Version }\n"
+                       "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 3 }\n",
+                       key=pub_hex)
+            return r, dest
+
+        r, dest = install_via_mirror(f"{dead}/agent/agent.manifest.json",
+                                     mirror("m-good", good_sha), "mirror-good")
+        check("GitHub unreachable: the mirror's signed manifest and binary install",
+              r.returncode == 0 and open(dest, "rb").read() == binary
+              and "/m-good/repo/agent/agent.manifest.json" in r.stdout
+              and f"/m-good/bin/{good_sha}" in r.stdout)
+
+        r, dest = install_via_mirror(f"{dead}/agent/agent.manifest.json",
+                                     mirror("m-stranger", good_sha,
+                                            signer=Ed25519PrivateKey.generate()), "mirror-stranger")
+        check("a mirror serving a manifest signed by another key is refused, nothing written",
+              r.returncode == 3 and "NOT signed by the fleet's key" in r.stderr
+              and not os.path.exists(dest))
+
+        r, dest = install_via_mirror(f"{dead}/agent/agent.manifest.json",
+                                     mirror("m-swapped", good_sha, bin_bytes=b"MZ" + os.urandom(64)),
+                                     "mirror-swapped")
+        check("a mirror serving a different binary under the signed hash is refused",
+              r.returncode == 3 and "does not match the signed manifest" in r.stderr
+              and not os.path.exists(dest))
+
+        gh = publish("gh-manifest.json", good_sha)
+        with open(os.path.join(site, "gh-manifest.json"), "rb") as fh:
+            gh_body = fh.read().replace(f"{base}/FleetHubAgent.exe".encode(),
+                                        f"{dead}/FleetHubAgent.exe".encode())
+        with open(os.path.join(site, "gh-manifest.json"), "wb") as fh:
+            fh.write(gh_body)
+        with open(os.path.join(site, "gh-manifest.json.sig"), "w") as fh:
+            fh.write(key.sign(gh_body).hex() + "\n")
+        r, dest = install_via_mirror(gh, mirror("m-binonly", good_sha), "mirror-binonly")
+        check("manifest from GitHub, release host blocked: the binary comes from the mirror",
+              r.returncode == 0 and open(dest, "rb").read() == binary
+              and f"({gh})" in r.stdout and f"/m-binonly/bin/{good_sha}" in r.stdout)
     finally:
         server.shutdown()
 

@@ -91,6 +91,9 @@ from permissions_web import create_access, create_permissions_blueprint
 from users_web import create_users_blueprint
 from invites_web import create_invites_blueprint
 from onboarding_web import create_onboarding_blueprint
+import clientrelease
+import release_mirror
+from release_mirror_web import create_release_mirror_blueprint
 from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
 from deploy_progress_web import create_deploy_progress_blueprint
@@ -177,7 +180,7 @@ if _env_acl_note:
 # the beta branch, which this once counted from, was retired on 2026-11-24).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.191.0"
+HUB_VERSION = "1.192.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
@@ -248,6 +251,11 @@ DISK_HISTORY_DIR = os.path.join(LOG_DIR, "disk_history")
 # #32). Beside the database for the disk-history reason: a catalogue is megabytes, and the
 # PCs send it again if it is lost, so it is working data rather than something to back up.
 ADMX_DIR = os.path.join(LOG_DIR, "admx")
+# The agent release mirror (roadmap #33): the signed manifests, the binaries they name and the
+# installers, for PCs that reach the hub but not GitHub. Beside the database for the
+# disk-history reason -- a few hundred MB that the next sync downloads again if it is lost, so
+# it is a cache, not something to back up.
+RELEASE_MIRROR_DIR = os.path.join(LOG_DIR, "release_mirror")
 # Ticket screenshots (roadmap #31): <root>/<ticket_id>/<attachment_id>.jpg. Outside the
 # database for the disk-history reason, and under LOG_DIR rather than the install root because
 # they are short-lived working data with a retention of their own, not operator files kept
@@ -1513,6 +1521,58 @@ def start_agent_version_watcher():
         agent_version_watcher_thread.start()
 
 # ================================
+# RELEASE MIRROR  --  roadmap #33. Keeps the hub's copy of the agent release files in step with
+# GitHub, on the version watcher's cadence, so a PC that reaches the hub but not GitHub can
+# still install and update. See release_mirror.py for why the hub is a mirror and never a
+# trust root.
+#
+# Its own thread rather than a step in agent_version_watcher: the first sync downloads two or
+# three self-contained agents (~80 MB each), and the version hints must not wait behind that.
+# ================================
+def release_mirror_enabled():
+    return bool(settings.get_bool(DB_PATH, "fleet.release_mirror"))
+
+def refresh_release_mirror():
+    if HUB_SKIP_REMOTE_CHECKS:
+        return
+    if not release_mirror_enabled():
+        # Switched off: give the disk back. The routes already 404 on the setting.
+        try:
+            release_mirror.clear(RELEASE_MIRROR_DIR)
+        except OSError as e:
+            print(f"[release-mirror] Could not clear the mirror: {e}")
+        return
+    pins = {}
+    for platform in release_mirror.PLATFORMS:
+        policy = agent_update_policy_for(platform)
+        if policy["mode"] == channels.UPDATE_PINNED:
+            pins[platform] = policy["version"]
+    try:
+        result = release_mirror.sync(RELEASE_MIRROR_DIR, pins, clientrelease.verify_signature)
+        for err in result["errors"]:
+            print(f"[release-mirror] {err}")
+    except Exception as e:
+        # A disk error, not a fetch error (those are recorded in the index). Logged and retried
+        # next round; the mirror keeps serving what it already holds.
+        print(f"[release-mirror] Sync failed: {e}")
+
+def release_mirror_watcher():
+    while True:
+        refresh_release_mirror()
+        time.sleep(AGENT_VERSION_CHECK_INTERVAL)
+
+release_mirror_watcher_thread = None
+
+def start_release_mirror_watcher():
+    global release_mirror_watcher_thread
+    with agent_version_watcher_lock:
+        if release_mirror_watcher_thread and release_mirror_watcher_thread.is_alive():
+            return
+        release_mirror_watcher_thread = threading.Thread(
+            target=release_mirror_watcher, daemon=True, name="release_mirror_watcher")
+        release_mirror_watcher_thread.start()
+
+# ================================
 # HUB SELF-UPDATE  --  opt-in (HUB_AUTO_UPDATE=1). Update in place, then exit; the
 # supervising service relaunches the server (serve.py's cheroot, or waitress-serve on a hub
 # installed before 1.170.0), which re-imports the new code.
@@ -2623,7 +2683,14 @@ app.register_blueprint(create_onboarding_blueprint(
     DB_PATH, login_required, access, hub_url=HUB_URL,
     valid_machine_name=lambda name: is_valid_machine_name(name),
     unsigned_reporters=lambda: unsigned_reporters(),
-    machine_record=lambda name: _machine_record(name)))
+    machine_record=lambda name: _machine_record(name),
+    mirror_has=lambda path: (release_mirror_enabled()
+                             and release_mirror.file_for_path(RELEASE_MIRROR_DIR, path) is not None)))
+# The agent release mirror (roadmap #33): the hub's copy of the signed release files, served
+# under /api/agent/dist/ to PCs that cannot reach GitHub, plus its status for the Onboarding
+# page. The setting is read per request so switching it off stops serving at once.
+app.register_blueprint(create_release_mirror_blueprint(
+    RELEASE_MIRROR_DIR, login_required, access, enabled=lambda: release_mirror_enabled()))
 # The Audit Log tab -- the read path over the trail every other blueprint writes to.
 # view_audit_log is the perimeter; view_security_audit widens which LEVELS come back, and
 # that widening is applied in SQL, never in the page (see audit_web.py).
@@ -7950,6 +8017,7 @@ def machine_page(machine):
 # the order of definitions in this file irrelevant to them, which a sleep before the first
 # pass would not -- it would only move the race.
 start_agent_version_watcher()
+start_release_mirror_watcher()
 start_hub_update_watcher()
 start_retention_pruner()
 start_deploy_scheduler()

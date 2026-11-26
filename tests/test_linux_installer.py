@@ -68,7 +68,7 @@ def read(*parts):
         return fh.read()
 
 
-def call(func, *args, key=None, manifest_url=None):
+def call(func, *args, key=None, manifest_url=None, extra=None):
     """Run one install.sh function in a bash that has loaded the script minus `main "$@"`.
 
     Overrides are assigned AFTER loading, because the script initialises its own globals when
@@ -80,6 +80,8 @@ def call(func, *args, key=None, manifest_url=None):
         overrides += f'UPDATE_PUBLIC_KEY_HEX="{key}"\n'
     if manifest_url:
         overrides += f'MANIFEST_URL_OVERRIDE="{manifest_url}"\n'
+    for name, value in (extra or {}).items():
+        overrides += f'{name}="{value}"\n'
     script = (
         'set -u\n'
         f'eval "$(sed \'/^main "\\$@"/d\' "{INSTALLER}")"\n'
@@ -208,6 +210,75 @@ def main():
             check("no manifest published is a clear refusal, not an unverified fallback",
                   r.returncode != 0 and f"{base}/missing.json" in r.stderr
                   and "--binary" in r.stderr and not os.path.exists(dest))
+
+            # The hub's release mirror (roadmap #33): GitHub unreachable, the hub reachable,
+            # laid out as release_mirror_web serves it. "GitHub" is a port nothing listens on.
+            dead = "http://127.0.0.1:9"
+            good_sha = hashlib.sha256(binary).hexdigest()
+
+            def mirror(tag, sha, signer=key, bin_bytes=binary):
+                root = os.path.join(site, tag)
+                os.makedirs(os.path.join(root, "repo", "agent-linux", "packaging"))
+                os.makedirs(os.path.join(root, "bin"))
+                body = ('{"sha256":"%s","url":"%s/fleethub-agent","version":"0.3.0"}'
+                        % (sha, dead)).encode()
+                mpath = os.path.join(root, "repo", "agent-linux", "agent-linux.manifest.json")
+                with open(mpath, "wb") as fh:
+                    fh.write(body)
+                with open(mpath + ".sig", "w") as fh:
+                    fh.write(signer.sign(body).hex() + "\n")
+                with open(os.path.join(root, "bin", sha), "wb") as fh:
+                    fh.write(bin_bytes)
+                with open(os.path.join(root, "repo", "agent-linux", "packaging",
+                                       "fleethub-agent.service"), "w") as fh:
+                    fh.write("[Unit]\nDescription=test\n[Service]\nExecStart=/bin/true\n")
+                return f"{base}/{tag}"
+
+            def install_via_mirror(stable_url, mirror_base, tag):
+                dest = os.path.join(work, f"out-{tag}")
+                step = os.path.join(work, f"step-{tag}")
+                os.makedirs(step)
+                r = call("fetch_verified_binary", dest, step, key=pub_hex,
+                         extra={"MANIFEST_URL": stable_url, "MIRROR_URL": mirror_base})
+                return r, dest
+
+            r, dest = install_via_mirror(f"{dead}/m.json", mirror("m-good", good_sha), "m-good")
+            check("GitHub unreachable: the mirror's signed manifest and binary install",
+                  r.returncode == 0 and open(dest, "rb").read() == binary
+                  and "/m-good/repo/agent-linux/agent-linux.manifest.json" in r.stdout
+                  and f"/m-good/bin/{good_sha}" in r.stdout)
+
+            r, dest = install_via_mirror(
+                f"{dead}/m.json",
+                mirror("m-stranger", good_sha, signer=Ed25519PrivateKey.generate()), "m-stranger")
+            check("a mirror serving a manifest signed by another key is refused, nothing written",
+                  r.returncode != 0 and "NOT signed by the fleet's key" in r.stderr
+                  and not os.path.exists(dest))
+
+            r, dest = install_via_mirror(
+                f"{dead}/m.json",
+                mirror("m-swapped", good_sha, bin_bytes=b"\x7fELF" + os.urandom(64)), "m-swapped")
+            check("a mirror serving a different binary under the signed hash is refused, "
+                  "and the file is removed", r.returncode != 0
+                  and "does not match the signed manifest" in r.stderr and not os.path.exists(dest))
+
+            gh_body = ('{"sha256":"%s","url":"%s/fleethub-agent","version":"0.3.0"}'
+                       % (good_sha, dead)).encode()
+            with open(os.path.join(site, "gh.json"), "wb") as fh:
+                fh.write(gh_body)
+            with open(os.path.join(site, "gh.json.sig"), "w") as fh:
+                fh.write(key.sign(gh_body).hex() + "\n")
+            r, dest = install_via_mirror(f"{base}/gh.json", mirror("m-binonly", good_sha),
+                                         "m-binonly")
+            check("manifest from GitHub, release host blocked: the binary comes from the mirror",
+                  r.returncode == 0 and open(dest, "rb").read() == binary
+                  and f"({base}/gh.json)" in r.stdout and f"/m-binonly/bin/{good_sha}" in r.stdout)
+
+            unit_dest = os.path.join(work, "unit-from-mirror")
+            r = call("fetch_unit", unit_dest,
+                     extra={"UNIT_URL": f"{dead}/unit", "MIRROR_URL": f"{base}/m-good"})
+            check("GitHub unreachable: the unit file comes from the mirror", r.returncode == 0
+                  and os.path.exists(unit_dest) and "/m-good/repo/" in r.stdout)
         finally:
             server.shutdown()
 

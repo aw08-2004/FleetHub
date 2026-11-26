@@ -37,7 +37,13 @@ param(
     [string]$AgentExe,                       # OR a local path to the agent exe -- NOT verified
     [string]$ManifestUrl,                    # signed manifest from a mirror; still verified
     [string]$EnrollmentSecret,               # shared secret for POST /api/agent/enroll
-    [string]$HubUrl                          # optional hub base override (FLEETHUB_HUB)
+    [string]$HubUrl,                         # optional hub base override (FLEETHUB_HUB)
+    # The hub's release mirror, e.g. https://hub.example.com/api/agent/dist (roadmap #33): the
+    # second source for every download, tried when GitHub cannot be reached. Everything from it
+    # is checked exactly as from GitHub. Defaults to FLEETHUB_MIRROR_URL, which is how the
+    # onboarding script passes it -- a variable, because an older copy of this file dies on a
+    # parameter it does not know and ignores a variable.
+    [string]$MirrorUrl = $env:FLEETHUB_MIRROR_URL
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,6 +82,16 @@ $LegacyInstall  = "C:\Program Files\TempMonitorAgent"
 $StateDir       = Join-Path $env:ProgramData "FleetHub\Agent"
 $LegacyStateDir = Join-Path $env:ProgramData "TempMonitorAgent"
 $PawnIoUrl   = "https://raw.githubusercontent.com/LibreHardwareMonitor/LibreHardwareMonitor/refs/heads/master/LibreHardwareMonitor.Windows.Forms/Resources/PawnIO_setup.exe"
+# **PawnIO is pinned by hash** (roadmap #33). It comes from another project's master branch and
+# runs elevated, and until this pin nothing checked it at all. The hub's mirror serves it only
+# under this hash, so a mirror cannot hand this installer a different driver. When upstream
+# ships a new PawnIO, the download no longer matches and the install continues WITHOUT it
+# (sensors unreadable, everything else working) until someone checks the new file and moves
+# this pin and release_mirror.PAWNIO_SHA256 together; tests/test_release_mirror.py fails if
+# they differ. Rejected: dying on a mismatch (a PC with no agent is worse than one without
+# temperatures), and trusting whatever master serves (the state this replaced).
+$PawnIoSha256 = "a3a46226c5e2824f4cdd42be0eecbabfc672c86f7889710f5ab1e6ad385b47a0"
+$MirrorUrl = "$MirrorUrl".TrimEnd('/')
 
 function Say($msg)  { Write-Host "  $msg" }
 function Ok($msg)   { Write-Host "  [ok] $msg"   -ForegroundColor Green }
@@ -300,8 +316,24 @@ function Test-ManifestSignature([byte[]]$Message, [string]$SignatureHex) {
 # Fetch, verify and download into $Destination, or throw with the reason. $Destination exists
 # afterwards only if every check passed. Returns the signed version and sha256: the caller
 # re-hashes the installed copy against the latter (see "Installing agent binary").
-function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl) {
+#
+# **Two sources since roadmap #33: GitHub, then the hub's release mirror ($MirrorBase).** Each
+# step falls back on its own -- a site may allow raw.githubusercontent.com and block the release
+# download host -- and on ANY failure to get a verified file: DNS, connect, TLS, timeout, an
+# HTTP error page, a bad signature. Being picky about which failures count would gain nothing,
+# because what the mirror serves is checked exactly as strictly. The manifest and its .sig are
+# always taken from the SAME source, so a release landing between two requests cannot pair one
+# version's manifest with another's signature. The mirror is used only for the stable manifest
+# this installer would read anyway: a -ManifestUrl pointing somewhere else is its own mirror.
+# From the mirror the binary is fetched by its SIGNED sha256 (`<mirror>/bin/<sha256>`), never
+# from a url the hub chose.
+function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl, [string]$MirrorBase) {
     if (-not $FromManifestUrl) { $FromManifestUrl = $StableManifestUrl }
+    $MirrorBase = "$MirrorBase".TrimEnd('/')
+    $sources = @($FromManifestUrl)
+    if ($MirrorBase -and $FromManifestUrl -eq $StableManifestUrl) {
+        $sources += "$MirrorBase/repo/agent/agent.manifest.json"
+    }
     # The progress bar on 5.1 costs more than the transfer on an agent-sized download.
     $ProgressPreference = 'SilentlyContinue'
     $work = Join-Path ([IO.Path]::GetTempPath()) ("fleethub-manifest-" + [guid]::NewGuid().ToString('N'))
@@ -309,18 +341,32 @@ function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl) {
     try {
         $mPath = Join-Path $work "manifest.json"
         $sPath = Join-Path $work "manifest.json.sig"
-        try {
-            # -OutFile, never Invoke-RestMethod: the signature covers bytes, and anything that
-            # decodes and re-reads the text is checking something other than what was signed.
-            Invoke-WebRequest -Uri $FromManifestUrl -OutFile $mPath -UseBasicParsing
-            Invoke-WebRequest -Uri "$FromManifestUrl.sig" -OutFile $sPath -UseBasicParsing
-        } catch {
-            throw "could not fetch the signed agent manifest from $FromManifestUrl (or its .sig): $($_.Exception.Message). Use -AgentExe with a locally built agent, or -AgentUrl for an unverified download."
+        $m = $null
+        $mBytes = $null
+        $from = $null
+        $reasons = @()
+        foreach ($src in $sources) {
+            try {
+                # -OutFile, never Invoke-RestMethod: the signature covers bytes, and anything that
+                # decodes and re-reads the text is checking something other than what was signed.
+                Invoke-WebRequest -Uri $src -OutFile $mPath -UseBasicParsing
+                Invoke-WebRequest -Uri "$src.sig" -OutFile $sPath -UseBasicParsing
+            } catch {
+                $reasons += "could not fetch the signed agent manifest from $src (or its .sig): $($_.Exception.Message)"
+                continue
+            }
+            $candidate = [IO.File]::ReadAllBytes($mPath)
+            $sigHex = [IO.File]::ReadAllText($sPath)
+            if (-not (Test-ManifestSignature $candidate $sigHex)) {
+                $reasons += "the agent manifest at $src is NOT signed by the fleet's key"
+                continue
+            }
+            $mBytes = $candidate
+            $from = $src
+            break
         }
-        $mBytes = [IO.File]::ReadAllBytes($mPath)
-        $sigHex = [IO.File]::ReadAllText($sPath)
-        if (-not (Test-ManifestSignature $mBytes $sigHex)) {
-            throw "the agent manifest at $FromManifestUrl is NOT signed by the fleet's key. Refusing to install. Nothing on this machine was changed."
+        if ($null -eq $mBytes) {
+            throw (($reasons -join '. ') + ". Refusing to install; nothing on this machine was changed. Use -AgentExe with a locally built agent, or -AgentUrl for an unverified download.")
         }
         # Parsed only AFTER the signature verified, so a missing field is a signing bug.
         $m = [Text.Encoding]::UTF8.GetString($mBytes) | ConvertFrom-Json
@@ -328,17 +374,30 @@ function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl) {
         if (-not $m.version -or -not $m.url -or $want -notmatch '^[0-9a-f]{64}$') {
             throw "the signed manifest is missing its version, url or sha256 -- a release-signing bug."
         }
-        Write-Host "  manifest verified: version $($m.version), signed by the fleet key"
-        Write-Host "  binary  <- $($m.url)"
+        Write-Host "  manifest verified: version $($m.version), signed by the fleet key ($from)"
         $bPath = Join-Path $work "agent.exe"
-        try {
-            Invoke-WebRequest -Uri $m.url -OutFile $bPath -UseBasicParsing
-        } catch {
-            throw "download failed: $($m.url): $($_.Exception.Message)"
+        $binSources = @("$($m.url)")
+        if ($MirrorBase) { $binSources += "$MirrorBase/bin/$want" }
+        $reasons = @()
+        $verified = $false
+        foreach ($src in $binSources) {
+            Write-Host "  binary  <- $src"
+            try {
+                Invoke-WebRequest -Uri $src -OutFile $bPath -UseBasicParsing
+            } catch {
+                $reasons += "download failed: ${src}: $($_.Exception.Message)"
+                continue
+            }
+            $got = (Get-FileHash -Path $bPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($got -ne $want) {
+                $reasons += "the binary from $src does not match the signed manifest (sha256 $got, expected $want)"
+                continue
+            }
+            $verified = $true
+            break
         }
-        $got = (Get-FileHash -Path $bPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($got -ne $want) {
-            throw "the downloaded binary does not match the signed manifest (sha256 $got, expected $want). Refusing to install."
+        if (-not $verified) {
+            throw (($reasons -join '. ') + ". Refusing to install.")
         }
         Write-Host "  binary  sha256 matches the signed manifest"
         Move-Item -Path $bPath -Destination $Destination -Force
@@ -570,14 +629,45 @@ Step "Installing PawnIO driver"
 if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) {
     Ok "Already installed, skipping"
 } else {
-    $pawnioPath = Join-Path $env:TEMP "PawnIO_setup.exe"
-    Say "Downloading $PawnIoUrl"
-    Invoke-WebRequest -Uri $PawnIoUrl -OutFile $pawnioPath -UseBasicParsing
-    Unblock-File -Path $pawnioPath -ErrorAction SilentlyContinue
-    $proc = Start-Process -FilePath $pawnioPath -ArgumentList "-install","-silent" -Wait -PassThru -NoNewWindow
-    Remove-Item $pawnioPath -Force -ErrorAction SilentlyContinue
-    if ($proc.ExitCode -ne 0) { Warn "PawnIO installer exited $($proc.ExitCode). Sensors may be unreadable." }
-    else { Ok "PawnIO installed" }
+    # A private folder, not %TEMP%: the file is hashed and then run elevated, and a non-elevated
+    # process of this user could swap it in between in a folder it can write to.
+    $pawnioDir = Join-Path $env:ProgramData ("FleetHub-PawnIO-" + [guid]::NewGuid().ToString('N'))
+    $pawnioSec = New-Object System.Security.AccessControl.DirectorySecurity
+    $pawnioSec.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {   # SYSTEM, BUILTIN\Administrators
+        $pawnioSec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl',
+            'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    }
+    [void][IO.Directory]::CreateDirectory($pawnioDir, $pawnioSec)
+    $pawnioPath = Join-Path $pawnioDir "PawnIO_setup.exe"
+    try {
+        $pawnioSources = @($PawnIoUrl)
+        if ($MirrorUrl) { $pawnioSources += "$MirrorUrl/bin/$PawnIoSha256" }
+        $pawnioOk = $false
+        foreach ($src in $pawnioSources) {
+            Say "Downloading $src"
+            try {
+                Invoke-WebRequest -Uri $src -OutFile $pawnioPath -UseBasicParsing
+            } catch {
+                Warn "could not download PawnIO from ${src}: $($_.Exception.Message)"
+                continue
+            }
+            $got = (Get-FileHash -Path $pawnioPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($got -eq $PawnIoSha256) { $pawnioOk = $true; break }
+            Warn "PawnIO from $src does not match the pinned sha256 (got $got) -- not run."
+        }
+        if (-not $pawnioOk) {
+            Warn "PawnIO was not installed. The agent will run, but sensors may be unreadable."
+        } else {
+            Unblock-File -Path $pawnioPath -ErrorAction SilentlyContinue
+            $proc = Start-Process -FilePath $pawnioPath -ArgumentList "-install","-silent" -Wait -PassThru -NoNewWindow
+            if ($proc.ExitCode -ne 0) { Warn "PawnIO installer exited $($proc.ExitCode). Sensors may be unreadable." }
+            else { Ok "PawnIO installed" }
+        }
+    } finally {
+        Remove-Item -LiteralPath $pawnioDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ----------------------------------------------------------------------
@@ -602,7 +692,7 @@ if ($AgentExe) {
         Warn "-AgentUrl is NOT checked against the fleet's signing key. Omit it to install the signed release."
     } else {
         try {
-            $verified = Get-VerifiedAgent -Destination $staged -FromManifestUrl $ManifestUrl
+            $verified = Get-VerifiedAgent -Destination $staged -FromManifestUrl $ManifestUrl -MirrorBase $MirrorUrl
             $signedSha256 = $verified.Sha256
             Ok "Agent $($verified.Version) verified against the fleet key"
         } catch {

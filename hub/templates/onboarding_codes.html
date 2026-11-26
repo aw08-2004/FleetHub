@@ -28,6 +28,15 @@
     <ul class="onboarding-unsigned" id="unsigned-list"></ul>
 </div>
 
+{# The release mirror (roadmap #33): whether a PC that cannot reach GitHub can be onboarded
+   from here. On this page, not under Settings, because this is where an onboarding that
+   failed on "Unable to connect" sends an operator, and the setting itself is one click away. #}
+<div class="card" id="mirror-card" style="margin-top: var(--space-5);" hidden>
+    <h2 class="section-title">{{ t('onboarding.admin.mirror.heading') }}</h2>
+    <p class="stat-card__meta">{{ t('onboarding.admin.mirror.intro') }}</p>
+    <div id="mirror-body"></div>
+</div>
+
 <dialog class="modal" id="code-modal">
     <form method="dialog">
         <div class="modal__head">

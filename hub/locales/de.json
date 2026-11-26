@@ -1532,6 +1532,10 @@
         "label": "Fixierte Android-Agent-Version",
         "help": "Die genaue Android-Agent-Version, die bei fixierten Updates installiert wird, als MAJOR.MINOR.PATCH."
       },
+      "fleet.release_mirror": {
+        "label": "Agent-Downloads über diesen Hub",
+        "help": "Eine Kopie der Agent-Releases und Installer auf diesem Hub vorhalten, damit PCs ohne Zugriff auf GitHub trotzdem installiert und aktualisiert werden können. Alles Ausgelieferte wird auf dem PC weiterhin gegen den Signaturschlüssel der Flotte geprüft. Belegt einige hundert MB; beim Ausschalten wird der Platz freigegeben."
+      },
       "sharing.enabled": {
         "label": "Rechner mit anderen Hubs teilen",
         "help": "Erlaubt diesem Hub, Anfragen gekoppelter Hubs zu beantworten und selbst Anfragen an Hubs zu stellen, die einen Rechner freigegeben haben. Aus bedeutet: keine Richtung funktioniert, unabhängig von bestehenden Kopplungen – Gekoppeltes bleibt sichtbar, damit Sie es widerrufen können."
@@ -5602,6 +5606,23 @@
       "unsigned_heading": "Rechner, die ohne Registrierung melden",
       "unsigned_intro": "Diese Rechner haben am letzten Tag Telemetrie ohne Agenten-Anmeldedaten gesendet. Solange nur registrierte Telemetrie angenommen wird, wird sie abgelehnt. Aktualisieren Sie ihren Agenten oder nehmen Sie sie mit einem Code auf.",
       "unsigned_last": "letzter Bericht {when}",
+      "mirror": {
+        "heading": "Agent-Downloads über diesen Hub",
+        "intro": "PCs ohne Zugriff auf GitHub installieren und aktualisieren aus der Kopie der Agent-Releases auf diesem Hub. Alles wird auf dem PC weiterhin gegen den Signaturschlüssel der Flotte geprüft.",
+        "off": "Aus. Ein PC ohne Zugriff auf GitHub kann weder aufgenommen noch aktualisiert werden. Schalten Sie 'Agent-Downloads über diesen Hub' in den Einstellungen auf der Registerkarte Flotte ein.",
+        "never": "Noch nicht kopiert. Der Hub kopiert die Releases kurz nach dem Start von GitHub und danach alle 15 Minuten.",
+        "never_complete": "Noch keine vollständige Kopie ({size} auf dem Datenträger). Einige Dateien konnten nicht kopiert werden; siehe unten.",
+        "synced": "Letzte vollständige Kopie {when}, {size} auf dem Datenträger.",
+        "windows_stable": "Windows-Agent {version}",
+        "windows_beta": "Windows-Agent {version} (Beta)",
+        "windows_pinned": "Windows-Agent {version} (fixiert)",
+        "linux_stable": "Linux-Agent {version}",
+        "linux_beta": "Linux-Agent {version} (Beta)",
+        "linux_pinned": "Linux-Agent {version} (fixiert)",
+        "no_installers": "Die Installer sind noch nicht kopiert, daher lädt die Aufnahme sie weiterhin von GitHub.",
+        "no_pawnio": "Der PawnIO-Treiber ist nicht kopiert, daher wird ein PC ohne Internetzugang ohne Temperatur- und Lüfterwerte installiert.",
+        "errors": "Der letzte Versuch, {when}, hatte Probleme. Die vorherige Kopie jeder Datei wird weiterhin ausgeliefert:"
+      },
       "editor_title": "Neuer Onboarding-Code",
       "label": "Bezeichnung",
       "label_placeholder": "z. B. Empfangs-PC für Maria",

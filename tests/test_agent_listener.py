@@ -105,6 +105,10 @@ MINTED_PATH_VARIABLES = {
     "change_id", "code", "command_id", "digest", "index", "request_id", "restore_id",
     "run_id", "scan_id", "seq", "session_id", "sha256", "share_id", "ticket_id", "token",
     "transfer_id", "update_id",
+    # Not minted, but not free text either: the release mirror (roadmap #33) resolves it only
+    # against a fixed list of this repository's own file paths (release_mirror.INSTALLER_FILES
+    # and the channel and pinned manifest names), none of which holds a "%".
+    "repo_path",
 }
 
 

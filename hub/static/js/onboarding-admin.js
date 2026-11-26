@@ -28,6 +28,8 @@ const createdLink = document.getElementById('created-link');
 const createdStatus = document.getElementById('created-status');
 const unsignedCard = document.getElementById('unsigned-card');
 const unsignedList = document.getElementById('unsigned-list');
+const mirrorCard = document.getElementById('mirror-card');
+const mirrorBody = document.getElementById('mirror-body');
 
 async function api(path, options) {
     const resp = await fetch(path, options);
@@ -125,6 +127,74 @@ function renderUnsigned(rows) {
     });
 }
 
+function fmtBytes(n) {
+    if (!n && n !== 0) return '—';
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+// One line per mirrored manifest, named for an operator rather than by repository path.
+// Literal keys, one branch each, so tests/test_i18n.py sees every one of them.
+function mirrorLine(path, version) {
+    const pinned = /\/manifests\/[^/]+\.json$/.test(path);
+    if (path.startsWith('agent-linux/')) {
+        if (pinned) return t('onboarding.admin.mirror.linux_pinned', { version });
+        if (path.includes('.beta.')) return t('onboarding.admin.mirror.linux_beta', { version });
+        return t('onboarding.admin.mirror.linux_stable', { version });
+    }
+    if (pinned) return t('onboarding.admin.mirror.windows_pinned', { version });
+    if (path.includes('.beta.')) return t('onboarding.admin.mirror.windows_beta', { version });
+    return t('onboarding.admin.mirror.windows_stable', { version });
+}
+
+// The release mirror's card (roadmap #33). Says plainly when a PC without internet access
+// could NOT be onboarded from here -- off, never synced, installers or PawnIO missing -- because
+// that is otherwise discovered only when an onboarding fails at the PC.
+function renderMirror(s) {
+    mirrorBody.replaceChildren();
+    mirrorCard.hidden = false;
+    if (!s.enabled) {
+        mirrorBody.appendChild(el('p', null, t('onboarding.admin.mirror.off')));
+        return;
+    }
+    if (!s.attempted_at) {
+        mirrorBody.appendChild(el('p', null, t('onboarding.admin.mirror.never')));
+        return;
+    }
+    mirrorBody.appendChild(el('p', null, s.synced_at
+        ? t('onboarding.admin.mirror.synced', { when: fmtTime(s.synced_at), size: fmtBytes(s.bytes) })
+        : t('onboarding.admin.mirror.never_complete', { size: fmtBytes(s.bytes) })));
+    const held = Object.entries(s.manifests || {}).filter(([path]) => !path.endsWith('.sig'));
+    if (held.length) {
+        const list = el('ul', 'onboarding-unsigned');
+        held.forEach(([path, version]) => list.appendChild(el('li', null, mirrorLine(path, version || '?'))));
+        mirrorBody.appendChild(list);
+    }
+    if (!(s.installers || []).length) {
+        mirrorBody.appendChild(el('p', 'stat-card__meta', t('onboarding.admin.mirror.no_installers')));
+    }
+    if (!s.pawnio) {
+        mirrorBody.appendChild(el('p', 'stat-card__meta', t('onboarding.admin.mirror.no_pawnio')));
+    }
+    if ((s.errors || []).length) {
+        mirrorBody.appendChild(el('p', 'setting__error',
+            t('onboarding.admin.mirror.errors', { when: fmtTime(s.attempted_at) })));
+        const list = el('ul', 'onboarding-unsigned');
+        s.errors.forEach((e) => list.appendChild(el('li', 'stat-card__meta', e)));
+        mirrorBody.appendChild(list);
+    }
+}
+
+async function loadMirror() {
+    try {
+        renderMirror(await api('/api/release-mirror/status'));
+    } catch {
+        // A hub older than the mirror, or a transient error: the card simply stays hidden.
+        mirrorCard.hidden = true;
+    }
+}
+
 async function revokeCode(code, btn) {
     const message = code.redeemed_machine
         ? t('onboarding.admin.confirm_revoke_machine', { label: code.label, machine: code.redeemed_machine })
@@ -216,6 +286,7 @@ document.getElementById('created-close').addEventListener('click', () => created
 modal.addEventListener('click', (e) => { if (e.target === modal) modal.close(); });
 
 void load();
+void loadMirror();
 // A PC redeeming a code is a write under the onboarding blueprint: use counts follow it.
 window.FleetLive.watch(['onboarding'], load);
 
