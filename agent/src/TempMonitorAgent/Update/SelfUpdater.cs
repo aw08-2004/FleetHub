@@ -137,8 +137,14 @@ public sealed class SelfUpdater
                 failures, ct);
             if (fetched is not { } got)
             {
-                // Debug, as before the mirror: a PC that cannot look is usually just offline.
-                _log.LogDebug("[update] no verifiable manifest: {Failures}", string.Join("; ", failures));
+                // A bad signature is a Warning, as it was before the mirror: it is the one failure
+                // here that may mean someone tampered with a source. Anything else stays at Debug,
+                // because a PC that cannot look is usually just offline.
+                if (failures.Exists(f => f.Contains("NOT signed", StringComparison.Ordinal)))
+                    _log.LogWarning("[update] manifest signature invalid -- refusing: {Failures}",
+                        string.Join("; ", failures));
+                else
+                    _log.LogDebug("[update] no verifiable manifest: {Failures}", string.Join("; ", failures));
                 return false;
             }
             var manifestBytes = got.Manifest;

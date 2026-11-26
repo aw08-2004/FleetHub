@@ -280,7 +280,7 @@ fetch_verified_binary() {
     local dest="$1" work="$2" url version want got src from="" reasons=""
     local manifest_url="${MANIFEST_URL_OVERRIDE:-$MANIFEST_URL}"
     local sources="$manifest_url"
-    if [ -n "$MIRROR_URL" ] && [ -z "$MANIFEST_URL_OVERRIDE" ]; then
+    if [[ -n "$MIRROR_URL" && -z "$MANIFEST_URL_OVERRIDE" ]]; then
         sources="$sources $MIRROR_URL/repo/agent-linux/agent-linux.manifest.json"
     fi
     need_openssl3
@@ -299,7 +299,7 @@ fetch_verified_binary() {
         from="$src"
         break
     done
-    [ -n "$from" ] || die "no verifiable Linux agent manifest:$reasons
+    [[ -n "$from" ]] || die "no verifiable Linux agent manifest:$reasons
   Refusing to install. Nothing on this machine was changed.
   If no Linux release has been cut since signed manifests were introduced, there is nothing
   verifiable to install yet: use --binary with a locally built agent, or --agent-url for an
@@ -311,7 +311,7 @@ fetch_verified_binary() {
         || die "the signed manifest is missing its version, url or sha256 -- a release-signing bug."
     say "manifest verified: version $version, signed by the fleet key ($from)"
     sources="$url"
-    [ -n "$MIRROR_URL" ] && sources="$sources $MIRROR_URL/bin/$want"
+    [[ -n "$MIRROR_URL" ]] && sources="$sources $MIRROR_URL/bin/$want"
     reasons=""
     for src in $sources; do
         say "binary  <- $src"
@@ -325,7 +325,7 @@ fetch_verified_binary() {
         # so a genuine binary under such a path was refused as tampered. Found on Windows, where
         # every path has one; a Linux install directory can have one too.
         got="$(sha256sum < "$dest" | cut -d' ' -f1)"
-        if [ "$got" = "$want" ]; then
+        if [[ "$got" == "$want" ]]; then
             say "binary  sha256 matches the signed manifest"
             return 0
         fi

@@ -100,8 +100,10 @@ MAX_BINARY_BYTES = 512 * 1024 * 1024
 INDEX_NAME = "index.json"
 BLOB_DIR = "blobs"
 
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+# \A and \Z, not ^ and $: `$` also matches before a trailing newline, so "<64 hex>\n" would
+# pass -- and the hash pattern guards a value a route takes from the request path.
+_SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
+_VERSION = re.compile(r"\A\d+\.\d+\.\d+\Z")
 
 
 class FetchError(Exception):
@@ -120,7 +122,15 @@ def blob_dir(mirror_dir):
 
 
 def _blob_path(mirror_dir, sha):
-    return os.path.join(blob_dir(mirror_dir), sha)
+    """The blob file for `sha`, which must resolve INSIDE the blob directory or this raises
+    ValueError. Every caller has already checked `sha` against _SHA256, so this cannot fire
+    today; it is the containment check itself rather than a reason to trust that, because a
+    route hands a request value to file_for_sha and the regex is one edit from being wrong."""
+    base = os.path.realpath(blob_dir(mirror_dir))
+    path = os.path.realpath(os.path.join(base, str(sha)))
+    if not path.startswith(base + os.sep):
+        raise ValueError(f"blob path outside the mirror: {sha!r}")
+    return path
 
 
 def channel_manifest_paths(platform):
@@ -210,7 +220,10 @@ def file_for_sha(mirror_dir, sha):
 def _existing_blob(mirror_dir, sha):
     if not sha or not _SHA256.match(sha):
         return None
-    path = _blob_path(mirror_dir, sha)
+    try:
+        path = _blob_path(mirror_dir, sha)
+    except ValueError:
+        return None
     return path if os.path.isfile(path) else None
 
 
@@ -327,6 +340,92 @@ def _store_download(mirror_dir, fetch, url, want_sha, max_bytes):
 
 # ------------------------------------------------------------------ the sync
 
+class _Refused(Exception):
+    """A file GitHub served that the mirror will not keep. The previous copy is kept."""
+
+
+def _signed_target(manifest, sig, verify_signature, url):
+    """(sha256, binary url) from a manifest the release key signed, or raises _Refused. The
+    agents' own order: signature over the exact bytes FIRST, parse only after."""
+    try:
+        sig_text = sig.decode("ascii")
+    except UnicodeDecodeError:
+        sig_text = ""
+    if not verify_signature(manifest, sig_text):
+        raise _Refused(f"{url}: NOT signed by the fleet's release key -- not kept")
+    try:
+        parsed = json.loads(manifest.decode("utf-8"))
+        want = str(parsed.get("sha256") or "").strip().lower()
+        bin_url = str(parsed.get("url") or "").strip()
+    except (ValueError, AttributeError):   # UnicodeDecodeError is a ValueError
+        want, bin_url = "", ""
+    if not _SHA256.match(want) or not bin_url.startswith("https://"):
+        raise _Refused(f"{url}: signed, but missing its sha256 or url -- a release-signing bug")
+    return want, bin_url
+
+
+class _Round:
+    """One sync round: the new index being built, the old one it may carry files over from,
+    and the errors that round met. A class only so each kind of file is one short method."""
+
+    def __init__(self, mirror_dir, fetch, verify_signature):
+        self.mirror_dir = mirror_dir
+        self.fetch = fetch
+        self.verify_signature = verify_signature
+        self.old = load_index(mirror_dir)
+        self.files, self.binaries, self.errors = {}, {}, []
+
+    def carry(self, path):
+        """Keep the previous copy of `path` (and its .sig and binary) after a failed fetch."""
+        for p in (path, path + ".sig"):
+            if p in self.old["files"]:
+                self.files[p] = self.old["files"][p]
+        if path in self.old["binaries"]:
+            self.binaries[path] = self.old["binaries"][path]
+
+    def manifest(self, path):
+        url = RAW_BASE + path
+        try:
+            manifest = _fetch_bytes(self.fetch, url, MAX_MANIFEST_BYTES)
+            sig = _fetch_bytes(self.fetch, url + ".sig", MAX_MANIFEST_BYTES)
+        except NotFound:
+            return   # normal and permanent for most fleets (no beta published): not an error
+        except FetchError as e:
+            self.errors.append(str(e))
+            self.carry(path)
+            return
+        try:
+            want, bin_url = _signed_target(manifest, sig, self.verify_signature, url)
+            _store_download(self.mirror_dir, self.fetch, bin_url, want, MAX_BINARY_BYTES)
+        except (_Refused, FetchError, NotFound) as e:
+            self.errors.append(str(e))
+            self.carry(path)
+            return
+        self.files[path] = _store_bytes(self.mirror_dir, manifest)
+        self.files[path + ".sig"] = _store_bytes(self.mirror_dir, sig)
+        self.binaries[path] = want
+
+    def installer(self, path):
+        url = RAW_BASE + path
+        try:
+            self.files[path] = _store_bytes(self.mirror_dir,
+                                            _fetch_bytes(self.fetch, url, MAX_TEXT_BYTES))
+        except NotFound:
+            return
+        except FetchError as e:
+            self.errors.append(str(e))
+            if path in self.old["files"]:
+                self.files[path] = self.old["files"][path]
+
+    def pawnio(self):
+        try:
+            _store_download(self.mirror_dir, self.fetch, PAWNIO_URL, PAWNIO_SHA256,
+                            MAX_BINARY_BYTES)
+            self.binaries["pawnio"] = PAWNIO_SHA256
+        except (FetchError, NotFound) as e:
+            self.errors.append(f"PawnIO: {e}")
+
+
 def sync(mirror_dir, pins, verify_signature, fetch=http_fetch, now=None):
     """Bring the mirror up to date with GitHub. Returns the new status.
 
@@ -338,79 +437,17 @@ def sync(mirror_dir, pins, verify_signature, fetch=http_fetch, now=None):
     """
     os.makedirs(blob_dir(mirror_dir), exist_ok=True)
     stamp = now if now is not None else int(time.time())
-    old = load_index(mirror_dir)
-    files, binaries, errors = {}, {}, []
-
-    def carry(path):
-        """Keep the previous copy of `path` (and its .sig and binary) after a failed fetch."""
-        for p in (path, path + ".sig"):
-            if p in old["files"]:
-                files[p] = old["files"][p]
-        if path in old["binaries"]:
-            binaries[path] = old["binaries"][path]
-
+    r = _Round(mirror_dir, fetch, verify_signature)
     for path in wanted_manifests(pins):
-        url = RAW_BASE + path
-        try:
-            manifest = _fetch_bytes(fetch, url, MAX_MANIFEST_BYTES)
-            sig = _fetch_bytes(fetch, url + ".sig", MAX_MANIFEST_BYTES)
-        except NotFound:
-            # Normal and permanent for most fleets (no beta published), so not an error.
-            continue
-        except FetchError as e:
-            errors.append(str(e))
-            carry(path)
-            continue
-        # The agents' own order: signature over the exact bytes FIRST, parse only after.
-        try:
-            sig_text = sig.decode("ascii")
-        except UnicodeDecodeError:
-            sig_text = ""
-        if not verify_signature(manifest, sig_text):
-            errors.append(f"{url}: NOT signed by the fleet's release key -- not kept")
-            carry(path)
-            continue
-        try:
-            parsed = json.loads(manifest.decode("utf-8"))
-            want = str(parsed.get("sha256") or "").strip().lower()
-            bin_url = str(parsed.get("url") or "").strip()
-        except (ValueError, UnicodeDecodeError, AttributeError):
-            parsed, want, bin_url = None, "", ""
-        if not _SHA256.match(want) or not bin_url.startswith("https://"):
-            errors.append(f"{url}: signed, but missing its sha256 or url -- a release-signing bug")
-            carry(path)
-            continue
-        try:
-            _store_download(mirror_dir, fetch, bin_url, want, MAX_BINARY_BYTES)
-        except (FetchError, NotFound) as e:
-            errors.append(str(e))
-            carry(path)
-            continue
-        files[path] = _store_bytes(mirror_dir, manifest)
-        files[path + ".sig"] = _store_bytes(mirror_dir, sig)
-        binaries[path] = want
-
+        r.manifest(path)
     for path in INSTALLER_FILES:
-        url = RAW_BASE + path
-        try:
-            files[path] = _store_bytes(mirror_dir, _fetch_bytes(fetch, url, MAX_TEXT_BYTES))
-        except NotFound:
-            continue
-        except FetchError as e:
-            errors.append(str(e))
-            if path in old["files"]:
-                files[path] = old["files"][path]
-
-    try:
-        _store_download(mirror_dir, fetch, PAWNIO_URL, PAWNIO_SHA256, MAX_BINARY_BYTES)
-        binaries["pawnio"] = PAWNIO_SHA256
-    except (FetchError, NotFound) as e:
-        errors.append(f"PawnIO: {e}")
-
-    index = {"files": files, "binaries": binaries, "attempted_at": stamp, "errors": errors,
+        r.installer(path)
+    r.pawnio()
+    index = {"files": r.files, "binaries": r.binaries, "attempted_at": stamp,
+             "errors": r.errors,
              # "Synced" means every file was checked this round; a partial round keeps the
              # previous time, so the card can say how stale the oldest copy might be.
-             "synced_at": stamp if not errors else old["synced_at"]}
+             "synced_at": stamp if not r.errors else r.old["synced_at"]}
     _write_index(mirror_dir, index)
     _collect_garbage(mirror_dir, index)
     return status(mirror_dir)

@@ -313,6 +313,47 @@ function Test-ManifestSignature([byte[]]$Message, [string]$SignatureHex) {
     return [FleetHubInstaller.Ed25519]::Verify($key, $Message, $sig)
 }
 
+# The first manifest, from $Sources in order, whose signature verifies -- as @{ Bytes; From } --
+# or throw with every source's reason. The manifest and its .sig come from the SAME source.
+function Get-SignedManifest([string[]]$Sources, [string]$ManifestPath, [string]$SigPath) {
+    $reasons = @()
+    foreach ($src in $Sources) {
+        try {
+            # -OutFile, never Invoke-RestMethod: the signature covers bytes, and anything that
+            # decodes and re-reads the text is checking something other than what was signed.
+            Invoke-WebRequest -Uri $src -OutFile $ManifestPath -UseBasicParsing
+            Invoke-WebRequest -Uri "$src.sig" -OutFile $SigPath -UseBasicParsing
+        } catch {
+            $reasons += "could not fetch the signed agent manifest from $src (or its .sig): $($_.Exception.Message)"
+            continue
+        }
+        $candidate = [IO.File]::ReadAllBytes($ManifestPath)
+        if (Test-ManifestSignature $candidate ([IO.File]::ReadAllText($SigPath))) {
+            return [pscustomobject]@{ Bytes = $candidate; From = $src }
+        }
+        $reasons += "the agent manifest at $src is NOT signed by the fleet's key"
+    }
+    throw (($reasons -join '. ') + ". Refusing to install; nothing on this machine was changed. Use -AgentExe with a locally built agent, or -AgentUrl for an unverified download.")
+}
+
+# Download into $Path from the first of $Sources whose bytes hash to the SIGNED $Sha256, or
+# throw with every source's reason. Returns the source that matched.
+function Get-MatchingBinary([string[]]$Sources, [string]$Path, [string]$Sha256) {
+    $reasons = @()
+    foreach ($src in $Sources) {
+        try {
+            Invoke-WebRequest -Uri $src -OutFile $Path -UseBasicParsing
+        } catch {
+            $reasons += "download failed: ${src}: $($_.Exception.Message)"
+            continue
+        }
+        $got = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($got -eq $Sha256) { return $src }
+        $reasons += "the binary from $src does not match the signed manifest (sha256 $got, expected $Sha256)"
+    }
+    throw (($reasons -join '. ') + ". Refusing to install.")
+}
+
 # Fetch, verify and download into $Destination, or throw with the reason. $Destination exists
 # afterwards only if every check passed. Returns the signed version and sha256: the caller
 # re-hashes the installed copy against the latter (see "Installing agent binary").
@@ -323,10 +364,14 @@ function Test-ManifestSignature([byte[]]$Message, [string]$SignatureHex) {
 # HTTP error page, a bad signature. Being picky about which failures count would gain nothing,
 # because what the mirror serves is checked exactly as strictly. The manifest and its .sig are
 # always taken from the SAME source, so a release landing between two requests cannot pair one
-# version's manifest with another's signature. The mirror is used only for the stable manifest
-# this installer would read anyway: a -ManifestUrl pointing somewhere else is its own mirror.
-# From the mirror the binary is fetched by its SIGNED sha256 (`<mirror>/bin/<sha256>`), never
-# from a url the hub chose.
+# version's manifest with another's signature. From the mirror the binary is fetched by its
+# SIGNED sha256 (`<mirror>/bin/<sha256>`), never from a url the hub chose.
+#
+# **The mirror is tried only for the stable manifest**, because that is the only manifest this
+# installer reads on its own: a first install is always stable ($StableManifestUrl says why), and
+# a -ManifestUrl pointing somewhere else is its own mirror. There is no beta case to cover here.
+# A beta PC reaches its channel through the agent's own updater, which does fall back to the hub
+# for beta and pinned manifests too (agent-shared/UpdateMirror.cs).
 function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl, [string]$MirrorBase) {
     if (-not $FromManifestUrl) { $FromManifestUrl = $StableManifestUrl }
     $MirrorBase = "$MirrorBase".TrimEnd('/')
@@ -339,66 +384,19 @@ function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl, [stri
     $work = Join-Path ([IO.Path]::GetTempPath()) ("fleethub-manifest-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     try {
-        $mPath = Join-Path $work "manifest.json"
-        $sPath = Join-Path $work "manifest.json.sig"
-        $m = $null
-        $mBytes = $null
-        $from = $null
-        $reasons = @()
-        foreach ($src in $sources) {
-            try {
-                # -OutFile, never Invoke-RestMethod: the signature covers bytes, and anything that
-                # decodes and re-reads the text is checking something other than what was signed.
-                Invoke-WebRequest -Uri $src -OutFile $mPath -UseBasicParsing
-                Invoke-WebRequest -Uri "$src.sig" -OutFile $sPath -UseBasicParsing
-            } catch {
-                $reasons += "could not fetch the signed agent manifest from $src (or its .sig): $($_.Exception.Message)"
-                continue
-            }
-            $candidate = [IO.File]::ReadAllBytes($mPath)
-            $sigHex = [IO.File]::ReadAllText($sPath)
-            if (-not (Test-ManifestSignature $candidate $sigHex)) {
-                $reasons += "the agent manifest at $src is NOT signed by the fleet's key"
-                continue
-            }
-            $mBytes = $candidate
-            $from = $src
-            break
-        }
-        if ($null -eq $mBytes) {
-            throw (($reasons -join '. ') + ". Refusing to install; nothing on this machine was changed. Use -AgentExe with a locally built agent, or -AgentUrl for an unverified download.")
-        }
+        $signed = Get-SignedManifest $sources (Join-Path $work "manifest.json") (Join-Path $work "manifest.json.sig")
         # Parsed only AFTER the signature verified, so a missing field is a signing bug.
-        $m = [Text.Encoding]::UTF8.GetString($mBytes) | ConvertFrom-Json
+        $m = [Text.Encoding]::UTF8.GetString($signed.Bytes) | ConvertFrom-Json
         $want = "$($m.sha256)".ToLowerInvariant()
         if (-not $m.version -or -not $m.url -or $want -notmatch '^[0-9a-f]{64}$') {
             throw "the signed manifest is missing its version, url or sha256 -- a release-signing bug."
         }
-        Write-Host "  manifest verified: version $($m.version), signed by the fleet key ($from)"
-        $bPath = Join-Path $work "agent.exe"
+        Write-Host "  manifest verified: version $($m.version), signed by the fleet key ($($signed.From))"
         $binSources = @("$($m.url)")
         if ($MirrorBase) { $binSources += "$MirrorBase/bin/$want" }
-        $reasons = @()
-        $verified = $false
-        foreach ($src in $binSources) {
-            Write-Host "  binary  <- $src"
-            try {
-                Invoke-WebRequest -Uri $src -OutFile $bPath -UseBasicParsing
-            } catch {
-                $reasons += "download failed: ${src}: $($_.Exception.Message)"
-                continue
-            }
-            $got = (Get-FileHash -Path $bPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($got -ne $want) {
-                $reasons += "the binary from $src does not match the signed manifest (sha256 $got, expected $want)"
-                continue
-            }
-            $verified = $true
-            break
-        }
-        if (-not $verified) {
-            throw (($reasons -join '. ') + ". Refusing to install.")
-        }
+        $bPath = Join-Path $work "agent.exe"
+        $binFrom = Get-MatchingBinary $binSources $bPath $want
+        Write-Host "  binary  <- $binFrom"
         Write-Host "  binary  sha256 matches the signed manifest"
         Move-Item -Path $bPath -Destination $Destination -Force
         return [pscustomobject]@{ Version = "$($m.version)"; Sha256 = $want }

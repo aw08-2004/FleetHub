@@ -186,6 +186,9 @@ def test_sync(work):
               and release_mirror.file_for_path(mirror, "../index.json") is None
               and release_mirror.file_for_path(mirror, "hub/app.py") is None)
         check("a malformed hash resolves to nothing", release_mirror.file_for_sha(mirror, "../x") is None)
+        # `$` matches before a trailing newline; the pattern is anchored with \Z so this fails.
+        check("...including a real hash with a newline on the end",
+              release_mirror.file_for_sha(mirror, hashlib.sha256(win_bin).hexdigest() + "\n") is None)
 
         print("\n== The second sync downloads nothing it already has ==")
         bin_url = json.loads(win_body)["url"]
