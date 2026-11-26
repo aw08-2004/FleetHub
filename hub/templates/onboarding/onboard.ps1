@@ -91,13 +91,30 @@
             if (-not $fetched) {
                 Fail ("Could not download the agent installer from " + ($reasons -join '; ') + ". The onboarding code was NOT used. If this PC has no internet access, ask your administrator to turn on 'Agent downloads through this hub' in Settings.")
             }
-            # Run below under RemoteSigned, which refuses a file marked as downloaded from the
-            # web. Invoke-WebRequest does not mark it today; this keeps that true if one does.
-            Unblock-File -LiteralPath $installer -ErrorAction SilentlyContinue
             # An environment variable, not a parameter, for the reason onboard.sh gives: an older
             # agent-install.ps1 dies on a parameter it does not know, and ignores a variable.
             if ($MirrorUrl) { $env:FLEETHUB_MIRROR_URL = $MirrorUrl }
-            & powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File $installer -HubUrl $HubUrl
+            # **Run in THIS process, never a second powershell.exe.** Until hub 1.193.0 this
+            # started `powershell.exe -ExecutionPolicy RemoteSigned -File <installer>`, and
+            # Kaspersky Endpoint Security killed this process at exactly that step (KES event
+            # 4662 against onboard.ps1, 2026-11-26): a script that downloads a script and
+            # launches a new PowerShell on it is a dropper to a behaviour engine. Killed, it got
+            # no chance to say so -- no red line, the private folder left behind, and under
+            # Invoke-Command the output simply stopped after "Installing the FleetHub agent".
+            # In-process, `exit N` in the installer ends only the installer and sets
+            # LASTEXITCODE (it ends with an explicit `exit 0` for that reason), a thrown error
+            # lands in the catch below, and its output reaches a remote session directly.
+            # The process already runs under RemoteSigned, and Invoke-WebRequest leaves no
+            # downloaded-from-the-web mark, so no Unblock-File: removing that mark from a fresh
+            # download is itself a pattern these engines watch for.
+            # Rejected: running the installer text from memory -- the pattern Kaspersky blocked
+            # on the first launcher, see the top of this file.
+            $global:LASTEXITCODE = 0
+            try {
+                & $installer -HubUrl $HubUrl
+            } catch {
+                Fail "The agent installer stopped: $($_.Exception.Message) The onboarding code was NOT used; fix the problem above and run this again."
+            }
             if ($LASTEXITCODE -ne 0) { Fail "The agent installer failed (exit code $LASTEXITCODE). The onboarding code was NOT used; fix the problem above and run this again." }
         } finally {
             Remove-Item -LiteralPath $installerDir -Recurse -Force -ErrorAction SilentlyContinue
