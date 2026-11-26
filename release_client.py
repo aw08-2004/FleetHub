@@ -578,6 +578,10 @@ def main():
     # Before the version prompt, not inside build(): --skip-build packages an exe that
     # was built from these same files, so it needs the check just as much.
     check_runner_customizations()
+    # Before the version too: set_version() rewrites two tracked files, so a PC without
+    # signing set up would otherwise die here with a dirty tree, and a retry that chose a
+    # different number would leave the first one behind in version.dart and pubspec.yaml.
+    preflight_codesign(args.no_codesign)
 
     # Which version is being published is a decision, so it is ASKED rather than inferred
     # from whatever was left in the tree. --version and --keep-version are the
@@ -604,7 +608,6 @@ def main():
               "commit them with the manifest.")
 
     print(f"\nReleasing FleetHub client {version}")
-    preflight_codesign(args.no_codesign)
 
     if not args.skip_build:
         build(find_flutter(), args.skip_tests)
