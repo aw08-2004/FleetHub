@@ -17,6 +17,7 @@ bad set of those:
 House pattern: a `check(name, cond)` counter plus a `__main__` that exits non-zero.
 """
 import os
+import ssl
 import sys
 import tempfile
 
@@ -25,6 +26,7 @@ import alerts
 import directory
 import fleet
 import permissions
+import settings
 
 PASS = 0
 FAIL = 0
@@ -386,6 +388,52 @@ def main():
               directory.validate_config({"server": "ldaps://dc", "base_dn": "DC=corp",
                                          "bind_dn": "CN=svc", "password": "pw"})[1]
               == "DC=corp")
+
+        print("\n== directory.ca_file: the enterprise CA a real domain needs ==")
+        # The silent failure: before this setting, a DC with an AD CS certificate failed
+        # every sync with CERTIFICATE_VERIFY_FAILED and NO setting could fix it -- the CA
+        # field on the sign-in page looked like it should, and did nothing for sync.
+        base = {"server": "ldaps://dc", "base_dn": "DC=corp", "bind_dn": "CN=svc",
+                "password": "pw"}
+        try:
+            directory.validate_config(dict(base, ca_file="/nonexistent/ad-ca.pem"))
+            check("refuses a CA file that is not on the hub", False)
+        except directory.DirectoryError as e:
+            check("refuses a CA file that is not on the hub, naming the setting",
+                  "directory.ca_file" in str(e) and "/state" in str(e))
+        check("a stale CA path does not block a sync that never reads it (verify off)",
+              directory.validate_config(dict(base, ca_file="/nonexistent/ad-ca.pem",
+                                             tls_verify=False))[0] == "ldaps://dc")
+        check("...nor a plain-LDAP lab sync",
+              directory.validate_config(dict(base, server="ldap://dc", allow_insecure=True,
+                                             ca_file="/nonexistent/ad-ca.pem"))[0]
+              == "ldap://dc")
+        ca_path = db_path + ".ca.pem"
+        with open(ca_path, "w") as f:
+            f.write("-----BEGIN CERTIFICATE-----\n")
+        try:
+            check("an existing CA file validates",
+                  directory.validate_config(dict(base, ca_file=ca_path))[0] == "ldaps://dc")
+        finally:
+            os.remove(ca_path)
+
+        class FakeLdap3:
+            def Tls(self, **kwargs):
+                return kwargs
+        tls = directory.tls_options(FakeLdap3(), {"ca_file": " /state/ad-ca.pem "})
+        check("the CA file reaches ldap3 as the trust anchor",
+              tls == {"validate": ssl.CERT_REQUIRED, "ca_certs_file": "/state/ad-ca.pem"})
+        tls = directory.tls_options(FakeLdap3(), {})
+        check("no CA file keeps the image's public CA list, still verified",
+              tls == {"validate": ssl.CERT_REQUIRED, "ca_certs_file": None})
+        tls = directory.tls_options(FakeLdap3(), {"tls_verify": False,
+                                                  "ca_file": "/state/ad-ca.pem"})
+        check("verification off ignores the CA file rather than half-applying it",
+              tls == {"validate": ssl.CERT_NONE, "ca_certs_file": None})
+        check("the setting is registered, empty by default",
+              settings.get(db_path, "directory.ca_file") == "")
+        check("config_from_settings carries it",
+              "ca_file" in directory.config_from_settings(db_path))
 
         print("\n== A missing ldap3 is a configuration message, not a crash ==")
         if not directory.ldap3_installed():

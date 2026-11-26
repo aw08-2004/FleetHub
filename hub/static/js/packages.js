@@ -224,6 +224,7 @@ async function loadPackages() {
     try {
         const doc = await api('/api/packages');
         vocab = doc;
+        window.PackageConditions.setVocab(doc.conditions);
         renderPackages(doc.packages);
     } catch (e) {
         packagesPane.replaceChildren(el('p', 'setting__error', e.message));
@@ -268,6 +269,8 @@ const STEP_LABELS = {
     extract: () => [t('packages.step.extract.label'), t('packages.step.extract.description')],
     pnputil: () => [t('packages.step.pnputil.label'), t('packages.step.pnputil.description')],
     apk: () => [t('packages.step.apk.label'), t('packages.step.apk.description')],
+    if: () => [t('packages.step.if.label'), t('packages.step.if.description')],
+    stop: () => [t('packages.step.stop.label'), t('packages.step.stop.description')],
 };
 
 function stepText(kind) {
@@ -353,22 +356,38 @@ function row(...blocks) {
 
 // ---- payloads ----
 
-// Every name a step may use at this point in the list. Payload names are bound before
-// step 1; an extract step binds its own name for the steps after it. Mirrors
-// packages.validate_steps so the hint matches what the server will accept.
-function boundVariables(uptoStepIndex) {
+// Every name a step may use. Payload names and the machine's own values ({model}, {arch} ...)
+// are bound before step 1; an extract step binds its own name for the steps after it.
+// An approximation of packages.validate_steps for the hint only -- it lists names bound
+// anywhere in the tree, where the server knows which branch binds what, and the server's
+// refusal is what names a step that uses one too early.
+function boundVariables() {
     const names = [vocab.work_variable || 'work'];
     draftPayloads.forEach((p) => { if (p.name) names.push(p.name); });
     if (draftPayloads.length === 1 && draftPayloads[0].name !== 'file') names.push('file');
-    draftSteps.slice(0, uptoStepIndex === undefined ? draftSteps.length : uptoStepIndex)
-        .forEach((step) => {
-            if (step.kind !== 'extract') return;
-            // A blank save_as is not "no name" — the server picks one. Mirroring that
-            // choice here (packages.validate_steps) is what lets the hint name the folder
-            // the next step has to point at, instead of leaving the operator to guess.
-            names.push(step.save_as || autoExtractName(names));
-        });
+    Object.keys((vocab.conditions || {}).fact_bindings || {}).forEach((n) => names.push(n));
+    flatSteps(draftSteps).forEach(({ step }) => {
+        if (step.kind !== 'extract') return;
+        // A blank save_as is not "no name" — the server picks one. Mirroring that
+        // choice here (packages.validate_steps) is what lets the hint name the folder
+        // the next step has to point at, instead of leaving the operator to guess.
+        names.push(step.save_as || autoExtractName(names));
+    });
     return names;
+}
+
+// The step tree depth-first, the numbering the server validates by and the agent reports
+// progress by (packages.iter_steps): an If, then its Then steps, then its Else steps.
+function flatSteps(list, depth, out) {
+    const acc = out || [];
+    (list || []).forEach((step) => {
+        acc.push({ step, depth: depth || 0 });
+        if (step.kind === 'if') {
+            flatSteps(step.then_steps, (depth || 0) + 1, acc);
+            flatSteps(step.else_steps, (depth || 0) + 1, acc);
+        }
+    });
+    return acc;
 }
 
 function autoExtractName(taken) {
@@ -444,10 +463,40 @@ function renderPayloads() {
                     { hint: t('packages.editor.sha256_hint') }));
             }
         }
+        // "Only download on some machines": the per-model driver pack. Only for a file the
+        // agent actually fetches, and only in step mode -- the server refuses both others.
+        if (payload.kind !== 'winget' && installMode() === 'steps') {
+            card.appendChild(payloadConditionBlock(payload));
+        }
         host.appendChild(card);
     });
     syncVariableHint();
     syncInstallPanes();
+}
+
+function payloadConditionBlock(payload) {
+    const wrap = el('div', 'pkg-cond-block');
+    const host = el('div');
+    const help = el('p', 'setting__default', t('packages.editor.payload_only_if_help'));
+    const sync = () => {
+        host.hidden = !payload.only_if;
+        help.hidden = !payload.only_if;
+        if (payload.only_if) {
+            // No machine checks and no step results: a download happens before any step.
+            window.PackageConditions.render(host, payload.only_if,
+                { allowProbes: false, allowRuntime: false });
+        }
+    };
+    wrap.appendChild(checkboxField(t('packages.editor.payload_only_if'), !!payload.only_if,
+        (on) => {
+            payload.only_if = on ? (payload.only_if || window.PackageConditions.blank(false)) : null;
+            sync();
+            syncConditionsNote();
+        }));
+    wrap.appendChild(help);
+    wrap.appendChild(host);
+    sync();
+    return wrap;
 }
 
 function payloadState(payload) {
@@ -472,33 +521,69 @@ document.getElementById('add-payload').addEventListener('click', () => {
 
 // ---- steps ----
 
+// The step list is a TREE: an If step carries `then` and `else`, each another list drawn the
+// same way, one level in. Every card is numbered depth-first -- the number the server's errors
+// and the deployment view use -- so "step 7" means the same card everywhere.
 function renderSteps() {
     const host = document.getElementById('step-list');
     host.replaceChildren();
     if (!draftSteps.length) {
         host.appendChild(el('p', 'setting__default', t('packages.editor.no_steps')));
     }
-    draftSteps.forEach((step, index) => host.appendChild(renderStep(step, index)));
+    const counter = { n: 0 };
+    draftSteps.forEach((step, index) =>
+        host.appendChild(renderStep(step, index, draftSteps, 0, counter)));
     syncVariableHint();
+    syncConditionsNote();
 }
 
-function moveStep(from, to) {
-    if (to < 0 || to >= draftSteps.length) return;
-    const [moved] = draftSteps.splice(from, 1);
-    draftSteps.splice(to, 0, moved);
+function syncConditionsNote() {
+    // Says up front what the scheduler will otherwise say per machine: an agent too old for
+    // If / Stop is refused the deploy (packages.MIN_CONDITIONS_AGENT), not sent it to fail.
+    const note = document.getElementById('step-conditions-note');
+    if (!note) return;
+    const flowSteps = flatSteps(draftSteps).some(({ step }) => step.kind === 'if' || step.kind === 'stop');
+    const conditional = flowSteps || draftPayloads.some((p) => p.only_if);
+    note.hidden = !conditional;
+    note.textContent = conditional
+        ? t('packages.editor.needs_agent', { version: (vocab.conditions || {}).min_agent || '' })
+        : '';
+}
+
+function moveStep(list, from, to) {
+    if (to < 0 || to >= list.length) return;
+    const [moved] = list.splice(from, 1);
+    list.splice(to, 0, moved);
     renderSteps();
 }
 
-function renderStep(step, index) {
-    const card = el('div', 'pkg-card');
+function newStep(kind) {
+    if (kind === 'if') {
+        return { kind, condition: window.PackageConditions.blank(true), on_unknown: 'fail',
+                 then_steps: [], else_steps: [] };
+    }
+    if (kind === 'stop') return { kind, outcome: 'success', message: '' };
+    return { kind, subdirs: true };
+}
+
+function canAddStep() {
+    const max = vocab.max_steps || 60;
+    if (flatSteps(draftSteps).length < max) return true;
+    packageError.textContent = t('packages.editor.too_many_steps', { max });
+    return false;
+}
+
+function renderStep(step, index, list, depth, counter) {
+    const number = ++counter.n;
+    const card = el('div', `pkg-card${step.kind === 'if' ? ' pkg-card--if' : ''}`);
     const head = el('div', 'pkg-card__head');
     head.appendChild(el('span', 'pkg-card__title',
-        t('packages.editor.step_n', { number: index + 1, kind: stepText(step.kind)[0] })));
+        t('packages.editor.step_n', { number, kind: stepText(step.kind)[0] })));
 
     const buttons = el('span', 'pkg-card__actions');
-    [[t('packages.editor.move_up'), () => moveStep(index, index - 1)],
-     [t('packages.editor.move_down'), () => moveStep(index, index + 1)],
-     [t('common.delete'), () => { draftSteps.splice(index, 1); renderSteps(); }],
+    [[t('packages.editor.move_up'), () => moveStep(list, index, index - 1)],
+     [t('packages.editor.move_down'), () => moveStep(list, index, index + 1)],
+     [t('common.delete'), () => { list.splice(index, 1); renderSteps(); }],
     ].forEach(([label, action]) => {
         const button = el('button', 'btn pkg-card__btn', label);
         button.type = 'button';
@@ -510,6 +595,23 @@ function renderStep(step, index) {
 
     card.appendChild(textField(t('packages.editor.step_label'), step.name,
         (v) => { step.name = v; }, { placeholder: stepText(step.kind)[0] }));
+
+    if (step.kind === 'if') {
+        renderIfBody(card, step, depth, counter);
+        return card;
+    }
+    if (step.kind === 'stop') {
+        card.appendChild(row(
+            selectField(t('packages.editor.stop_outcome'), step.outcome || 'success',
+                [['success', t('packages.editor.stop_success')],
+                 ['failure', t('packages.editor.stop_failure')]],
+                (v) => { step.outcome = v; }),
+            textField(t('packages.editor.stop_message'), step.message,
+                (v) => { step.message = v; },
+                { placeholder: t('packages.editor.stop_message_placeholder') })));
+        card.appendChild(el('p', 'setting__default', t('packages.editor.stop_help')));
+        return card;
+    }
 
     stepFields(step).forEach((node) => card.appendChild(node));
 
@@ -531,6 +633,118 @@ function renderStep(step, index) {
     carryOn.style.marginTop = 'var(--space-3)';
     card.appendChild(carryOn);
     return card;
+}
+
+// An If card: the condition, what to do when the machine cannot answer it, then two lanes of
+// steps. The lanes are ordinary step lists, which is what lets an If hold an If.
+function renderIfBody(card, step, depth, counter) {
+    card.appendChild(el('div', 'setting__label', t('packages.editor.if_condition')));
+    const condHost = el('div');
+    window.PackageConditions.render(condHost, step.condition,
+        { allowProbes: true, allowRuntime: true });
+    card.appendChild(condHost);
+
+    card.appendChild(row(
+        selectField(t('packages.editor.on_unknown'), step.on_unknown || 'fail',
+            [['fail', t('packages.editor.on_unknown_fail')],
+             ['else', t('packages.editor.on_unknown_else')]],
+            (v) => { step.on_unknown = v; }),
+        conditionPreview(step)));
+
+    const carryOn = checkboxField(t('packages.editor.if_continue_on_error'),
+        step.continue_on_error, (v) => { step.continue_on_error = v; });
+    carryOn.style.marginTop = 'var(--space-3)';
+    card.appendChild(carryOn);
+
+    // The lane lists are `then_steps` / `else_steps` on the wire, not `then` / `else`: an
+    // object with a `then` property is a thenable to every Promise it passes through.
+    [['then_steps', 'then', t('packages.editor.if_then')],
+     ['else_steps', 'else', t('packages.editor.if_else')]]
+        .forEach(([field, lane, title]) => {
+            step[field] = step[field] || [];
+            const box = el('div', `pkg-lane pkg-lane--${lane}`);
+            box.appendChild(el('div', 'pkg-lane__title', title));
+            if (!step[field].length) {
+                box.appendChild(el('p', 'setting__default', t('packages.editor.lane_empty')));
+            }
+            step[field].forEach((child, i) =>
+                box.appendChild(renderStep(child, i, step[field], depth + 1, counter)));
+            box.appendChild(laneAdder(step[field], depth + 1, lane === 'else'));
+            card.appendChild(box);
+        });
+}
+
+// The palette at the foot of a lane. Its own select per lane rather than the main one at the
+// bottom of the list: "which list does Add step add to" must never be a question.
+function laneAdder(list, depth, offerElseIf) {
+    const bar = el('div', 'pkg-lane__add');
+    const select = document.createElement('select');
+    select.className = 'input';
+    (vocab.step_kinds || []).forEach((kind) => {
+        // An If that would nest past the server's limit is not offered, rather than refused
+        // on save after the operator has filled it in.
+        if (kind.name === 'if' && depth >= ((vocab.conditions || {}).max_depth || 4)) return;
+        const option = document.createElement('option');
+        option.value = kind.name;
+        option.textContent = kind.label;
+        select.appendChild(option);
+    });
+    const add = el('button', 'btn pkg-card__btn', t('packages.editor.lane_add'));
+    add.type = 'button';
+    add.addEventListener('click', () => {
+        if (!canAddStep()) return;
+        list.push(newStep(select.value));
+        renderSteps();
+    });
+    bar.appendChild(select);
+    bar.appendChild(add);
+    if (offerElseIf && depth < ((vocab.conditions || {}).max_depth || 4)) {
+        const elseIf = el('button', 'btn pkg-card__btn', t('packages.editor.add_else_if'));
+        elseIf.type = 'button';
+        elseIf.addEventListener('click', () => {
+            if (!canAddStep()) return;
+            list.push(newStep('if'));
+            renderSteps();
+        });
+        bar.appendChild(elseIf);
+    }
+    return bar;
+}
+
+// "Test on a machine": what the hub's copy of that machine's facts says about this condition.
+// A preview, and labelled as one -- the deploy itself is decided on the machine.
+function conditionPreview(step) {
+    const wrap = el('div');
+    const label = el('label', 'setting__label', t('packages.cond.preview_machine'));
+    const line = el('div', 'pkg-cond__line');
+    const machine = document.createElement('input');
+    machine.className = 'input';
+    machine.id = `pkg-field-${++controlSeq}`;
+    machine.placeholder = t('packages.cond.preview_placeholder');
+    machine.autocomplete = 'off';
+    label.htmlFor = machine.id;
+    const go = el('button', 'btn pkg-card__btn', t('packages.cond.preview_button'));
+    go.type = 'button';
+    const out = el('div', 'pkg-cond__preview');
+    go.addEventListener('click', async () => {
+        out.replaceChildren();
+        if (!machine.value.trim()) return;
+        try {
+            const doc = await api('/api/packages/conditions/preview', json('POST', {
+                machine: machine.value.trim(),
+                condition: window.PackageConditions.toAst(step.condition),
+            }));
+            window.PackageConditions.renderPreview(out, doc);
+        } catch (e) {
+            out.appendChild(el('p', 'setting__error', e.message));
+        }
+    });
+    line.appendChild(machine);
+    line.appendChild(go);
+    wrap.appendChild(label);
+    wrap.appendChild(line);
+    wrap.appendChild(out);
+    return wrap;
 }
 
 function stepFields(step) {
@@ -603,17 +817,15 @@ function renderStepPalette() {
 
 document.getElementById('add-step').addEventListener('click', () => {
     const kind = document.getElementById('step-kind').value;
-    if (draftSteps.length >= (vocab.max_steps || 25)) {
-        packageError.textContent = t('packages.editor.too_many_steps',
-            { max: vocab.max_steps || 25 });
-        return;
-    }
-    draftSteps.push({ kind, subdirs: true });
+    if (!canAddStep()) return;
+    draftSteps.push(newStep(kind));
     renderSteps();
 });
 
 document.querySelectorAll('input[name="install-mode"]').forEach((radio) => {
-    radio.addEventListener('change', syncInstallPanes);
+    // Redraws the payloads, not just the panes: their "only download on some machines"
+    // control exists in step mode only.
+    radio.addEventListener('change', renderPayloads);
 });
 
 function syncInstallPanes() {
@@ -694,14 +906,10 @@ function openPackage(pkg) {
             file_name: source.file_name || '',
             file_size: source.file_size || 0,
             stored_sha256: source.sha256 || '',
+            only_if: source.only_if ? window.PackageConditions.fromAst(source.only_if) : null,
             file: null,
         }));
-    draftSteps = ((pkg && pkg.steps) || []).map((step) => ({
-        ...step,
-        // Both arrive typed from the server and are edited as text here.
-        timeout_seconds: step.timeout_seconds || '',
-        success_exit_codes: (step.success_exit_codes || []).join(', '),
-    }));
+    draftSteps = draftStepsFrom((pkg && pkg.steps) || []);
 
     const mode = draftSteps.length ? 'steps' : 'command';
     const modeRadio = document.querySelector(`input[name="install-mode"][value="${mode}"]`);
@@ -726,6 +934,26 @@ function openPackage(pkg) {
     syncDetectionPanes();
 
     packageModal.showModal();
+}
+
+// Server steps -> editable copies, recursively through If lanes.
+function draftStepsFrom(steps) {
+    return (steps || []).map((step) => {
+        const draft = {
+            ...step,
+            // Both arrive typed from the server and are edited as text here.
+            timeout_seconds: step.timeout_seconds || '',
+            success_exit_codes: (step.success_exit_codes || []).join(', '),
+        };
+        if (step.kind === 'if') {
+            draft.condition = window.PackageConditions.fromAst(step.condition)
+                || window.PackageConditions.blank(true);
+            draft.on_unknown = step.on_unknown || 'fail';
+            draft.then_steps = draftStepsFrom(step.then_steps);
+            draft.else_steps = draftStepsFrom(step.else_steps);
+        }
+        return draft;
+    });
 }
 
 function collectDetection() {
@@ -780,17 +1008,25 @@ async function uploadPayloads() {
 }
 
 function collectSources() {
+    // A download condition is a step-mode feature (the server refuses it on a one-command
+    // package); one left over from before a switch to command mode is dropped, not sent.
+    const conditional = installMode() === 'steps';
     return draftPayloads.map((payload) => {
+        let source;
         if (payload.kind === 'upload') {
             // The stored hash carries over untouched when no new file was chosen, so
             // editing a command line doesn't mean re-uploading 200 MB.
             if (!payload.stored_sha256) throw new Error(t('packages.editor.choose_file'));
-            return { name: payload.name, kind: 'upload', sha256: payload.stored_sha256,
-                     file_name: payload.file_name, file_size: payload.file_size };
+            source = { name: payload.name, kind: 'upload', sha256: payload.stored_sha256,
+                       file_name: payload.file_name, file_size: payload.file_size };
+        } else {
+            source = { name: payload.name, kind: payload.kind, ref: payload.ref };
+            const sha = (payload.sha256 || '').trim();
+            if (sha && payload.kind !== 'winget') source.sha256 = sha;
         }
-        const source = { name: payload.name, kind: payload.kind, ref: payload.ref };
-        const sha = (payload.sha256 || '').trim();
-        if (sha && payload.kind !== 'winget') source.sha256 = sha;
+        if (conditional && payload.only_if && payload.kind !== 'winget') {
+            source.only_if = window.PackageConditions.toAst(payload.only_if);
+        }
         return source;
     });
 }
@@ -803,23 +1039,54 @@ function collectSteps() {
     // single-command recipe and rejects for having no command — a message about a field
     // this operator cannot even see right now.
     if (!draftSteps.length) throw new Error(t('packages.editor.no_steps'));
-    return draftSteps.map((step) => {
-        const out = { kind: step.kind };
-        ['name', 'command', 'args', 'script', 'id', 'archive', 'dest', 'save_as', 'path', 'apk']
-            .forEach((field) => {
-                const value = (step[field] || '').trim ? (step[field] || '').trim() : step[field];
-                if (value) out[field] = value;
-            });
-        if (step.kind === 'pnputil') out.subdirs = step.subdirs !== false;
-        if (String(step.timeout_seconds || '').trim()) {
-            out.timeout_seconds = Number(step.timeout_seconds);
-        }
-        if (String(step.success_exit_codes || '').trim()) {
-            out.success_exit_codes = step.success_exit_codes;
-        }
-        if (step.continue_on_error) out.continue_on_error = true;
-        return out;
+    return collectStepList(draftSteps);
+}
+
+function collectStepList(list) {
+    return list.map((step) => {
+        if (step.kind === 'if') return collectIfStep(step);
+        if (step.kind === 'stop') return collectStopStep(step);
+        return collectActionStep(step);
     });
+}
+
+function trimmed(value) {
+    return typeof value === 'string' ? value.trim() : value;
+}
+
+function collectIfStep(step) {
+    const out = { kind: 'if', condition: window.PackageConditions.toAst(step.condition) };
+    if (trimmed(step.name)) out.name = trimmed(step.name);
+    if (step.on_unknown && step.on_unknown !== 'fail') out.on_unknown = step.on_unknown;
+    if (step.continue_on_error) out.continue_on_error = true;
+    out.then_steps = collectStepList(step.then_steps || []);
+    out.else_steps = collectStepList(step.else_steps || []);
+    return out;
+}
+
+function collectStopStep(step) {
+    const out = { kind: 'stop', outcome: step.outcome || 'success' };
+    if (trimmed(step.name)) out.name = trimmed(step.name);
+    if (trimmed(step.message)) out.message = trimmed(step.message);
+    return out;
+}
+
+function collectActionStep(step) {
+    const out = { kind: step.kind };
+    ['name', 'command', 'args', 'script', 'id', 'archive', 'dest', 'save_as', 'path', 'apk']
+        .forEach((field) => {
+            const value = trimmed(step[field]);
+            if (value) out[field] = value;
+        });
+    if (step.kind === 'pnputil') out.subdirs = step.subdirs !== false;
+    if (String(step.timeout_seconds || '').trim()) {
+        out.timeout_seconds = Number(step.timeout_seconds);
+    }
+    if (String(step.success_exit_codes || '').trim()) {
+        out.success_exit_codes = step.success_exit_codes;
+    }
+    if (step.continue_on_error) out.continue_on_error = true;
+    return out;
 }
 
 document.getElementById('package-save').addEventListener('click', async () => {
@@ -1230,56 +1497,417 @@ async function loadDeployments() {
 }
 
 // ---------------------------------------------------------------- progress view
+//
+// PDQ Deploy's deployment status window, roadmap #5. Per machine: what it is DOING (queued,
+// sent, running, aborting...), which step it is on, and -- expanded -- the whole step list
+// with each step's result, exit code and its own log, readable while it runs.
+//
+// The step list is drawn by the HUB from the recipe it sent (packages.progress_skeleton) and
+// filled in by the agent's step events, so this page only renders; it never infers a step
+// from log text. An agent older than MIN_PROGRESS_AGENT reports no steps: its row says so
+// rather than showing an empty list that reads as "nothing happened".
+//
+// The modal is a <dialog>, which FleetLive deliberately waits on, so it polls on its own:
+// every two seconds while anything can still change, and not at all once everything has.
+
+// Mirrors packages.MIN_PROGRESS_AGENT (hub/packages.py). That copy refuses an abort; this
+// one only decides what to OFFER, so drift costs a refused click, never a wrong record.
+const MIN_PROGRESS_AGENT = '3.53.0';
+const PROGRESS_POLL_MS = 2000;
+const LOG_POLL_MS = 1000;
+
+// Literal keys per wire value, for the i18n key scan (see STATUS_LABELS).
+const STAGE_LABELS = {
+    scheduled: () => t('packages.progress.stage.scheduled'),
+    queued: () => t('packages.progress.stage.queued'),
+    retry_wait: () => t('packages.progress.stage.retry_wait'),
+    waiting: () => t('packages.progress.stage.waiting'),
+    running: () => t('packages.progress.stage.running'),
+    aborting: () => t('packages.progress.stage.aborting'),
+    finishing: () => t('packages.progress.stage.finishing'),
+    succeeded: () => t('packages.progress.stage.succeeded'),
+    failed: () => t('packages.progress.stage.failed'),
+    expired: () => t('packages.progress.stage.expired'),
+    cancelled: () => t('packages.progress.stage.cancelled'),
+};
+
+const STEP_STATE_LABELS = {
+    running: () => t('packages.progress.state.running'),
+    ok: () => t('packages.progress.state.ok'),
+    failed: () => t('packages.progress.state.failed'),
+    skipped: () => t('packages.progress.state.skipped'),
+    aborted: () => t('packages.progress.state.aborted'),
+    not_run: () => t('packages.progress.state.not_run'),
+};
+
+// A glyph AND a word for every state: colour alone never carries "did it work" (see the
+// progress bar's CSS), and neither does a symbol someone has to learn. `not_run` is the
+// branch an If did not take (agent 3.54.0) -- a dash, not a cross, because nothing failed.
+const STEP_GLYPHS = { running: '◐', ok: '✓', failed: '✕', skipped: '↷', aborted: '■', not_run: '–' };
+
+// A function rather than a { then: ... } lookup table, which would be a thenable.
+function branchLabel(branch) {
+    if (branch === 'then') return t('packages.progress.branch_then');
+    if (branch === 'else') return t('packages.progress.branch_else');
+    return '';
+}
+
+let progressDeployment = null;
+const expandedTargets = new Set();
+const selectedTargets = new Set();
+// The one step log open at a time: { machine, phase, ordinal, text, nextSeq, done, expired }.
+let openLog = null;
+let logTimer = null;
+
+function stageLabel(stage) {
+    const get = STAGE_LABELS[stage];
+    return get ? get() : statusLabel(stage);
+}
+
+function stepStateLabel(state) {
+    const get = STEP_STATE_LABELS[state];
+    return get ? get() : t('packages.progress.state.not_run');
+}
+
+function versionAtLeast(version, minimum) {
+    const parse = (v) => (/^\s*(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')) || []).slice(1).map(Number);
+    const a = parse(version);
+    const b = parse(minimum);
+    if (a.length !== 3) return false;
+    for (let i = 0; i < 3; i++) {
+        if (a[i] !== b[i]) return a[i] > b[i];
+    }
+    return true;
+}
+
+function fmtSeconds(seconds) {
+    const s = Math.max(0, Math.round(seconds));
+    if (s < 60) return t('packages.progress.seconds', { seconds: s });
+    return t('packages.progress.minutes', {
+        minutes: Math.floor(s / 60), seconds: String(s % 60).padStart(2, '0') });
+}
+
+function nowEpoch() { return Math.floor(Date.now() / 1000); }
+
+function stepKindLabel(kind) {
+    if (kind === 'command') return t('packages.progress.kind_command');
+    const found = (vocab.step_kinds || []).find((k) => k.name === kind);
+    return found ? found.label : kind;
+}
+
+function detectionKindLabel(kind) {
+    const found = (vocab.detection_kinds || []).find((k) => k.name === kind);
+    return found ? found.label : kind;
+}
+
+/** "Step 2 · Install drivers", "Download · drivers.zip", "Detection · File exists". */
+function phaseLabel(step) {
+    if (step.phase === 'download') {
+        return t('packages.progress.phase_download', { what: step.label || '' });
+    }
+    if (step.phase === 'detect') {
+        return t('packages.progress.phase_detect', { what: detectionKindLabel(step.kind) });
+    }
+    return t('packages.progress.phase_step', {
+        n: step.ordinal, what: step.label || stepKindLabel(step.kind) });
+}
+
+/** What the collapsed row says about where the machine is. */
+function currentStepText(target) {
+    const current = target.current_step;
+    if (!current) return '';
+    if (target.status === 'succeeded') {
+        return t('packages.progress.all_done', { total: target.step_total });
+    }
+    if (current.phase === 'step' && current.state === 'running') {
+        // `position` (hub 1.187.0) counts only the steps that will run; the ordinal also
+        // counts an If's untaken lane, which made "step 6 of 3".
+        return t('packages.progress.step_of', {
+            current: current.position || current.ordinal, total: target.step_total,
+            what: current.label || stepKindLabel(current.kind) });
+    }
+    return phaseLabel(current);
+}
+
+function isUnresolved(target) {
+    return !TERMINAL.includes(target.status);
+}
+
+function renderStepList(target) {
+    const wrap = el('div', 'pkg-steps-wrap');
+    if (!target.steps.length) {
+        wrap.appendChild(el('p', 'stat-card__meta', t('packages.progress.no_steps_yet')));
+        return wrap;
+    }
+    if (!target.agent_reports_steps) {
+        wrap.appendChild(el('p', 'stat-card__meta', target.agent_version
+            ? t('packages.progress.old_agent', { version: target.agent_version, min: MIN_PROGRESS_AGENT })
+            : t('packages.progress.old_agent_unknown', { min: MIN_PROGRESS_AGENT })));
+    }
+    const list = el('ol', 'pkg-steps');
+    const now = nowEpoch();
+    target.steps.forEach((step) => {
+        const item = el('li', `pkg-step pkg-step--${step.state || 'none'}`);
+        // A step inside an If is indented under it and says which lane it is in, so "step 5"
+        // reads as "the Else side of step 2" without counting.
+        if (step.depth) item.style.paddingInlineStart = `calc(${step.depth} * var(--space-6))`;
+        item.appendChild(el('span', 'pkg-step__glyph', STEP_GLYPHS[step.state] || '○'));
+        const main = el('div', 'pkg-step__main');
+        const lane = branchLabel(step.branch) ? `${branchLabel(step.branch)} · ` : '';
+        main.appendChild(el('div', 'pkg-step__label', lane + phaseLabel(step)));
+        if (!target.agent_reports_steps) {
+            // The plan, and nothing about it: an agent that reports no steps has not said
+            // whether any of them ran, and "Not run" under each would be a claim it never made.
+            item.appendChild(main);
+            list.appendChild(item);
+            return;
+        }
+        const meta = [stepStateLabel(step.state)];
+        if (step.exit_code !== null && step.exit_code !== undefined) {
+            meta.push(t('packages.progress.exit_code', { code: step.exit_code }));
+        }
+        if (step.started_at) {
+            meta.push(fmtSeconds((step.finished_at || now) - step.started_at));
+        }
+        main.appendChild(el('div', 'stat-card__meta', meta.join(' · ')));
+        // An If's message is its answer ("Then: hw.model contains Latitude"), which is worth
+        // showing when it went fine too; for every other step a message on success is noise.
+        if (step.message && (step.state !== 'ok' || step.kind === 'if' || step.kind === 'stop')) {
+            main.appendChild(el('div', 'pkg-target-error', step.message));
+        }
+        if (step.has_output) {
+            const isOpen = openLog && openLog.machine === target.machine
+                && openLog.phase === step.phase && openLog.ordinal === step.ordinal;
+            const toggle = el('button', 'btn btn--ghost pkg-step__log-toggle',
+                isOpen ? t('packages.progress.hide_log') : t('packages.progress.show_log'));
+            toggle.type = 'button';
+            toggle.addEventListener('click', () => toggleLog(target.machine, step));
+            main.appendChild(toggle);
+            if (isOpen) main.appendChild(renderLog());
+        }
+        item.appendChild(main);
+        list.appendChild(item);
+    });
+    wrap.appendChild(list);
+    return wrap;
+}
+
+function renderLog() {
+    const box = el('div', 'pkg-step-log');
+    if (openLog.expired) {
+        box.appendChild(el('p', 'stat-card__meta', t('packages.progress.log_expired')));
+        return box;
+    }
+    const pre = el('pre', 'pkg-step-log__text',
+        openLog.text || (openLog.done ? t('packages.progress.log_empty') : t('common.loading')));
+    pre.id = 'pkg-step-log-text';
+    box.appendChild(pre);
+    return box;
+}
+
+function toggleLog(machine, step) {
+    clearTimeout(logTimer);
+    const same = openLog && openLog.machine === machine
+        && openLog.phase === step.phase && openLog.ordinal === step.ordinal;
+    openLog = same ? null : {
+        machine, phase: step.phase, ordinal: step.ordinal,
+        text: '', nextSeq: -1, done: false, expired: false,
+    };
+    if (progressDeployment) renderProgress(progressDeployment);
+    if (openLog) void pollLog();
+}
+
+async function pollLog() {
+    clearTimeout(logTimer);
+    const log = openLog;
+    if (!log || !progressModal.open || !openDeploymentId) return;
+    try {
+        const doc = await api(
+            `/api/deployments/${encodeURIComponent(openDeploymentId)}/targets/`
+            + `${encodeURIComponent(log.machine)}/steps/${encodeURIComponent(log.phase)}/`
+            + `${log.ordinal}/output?after_seq=${log.nextSeq}`);
+        if (log !== openLog) return;      // closed or switched while this was in flight
+        log.text += (doc.chunks || []).map((c) => c.text).join('');
+        if (doc.chunks?.length) log.nextSeq = doc.next_seq - 1;
+        log.done = !!doc.done;
+        log.expired = !!doc.expired;
+        const pre = document.getElementById('pkg-step-log-text');
+        if (pre && !log.expired) {
+            // Follow the tail only if the reader was already there: someone scrolled up to
+            // read an error must not be yanked back down every second.
+            const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+            pre.textContent = log.text || (log.done ? t('packages.progress.log_empty') : t('common.loading'));
+            if (atBottom) pre.scrollTop = pre.scrollHeight;
+        } else if (progressDeployment) {
+            renderProgress(progressDeployment);
+        }
+        if (!log.done) logTimer = setTimeout(pollLog, LOG_POLL_MS);
+    } catch (e) {
+        log.text += `\n${e.message}\n`;
+    }
+}
+
+function renderTargetRows(target, body) {
+    const tr = el('tr', 'pkg-target-row');
+    const pick = el('td');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = selectedTargets.has(target.machine);
+    box.setAttribute('aria-label', t('packages.progress.select_machine', { machine: target.machine }));
+    box.addEventListener('change', () => {
+        if (box.checked) selectedTargets.add(target.machine);
+        else selectedTargets.delete(target.machine);
+        syncProgressActions();
+    });
+    pick.appendChild(box);
+    tr.appendChild(pick);
+
+    const machine = el('td');
+    const expanded = expandedTargets.has(target.machine);
+    const toggle = el('button', 'pkg-expand', `${expanded ? '▾' : '▸'} ${target.machine}`);
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    toggle.title = expanded ? t('packages.progress.hide_steps') : t('packages.progress.show_steps');
+    toggle.addEventListener('click', () => {
+        if (expandedTargets.has(target.machine)) expandedTargets.delete(target.machine);
+        else expandedTargets.add(target.machine);
+        renderProgress(progressDeployment);
+    });
+    machine.appendChild(toggle);
+    tr.appendChild(machine);
+
+    const stage = el('td');
+    stage.appendChild(el('span', `pkg-stage pkg-stage--${target.stage}`, stageLabel(target.stage)));
+    tr.appendChild(stage);
+
+    const where = el('td');
+    const text = currentStepText(target);
+    if (text) where.appendChild(el('div', null, text));
+    if (target.started_at && (target.stage === 'running' || target.stage === 'aborting')) {
+        where.appendChild(el('div', 'stat-card__meta', t('packages.progress.elapsed', {
+            duration: fmtSeconds(nowEpoch() - target.started_at) })));
+    } else if (target.started_at && target.finished_at) {
+        where.appendChild(el('div', 'stat-card__meta', t('packages.progress.took', {
+            duration: fmtSeconds(target.finished_at - target.started_at) })));
+    }
+    tr.appendChild(where);
+
+    tr.appendChild(el('td', null, String(target.attempts)));
+
+    const detail = el('td');
+    if (target.failed_step) {
+        detail.appendChild(el('div', null,
+            t('packages.progress.failed_at', { step: phaseLabel(target.failed_step) })));
+    }
+    if (target.last_error) {
+        detail.appendChild(el('div', 'pkg-target-error', target.last_error));
+    } else if (target.next_attempt_at && target.status === 'pending') {
+        detail.appendChild(el('div', 'stat-card__meta',
+            t('packages.deployments.retries_at', { when: fmtTime(target.next_attempt_at) })));
+    }
+    tr.appendChild(detail);
+    body.appendChild(tr);
+
+    if (expanded) {
+        const stepsRow = el('tr', 'pkg-steps-row');
+        const cell = el('td');
+        cell.colSpan = 6;
+        cell.appendChild(renderStepList(target));
+        stepsRow.appendChild(cell);
+        body.appendChild(stepsRow);
+    }
+}
+
+function renderProgressActions() {
+    const bar = el('div', 'pkg-progress-actions');
+    const all = el('label', 'stat-card__meta');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.id = 'progress-select-all';
+    const visible = progressDeployment.targets.map((target) => target.machine);
+    box.checked = visible.length > 0 && visible.every((m) => selectedTargets.has(m));
+    box.addEventListener('change', () => {
+        visible.forEach((m) => (box.checked ? selectedTargets.add(m) : selectedTargets.delete(m)));
+        renderProgress(progressDeployment);
+    });
+    all.appendChild(box);
+    all.appendChild(document.createTextNode(` ${t('packages.progress.select_all')}`));
+    bar.appendChild(all);
+
+    [['progress-abort', t('packages.progress.abort'), abortSelected, 'btn btn--danger'],
+     ['progress-redeploy', t('packages.progress.redeploy_selected'), redeploySelected, 'btn'],
+     ['progress-retry-now', t('packages.progress.retry_now'), retryNowSelected, 'btn']]
+        .forEach(([id, label, handler, cls]) => {
+            const button = el('button', cls, label);
+            button.type = 'button';
+            button.id = id;
+            button.addEventListener('click', handler);
+            bar.appendChild(button);
+        });
+    return bar;
+}
+
+/** Offer only what the selection can take, so a disabled button explains itself by its
+ *  absence of effect rather than a refusal after the click. */
+function syncProgressActions() {
+    if (!progressDeployment) return;
+    const chosen = progressDeployment.targets.filter((target) => selectedTargets.has(target.machine));
+    const set = (id, enabled) => {
+        const button = document.getElementById(id);
+        if (button) button.disabled = !enabled;
+    };
+    set('progress-abort', chosen.some((target) => isUnresolved(target)
+        && target.stage !== 'aborting'));
+    set('progress-redeploy', chosen.some((target) => !isUnresolved(target)));
+    set('progress-retry-now', chosen.some((target) => target.stage === 'retry_wait'));
+}
 
 function renderProgress(deployment) {
+    progressDeployment = deployment;
     document.getElementById('progress-title').textContent =
         t('packages.deployments.progress_title', {
             package: deployment.package_name || t('packages.deployments.deleted_package'),
             status: statusLabel(deployment.status),
         });
+    // A machine that left the deployment (deleted, or out of scope now) leaves the selection.
+    const present = new Set(deployment.targets.map((target) => target.machine));
+    [...selectedTargets].forEach((m) => { if (!present.has(m)) selectedTargets.delete(m); });
+
+    // The open log's <pre> keeps its scroll position across a re-render.
+    const oldPre = document.getElementById('pkg-step-log-text');
+    const logScroll = oldPre ? oldPre.scrollTop : null;
+
     progressBody.replaceChildren();
     progressBody.appendChild(renderProgressBar(deployment.target_counts, deployment.target_total));
     progressBody.appendChild(renderTally(deployment.target_counts));
+    progressBody.appendChild(renderProgressActions());
 
     const table = el('table', 'data-table');
-    table.style.marginTop = 'var(--space-4)';
     const head = el('thead');
     const headRow = el('tr');
-    [t('packages.deployments.target_col.machine'), t('packages.deployments.target_col.status'),
-     t('packages.deployments.target_col.attempts'),
+    ['', t('packages.deployments.target_col.machine'), t('packages.deployments.target_col.status'),
+     t('packages.progress.col_step'), t('packages.deployments.target_col.attempts'),
      t('packages.deployments.target_col.detail')].forEach((label) => {
         headRow.appendChild(el('th', null, label));
     });
     head.appendChild(headRow);
     table.appendChild(head);
-
     const body = el('tbody');
-    deployment.targets.forEach((target) => {
-        const tr = el('tr');
-        tr.appendChild(el('td', null, target.machine));
-        tr.appendChild(el('td', null, statusLabel(target.status)));
-        tr.appendChild(el('td', null, String(target.attempts)));
-
-        const detail = el('td');
-        if (target.last_error) {
-            detail.appendChild(el('div', 'pkg-target-error', target.last_error));
-        } else if (target.next_attempt_at) {
-            detail.appendChild(el('div', 'stat-card__meta',
-                t('packages.deployments.retries_at',
-                  { when: fmtTime(target.next_attempt_at) })));
-        }
-        tr.appendChild(detail);
-        body.appendChild(tr);
-    });
+    deployment.targets.forEach((target) => renderTargetRows(target, body));
     table.appendChild(body);
-    progressBody.appendChild(table);
+    const scroll = el('div', 'table-scroll');
+    scroll.appendChild(table);
+    progressBody.appendChild(scroll);
+    syncProgressActions();
+
+    const pre = document.getElementById('pkg-step-log-text');
+    if (pre && logScroll !== null) pre.scrollTop = logScroll;
 
     // Keep watching only while something can still change. The hub's scheduler is what
     // actually advances the deploy; this is a viewer, so a closed tab costs nothing.
-    const unresolved = deployment.targets.some((t) => !TERMINAL.includes(t.status));
     clearTimeout(pollTimer);
-    if (unresolved && progressModal.open) {
-        pollTimer = setTimeout(() => refreshProgress(), 5000);
+    if (deployment.targets.some(isUnresolved) && progressModal.open) {
+        pollTimer = setTimeout(() => refreshProgress(), PROGRESS_POLL_MS);
     }
 }
 
@@ -1293,14 +1921,88 @@ async function refreshProgress() {
 }
 
 async function openProgress(deploymentId) {
+    if (deploymentId !== openDeploymentId) {
+        expandedTargets.clear();
+        selectedTargets.clear();
+        openLog = null;
+    }
     openDeploymentId = deploymentId;
+    progressDeployment = null;
     progressBody.replaceChildren(el('p', 'stat-card__meta', t('common.loading')));
     progressModal.showModal();
     await refreshProgress();
+    // One machine is the common case (a deploy to one PC): open its steps straight away.
+    if (progressDeployment?.targets.length === 1
+        && !expandedTargets.size) {
+        expandedTargets.add(progressDeployment.targets[0].machine);
+        renderProgress(progressDeployment);
+    }
+}
+
+function selectedMachines() {
+    return progressDeployment
+        ? progressDeployment.targets.map((target) => target.machine).filter((m) => selectedTargets.has(m))
+        : [];
+}
+
+async function postProgressAction(path, machines) {
+    // Content-Type is load-bearing, not habit: app.login_required refuses a POST without
+    // it, which is what keeps a cross-site form from aborting a deploy.
+    return api(`/api/deployments/${encodeURIComponent(openDeploymentId)}/${path}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(machines ? { machines } : {}),
+    });
+}
+
+async function abortSelected() {
+    const machines = selectedMachines();
+    if (!machines.length) return;
+    if (!await confirmDialog({
+        title: t('packages.progress.confirm_abort_title'),
+        message: t('packages.progress.confirm_abort', { count: machines.length }),
+        confirmLabel: t('packages.progress.confirm_abort_ok'),
+        cancelLabel: t('dialog.keep_running'),
+        danger: true,
+    })) return;
+    try {
+        const doc = await postProgressAction('abort', machines);
+        renderProgress(doc);
+        const outcome = doc.abort || {};
+        if ((outcome.unsupported || []).length) {
+            void noticeDialog({ kind: 'error', message: t('packages.progress.abort_unsupported', {
+                min: MIN_PROGRESS_AGENT, machines: outcome.unsupported.join(', ') }) });
+        } else if (!(outcome.cancelled || []).length && !(outcome.aborting || []).length) {
+            void noticeDialog({ message: t('packages.progress.abort_none') });
+        }
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
+}
+
+async function redeploySelected() {
+    const machines = selectedMachines();
+    if (!machines.length) return;
+    if (!await confirmDialog({
+        title: t('packages.progress.confirm_redeploy_title'),
+        message: t('packages.progress.confirm_redeploy', { count: machines.length }),
+        confirmLabel: t('packages.progress.confirm_redeploy_ok'),
+    })) return;
+    try {
+        renderProgress(await postProgressAction('retry', machines));
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
+}
+
+async function retryNowSelected() {
+    const machines = selectedMachines();
+    if (!machines.length) return;
+    try {
+        const doc = await postProgressAction('retry-now', machines);
+        renderProgress(doc);
+        if (!doc.moved) void noticeDialog({ message: t('packages.progress.retry_now_none') });
+    } catch (e) { void noticeDialog({ message: e.message, kind: 'error' }); }
 }
 
 document.getElementById('progress-close').addEventListener('click', () => {
     clearTimeout(pollTimer);
+    clearTimeout(logTimer);
     progressModal.close();
     loadDeployments();
 });

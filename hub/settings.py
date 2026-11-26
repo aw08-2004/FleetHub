@@ -67,12 +67,17 @@ Setting = namedtuple("Setting", [
     "unit",      # a UNIT SLUG ("seconds", "celsius") resolved through settings.unit.*
     "choices",   # for "enum"/"str_list": a list, or callable(db_path) -> list
     "agent",     # True => shipped to agents over the heartbeat config channel
+    "policy",    # True => a Group Policy may set it per OU/folder, resolved ON THE HUB
 ])
+# `policy` exists for settings the hub enforces per machine but the agent never needs to know
+# about -- the remote view mode is the first (roadmap #2 follow-up, done through #32). A
+# policy-settable key is NOT `agent`: shipping it would move the config version of every PC under
+# the OU and push a config that changes nothing on the PC. gpo.config_overrides() filters them out.
 
 
 def _s(key, section, type, default, *, minimum=None, maximum=None,
-       unit="", choices=None, agent=False):
-    return Setting(key, section, type, default, minimum, maximum, unit, choices, agent)
+       unit="", choices=None, agent=False, policy=False):
+    return Setting(key, section, type, default, minimum, maximum, unit, choices, agent, policy)
 
 
 # ------------------------------------------------------- where the words live
@@ -224,17 +229,15 @@ REGISTRY = (
     _s("hub.live_default_window_seconds", "hub", "int", 60, minimum=5, maximum=86400,
        unit="seconds"),
     _s("hub.auto_update", "hub", "bool", None),
-    # Release channels (roadmap #21). Three knobs, one per updater, and they are deliberately
-    # independent: a hub tracking beta while its fleet stays stable is the normal way to try a
-    # hub release, and the reverse (a pilot ring of agents against a stable hub) is the normal
-    # way to try an agent one.
+    # Release channels (roadmap #21). The agents' channel is fleet.default_agent_channel plus a
+    # per-machine override; the client's is below. **There is no `hub.update_channel` any
+    # more.** It picked the git branch this hub read HUB_VERSION from -- `main` or `beta` --
+    # and the beta branch was retired on 2026-11-24 (ROADMAP.MD, *Beta branch retired*), so a
+    # hub left on beta would have silently stopped updating. Removed rather than narrowed to
+    # one choice: a picker with one option is a setting that does nothing. A hub's stored row
+    # for it is skipped by _build like any key that left the registry, and every hub reads main
+    # (channels.HUB_REF).
     #
-    # `hub.update_channel` selects a git REF rather than a manifest, because the hub has no
-    # manifest -- it reads HUB_VERSION out of app.py. Beta hubs track the `beta` branch. It
-    # only INSTALLS anything when hub.auto_update is on, but the sidebar update notice follows
-    # it either way: knowing a newer hub exists matters most precisely when this hub is not
-    # going to install it by itself.
-    _s("hub.update_channel", "hub", "enum", channels.DEFAULT, choices=list(channels.CHANNELS)),
     # Which client build the Download page offers and updater.dart accepts. Lives in `hub`
     # rather than a section of its own for the reason device_token_lifetime_days does: one
     # knob is not a tab.
@@ -426,6 +429,12 @@ REGISTRY = (
        choices=list(channels.UPDATE_MODES)),
     _s("fleet.agent_pin.android", "fleet", "str", ""),
 
+    # The agent release mirror (roadmap #33): the hub keeps a copy of the signed release files
+    # and serves them to PCs that cannot reach GitHub. On by default, because the PCs that need
+    # it are exactly the ones whose operators do not yet know they do -- a failed update check is
+    # silent. Off gives the disk back and leaves every client on GitHub alone, as before.
+    _s("fleet.release_mirror", "fleet", "bool", True),
+
     # Command PUSH: how long the hub may hold an agent's command request open so a command
     # issued in the meantime goes down it immediately, and how many it will hold at once.
     # See fleet.py's COMMAND PUSH block -- claiming is unchanged and is the fallback.
@@ -502,9 +511,12 @@ REGISTRY = (
        unit="pcs"),
 
     # ---------------- Remote view/control (roadmap #2) ----------------
-    _s("remote.enabled", "remote", "bool", True),
+    # Both may be set per OU/folder by a Group Policy (policy=True). The fleet-wide
+    # `remote.enabled` stays a hard kill switch: a policy can turn remote off for its OU, never
+    # on over a fleet-wide off -- see remote_web._remote_policy.
+    _s("remote.enabled", "remote", "bool", True, policy=True),
     _s("remote.consent_mode", "remote", "enum", "unattended",
-       choices=["unattended", "attended"]),
+       choices=["unattended", "attended"], policy=True),
     _s("remote.session_ttl_seconds", "remote", "int", 4 * 60 * 60, minimum=300,
        maximum=86400, unit="seconds"),
     _s("remote.turn_ttl_seconds", "remote", "int", 600, minimum=60, maximum=86400,
@@ -535,6 +547,12 @@ REGISTRY = (
        unit="seconds"),
     _s("directory.alert_on_unmatched", "directory", "bool", True),
     _s("directory.tls_verify", "directory", "bool", True),
+    # A PEM path ON THE HUB, not the certificate itself: a path is short, survives a settings
+    # export without dragging key material around, and is the same shape as the sign-in's
+    # LDAP_CA_FILE, so one file under /state serves both. Empty means "the image's public CA
+    # list", which never contains an enterprise AD CS root -- that was the first thing a real
+    # domain hit (CERTIFICATE_VERIFY_FAILED, with no setting that could fix it).
+    _s("directory.ca_file", "directory", "str", ""),
     _s("directory.allow_insecure", "directory", "bool", False),
 
     # ---------------- Firmware updates (roadmap #9) ----------------
@@ -1394,6 +1412,7 @@ def schema(db_path, lang=None):
                 "choice_labels": {c: choice_label(setting, c, lang)
                                   for c in (choices or [])},
                 "agent": setting.agent,
+                "policy": setting.policy,
                 "placeholder": field_placeholder(setting, lang),
             })
         if fields:

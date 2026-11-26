@@ -37,11 +37,17 @@ Four things carry the design, and the first two are constraints rather than choi
         except the pilot ring, which is exactly backwards. While stable's manifest is strictly
         newer, a beta machine is TOLD stable; the next beta that passes it flips it back.
 
-  * **The hub's own channel selects a git REF, not a manifest.** The agent and the client
-    each read a signed manifest; the hub has none -- `hub_update_available()` reads
-    HUB_VERSION straight out of `hub/app.py` on main, and the updater pulls either
-    `origin/main` or a codeload zip of main. So `hub_ref()` is the odd one out here by
-    necessity, not by oversight.
+  * **The hub has no channel; it always tracks `main`.** The agent and the client each read a
+    signed manifest, so a beta channel is one more file beside the stable one. The hub has no
+    manifest -- `hub_update_available()` reads HUB_VERSION straight out of `hub/app.py` and
+    the updater pulls `origin/main` or a codeload zip of it -- so a hub "channel" could only
+    ever be a git branch. From roadmap #21 until 2026-11-24 it was: a `hub.update_channel`
+    setting picked `main` or `beta`. **The `beta` branch was retired** (ROADMAP.MD, *Beta
+    branch retired*), and a hub left on that setting would have read HUB_VERSION from a
+    branch that no longer exists and silently stopped updating. A hub release is staged by
+    pinning an exact `X.Y.Z` image on a test hub instead. Kept as one named ref
+    (`HUB_REF`) rather than a channel map with one entry, so nothing suggests there is a
+    second one to pick.
 
   * **Unknown reads as stable, everywhere.** A channel name arriving from a database column,
     a settings value, or an older peer is normalised through `normalize()`, and anything
@@ -86,8 +92,9 @@ DEFAULT = STABLE
 #: catalog entries fails tests/test_i18n.py rather than captioning a picker with its own key.
 CHANNEL_TEXT_KEY = "channels.channel"
 
-#: The git ref each channel tracks. Only the hub uses these -- see the module docstring.
-_REFS = {STABLE: "main", BETA: "beta"}
+#: The one git ref a hub reads its version from and updates to -- see the module docstring
+#: for why the hub, unlike the agent and the client, has no beta channel.
+HUB_REF = "main"
 
 #: Manifest filenames. The Windows names are the existing files and must not change: they are
 #: pinned `-text` in .gitattributes and baked into every agent already in the field.
@@ -186,8 +193,15 @@ def agent_manifest_url(channel=DEFAULT, platform=capabilities.PLATFORM_WINDOWS):
     filed under another agent's directory is one that gets updated by the wrong release
     script exactly once.
     """
+    return f"https://raw.githubusercontent.com/{REPO}/main/{agent_manifest_path(channel, platform)}"
+
+
+def agent_manifest_path(channel=DEFAULT, platform=capabilities.PLATFORM_WINDOWS):
+    """The same manifest as a path inside the repository. The hub's release mirror (roadmap
+    #33) serves files under their repository paths, so a client that cannot reach GitHub
+    swaps one base for another and changes nothing else."""
     directory, filename = _AGENT_MANIFEST[normalize_platform(platform)][normalize(channel)]
-    return f"https://raw.githubusercontent.com/{REPO}/main/{directory}/{filename}"
+    return f"{directory}/{filename}"
 
 
 def agent_release_notes_url(version, channel=DEFAULT):
@@ -313,33 +327,27 @@ def client_manifest_filename(channel):
 # ================================
 # HUB
 # ================================
-def hub_ref(channel=DEFAULT):
-    """The git ref this hub's channel tracks. `main` for stable, `beta` for beta."""
-    return _REFS[normalize(channel)]
-
-
-def hub_source_url(channel=DEFAULT):
+def hub_source_url():
     """Where to read HUB_VERSION for the update notice and the opt-in self-updater."""
-    return f"https://raw.githubusercontent.com/{REPO}/{hub_ref(channel)}/hub/app.py"
+    return f"https://raw.githubusercontent.com/{REPO}/{HUB_REF}/hub/app.py"
 
 
-def hub_archive_url(channel=DEFAULT):
+def hub_archive_url():
     """The branch zip the files-only self-update path downloads."""
-    return f"https://codeload.github.com/{REPO}/zip/refs/heads/{hub_ref(channel)}"
+    return f"https://codeload.github.com/{REPO}/zip/refs/heads/{HUB_REF}"
 
 
-def hub_release_notes_url(version, channel=DEFAULT):
-    """The release notes for a hub version, on the ref this hub's channel tracks, or None.
+def hub_release_notes_url(version):
+    """The release notes for a hub version, on `main`, or None.
 
-    The hub has no GitHub releases -- a hub release is a HUB_VERSION bump on a branch -- so
-    the notes are a file, `deploy/docker/release-notes/<version>.md`, written in the same
-    change as the bump (CLAUDE.md makes that a rule). Read from the channel's ref rather than
-    from main, because a beta hub is announcing a version that only exists on beta.
+    The hub has no GitHub releases -- a hub release is a HUB_VERSION bump on `main` -- so the
+    notes are a file, `deploy/docker/release-notes/<version>.md`, written in the same change
+    as the bump (CLAUDE.md makes that a rule).
     """
     version = str(version or "").strip()
     if not version:
         return None
-    return f"https://github.com/{REPO}/blob/{hub_ref(channel)}/deploy/docker/release-notes/{version}.md"
+    return f"https://github.com/{REPO}/blob/{HUB_REF}/deploy/docker/release-notes/{version}.md"
 
 
 # ================================

@@ -25,6 +25,12 @@ public sealed class RestartState
 {
     [JsonPropertyName("target")] public string Target { get; set; } = "";
     [JsonPropertyName("count")] public int Count { get; set; }
+
+    /// <summary>When the last attempt was made, so a target the guard gave up on can be tried
+    /// again a day later (see AgentConfig.GiveUpRetryAfter). Null in files written before 0.4.1,
+    /// which reads as "long ago": those are exactly the boxes stuck on the old give-up-forever
+    /// rule.</summary>
+    [JsonPropertyName("last_attempt_utc")] public DateTimeOffset? LastAttemptUtc { get; set; }
 }
 
 /// <summary>The signed self-update manifest: which version, where, and what it hashes to.

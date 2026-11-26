@@ -37,6 +37,7 @@ from flask import Blueprint, jsonify, render_template, request, send_file
 
 import fleet
 import i18n
+import package_conditions
 import packages
 import permissions
 import permissions_web
@@ -64,6 +65,26 @@ def _bearer_agent(db_path):
     return agent_id, machine
 
 
+def scoped_targets(access, machines):
+    """Validate every requested target against the caller's scope.
+
+    Returns (targets, error, status) -- all-or-nothing on purpose, see the module
+    docstring. An empty selection is a 400 (malformed request); an out-of-scope
+    machine is a 403 (well-formed, refused). Shared with deploy_progress_web.py, whose
+    Abort and Retry now take a selection of a deployment's machines the same way.
+    """
+    names = [str(m or "").strip() for m in (machines or [])]
+    names = [n for n in names if n]
+    if not names:
+        return None, "Select at least one machine.", 400
+    denied = [n for n in names if not access.in_scope(n)]
+    if denied:
+        return None, (f"You do not have access to {denied[0]!r}"
+                      + (f" and {len(denied) - 1} other machine(s)."
+                         if len(denied) > 1 else ".")), 403
+    return names, None, 200
+
+
 def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=""):
     """Build the packages Blueprint.
 
@@ -82,22 +103,47 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
         return permissions_web.current_actor()
 
     def _scoped_targets(machines):
-        """Validate every requested target against the caller's scope.
+        return scoped_targets(access, machines)
 
-        Returns (targets, error, status) -- all-or-nothing on purpose, see the module
-        docstring. An empty selection is a 400 (malformed request); an out-of-scope
-        machine is a 403 (well-formed, refused).
+    def _condition_vocab():
+        """What the If editor builds conditions from, in the caller's language. Served, not
+        hardcoded in the page, for the same reason as step_kinds: a variable added to
+        package_conditions shows up in the builder with no JS change.
+
+        Labels are spelled per variable in the catalogs (`packages.cond.var.<name>.label`);
+        a custom field is labelled with its own name, which is what the operator called it.
         """
-        names = [str(m or "").strip() for m in (machines or [])]
-        names = [n for n in names if n]
-        if not names:
-            return None, "Select at least one machine.", 400
-        denied = [n for n in names if not access.in_scope(n)]
-        if denied:
-            return None, (f"You do not have access to {denied[0]!r}"
-                          + (f" and {len(denied) - 1} other machine(s)."
-                             if len(denied) > 1 else ".")), 403
-        return names, None, 200
+        fields = package_conditions.field_variables(db_path)
+        variables = []
+        for entry in package_conditions.catalog(fields):
+            name = entry["name"]
+            entry["label"] = (name[len("field."):] if name.startswith("field.")
+                              else i18n.translate(
+                                  f"{package_conditions.VAR_TEXT_KEY}.{name}.label", _lang()))
+            variables.append(entry)
+        operators = sorted({op for ops in package_conditions.OPERATORS_BY_KIND.values()
+                            for op in ops})
+        return {
+            "variables": variables,
+            # The rules page's own operator labels: one wording for "is at least" across the
+            # console, not one per page.
+            "operators": {op: i18n.translate(f"rules.operator.{op}.label", _lang())
+                          for op in operators},
+            "probes": [
+                {"name": kind,
+                 "label": i18n.translate(
+                     f"{package_conditions.PROBE_TEXT_KEY}.{kind}.label", _lang()),
+                 "description": i18n.translate(
+                     f"{package_conditions.PROBE_TEXT_KEY}.{kind}.description", _lang())}
+                for kind in package_conditions.PROBE_KINDS
+            ],
+            "fact_bindings": package_conditions.FACT_BINDINGS,
+            "on_unknown": list(package_conditions.ON_UNKNOWN_CHOICES),
+            "stop_outcomes": list(packages.STOP_OUTCOMES),
+            "max_depth": packages.MAX_STEP_DEPTH,
+            "max_probe_timeout": package_conditions.MAX_PROBE_TIMEOUT,
+            "min_agent": ".".join(str(p) for p in packages.MIN_CONDITIONS_AGENT),
+        }
 
     # ---------------- Pages ----------------
     @bp.route("/packages")
@@ -140,6 +186,7 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
             "file_placeholder": packages.FILE_PLACEHOLDER,
             "work_variable": packages.WORK_VAR,
             "max_steps": packages.MAX_STEPS,
+            "conditions": _condition_vocab(),
             "max_upload_mb": settings.get_int(db_path, "deploy.max_upload_mb"),
             "defaults": {
                 "success_exit_codes": list(packages.DEFAULT_SUCCESS_EXIT_CODES),
@@ -149,6 +196,46 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
                 "retry_backoff_seconds": settings.get_int(
                     db_path, "deploy.default_retry_backoff_seconds"),
             },
+        }), 200
+
+    @bp.route("/api/packages/conditions/preview", methods=["POST"])
+    @login_required
+    @can_deploy
+    def preview_condition():
+        """What one machine would answer to one condition, from what the HUB knows of it.
+
+        A preview, not a verdict, and the response says which parts it could not answer:
+        the deploy itself is decided by the agent's live reading (package_conditions'
+        docstring says why), and file / registry / PowerShell checks and Lenovo's model name
+        are things only the machine can see. Those come back `unknown` with
+        `on_machine: true`, never guessed.
+
+        The machine arrives in the body, so the scope check is inline -- require_machine
+        reads a URL argument (see permissions_web). The check is the same one, and like
+        require_machine it gives a scoped operator the same 403 for a machine that does not
+        exist as for one outside their scope, so it cannot be used to learn which hostnames
+        exist. An unscoped operator, who can see every machine anyway, gets a preview with no
+        facts for a name the hub has never heard of. (A caller without the capability
+        is stopped earlier, by can_deploy, with that gate's own message.)
+        """
+        data = request.get_json(silent=True) or {}
+        machine = str(data.get("machine") or "").strip()
+        if not machine or not access.in_scope(machine):
+            return jsonify({"error": f"You do not have access to {machine!r}."}), 403
+        fields = package_conditions.field_variables(db_path)
+        try:
+            condition = package_conditions.validate(
+                data.get("condition"), package_conditions.Context(extra=fields))
+        except ValueError as e:
+            return refusals.refuse(e)
+        names = package_conditions.referenced_variables(condition)
+        facts = package_conditions.resolve_hub_facts(db_path, machine, names)
+        result = package_conditions.evaluate(condition, facts, fields)
+        return jsonify({
+            "machine": machine,
+            "result": package_conditions.result_name(result),
+            "explain": package_conditions.explain(condition, facts, fields),
+            "facts": facts,
         }), 200
 
     @bp.route("/api/packages/upload", methods=["POST"])
@@ -359,9 +446,22 @@ def create_packages_blueprint(db_path, log_dir, login_required, access, hub_url=
     @login_required
     @can_deploy
     def retry_deployment(deployment_id):
+        """Redeploy. With no body, every failed/expired/cancelled target -- but only the ones
+        in the caller's scope: an operator who can see three of a deployment's forty
+        machines must not be able to requeue the other thirty-seven. With `machines`, those
+        targets whatever they ended as, which is PDQ's "Redeploy selected"."""
+        data = request.get_json(silent=True) or {}
+        if data.get("machines") is not None:
+            targets, error, status = _scoped_targets(data.get("machines"))
+            if error:
+                return jsonify({"error": error}), status
+            selection, include_succeeded = targets, True
+        else:
+            selection, include_succeeded = access.current().get("machines"), False
         try:
             requeued = packages.retry_deployment_failures(
-                db_path, deployment_id, actor=_current_email())
+                db_path, deployment_id, actor=_current_email(), machines=selection,
+                include_succeeded=include_succeeded)
         except KeyError:
             return jsonify({"error": "unknown deployment"}), 404
         deployment = _visible_deployment(deployment_id)

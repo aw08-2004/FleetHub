@@ -62,7 +62,7 @@ SIDEBAR_ENDPOINTS = """index inventory_page alerts_page tools_page remote_page s
     policy.policy_page device_groups.device_groups_page pc_tree.pc_tree_page gpo.group_policy_page watchdogs.watchdogs_page""".split()
 
 
-def build_app(db_path, unsigned=None):
+def build_app(db_path, unsigned=None, mirror_has=None):
     app = Flask(__name__, template_folder=os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub", "templates"))
     app.secret_key = "test"
@@ -70,7 +70,7 @@ def build_app(db_path, unsigned=None):
     app.register_blueprint(create_onboarding_blueprint(
         db_path, fake_login_required, access, hub_url=HUB,
         valid_machine_name=lambda n: bool(n) and "<" not in n,
-        unsigned_reporters=lambda: list(unsigned or [])))
+        unsigned_reporters=lambda: list(unsigned or []), mirror_has=mirror_has))
     for name in SIDEBAR_ENDPOINTS:
         blueprint, _, endpoint = name.rpartition(".")
         if not blueprint:
@@ -231,6 +231,37 @@ def main():
         # the installer's failure ends the script.
         check("...installing BEFORE spending the code",
               shell.index('bash "$work/install.sh"') < shell.index("/api/onboarding/redeem"))
+        check("...with no mirror, GitHub alone and no mirror handed on (roadmap #33)",
+              "local installer_fallback_url=''" in shell and "local mirror_url=''" in shell)
+        check("...and the same for Windows", "$MirrorUrl    = ''" in script
+              and f"@('{onboarding_web.AGENT_INSTALLER_URL}', '')" in script)
+
+        # The hub's release mirror holds the installers (roadmap #33): the hub first, GitHub
+        # second, and the mirror handed to the installer. A second app over the same database,
+        # so the code above is still live.
+        mirrored = build_app(db, mirror_has=lambda path: True).test_client()
+        reset_limits()
+        m_ps = mirrored.get(f"/onboarding/run/{code}.ps1").get_data(as_text=True)
+        m_sh = mirrored.get(f"/onboarding/run/{code}.sh").get_data(as_text=True)
+        hub_ps1 = f"{HUB}/api/agent/dist/repo/{onboarding_web.AGENT_INSTALLER_PATH}"
+        hub_sh = f"{HUB}/api/agent/dist/repo/{onboarding_web.AGENT_LINUX_INSTALLER_PATH}"
+        check("with the mirror: Windows fetches the installer from the hub, then GitHub",
+              f"@('{hub_ps1}', '{onboarding_web.AGENT_INSTALLER_URL}')" in m_ps)
+        check("...and passes the mirror to the installer as a variable, not a parameter",
+              f"$MirrorUrl    = '{HUB}/api/agent/dist'" in m_ps
+              and "$env:FLEETHUB_MIRROR_URL = $MirrorUrl" in m_ps and "-MirrorUrl" not in m_ps)
+        check("...and Linux the same way",
+              f"local installer_url='{hub_sh}'" in m_sh
+              and f"local installer_fallback_url='{onboarding_web.AGENT_LINUX_INSTALLER_URL}'" in m_sh
+              and f"local mirror_url='{HUB}/api/agent/dist'" in m_sh
+              and 'FLEETHUB_MIRROR_URL="$mirror_url" bash "$work/install.sh"' in m_sh)
+        broken = build_app(db, mirror_has=lambda path: 1 / 0).test_client()
+        reset_limits()
+        b_ps = broken.get(f"/onboarding/run/{code}.ps1")
+        check("a mirror lookup that fails falls back to GitHub, never to an error page",
+              b_ps.status_code == 200
+              and f"@('{onboarding_web.AGENT_INSTALLER_URL}', '')" in b_ps.get_data(as_text=True))
+        reset_limits()
         check("...never printing the token",
               "echo \"$token\"" not in shell and "printf '%s\\n' \"$token\"" not in shell)
         check("...writing agent.json 0600 in one step, never widened then narrowed",

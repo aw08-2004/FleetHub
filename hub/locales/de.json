@@ -262,8 +262,9 @@
       "name": "Name",
       "description": "Beschreibung",
       "enabled": "Aktiviert",
-      "agent_settings": "Agent-Einstellungen",
+      "agent_settings": "Einstellungen",
       "agent_help": "Überschreibt den hubweiten Wert dieser Einstellungen auf den PCs, für die diese Richtlinie gilt. Funktioniert mit jeder Agent-Version.",
+      "hub_side": "Vom Hub durchgesetzt",
       "add_setting": "Einstellung hinzufügen…",
       "registry": "Registrierungswerte",
       "hive": "Struktur",
@@ -459,7 +460,9 @@
       "10s": "10 s",
       "1m": "1 Min",
       "5m": "5 Min",
-      "unknown": "--"
+      "unknown": "--",
+      "15m": "15 Min",
+      "1h": "1 Std"
     },
     "in_use": "Verwendet: {value}",
     "dynamic_on_zoom": "Dynamisch beim Zoomen",
@@ -1303,11 +1306,11 @@
       },
       "remote.enabled": {
         "label": "Fernansicht/-steuerung erlauben",
-        "help": "Hauptschalter für Remotesitzungen. Ist er aus, lässt sich keine Sitzung starten, auch nicht mit der Berechtigung dafür."
+        "help": "Hauptschalter für Remotesitzungen. Ist er aus, lässt sich keine Sitzung starten, auch nicht mit der Berechtigung dafür. Eine Gruppenrichtlinie kann die Fernsteuerung zusätzlich für eine OU oder einen Ordner abschalten, aber nie wieder einschalten, solange dieser Schalter aus ist."
       },
       "remote.consent_mode": {
         "label": "Einwilligungsmodus",
-        "help": "Unbeaufsichtigt verbindet sofort, das übliche Verhalten eines RMM. Beaufsichtigt fragt die angemeldete Person und lehnt von selbst ab, wenn niemand antwortet – funktioniert also nicht an einem Computer, an dem niemand sitzt."
+        "help": "Unbeaufsichtigt verbindet sofort, das übliche Verhalten eines RMM. Beaufsichtigt fragt die angemeldete Person und lehnt von selbst ab, wenn niemand antwortet – funktioniert also nicht an einem Computer, an dem niemand sitzt. Eine Gruppenrichtlinie an einer OU oder einem Ordner kann für die PCs darunter einen anderen Modus festlegen."
       },
       "remote.session_ttl_seconds": {
         "label": "Sitzung automatisch beenden nach",
@@ -1370,6 +1373,10 @@
       "directory.tls_verify": {
         "label": "Zertifikat des Domänencontrollers prüfen",
         "help": "Prüft das TLS-Zertifikat des Domänencontrollers. Abschalten macht die Verbindung abhörbar; nur zur Fehlersuche an einer internen CA gedacht."
+      },
+      "directory.ca_file": {
+        "label": "CA-Zertifikat (optional)",
+        "help": "Eine PEM-Datei auf dem Hub mit der Zertifizierungsstelle, die das Zertifikat des Domänencontrollers ausgestellt hat, falls es Ihre eigene ist (AD-Zertifikatdienste). Lassen Sie das Feld leer, wenn das Zertifikat von einer öffentlichen Zertifizierungsstelle stammt. In Docker gehört sie unter /state, z. B. /state/ad-ca.pem — es kann dieselbe Datei sein wie das CA-Zertifikat der Anmeldeseite."
       },
       "directory.allow_insecure": {
         "label": "Unverschlüsseltes LDAP erlauben",
@@ -1493,10 +1500,6 @@
         "label": "Update-Liste eines Rechners vergessen nach",
         "help": "Wie lange die gemeldeten verfügbaren Updates eines Rechners ohne neue Meldung bestehen bleiben. Ein Rechner, der nichts mehr meldet, würde sonst seine letzte Antwort für immer behalten und einen Compliance-Wert stützen, der seit Monaten nicht mehr stimmt."
       },
-      "hub.update_channel": {
-        "label": "Release-Kanal dieses Hubs",
-        "help": "Aus welchem Branch dieser Hub seine eigene Version liest und aktualisiert, wenn automatische Hub-Updates aktiv sind. Der Update-Hinweis folgt dem in jedem Fall – Sie erfahren also von einem neueren Hub, auch wenn dieser ihn nicht selbst installiert."
-      },
       "hub.client_update_channel": {
         "label": "Release-Kanal des Clients",
         "help": "Welchen Desktop- und Mobile-Client-Build die Download-Seite anbietet und auf welchen sich ein installierter Client selbst aktualisiert."
@@ -1528,6 +1531,10 @@
       "fleet.agent_pin.android": {
         "label": "Fixierte Android-Agent-Version",
         "help": "Die genaue Android-Agent-Version, die bei fixierten Updates installiert wird, als MAJOR.MINOR.PATCH."
+      },
+      "fleet.release_mirror": {
+        "label": "Agent-Downloads über diesen Hub",
+        "help": "Eine Kopie der Agent-Releases und Installer auf diesem Hub vorhalten, damit PCs ohne Zugriff auf GitHub trotzdem installiert und aktualisiert werden können. Alles Ausgelieferte wird auf dem PC weiterhin gegen den Signaturschlüssel der Flotte geprüft. Belegt einige hundert MB; beim Ausschalten wird der Platz freigegeben."
       },
       "sharing.enabled": {
         "label": "Rechner mit anderen Hubs teilen",
@@ -1777,10 +1784,6 @@
       "patches.auto_approve_classifications": {
         "security": "Sicherheit",
         "critical": "Kritisch"
-      },
-      "hub.update_channel": {
-        "stable": "Stabil",
-        "beta": "Beta"
       },
       "hub.client_update_channel": {
         "stable": "Stabil",
@@ -2168,7 +2171,26 @@
       "choose_file": "Wähle eine Datei zum Hochladen.",
       "save": "Paket speichern",
       "apk_payload": "Zu installierende APK",
-      "apk_hint": "die Nutzlast mit der .apk, in geschweiften Klammern"
+      "apk_hint": "die Nutzlast mit der .apk, in geschweiften Klammern",
+      "needs_agent": "Wenn- und Beenden-Schritte sowie Download-Bedingungen erfordern Agent {version} oder neuer. Ein Gerät mit älterem Agent erhält dieses Paket nicht; seine Zeile nennt den Grund, und „Fehlgeschlagene wiederholen“ sendet es nach dem Agent-Update.",
+      "if_condition": "Bedingung",
+      "on_unknown": "Wenn das Gerät es nicht feststellen kann",
+      "on_unknown_fail": "Diesen Schritt fehlschlagen lassen (empfohlen)",
+      "on_unknown_else": "Sonst ausführen",
+      "if_continue_on_error": "Wenn die Bedingung nicht entschieden werden kann, Dann und Sonst überspringen und fortfahren",
+      "if_then": "Dann",
+      "if_else": "Sonst",
+      "lane_empty": "Keine Schritte – hier passiert nichts.",
+      "lane_add": "Schritt hinzufügen",
+      "add_else_if": "Sonst-wenn hinzufügen",
+      "stop_outcome": "Verteilung beenden als",
+      "stop_success": "Erfolgreich – hier nichts zu tun",
+      "stop_failure": "Fehlgeschlagen",
+      "stop_message": "Meldung",
+      "stop_message_placeholder": "Nicht unterstütztes Modell",
+      "stop_help": "Nach diesem Schritt läuft nichts mehr, auch nicht die Erkennungsprüfung: Ein Beenden-Schritt legt fest, wie die Verteilung auf diesem Gerät endet.",
+      "payload_only_if": "Nur auf bestimmten Geräten herunterladen",
+      "payload_only_if_help": "Die Datei wird nur dort heruntergeladen, wo dies zutrifft – ein modellspezifisches Treiberpaket erreicht nur dieses Modell. Ein Schritt, der sie auf einem anderen Gerät verwendet, schlägt fehl; legen Sie solche Schritte daher in ein Wenn mit derselben Bedingung."
     },
     "deploy_editor": {
       "add_group": "Gruppe hinzufügen",
@@ -2234,6 +2256,71 @@
         "load_failed": "Die wartenden oder laufenden Geräte konnten nicht geladen werden. Laden Sie die Seite neu, um es erneut zu versuchen."
       }
     },
+    "_progress": [
+      "The live deployment view (roadmap #5): what each machine is doing, which step it",
+      "is on, each step's result and log, and Abort / Redeploy / Retry now."
+    ],
+    "progress": {
+      "stage": {
+        "scheduled": "Geplant",
+        "queued": "In der Warteschlange",
+        "retry_wait": "Wartet auf neuen Versuch",
+        "waiting": "Gesendet, wartet auf den Rechner",
+        "running": "Läuft",
+        "aborting": "Wird abgebrochen…",
+        "finishing": "Wird abgeschlossen",
+        "succeeded": "Erfolgreich",
+        "failed": "Fehlgeschlagen",
+        "expired": "Abgelaufen",
+        "cancelled": "Abgebrochen"
+      },
+      "state": {
+        "running": "Läuft",
+        "ok": "Fertig",
+        "failed": "Fehlgeschlagen",
+        "skipped": "Fehlgeschlagen, fortgesetzt",
+        "aborted": "Abgebrochen",
+        "not_run": "Nicht ausgeführt"
+      },
+      "col_step": "Fortschritt",
+      "step_of": "Schritt {current} von {total} · {what}",
+      "phase_step": "Schritt {n} · {what}",
+      "phase_download": "Download · {what}",
+      "phase_detect": "Erkennung · {what}",
+      "kind_command": "Installationsbefehl",
+      "exit_code": "Exitcode {code}",
+      "seconds": "{seconds} s",
+      "minutes": "{minutes} min {seconds} s",
+      "elapsed": "läuft seit {duration}",
+      "took": "dauerte {duration}",
+      "all_done": "Alle {total} Schritte erledigt",
+      "failed_at": "Fehlgeschlagen bei {step}",
+      "show_steps": "Schritte anzeigen",
+      "hide_steps": "Schritte ausblenden",
+      "no_steps_yet": "Die Schrittliste erscheint, sobald diese Verteilung an den Rechner gesendet wurde.",
+      "old_agent": "Der Agent dieses Rechners ({version}) meldet keine Schritte. Aktualisieren Sie ihn auf {min} für die Live-Schrittansicht und das Abbrechen.",
+      "old_agent_unknown": "Der Agent dieses Rechners meldet keine Schritte. Ab Agent {min} gibt es die Live-Schrittansicht und das Abbrechen.",
+      "show_log": "Protokoll",
+      "hide_log": "Protokoll ausblenden",
+      "log_empty": "Dieser Schritt hat nichts ausgegeben.",
+      "log_expired": "Das Protokoll dieses Schritts wurde bereits bereinigt. Die gesamte Ausgabe steht weiterhin im Befehlsverlauf des Rechners.",
+      "select_all": "Alle auswählen",
+      "select_machine": "{machine} auswählen",
+      "abort": "Abbrechen",
+      "confirm_abort_title": "Ausgewählte Rechner abbrechen?",
+      "confirm_abort": "{count} Rechner ausgewählt. Rechner, die noch nicht begonnen haben, werden storniert. Rechner, die gerade installieren, werden beim aktuellen Schritt gestoppt — dessen Programm wird beendet, was die Software halb installiert zurücklassen kann.",
+      "confirm_abort_ok": "Abbrechen",
+      "abort_unsupported": "Nicht abgebrochen — auf diesen Rechnern läuft ein Agent älter als {min}, der nicht gestoppt werden kann: {machines}",
+      "abort_none": "Nichts abzubrechen: Die ausgewählten Rechner waren bereits fertig.",
+      "redeploy_selected": "Erneut verteilen",
+      "confirm_redeploy_title": "An die ausgewählten Rechner erneut verteilen?",
+      "confirm_redeploy": "{count} Rechner ausgewählt. Jeder erhält neue Versuche mit dem Paket in seiner aktuellen Definition, auch Rechner, auf denen es bereits erfolgreich war.",
+      "confirm_redeploy_ok": "Erneut verteilen",
+      "retry_now": "Jetzt wiederholen",
+      "retry_now_none": "Keiner der ausgewählten Rechner wartet auf einen neuen Versuch.",
+      "branch_then": "Dann",
+      "branch_else": "Sonst"
+    },
     "status": {
       "scheduled": "geplant",
       "running": "läuft",
@@ -2269,6 +2356,14 @@
       "apk": {
         "label": "Android-App installieren",
         "description": "Installiert eine APK still auf einem vollständig verwalteten Android-Gerät. Ein Paket mit diesem Schritt ist nur für Android-Geräte, und jede Nutzlast muss per sha256 festgelegt sein."
+      },
+      "if": {
+        "label": "Wenn / Sonst",
+        "description": "Prüft eine Bedingung auf dem Gerät – Modell, Hersteller, Windows-Version, eine Datei, einen Registrierungswert oder eine PowerShell-Prüfung – und führt die Dann- oder die Sonst-Schritte aus."
+      },
+      "stop": {
+        "label": "Beenden",
+        "description": "Beendet die Verteilung hier – als Erfolg (auf diesem Gerät nichts zu tun) oder als Fehler (zum Beispiel ein nicht unterstütztes Modell)."
       }
     },
     "detection": {
@@ -2287,6 +2382,138 @@
       "installed_version": {
         "label": "Installierte Version",
         "description": "Schlägt das Produkt in der Registry der installierten Programme von Windows nach und verlangt mindestens eine bestimmte Version."
+      }
+    },
+    "cond": {
+      "var": {
+        "hw": {
+          "manufacturer": {
+            "label": "Hersteller"
+          },
+          "model": {
+            "label": "Modell"
+          },
+          "model_name": {
+            "label": "Modellname (Lenovo: ThinkPad X1 …)"
+          },
+          "sku": {
+            "label": "System-SKU"
+          },
+          "serial_number": {
+            "label": "Seriennummer"
+          },
+          "chassis": {
+            "label": "Gehäusetyp"
+          },
+          "memory_gb": {
+            "label": "Arbeitsspeicher (GB)"
+          },
+          "cpu": {
+            "label": "Prozessor"
+          }
+        },
+        "os": {
+          "name": {
+            "label": "Windows-Edition"
+          },
+          "version": {
+            "label": "Windows-Version"
+          },
+          "build": {
+            "label": "Windows-Build"
+          },
+          "display_version": {
+            "label": "Windows-Release (z. B. 23H2)"
+          },
+          "arch": {
+            "label": "Architektur"
+          }
+        },
+        "bios": {
+          "version": {
+            "label": "BIOS-Version"
+          }
+        },
+        "sys": {
+          "hostname": {
+            "label": "Computername"
+          },
+          "domain": {
+            "label": "Domäne oder Arbeitsgruppe"
+          },
+          "domain_joined": {
+            "label": "Mitglied einer Domäne"
+          },
+          "agent_version": {
+            "label": "Agent-Version"
+          }
+        },
+        "ad": {
+          "ou": {
+            "label": "AD-Organisationseinheit"
+          },
+          "dn": {
+            "label": "AD-Distinguished-Name"
+          },
+          "owner": {
+            "label": "AD-Besitzer"
+          }
+        },
+        "step": {
+          "last_exit_code": {
+            "label": "Exitcode des vorherigen Schritts"
+          }
+        }
+      },
+      "probe": {
+        "file_exists": {
+          "label": "Datei oder Ordner vorhanden",
+          "description": "Wahr, wenn der Pfad auf dem Gerät existiert."
+        },
+        "registry_value": {
+          "label": "Registrierungswert",
+          "description": "Wahr, wenn der Wert existiert – oder, bei exakter Übereinstimmung, genau diese Daten enthält."
+        },
+        "installed_version": {
+          "label": "Programm ist installiert",
+          "description": "Wahr, wenn ein Programm, dessen Name diesen Text enthält, in den installierten Programmen steht – bei Angabe einer Version mindestens in dieser."
+        },
+        "powershell": {
+          "label": "PowerShell-Prüfung",
+          "description": "Führt ein kurzes Skript als SYSTEM aus: Exitcode 0 bedeutet wahr, 1 bedeutet falsch, alles andere bedeutet, dass das Gerät es nicht feststellen konnte."
+        }
+      },
+      "mode_all": "Alle diese sind wahr",
+      "mode_any": "Mindestens eine ist wahr",
+      "mode_none": "Keine davon ist wahr",
+      "group": {
+        "hw": "Hardware",
+        "os": "Windows",
+        "bios": "BIOS",
+        "sys": "System",
+        "ad": "Active Directory",
+        "step": "Vorheriger Schritt",
+        "field": "Benutzerdefinierte Felder",
+        "checks": "Prüfungen auf dem Gerät"
+      },
+      "add_clause": "Bedingung hinzufügen",
+      "add_group": "Gruppe hinzufügen",
+      "empty_group": "Fügen Sie dieser Gruppe mindestens eine Bedingung hinzu.",
+      "yes": "Ja",
+      "no": "Nein",
+      "list_placeholder": "Werte durch Kommas trennen",
+      "powershell_hint": "Exitcode 0 für wahr, 1 für falsch. Halten Sie es kurz: Das Skript läuft vor dem Schritt und hält die Verteilung an, bis es antwortet.",
+      "probe_timeout": "Zeitlimit (Sekunden)",
+      "preview_machine": "An einem Gerät testen",
+      "preview_placeholder": "Computername",
+      "preview_button": "Testen",
+      "preview": {
+        "true": "Auf {machine} würde Dann ausgeführt.",
+        "false": "Auf {machine} würde Sonst ausgeführt.",
+        "unknown": "Für {machine} kann der Hub es nicht sagen – das Gerät entscheidet bei der Verteilung.",
+        "on_machine": "wird auf dem Gerät geprüft",
+        "no_value": "dem Hub nicht bekannt",
+        "caveat": "Nach dem letzten Stand des Hubs. Die Verteilung liest das Gerät live aus – ein geändertes Modell oder eine Neuinstallation kann anders antworten."
       }
     }
   },
@@ -2478,6 +2705,7 @@
         "new_credentials": "Werden auf diesem Server mit dem Sicherungs-Hauptschlüssel verschlüsselt gespeichert. Sie werden nie wieder angezeigt.",
         "test": "Verbindung testen",
         "testing": "Wird getestet…",
+        "presign_rejected": "Das Ziel akzeptiert die eigenen Anfragen des Hubs, lehnt aber die vorsignierten Upload-Links ab, die die PCs verwenden (SignatureDoesNotMatch). Damit würde jede Dateisicherung eines PCs fehlschlagen. Die häufigste Ursache ist ein Zugriffsschlüssel mit falscher Groß-/Kleinschreibung: MinIO AIStor speichert Schlüssel in Kleinbuchstaben und vergleicht die per Header signierten Anfragen des Hubs ohne Rücksicht auf Groß-/Kleinschreibung, ein vorsignierter Link trägt den Schlüssel aber in seiner signierten Abfrage, sodass ein Schlüssel mit gemischter Schreibung nur dort scheitert. Geben Sie den Zugriffsschlüssel genau so ein, wie der Speicherserver ihn anzeigt.",
         "save": "Ziel speichern"
       }
     },
@@ -2724,7 +2952,19 @@
       "title": "Verlauf",
       "day": "Tag:",
       "zoom_hint": "Mit dem Mausrad oder Ziehen ein Panel zoomen; der Zeitbereich bleibt über alle Diagramme hinweg synchron.",
-      "no_readings": "Für diesen Tag wurden keine Messwerte gefunden."
+      "no_readings": "Für diesen Tag wurden keine Messwerte gefunden.",
+      "range": "Zeitraum",
+      "range_live": "Live",
+      "range_1h": "1 Std.",
+      "range_6h": "6 Std.",
+      "range_24h": "24 Std.",
+      "expand": "Diagramm vergrößern",
+      "shrink": "Diagramm verkleinern",
+      "steady": "stabil",
+      "vs_avg": "{delta} ggü. Ø",
+      "min_peak": "min. {min} · Spitze {peak} um {time}",
+      "range_7d": "7 T.",
+      "range_30d": "30 T."
     },
     "terminal": {
       "title": "Terminal",
@@ -2819,6 +3059,7 @@
       "vdd_remove": "Virtuelle Anzeige entfernen",
       "starting": "Wird gestartet…",
       "waiting_helper": "Warten, bis der Agent seinen Aufnahme-Helfer startet…",
+      "waiting_consent": "Beaufsichtigter Modus: Warten, bis die am PC angemeldete Person zustimmt…",
       "start_failed": "Start nicht möglich: {error}",
       "connecting": "Verbindung wird hergestellt…",
       "reconnecting": "Neuverbindung…",
@@ -3150,9 +3391,7 @@
       },
       "no_answer_note": "Das Magic Packet wurde gesendet, und der PC hat sich seitdem nicht gemeldet."
     },
-    "fold": {
-      "stats": "Auf einen Blick"
-    },
+    "fold": {},
     "open": {
       "label": "In Werkzeugen öffnen:",
       "terminal": "Terminal",
@@ -3242,7 +3481,27 @@
       }
     },
     "breadcrumb_label": "Navigationspfad",
-    "settings_title": "Geräteeinstellungen"
+    "settings_title": "Geräteeinstellungen",
+    "bento": {
+      "clock": "Takt",
+      "power": "Leistung",
+      "hot_at": "Heiß ab {value} °C",
+      "memory": "Arbeitsspeicher",
+      "memory_used": "{used} von {total} GB",
+      "profile": "Geräteprofil",
+      "copy": "Kopieren",
+      "copied": "Kopiert",
+      "f": {
+        "manufacturer": "Hersteller",
+        "model": "Modell",
+        "serial": "Seriennummer",
+        "service_tag": "Service-Tag",
+        "asset_tag": "Anlagenkennzeichen",
+        "os": "Betriebssystem",
+        "ou": "OU",
+        "owner": "Verwaltet von"
+      }
+    }
   },
   "remote": {
     "title": "Remote",
@@ -5051,12 +5310,6 @@
     "read_failed": "Der Verschlüsselungszustand dieses Geräts konnte nicht gelesen werden: {error}",
     "load_error": "Verschlüsselungsdaten konnten nicht geladen werden.",
     "retry": "Erneut versuchen",
-    "column": {
-      "volume": "Volume",
-      "protection": "Schutz",
-      "method": "Verfahren",
-      "key": "Wiederherstellungsschlüssel"
-    },
     "protection": {
       "on": "Geschützt",
       "off": "Nicht geschützt",
@@ -5353,6 +5606,23 @@
       "unsigned_heading": "Rechner, die ohne Registrierung melden",
       "unsigned_intro": "Diese Rechner haben am letzten Tag Telemetrie ohne Agenten-Anmeldedaten gesendet. Solange nur registrierte Telemetrie angenommen wird, wird sie abgelehnt. Aktualisieren Sie ihren Agenten oder nehmen Sie sie mit einem Code auf.",
       "unsigned_last": "letzter Bericht {when}",
+      "mirror": {
+        "heading": "Agent-Downloads über diesen Hub",
+        "intro": "PCs ohne Zugriff auf GitHub installieren und aktualisieren aus der Kopie der Agent-Releases auf diesem Hub. Alles wird auf dem PC weiterhin gegen den Signaturschlüssel der Flotte geprüft.",
+        "off": "Aus. Ein PC ohne Zugriff auf GitHub kann weder aufgenommen noch aktualisiert werden. Schalten Sie 'Agent-Downloads über diesen Hub' in den Einstellungen auf der Registerkarte Flotte ein.",
+        "never": "Noch nicht kopiert. Der Hub kopiert die Releases kurz nach dem Start von GitHub und danach alle 15 Minuten.",
+        "never_complete": "Noch keine vollständige Kopie ({size} auf dem Datenträger). Einige Dateien konnten nicht kopiert werden; siehe unten.",
+        "synced": "Letzte vollständige Kopie {when}, {size} auf dem Datenträger.",
+        "windows_stable": "Windows-Agent {version}",
+        "windows_beta": "Windows-Agent {version} (Beta)",
+        "windows_pinned": "Windows-Agent {version} (fixiert)",
+        "linux_stable": "Linux-Agent {version}",
+        "linux_beta": "Linux-Agent {version} (Beta)",
+        "linux_pinned": "Linux-Agent {version} (fixiert)",
+        "no_installers": "Die Installer sind noch nicht kopiert, daher lädt die Aufnahme sie weiterhin von GitHub.",
+        "no_pawnio": "Der PawnIO-Treiber ist nicht kopiert, daher wird ein PC ohne Internetzugang ohne Temperatur- und Lüfterwerte installiert.",
+        "errors": "Der letzte Versuch, {when}, hatte Probleme. Die vorherige Kopie jeder Datei wird weiterhin ausgeliefert:"
+      },
       "editor_title": "Neuer Onboarding-Code",
       "label": "Bezeichnung",
       "label_placeholder": "z. B. Empfangs-PC für Maria",
@@ -5405,7 +5675,7 @@
       "os_windows": "Windows",
       "os_linux": "Linux",
       "linux_intro": "Fügen Sie diesen Befehl auf dem Linux-Rechner in ein Terminal ein. Er fragt nach Ihrem Passwort, installiert dann den Agenten und meldet den Rechner an:",
-      "linux_hint": "Wenn Ihr Konto sudo nicht verwenden darf, was bei OpenMediaVault üblich ist, führen Sie zuerst su - aus und fügen Sie den Befehl dann ohne das Wort sudo am Ende ein. Der Installer braucht systemd und einen 64-Bit-Rechner mit Intel- oder AMD-Prozessor.",
+      "linux_hint": "Wenn Ihr Konto sudo nicht verwenden darf, was bei NAS- und Appliance-Systemen üblich ist, führen Sie zuerst su - aus und fügen Sie den Befehl dann ohne das Wort sudo am Ende ein. Der Installer braucht systemd und einen 64-Bit-Rechner mit Intel- oder AMD-Prozessor.",
       "install_intro": "Laden Sie das Installationsprogramm herunter und öffnen Sie es. Windows fragt nach Administratorrechten; erlauben Sie dies. Das Fenster zeigt jeden Schritt und endet mit einer Erfolgsmeldung.",
       "download": "Installationsprogramm herunterladen",
       "download_hint": "Wenn Windows warnt, dass die Datei unbekannt ist, wählen Sie „Weitere Informationen“ und dann „Trotzdem ausführen“.",

@@ -36,6 +36,12 @@ namespace TempMonitorAgent.Fleet.Executors;
 ///      and the deploy only succeeds if the software is actually THERE afterward. It runs
 ///      once, at the end, because it is a claim about the PACKAGE, not about a step.
 ///
+/// Each phase is also REPORTED as it starts and ends (<see cref="IStepProgress"/>, 3.53.0):
+/// one event per payload download, per step, and for detection, which the console draws as
+/// PDQ's "step 3 of 5". An operator's Abort comes back the same way and cancels the token
+/// this runs under; the step's process tree is killed, the result says "aborted", and the
+/// working directory is still removed on the way out.
+///
 /// The whole working directory is deleted afterward, on every path. It lives under the
 /// agent's own %ProgramData% (SYSTEM-owned, like the self-updater's staging dir), not
 /// %TEMP%, so a half-finished install can't leave an executable somewhere a standard user
@@ -45,11 +51,42 @@ public sealed class DeployPackageExecutor : ICommandExecutor
 {
     private readonly ILogger<DeployPackageExecutor> _log;
     private readonly IPackageDownloader _downloader;
+    private readonly Func<IReadOnlyDictionary<string, string?>, IMachineFacts> _factsFactory;
 
     public DeployPackageExecutor(ILogger<DeployPackageExecutor> log, IPackageDownloader downloader)
+        : this(log, downloader, hub => new WindowsMachineFacts(hub))
+    {
+    }
+
+    /// <summary>With the machine's facts supplied -- the tests' seam, so an If can be
+    /// exercised against "a Latitude" on whatever machine runs the suite.
+    ///
+    /// Internal, not public: the service container only considers public constructors, and
+    /// it must keep building the one above.</summary>
+    internal DeployPackageExecutor(
+        ILogger<DeployPackageExecutor> log, IPackageDownloader downloader,
+        Func<IReadOnlyDictionary<string, string?>, IMachineFacts> factsFactory)
     {
         _log = log;
         _downloader = downloader;
+        _factsFactory = factsFactory;
+    }
+
+    /// <summary>The hub-resolved condition variables (AD, custom fields) for this machine,
+    /// from params.facts, as text. A bool arrives as JSON true/false and is kept lowercase
+    /// so it compares the way the hub's own literals do.</summary>
+    private static Dictionary<string, string?> HubFacts(FleetCommand cmd)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (cmd.Params.GetObject("facts") is not { } facts) return result;
+        foreach (var (name, value) in facts)
+        {
+            if (value is JsonValue v && v.TryGetValue<bool>(out var b))
+                result[name] = b ? "true" : "false";
+            else
+                result[name] = value?.ToString();
+        }
+        return result;
     }
 
     public string Type => "deploy_package";
@@ -58,9 +95,14 @@ public sealed class DeployPackageExecutor : ICommandExecutor
     /// %ProgramData%, for the ACL reason in the class docstring.</summary>
     private static string StagingDir => Path.Combine(AgentConfig.ProgramDataDir, "packages");
 
+    public Task<CommandResult> ExecuteAsync(
+        FleetCommand cmd, Action<string>? onOutput, CancellationToken ct) =>
+        ExecuteAsync(cmd, onOutput, null, ct);
+
     public async Task<CommandResult> ExecuteAsync(
-        FleetCommand cmd, Action<string>? onOutput, CancellationToken ct)
+        FleetCommand cmd, Action<string>? onOutput, IStepProgress? progress, CancellationToken ct)
     {
+        var phases = new PhaseTracker(progress);
         var packageName = cmd.Params.GetString("package_name") ?? "package";
         var legacySource = cmd.Params.GetObject("source");
         var steps = cmd.Params.GetArray("steps");
@@ -105,20 +147,65 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         // One directory per attempt, deleted whole at the end. Per attempt rather than
         // shared, so a retry can never pick up a half-unpacked folder the previous one left
         // behind and install from it.
+        await SweepStaleAttemptsAsync(StagingDir, DateTime.UtcNow);
         var workDir = Path.Combine(StagingDir, Guid.NewGuid().ToString("N"));
+        FileStream? live = null;
         try
         {
             Directory.CreateDirectory(workDir);
+            live = HoldLiveMarker(workDir);
             var vars = new PackageVariables(workDir);
+            // What If conditions, download conditions and `{model}` read (3.54.0). Live and
+            // lazy -- see WindowsMachineFacts -- so a package with no conditions reads nothing.
+            var facts = _factsFactory(HubFacts(cmd));
+            vars.BindFacts(facts);
 
             // ---- 1. payloads ----
+            // `download` counts FILE payloads only, in list order -- the same count as the
+            // hub's packages.progress_skeleton, or the events land on the wrong rows. A
+            // payload skipped by its download condition is still counted (and reported
+            // not_run), for the same reason.
+            var download = 0;
             foreach (var source in sources)
             {
                 var kind = source.GetString("kind") ?? "";
                 if (kind is not ("upload" or "url" or "unc")) continue;
                 var name = source.GetString("name") ?? "payload";
+                var ordinal = ++download;
+                if (source["only_if"] is JsonObject onlyIf)
+                {
+                    var wanted = await new ConditionEvaluator(
+                        facts, vars, () => null, Say, Emit, ct).EvaluateAsync(onlyIf);
+                    if (wanted == Tri.False)
+                    {
+                        Say($"[deploy] {name}: not needed on this machine, not downloaded");
+                        phases.Mark(StepPhase.Download, ordinal, StepState.NotRun,
+                                    "not needed on this machine");
+                        var reason = $"the payload {{{name}}} was not downloaded on this " +
+                                     "machine -- its download condition is false here";
+                        vars.Withhold(name, reason);
+                        if (sources.Count == 1) vars.Withhold("file", reason);
+                        continue;
+                    }
+                    if (wanted == Tri.Unknown)
+                    {
+                        // Fail closed, as an If does: guessing "download it anyway" would
+                        // put the wrong model's drivers one step from pnputil.
+                        var why = $"could not decide whether {name} is needed on this machine";
+                        Say("[deploy] FAILED: " + why);
+                        phases.Begin(StepPhase.Download, ordinal);
+                        phases.End(StepState.Failed, message: why);
+                        return new CommandResult(false, log + "\n[deploy] FAILED: " + why);
+                    }
+                }
+                phases.Begin(StepPhase.Download, ordinal);
                 var (path, error) = await ResolvePayloadAsync(source, kind, workDir, Say, ct);
-                if (error is not null) return new CommandResult(false, log + "\n" + error);
+                if (error is not null)
+                {
+                    phases.End(StepState.Failed, message: error.Replace("[deploy] ", ""));
+                    return new CommandResult(false, log + "\n" + error);
+                }
+                phases.End(StepState.Ok);
                 vars.Bind(name, path!);
                 // `{file}` is what every package written before steps says, so a package
                 // with exactly one payload keeps meaning what it always meant.
@@ -129,17 +216,29 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             bool ran;
             if (multiStep)
             {
-                ran = await PackageStepRunner.RunAllAsync(
-                    steps!, vars, timeout, successCodes, Say, Emit, ct);
+                var end = await PackageStepRunner.RunTreeAsync(
+                    steps!, vars, new PackageStepRunner.StepDefaults(timeout, successCodes),
+                    new PackageStepRunner.StepSinks(Say, Emit, phases), facts, ct);
+                if (end == PackageStepRunner.RunEnd.StoppedSuccess)
+                {
+                    // The package said "nothing to do here". Detection is a claim that the
+                    // software IS installed, which a Stop has just said it is not meant to
+                    // be -- so it is not run, and the console shows it as not run.
+                    phases.Mark(StepPhase.Detect, 1, StepState.NotRun, "stopped before detection");
+                    Say($"[deploy] {packageName}: finished early, nothing to install here");
+                    return new CommandResult(true, log.ToString());
+                }
+                ran = end == PackageStepRunner.RunEnd.Completed;
             }
             else
             {
                 ran = await RunSingleCommandAsync(
-                    cmd, legacySource, vars, timeout, successCodes, Say, Emit, ct);
+                    cmd, legacySource, vars, timeout, successCodes, Say, Emit, ct, phases);
             }
-            if (!ran) return new CommandResult(false, log.ToString());
+            if (!ran) return new CommandResult(false, log + Aborted(phases));
 
             // ---- 4. detection ----
+            phases.Begin(StepPhase.Detect, 1);
             var detection = cmd.Params.GetObject("detection");
             var (detected, detail) = EvaluateDetection(detection);
             Say($"[deploy] detection: {detail}");
@@ -147,14 +246,22 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             {
                 Say("[deploy] FAILED: the installer reported success but the software " +
                     "was not detected afterward");
+                phases.End(StepState.Failed, message: detail);
                 return new CommandResult(false, log.ToString());
             }
+            phases.End(StepState.Ok, message: detail);
 
             Say($"[deploy] {packageName} installed");
             return new CommandResult(true, log.ToString());
         }
         catch (Exception e)
         {
+            // An abort cancels the token, and wherever that lands -- mid-download, between
+            // steps -- it surfaces as an OperationCanceledException. Say so plainly rather
+            // than "FAILED: A task was canceled", which reads like a bug.
+            var aborted = phases.AbortRequested && ct.IsCancellationRequested;
+            phases.Fail(aborted ? null : e.Message, aborted);
+            if (aborted) return new CommandResult(false, log + Aborted(phases));
             _log.LogWarning(e, "deploy_package failed for {Package}", packageName);
             return new CommandResult(false, log + $"\n[deploy] FAILED: {e.Message}");
         }
@@ -163,14 +270,109 @@ public sealed class DeployPackageExecutor : ICommandExecutor
             // On every path, including a failure: a rejected or spent installer -- and
             // anything a step unpacked next to it -- must not stay on disk waiting to be
             // run by something else.
-            try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
-            catch (Exception e) { _log.LogDebug("Could not clean up {Path}: {Msg}", workDir, e.Message); }
+            // The marker is released first: this attempt's own delete would otherwise trip
+            // over the very file that tells a sweep the folder is in use.
+            if (live is not null) await live.DisposeAsync();
+            await DeleteAttemptDirAsync(workDir);
             // Also on every path: a deploy that failed halfway may still have installed
             // something, and the device sheet (roadmap #25) should say what is actually there
             // within one inventory pass rather than at the top of the next hour.
             TempMonitorAgent.Software.SoftwareInventoryReporter.Invalidate();
         }
     }
+
+    /// <summary>The file a running attempt holds open, exclusively, in its own folder for as
+    /// long as it runs. <see cref="SweepStaleAttempts"/> skips any folder whose marker it
+    /// cannot open, so a live attempt is never swept, whatever its folder's timestamps say:
+    /// a single step can run for hours without touching the folder's top level, so its
+    /// last-write time alone would make it look abandoned.</summary>
+    private const string LiveMarker = ".live";
+
+    internal static FileStream HoldLiveMarker(string workDir) =>
+        new(Path.Combine(workDir, LiveMarker), FileMode.Create, FileAccess.Write, FileShare.None);
+
+    /// <summary>Remove one attempt's folder, retrying briefly. A process killed on a timeout
+    /// or an Abort can take a moment to release the folder it ran in (see ProcessRunner), and
+    /// what is in here -- installers, unpacked drivers, If-step PowerShell checks -- ran as
+    /// SYSTEM and must not be left lying around. A failure is a warning, not a debug line:
+    /// <see cref="SweepStaleAttempts"/> retries it on the next deploy, but someone should
+    /// be able to see that it happened. Waits with Task.Delay, never a blocking sleep: a sweep
+    /// over many leftovers must not hold a thread.</summary>
+    private async Task DeleteAttemptDirAsync(string dir)
+    {
+        const int attempts = 3;
+        string? lastError = null;
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+                return;
+            }
+            catch (Exception e)
+            {
+                lastError = e.Message;
+                _log.LogDebug("Clean-up of {Path} failed (attempt {N}): {Msg}", dir, attempt, e.Message);
+                if (attempt < attempts) await Task.Delay(500 * attempt);
+            }
+        }
+        _log.LogWarning("Could not clean up {Path}; the next deploy retries it: {Msg}",
+                        dir, lastError);
+    }
+
+    /// <summary>Delete attempt folders an earlier deploy could not -- a clean-up that failed,
+    /// or a service stopped or a machine powered off mid-install, which no `finally` survives.
+    /// A folder whose live marker is held is skipped outright; of the rest, only those
+    /// untouched for an hour go, so an attempt that has only just been created is safe too.
+    /// Neither rule depends on deploys running one at a time.</summary>
+    internal async Task SweepStaleAttemptsAsync(string stagingDir, DateTime nowUtc)
+    {
+        try
+        {
+            if (!Directory.Exists(stagingDir)) return;
+            foreach (var dir in Directory.EnumerateDirectories(stagingDir))
+            {
+                // One folder at a time: a leftover that cannot be read must not stop the
+                // sweep from getting to the ones after it.
+                try
+                {
+                    if (nowUtc - Directory.GetLastWriteTimeUtc(dir) <= TimeSpan.FromHours(1)) continue;
+                    if (IsLive(dir)) continue;
+                    await DeleteAttemptDirAsync(dir);
+                }
+                catch (Exception e)
+                {
+                    _log.LogDebug("Could not sweep {Path}: {Msg}", dir, e.Message);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            _log.LogDebug("Could not sweep {Path}: {Msg}", stagingDir, e.Message);
+        }
+    }
+
+    /// <summary>Whether some running attempt holds this folder's live marker.</summary>
+    private static bool IsLive(string dir)
+    {
+        var marker = Path.Combine(dir, LiveMarker);
+        if (!File.Exists(marker)) return false;
+        try
+        {
+            using var probe = new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.None);
+            return false;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Held open by the attempt that owns it -- or a marker this account cannot even
+            // open, which is no evidence the attempt is over. Either way, leave it.
+            return true;
+        }
+    }
+
+    /// <summary>The closing line of a run the console stopped -- empty for any other end.</summary>
+    private static string Aborted(PhaseTracker phases) =>
+        phases.AbortRequested ? "\n[deploy] ABORTED from the console" : "";
 
     /// <summary>The payload list, from `sources` or from a lone legacy `source`.</summary>
     private static List<JsonObject> ResolveSourceList(FleetCommand cmd, JsonObject? legacySource)
@@ -190,13 +392,19 @@ public sealed class DeployPackageExecutor : ICommandExecutor
     /// package written before steps runs through and its behaviour must not shift.</summary>
     private async Task<bool> RunSingleCommandAsync(
         FleetCommand cmd, JsonObject? source, PackageVariables vars, int timeout,
-        HashSet<int> successCodes, Action<string> say, Action<string> emit, CancellationToken ct)
+        HashSet<int> successCodes, Action<string> say, Action<string> emit, CancellationToken ct,
+        PhaseTracker? phases = null)
     {
+        // The one command line is step 1 of 1 to the console, so a pre-steps package gets
+        // the same live view as every other.
+        phases?.Begin(StepPhase.Step, 1);
         var kind = source.GetString("kind") ?? "";
         var (file, args, buildError) = BuildCommandLine(cmd, source, kind, vars);
         if (file is null)
         {
-            say("[deploy] " + (buildError ?? "FAILED: deploy_package has no install command"));
+            var why = buildError ?? "FAILED: deploy_package has no install command";
+            say("[deploy] " + why);
+            phases?.End(StepState.Failed, message: why);
             return false;
         }
 
@@ -208,18 +416,30 @@ public sealed class DeployPackageExecutor : ICommandExecutor
         var outcome = await ProcessRunner.RunAsync(
             file, args, ct, timeoutSeconds: timeout, onLine: emit);
 
+        if (outcome.TimedOut && ct.IsCancellationRequested)
+        {
+            // ProcessRunner reports a cancelled wait as a timeout; it was the Abort, or the
+            // service stopping, and the tree is already killed either way.
+            say("[deploy] stopped: the run was cancelled");
+            phases?.Fail(null, aborted: phases.AbortRequested);
+            return false;
+        }
         if (outcome.TimedOut)
         {
             say($"[deploy] FAILED: timed out after {timeout}s");
+            phases?.End(StepState.Failed, message: $"timed out after {timeout}s");
             return false;
         }
         if (!successCodes.Contains(outcome.ExitCode))
         {
-            say($"[deploy] FAILED: exit code {outcome.ExitCode} is not in " +
-                $"[{string.Join(", ", successCodes.OrderBy(c => c))}]");
+            var why = $"exit code {outcome.ExitCode} is not in " +
+                      $"[{string.Join(", ", successCodes.OrderBy(c => c))}]";
+            say("[deploy] FAILED: " + why);
+            phases?.End(StepState.Failed, outcome.ExitCode, why);
             return false;
         }
         say($"[deploy] exit code {outcome.ExitCode} accepted");
+        phases?.End(StepState.Ok, outcome.ExitCode);
         return true;
     }
 
@@ -326,79 +546,91 @@ public sealed class DeployPackageExecutor : ICommandExecutor
     /// Any failure to evaluate counts as NOT detected, never as detected. A registry read
     /// that throws means we do not know whether the software is there, and "we don't
     /// know" must not be reported to the console as a successful install.</summary>
-    private (bool Passed, string Detail) EvaluateDetection(JsonObject? detection)
+    private static (bool Passed, string Detail) EvaluateDetection(JsonObject? detection)
+    {
+        var (passed, detail, _) = Detect(detection);
+        return (passed, detail);
+    }
+
+    /// <summary>The detection rule's verdict, plus whether it could be evaluated at all.
+    ///
+    /// <c>Errored</c> is what an If's file / registry / installed-program check needs and
+    /// detection does not: for detection, "could not tell" and "not there" both mean the
+    /// install is not proven, so both are a fail. For a condition they are different answers
+    /// -- "the key is absent" is false, "the registry threw" is unknown -- and conflating them
+    /// would send a machine down the Else branch over a read error. Shared rather than copied,
+    /// so the two can never disagree about what "installed" means.</summary>
+    internal static (bool Passed, string Detail, bool Errored) Detect(JsonObject? detection)
     {
         var kind = detection.GetString("kind") ?? "none";
         try
         {
-            switch (kind)
+            return kind switch
             {
-                case "none":
-                    return (true, "no check configured (exit code only)");
-
-                case "file_exists":
-                {
-                    var path = detection.GetString("path");
-                    if (string.IsNullOrWhiteSpace(path))
-                        return (false, "file_exists rule has no path");
-                    var found = File.Exists(path) || Directory.Exists(path);
-                    return (found, found ? $"found {path}" : $"NOT found: {path}");
-                }
-
-                case "registry_value":
-                {
-                    var root = OpenRoot(detection.GetString("root"));
-                    var keyPath = detection.GetString("key");
-                    var name = detection.GetString("name");
-                    if (root is null || string.IsNullOrWhiteSpace(keyPath) || string.IsNullOrWhiteSpace(name))
-                        return (false, "registry rule is incomplete");
-
-                    using var key = root.OpenSubKey(keyPath);
-                    var value = key?.GetValue(name);
-                    if (value is null)
-                        return (false, $"NOT found: {detection.GetString("root")}\\{keyPath}\\{name}");
-
-                    // An absent `equals` means "must merely exist"; an empty one is a real
-                    // exact match against the empty string, so check presence of the
-                    // property rather than emptiness of the string.
-                    if (detection is not null && detection.TryGetPropertyValue("equals", out var wanted)
-                        && wanted is not null)
-                    {
-                        var want = wanted.ToString();
-                        var got = value.ToString() ?? "";
-                        return (string.Equals(got, want, StringComparison.OrdinalIgnoreCase),
-                                $"{name} = '{got}' (wanted '{want}')");
-                    }
-                    return (true, $"{name} present");
-                }
-
-                case "installed_version":
-                {
-                    var product = detection.GetString("name");
-                    if (string.IsNullOrWhiteSpace(product))
-                        return (false, "installed_version rule has no product name");
-                    var found = FindInstalledVersion(product);
-                    if (found is null)
-                        return (false, $"NOT installed: no entry matching '{product}'");
-
-                    var min = detection.GetString("min_version");
-                    if (string.IsNullOrWhiteSpace(min))
-                        return (true, $"installed: {product} {found}");
-                    var ok = VersionUtil.Compare(found, min) >= 0;
-                    return (ok, $"installed {found}, required >= {min}");
-                }
-
-                default:
-                    // A kind this build doesn't implement (an older agent against a newer
-                    // hub). Fail closed: reporting success for a check we cannot perform
-                    // is the one outcome that misleads.
-                    return (false, $"unsupported detection kind '{kind}' — update the agent");
-            }
+                "none" => (true, "no check configured (exit code only)", false),
+                "file_exists" => DetectFile(detection),
+                "registry_value" => DetectRegistryValue(detection),
+                "installed_version" => DetectInstalledVersion(detection),
+                // A kind this build doesn't implement (an older agent against a newer hub).
+                // Fail closed: reporting success for a check we cannot perform is the one
+                // outcome that misleads.
+                _ => (false, $"unsupported detection kind '{kind}' — update the agent", true),
+            };
         }
         catch (Exception e)
         {
-            return (false, $"check failed: {e.Message}");
+            return (false, $"check failed: {e.Message}", true);
         }
+    }
+
+    private static (bool Passed, string Detail, bool Errored) DetectFile(JsonObject? detection)
+    {
+        var path = detection.GetString("path");
+        if (string.IsNullOrWhiteSpace(path))
+            return (false, "file_exists rule has no path", true);
+        var found = File.Exists(path) || Directory.Exists(path);
+        return (found, found ? $"found {path}" : $"NOT found: {path}", false);
+    }
+
+    private static (bool Passed, string Detail, bool Errored) DetectRegistryValue(JsonObject? detection)
+    {
+        var root = OpenRoot(detection.GetString("root"));
+        var keyPath = detection.GetString("key");
+        var name = detection.GetString("name");
+        if (root is null || string.IsNullOrWhiteSpace(keyPath) || string.IsNullOrWhiteSpace(name))
+            return (false, "registry rule is incomplete", true);
+
+        using var key = root.OpenSubKey(keyPath);
+        var value = key?.GetValue(name);
+        if (value is null)
+            return (false, $"NOT found: {detection.GetString("root")}\\{keyPath}\\{name}", false);
+
+        // An absent `equals` means "must merely exist"; an empty one is a real exact match
+        // against the empty string, so check presence of the property rather than emptiness
+        // of the string.
+        if (detection is null || !detection.TryGetPropertyValue("equals", out var wanted)
+            || wanted is null)
+            return (true, $"{name} present", false);
+        var want = wanted.ToString();
+        var got = value.ToString() ?? "";
+        return (string.Equals(got, want, StringComparison.OrdinalIgnoreCase),
+                $"{name} = '{got}' (wanted '{want}')", false);
+    }
+
+    private static (bool Passed, string Detail, bool Errored) DetectInstalledVersion(JsonObject? detection)
+    {
+        var product = detection.GetString("name");
+        if (string.IsNullOrWhiteSpace(product))
+            return (false, "installed_version rule has no product name", true);
+        var found = FindInstalledVersion(product);
+        if (found is null)
+            return (false, $"NOT installed: no entry matching '{product}'", false);
+
+        var min = detection.GetString("min_version");
+        if (string.IsNullOrWhiteSpace(min))
+            return (true, $"installed: {product} {found}", false);
+        var ok = VersionUtil.Compare(found, min) >= 0;
+        return (ok, $"installed {found}, required >= {min}", false);
     }
 
     private static RegistryKey? OpenRoot(string? root) => (root ?? "").ToUpperInvariant() switch

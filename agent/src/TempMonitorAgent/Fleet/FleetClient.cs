@@ -34,13 +34,26 @@ public interface IPackageDownloader
                                        CancellationToken ct);
 }
 
+/// <summary>Outcome of posting one step event (ProgressReporter). <c>Cancel</c> is the hub
+/// passing on an operator's Abort; <c>Gone</c> means stop reporting this command -- it is
+/// over, not ours, or the hub predates the endpoint.</summary>
+public readonly record struct ProgressPostResult(bool Ok, bool Cancel, bool Gone);
+
+/// <summary>The one call ProgressReporter needs, an interface for the same reason as
+/// IOutputSink: so its ordering, retry and abort logic is testable against a fake.</summary>
+public interface IProgressSink
+{
+    Task<ProgressPostResult> PostProgressAsync(
+        string commandId, TempMonitorAgent.Fleet.Executors.StepEvent e, CancellationToken ct);
+}
+
 /// <summary>
 /// Client for the hub's fleet command channel. Enrolls once (persisting the returned
 /// agent_id/token), then heartbeats, polls+claims commands, streams live output, and
 /// reports results — all authenticated with
 /// "Authorization: Bearer &lt;agent_id&gt;:&lt;token&gt;".
 /// </summary>
-public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, IPtyChannel,
+public sealed class FleetClient : IDisposable, IOutputSink, IProgressSink, IPackageDownloader, IPtyChannel,
                                   TempMonitorAgent.Tickets.ITicketUplink
 {
     private readonly ILogger<FleetClient> _log;
@@ -1008,6 +1021,52 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPackageDownloader, 
         {
             _log.LogDebug("Output post for {Id} seq {Seq} failed: {Msg}", commandId, seq, e.Message);
             return new OutputPostResult(Ok: false, Truncated: false);
+        }
+    }
+
+    /// <summary>Post one deployment step event. Only ProgressReporter should call this.
+    ///
+    /// 403 (the command is over, or not ours) and 404 (a hub older than step progress)
+    /// both come back as Gone, so the reporter goes quiet instead of retrying -- which is
+    /// what lets this agent deploy normally against a hub that has never heard of steps.</summary>
+    public async Task<ProgressPostResult> PostProgressAsync(
+        string commandId, TempMonitorAgent.Fleet.Executors.StepEvent e, CancellationToken ct)
+    {
+        if (!_identity.IsEnrolled) return new ProgressPostResult(Ok: false, Cancel: false, Gone: true);
+
+        var body = new JsonObject
+        {
+            ["phase"] = e.Phase,
+            ["ordinal"] = e.Ordinal,
+            ["state"] = e.State,
+            ["exit_code"] = e.ExitCode,
+            ["message"] = e.Message,
+            ["out_seq"] = e.OutSeq,
+        };
+        try
+        {
+            using var req = Authorized(HttpMethod.Post, AgentConfig.CommandProgressUrl(commandId));
+            req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+
+            if (resp.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+            {
+                _log.LogDebug("Progress for {Id} not accepted ({Status}); stopping",
+                    commandId, (int)resp.StatusCode);
+                return new ProgressPostResult(Ok: true, Cancel: false, Gone: true);
+            }
+            if (!resp.IsSuccessStatusCode)
+                return new ProgressPostResult(Ok: false, Cancel: false, Gone: false);
+
+            var json = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var cancel = json?["cancel"]?.GetValue<bool>() ?? false;
+            return new ProgressPostResult(Ok: true, Cancel: cancel, Gone: false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
+                                       or JsonException or InvalidOperationException)
+        {
+            _log.LogDebug(ex, "Progress post for {Id} failed", commandId);
+            return new ProgressPostResult(Ok: false, Cancel: false, Gone: false);
         }
     }
 

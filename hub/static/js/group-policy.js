@@ -524,7 +524,9 @@
             agentKeys.forEach((key) => {
                 const entry = result.agent_settings[key];
                 const tr = el('tr');
-                tr.appendChild(el('td', null, settingLabel(key)));
+                const name = el('td', null, settingLabel(key));
+                hubSideHint(name, agentSetting(key));
+                tr.appendChild(name);
                 tr.appendChild(el('td', null, displayValue(entry.value)));
                 tr.appendChild(el('td', 'stat-card__meta', entry.gpo));
                 body.appendChild(tr);
@@ -658,6 +660,15 @@
         return textInput(schema, value, onChange);
     }
 
+    // A hub-side setting (the remote view mode) is enforced by the hub when a session starts
+    // and never reaches the agent -- say so, or an operator reads its row as one more value
+    // the PC will pick up on its next heartbeat.
+    function hubSideHint(host, schema) {
+        if (!schema?.hub_side) return;
+        host.appendChild(document.createTextNode(' '));
+        host.appendChild(el('span', 'stat-card__meta', `(${t('gpo.editor.hub_side')})`));
+    }
+
     function renderAgentRows() {
         const host = document.getElementById('gpo-agent-rows');
         host.replaceChildren();
@@ -666,6 +677,7 @@
             const row = el('div', 'gpo-row');
             const label = el('span', 'gpo-row__label', schema.label);
             if (schema.unit) label.textContent = `${schema.label} (${schema.unit})`;
+            hubSideHint(label, schema);
             row.appendChild(label);
             row.appendChild(valueInput(schema, draft.agent_settings[key],
                 (v) => { draft.agent_settings[key] = v; }));

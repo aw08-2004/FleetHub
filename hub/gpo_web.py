@@ -60,7 +60,9 @@ def _setting_schema(setting, db_path, lang):
             "min": setting.minimum, "max": setting.maximum,
             "choices": choices,
             "choice_labels": {c: settings.choice_label(setting, c, lang) for c in (choices or [])},
-            "default": setting.default}
+            "default": setting.default,
+            # Hub-side: the hub enforces it per PC; the agent never sees it.
+            "hub_side": bool(setting.policy and not setting.agent)}
 
 
 def _with_state(entry, states):
@@ -132,7 +134,7 @@ class GpoApi:
             "blocked": [{"node_kind": kind, "node_key": key}
                         for (kind, key), opts in options.items() if opts.get("block_inheritance")],
             "agent_settings": [_setting_schema(s, self.db_path, lang)
-                               for s in settings.REGISTRY if s.agent],
+                               for s in settings.REGISTRY if s.agent or s.policy],
             "registry_types": [{"name": kind,
                                 "label": i18n.translate(f"gpo.registry_type.{kind}", lang)}
                                for kind in gpo.REGISTRY_TYPES],

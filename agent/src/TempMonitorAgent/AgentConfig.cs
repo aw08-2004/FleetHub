@@ -11,7 +11,7 @@ public static class AgentConfig
     /// <summary>Reported to the hub as companion_version -- the field keeps that name
     /// because every agent in the field already sends it. Also the self-update baseline.
     /// MUST match &lt;Version&gt; in TempMonitorAgent.csproj.</summary>
-    public const string Version = "3.52.0";
+    public const string Version = "3.53.0";
 
     /// <summary>Reads a FLEETHUB_* setting, falling back to the pre-rename TEMP_MONITOR_*
     /// name. Machines installed before the FleetHub rename still have the old machine-level
@@ -62,6 +62,8 @@ public static class AgentConfig
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/result";
     public static string CommandOutputUrl(string commandId) =>
         HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/output";
+    public static string CommandProgressUrl(string commandId) =>
+        HubBase + "/api/agent/commands/" + Uri.EscapeDataString(commandId) + "/progress";
 
     /// <summary>
     /// Does <paramref name="url"/> actually address OUR hub?
@@ -185,6 +187,14 @@ public static class AgentConfig
     public const int StreamMaxChunkChars = 16_000;
     public const int StreamPostRetries = 3;
 
+    // --- Deployment step progress (roadmap #5) -----------------------------
+    // While a phase runs, its "running" event is re-sent this often. Not for the console --
+    // the hub ignores a repeat -- but because the ANSWER is how an abort reaches the agent:
+    // an hour-long installer would otherwise only hear "stop" when it finished. Ten seconds
+    // is the abort latency an operator waits through, against one tiny POST per running
+    // deployment per interval on the hub.
+    public const int ProgressKeepaliveMillis = 10_000;
+
     // Commands execute off the main loop (see Worker), so a long script no longer
     // blocks telemetry/heartbeats. Bound the concurrency so a queued pile of scripts
     // can't exhaust the box. Session-control commands (shell_input/signal/reset) are
@@ -300,6 +310,12 @@ public static class AgentConfig
             : StableManifestUrl;
 
     public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
+
+    /// <summary>The binary download's own budget (roadmap #33). The self-contained agent is about
+    /// 80 MB, which the manifest client's 30 seconds only fits on a fast link -- and once the
+    /// hub's mirror is a source, the binary may come over the same WAN link as telemetry.
+    /// The Linux agent learned this first (its own DownloadTimeout); the same value here.</summary>
+    public static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(15);
 
     /// <summary>Honours FLEETHUB_NO_UPDATE, falling back to TEMP_MONITOR_NO_UPDATE.</summary>
     public static bool UpdatesDisabled => Env("NO_UPDATE", "NO_UPDATE") == "1";

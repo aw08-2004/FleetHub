@@ -91,8 +91,12 @@ from permissions_web import create_access, create_permissions_blueprint
 from users_web import create_users_blueprint
 from invites_web import create_invites_blueprint
 from onboarding_web import create_onboarding_blueprint
+import clientrelease
+import release_mirror
+from release_mirror_web import create_release_mirror_blueprint
 from audit_web import create_audit_blueprint
 from packages_web import create_packages_blueprint
+from deploy_progress_web import create_deploy_progress_blueprint
 from backups_web import create_backups_blueprint
 from remote_web import create_remote_blueprint
 from recordings_web import create_recordings_blueprint
@@ -172,15 +176,27 @@ if _env_acl_note:
 # ================================
 # CONFIG
 # ================================
-# Bump on every push to beta that touches hub/ -- to the next number after BETA's, which runs
-# ahead of main's (changes reach main only through the one beta -> main PR; see CLAUDE.md).
+# Bump on every push to main that touches hub/ -- to the next number after main's (CLAUDE.md;
+# the beta branch, which this once counted from, was retired on 2026-11-24).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.182.0"
+HUB_VERSION = "1.192.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"
+# The address AGENTS reach this hub on, and so the base of every URL the hub hands an agent,
+# an enrolling PC, an Android device or a peer hub. The agent attaches its bearer only to a
+# URL on exactly this origin (IsHubUrl), so this must stay what FLEETHUB_HUB says on the PCs.
 HUB_URL = os.environ.get("HUB_URL", "http://localhost:5000")
+# The address OPERATORS reach the console on (1.188.0). Equal to HUB_URL unless the console
+# and the agent channel are split (serve.py, FLEETHUB_AGENT_PORT), in which case HUB_URL is
+# the public agent listener and this is the internal console. Everything a browser checks
+# against its own origin uses it: the cookie's Secure flag, the Socket.IO CORS origin, the
+# OAuth redirect_uri, invite links and the assistant's links. **Defaulting to HUB_URL is what
+# keeps every unsplit install byte-for-byte unchanged**; a split hub that forgot to set it
+# would send operators' OAuth callbacks and invite links to the public listener, which 404s
+# every console route -- the release notes say to set it before the proxy is repointed.
+CONSOLE_URL = (os.environ.get("CONSOLE_URL") or "").strip() or HUB_URL
 # Opt-in hub self-update. Off by default so a dev clone never resets itself; the
 # operator sets HUB_AUTO_UPDATE=1 in the real hub's .env. The Settings tab can
 # override this per-hub -- see hub_auto_update_enabled() and hub_update_watcher().
@@ -235,6 +251,11 @@ DISK_HISTORY_DIR = os.path.join(LOG_DIR, "disk_history")
 # #32). Beside the database for the disk-history reason: a catalogue is megabytes, and the
 # PCs send it again if it is lost, so it is working data rather than something to back up.
 ADMX_DIR = os.path.join(LOG_DIR, "admx")
+# The agent release mirror (roadmap #33): the signed manifests, the binaries they name and the
+# installers, for PCs that reach the hub but not GitHub. Beside the database for the
+# disk-history reason -- a few hundred MB that the next sync downloads again if it is lost, so
+# it is a cache, not something to back up.
+RELEASE_MIRROR_DIR = os.path.join(LOG_DIR, "release_mirror")
 # Ticket screenshots (roadmap #31): <root>/<ticket_id>/<attachment_id>.jpg. Outside the
 # database for the disk-history reason, and under LOG_DIR rather than the install root because
 # they are short-lived working data with a retention of their own, not operator files kept
@@ -264,7 +285,15 @@ RETENTION_PRUNE_BATCH = 50000
 DEFAULT_HISTORY_LIMIT = 1200
 MAX_HISTORY_POINTS_PER_MACHINE = 2000
 MAX_HISTORY_MACHINE_MULTIPLIER = 16
-VALID_RESOLUTIONS = {"raw": None, "10s": 10, "1m": 60, "5m": 300}
+# 15m and 1h exist for the machine page's 7 d and 30 d History ranges (hub 1.189.0). At the
+# old coarsest bucket, 5m, thirty days is 8,640 points per metric and fourteen metrics in one
+# response -- about five megabytes of JSON for a chart 300 px wide. 1h brings that to 720.
+VALID_RESOLUTIONS = {"raw": None, "10s": 10, "1m": 60, "5m": 300, "15m": 900, "1h": 3600}
+# How many days of CSV archive one history request may pull into the DB. A multi-day
+# window imports each day it covers, the way a single-day request always has; past this it
+# imports nothing, so a hand-typed from=2019-01-01 cannot make one request read years of
+# files. 31 covers the 30 d range with a day of slack for the partial day at its start.
+MAX_HISTORY_IMPORT_DAYS = 31
 
 LOCAL_MACHINE = socket.gethostname()
 
@@ -1265,13 +1294,12 @@ AGENT_MANIFEST_URLS = {(p, c): channels.agent_manifest_url(c, p)
 # Kept as a name because the old constant is referenced in comments and tests as the stable
 # manifest; it is now simply the stable channel's entry.
 AGENT_MANIFEST_URL = AGENT_MANIFEST_URLS[(capabilities.PLATFORM_WINDOWS, channels.STABLE)]
-# The hub reads its own latest version straight out of app.py on the ref its channel tracks --
-# same source-of-truth and raw-GitHub trust as the client version hints above. Used by the
-# sidebar update notice always, and by the opt-in self-updater when it is enabled. Resolved
-# per call rather than pinned at import, so changing the channel in Settings takes effect on
-# the next watcher tick instead of at the next restart.
+# The hub reads its own latest version straight out of app.py on main -- same
+# source-of-truth and raw-GitHub trust as the client version hints above. Used by the
+# sidebar update notice always, and by the opt-in self-updater when it is enabled. Main only
+# since the beta branch was retired (channels.HUB_REF says why).
 def hub_source_url():
-    return channels.hub_source_url(hub_update_channel())
+    return channels.hub_source_url()
 HUB_UPDATE_CHECK_INTERVAL = 15 * 60  # 15 minutes
 AGENT_VERSION_CHECK_INTERVAL = 15 * 60  # 15 minutes
 # First version of the C# agent. A client reporting >= this is on the agent train.
@@ -1338,10 +1366,6 @@ def set_machine_channel_override(machine, channel):
     """Pin a machine to a channel, or pass None/"" to return it to the fleet default."""
     return channels.set_override(DB_PATH, machine, channel,
                                  to_timestamp_str(datetime.now()))
-
-def hub_update_channel():
-    """This hub's own channel -- which git ref it reads its version from and updates to."""
-    return channels.normalize(settings.get(DB_PATH, "hub.update_channel"))
 
 def version_tuple(v):
     """Tolerant version parse: reads the leading dotted-numeric prefix and ignores
@@ -1497,6 +1521,58 @@ def start_agent_version_watcher():
         agent_version_watcher_thread.start()
 
 # ================================
+# RELEASE MIRROR  --  roadmap #33. Keeps the hub's copy of the agent release files in step with
+# GitHub, on the version watcher's cadence, so a PC that reaches the hub but not GitHub can
+# still install and update. See release_mirror.py for why the hub is a mirror and never a
+# trust root.
+#
+# Its own thread rather than a step in agent_version_watcher: the first sync downloads two or
+# three self-contained agents (~80 MB each), and the version hints must not wait behind that.
+# ================================
+def release_mirror_enabled():
+    return bool(settings.get_bool(DB_PATH, "fleet.release_mirror"))
+
+def refresh_release_mirror():
+    if HUB_SKIP_REMOTE_CHECKS:
+        return
+    if not release_mirror_enabled():
+        # Switched off: give the disk back. The routes already 404 on the setting.
+        try:
+            release_mirror.clear(RELEASE_MIRROR_DIR)
+        except OSError as e:
+            print(f"[release-mirror] Could not clear the mirror: {e}")
+        return
+    pins = {}
+    for platform in release_mirror.PLATFORMS:
+        policy = agent_update_policy_for(platform)
+        if policy["mode"] == channels.UPDATE_PINNED:
+            pins[platform] = policy["version"]
+    try:
+        result = release_mirror.sync(RELEASE_MIRROR_DIR, pins, clientrelease.verify_signature)
+        for err in result["errors"]:
+            print(f"[release-mirror] {err}")
+    except Exception as e:
+        # A disk error, not a fetch error (those are recorded in the index). Logged and retried
+        # next round; the mirror keeps serving what it already holds.
+        print(f"[release-mirror] Sync failed: {e}")
+
+def release_mirror_watcher():
+    while True:
+        refresh_release_mirror()
+        time.sleep(AGENT_VERSION_CHECK_INTERVAL)
+
+release_mirror_watcher_thread = None
+
+def start_release_mirror_watcher():
+    global release_mirror_watcher_thread
+    with agent_version_watcher_lock:
+        if release_mirror_watcher_thread and release_mirror_watcher_thread.is_alive():
+            return
+        release_mirror_watcher_thread = threading.Thread(
+            target=release_mirror_watcher, daemon=True, name="release_mirror_watcher")
+        release_mirror_watcher_thread.start()
+
+# ================================
 # HUB SELF-UPDATE  --  opt-in (HUB_AUTO_UPDATE=1). Update in place, then exit; the
 # supervising service relaunches the server (serve.py's cheroot, or waitress-serve on a hub
 # installed before 1.170.0), which re-imports the new code.
@@ -1511,10 +1587,8 @@ def start_agent_version_watcher():
 # Ed25519 fleet-update trust root that gates agent binaries.
 # ================================
 # Source archive for the no-git path. codeload serves a branch zip directly.
-# Resolved per call, like hub_source_url above, so switching channel in Settings takes
-# effect on the next update rather than at the next restart (roadmap #21).
 def hub_archive_url():
-    return channels.hub_archive_url(hub_update_channel())
+    return channels.hub_archive_url()
 # Within the repo (and so within that archive), all of the hub's code and assets live under
 # this one directory. The self-updater mirrors it wholesale into HUB_CODE_DIR -- there is
 # deliberately no per-file allowlist anymore. That list was decided by the *running* version,
@@ -1650,9 +1724,9 @@ def _perform_hub_update_git(worktree_root):
     True only if fetch AND reset succeeded -- the caller restarts only then. Discards local
     drift by design (operator-confirmed).
 
-    The ref is the channel's (roadmap #21), and it is read once here rather than per git call
-    so that a channel changed mid-update cannot fetch one ref and reset to another."""
-    ref = channels.hub_ref(hub_update_channel())
+    The ref is always main (channels.HUB_REF); it followed a per-hub channel until the beta
+    branch was retired on 2026-11-24."""
+    ref = channels.HUB_REF
     code_dir = os.path.join(worktree_root, HUB_ARCHIVE_SUBDIR)
     # Snapshotted BEFORE the reset, while the tree is still the running version's.
     requirements_before = _requirements_text(code_dir)
@@ -1672,10 +1746,10 @@ def _stage_hub_archive(staging, archive_url):
     """Download and unpack the branch archive into `staging`, returning the path to the
     archive's hub/ directory, or None on any failure (logged, never raises).
 
-    `archive_url` is passed in rather than resolved here, for the reason
-    _perform_hub_update_git reads its ref once: hub_archive_url() re-reads the channel
-    setting on every call, so resolving it inside the download AND again in the log line
-    let an operator switching channel mid-update fetch one train and report the other.
+    `archive_url` is passed in rather than resolved here so the download and the log line
+    name the same URL. That mattered most while hub_archive_url() re-read a per-hub channel
+    setting on every call -- switching channel mid-update fetched one train and reported the
+    other. The setting is gone (the beta branch was retired), and the one-resolve rule stays.
 
     Everything lands in staging and is sanity-checked BEFORE the caller touches the live
     install -- a truncated download or a moved layout upstream must fail the update, not
@@ -2201,7 +2275,8 @@ app.secret_key = FLASK_SECRET_KEY
 #     and Chrome exempts cookies <2min old from it on top-level POSTs). Lax, not
 #     Strict: the Google OAuth callback is a top-level cross-site GET redirect and
 #     needs the cookie to find its state.
-#   Secure -- derived from HUB_URL so http://localhost dev still signs in.
+#   Secure -- derived from CONSOLE_URL (the address the browser holding this cookie
+#     actually uses; HUB_URL unless split) so http://localhost dev still signs in.
 #   HttpOnly -- Flask's default, pinned here so it is visible next to the others. No
 #     script needs to read this cookie, and one that could would be reading the perimeter.
 #   PERMANENT_SESSION_LIFETIME + SESSION_REFRESH_EACH_REQUEST -- the session survives
@@ -2214,7 +2289,7 @@ app.secret_key = FLASK_SECRET_KEY
 #     so an operator cannot extend their own session by editing it.
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=HUB_URL.startswith("https://"),
+    SESSION_COOKIE_SECURE=CONSOLE_URL.startswith("https://"),
     SESSION_COOKIE_HTTPONLY=True,
     PERMANENT_SESSION_LIFETIME=timedelta(days=SESSION_LIFETIME_DAYS),
     SESSION_REFRESH_EACH_REQUEST=True,
@@ -2232,6 +2307,8 @@ rate_limiter = RateLimiter(app)
 # the port reachable from the proxy only.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 print(f"[hub] Configured public URL: {HUB_URL}")
+if CONSOLE_URL != HUB_URL:
+    print(f"[hub] Configured console URL: {CONSOLE_URL}")
 # cors_allowed_origins is pinned to our own origin, NOT "*". engine.io does not send a
 # literal "*": on "*" it reflects the caller's Origin back in Access-Control-Allow-Origin
 # and pairs it with Access-Control-Allow-Credentials: true (see engineio's
@@ -2248,9 +2325,11 @@ print(f"[hub] Configured public URL: {HUB_URL}")
 # of 4 (cheroot's: 10) starves the hub outright; serve.py and install.ps1 pass 128 explicitly
 # and explain why. Don't drop the transport pin to "fix" this: neither cheroot nor waitress
 # has WebSocket support, so allowing upgrades here just breaks the socket.
+# CONSOLE_URL, not HUB_URL: on a split hub only the console's origin ever opens a socket, and
+# the agent listener refuses /socket.io/ outright (agent_listener.py).
 socketio = SocketIO(
     app,
-    cors_allowed_origins=[HUB_URL.rstrip("/")],
+    cors_allowed_origins=[CONSOLE_URL.rstrip("/")],
     async_mode="threading",
     transports=["polling"],
     allow_upgrades=False
@@ -2529,6 +2608,13 @@ def _on_command_result(command_id, machine, success, result, output=None):
     rules.handle_message_result returns None immediately for any command that was not a
     rule-issued message, which is very nearly all of them: one indexed lookup per result.
     """
+    # A deployment attempt just ended: record it now, not on the next half-minute pass, so
+    # the progress view goes from "finishing" to its result while the operator is watching.
+    try:
+        if packages.is_deploy_command(DB_PATH, command_id):
+            wake_deploy_scheduler()
+    except Exception as e:
+        print(f"[deploy] Could not wake the scheduler for {command_id}: {e}")
     if result is None and output:
         try:
             parsed = json.loads(output)
@@ -2578,13 +2664,15 @@ app.register_blueprint(create_permissions_blueprint(DB_PATH, login_required, acc
 # permission-group administration so a profile edit isn't the same trust as a grant.
 app.register_blueprint(create_users_blueprint(DB_PATH, login_required, access))
 # Invite links (roadmap #22). Gated by manage_permission_groups, because an invite hands
-# out capabilities -- it is group administration reached by a different door. HUB_URL is
-# needed because the link is assembled server-side: an admin reaching the console over an
-# internal hostname would otherwise copy a link that works only from inside, and would have
-# no way to tell. This blueprint also owns the hub's ONLY unauthenticated console route,
-# GET /invite/<code> -- see invites_web.py for what that page is and is not allowed to say.
+# out capabilities -- it is group administration reached by a different door. The base URL
+# is needed because the link is assembled server-side: an admin reaching the console over an
+# unexpected hostname would otherwise copy a link that works only from there, and would have
+# no way to tell. CONSOLE_URL, not HUB_URL (1.188.0): an invite ends in a console sign-in, and
+# on a split hub the public HUB_URL listener serves no console route at all. This blueprint
+# also owns the hub's ONLY unauthenticated console route, GET /invite/<code> -- see
+# invites_web.py for what that page is and is not allowed to say.
 app.register_blueprint(create_invites_blueprint(
-    DB_PATH, login_required, access, hub_url=HUB_URL))
+    DB_PATH, login_required, access, hub_url=CONSOLE_URL))
 # Onboarding codes (roadmap #29): the Onboarding admin page, and the public /onboarding
 # wizard an unenrolled PC is set up through. HUB_URL for the same reason invites need it --
 # the link and the install script both have to name the hub's public address. The machine
@@ -2595,7 +2683,14 @@ app.register_blueprint(create_onboarding_blueprint(
     DB_PATH, login_required, access, hub_url=HUB_URL,
     valid_machine_name=lambda name: is_valid_machine_name(name),
     unsigned_reporters=lambda: unsigned_reporters(),
-    machine_record=lambda name: _machine_record(name)))
+    machine_record=lambda name: _machine_record(name),
+    mirror_has=lambda path: (release_mirror_enabled()
+                             and release_mirror.file_for_path(RELEASE_MIRROR_DIR, path) is not None)))
+# The agent release mirror (roadmap #33): the hub's copy of the signed release files, served
+# under /api/agent/dist/ to PCs that cannot reach GitHub, plus its status for the Onboarding
+# page. The setting is read per request so switching it off stops serving at once.
+app.register_blueprint(create_release_mirror_blueprint(
+    RELEASE_MIRROR_DIR, login_required, access, enabled=lambda: release_mirror_enabled()))
 # The Audit Log tab -- the read path over the trail every other blueprint writes to.
 # view_audit_log is the perimeter; view_security_audit widens which LEVELS come back, and
 # that widening is applied in SQL, never in the page (see audit_web.py).
@@ -2605,6 +2700,13 @@ app.register_blueprint(create_audit_blueprint(DB_PATH, login_required, access))
 # and HUB_URL because the agent's download URL has to be absolute.
 app.register_blueprint(create_packages_blueprint(
     DB_PATH, LOG_DIR, login_required, access, hub_url=HUB_URL
+))
+# A running deployment: the agent's step events, a step's log, Abort and Retry now (roadmap
+# #5). on_change because its progress route marks `deployments` itself, and only when a step
+# moved -- see deploy_progress_web.py.
+app.register_blueprint(create_deploy_progress_blueprint(
+    DB_PATH, login_required, access,
+    on_change=lambda topic, machine: mark_changed(topic, machine),
 ))
 # Package building for the assistant (roadmap #26): public web reads, winget lookups and
 # installer downloads into <LOG_DIR>/staging. Ordinary routes, so the assistant reaches them
@@ -2909,7 +3011,8 @@ app.register_blueprint(create_assistant_blueprint(
     translate=lambda key: i18n.translate(key, current_language()),
     language=lambda: current_language(),
     setting=lambda key: settings.get(DB_PATH, key),
-    public_url=HUB_URL,
+    # CONSOLE_URL: the links the assistant writes (/machine/PC-12) are console pages.
+    public_url=CONSOLE_URL,
 ))
 
 # Sign-in provider configuration. Gated on ALLOWED_EMAILS membership rather than any
@@ -3123,8 +3226,10 @@ def _callback_url(endpoint):
     # Anchor the callback to HUB_URL rather than url_for(_external=True): behind a TLS
     # terminator (nginx/Cloudflare) the request can reach the hub as plain http, so the
     # _external form emits http://.../auth/callback -- which the provider rejects as a
-    # redirect_uri mismatch. HUB_URL is the authoritative public origin (https://...).
-    return HUB_URL.rstrip("/") + url_for(endpoint)
+    # redirect_uri mismatch. CONSOLE_URL is the authoritative console origin (https://...):
+    # HUB_URL unless split, and on a split hub the provider must send the operator back to
+    # the console listener, since the public one refuses /auth/* (agent_listener.py).
+    return CONSOLE_URL.rstrip("/") + url_for(endpoint)
 
 
 @app.route("/login/google")
@@ -3398,7 +3503,11 @@ def pick_resolution(requested_resolution, span_seconds):
         return "10s"
     if span_seconds <= 72 * 3600:
         return "1m"
-    return "5m"
+    # Up to eight days keeps the bucket it always had; only longer spans change, and those
+    # used to come back as one 5m point per bucket for as far as the caller asked.
+    if span_seconds <= 8 * 86400:
+        return "5m"
+    return "1h"
 
 def get_db_conn():
     conn = sqlite3.connect(DB_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
@@ -4688,6 +4797,10 @@ def deploy_scheduler():
     """
     while True:
         interval = settings.get_int(DB_PATH, "deploy.scheduler_interval_seconds")
+        # Cleared BEFORE the pass, never after the wait: a poke that lands while this pass
+        # runs must leave the event set and buy another pass, not be wiped by a clear that
+        # comes after it -- the lost-wakeup shape fleet.wait_for_commands documents.
+        _deploy_wake.clear()
         try:
             reconciled, dispatched = packages.tick(
                 DB_PATH,
@@ -4712,7 +4825,19 @@ def deploy_scheduler():
                 print(f"[deploy] Requested a wake for {woke} offline target(s).")
         except Exception as e:
             print(f"[deploy] Target wake pass failed: {e}")
-        time.sleep(interval)
+        # A wait, not a sleep: wake_deploy_scheduler() ends it early when an operator acts
+        # or an attempt finishes. The interval stays the floor for everything else (backoffs
+        # coming due, windows opening), and is still what bounds a pass that nobody pokes.
+        _deploy_wake.wait(interval)
+
+
+# Set to run the scheduler's next pass now. One Event, so a burst of pokes (fifty results
+# landing together) is one extra pass, not fifty -- the pass handles every due row anyway.
+_deploy_wake = threading.Event()
+
+
+def wake_deploy_scheduler():
+    _deploy_wake.set()
 
 
 def start_deploy_scheduler():
@@ -7272,7 +7397,7 @@ def get_hub_version_info():
         "latest": latest,
         # Where the notice's "Release notes" link points. Built, not fetched: nothing here
         # checks the file exists, which is why CLAUDE.md makes writing it part of the bump.
-        "release_notes_url": channels.hub_release_notes_url(latest, hub_update_channel()),
+        "release_notes_url": channels.hub_release_notes_url(latest),
         "update_available": hub_update_available(),
         # The notice stays out of the way when the hub will install this by itself.
         "auto_update": hub_auto_update_enabled(),
@@ -7319,46 +7444,77 @@ def post_hub_update():
     return jsonify({"status": "updating", "from": HUB_VERSION, "to": latest}), 202
 
 
+def _import_days_for_window(start_dt, end_dt):
+    """Run ensure_day_loaded_from_csv for every calendar day [start_dt, end_dt] touches, or
+    for none of them when that is more than MAX_HISTORY_IMPORT_DAYS. **The day string is
+    formatted here, never taken from the request** -- the CodeQL path-injection reasoning
+    in the `date` branch of _resolve_history_window applies to every day this names."""
+    first = start_dt.date()
+    last = end_dt.date()
+    days = (last - first).days + 1
+    if days > MAX_HISTORY_IMPORT_DAYS:
+        return
+    for offset in range(days):
+        ensure_day_loaded_from_csv((first + timedelta(days=offset)).strftime("%Y-%m-%d"))
+
+
+def _dated_history_window(date, from_raw, to_raw):
+    """One calendar day, optionally narrowed by from/to: (start_dt, end_dt). Imports that
+    day's CSV archive first."""
+    day_start = parse_request_datetime(date)
+    if day_start is None:
+        raise ValueError("Invalid date format; use YYYY-MM-DD.")
+    day_start = day_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    start_dt = max(parse_request_datetime(from_raw) or day_start, day_start)
+    end_dt = min(parse_request_datetime(to_raw) or day_end, day_end)
+    # The day as the hub formats it, never the raw query string. That string becomes a
+    # file name in LOG_DIR (CodeQL py/path-injection, alerts #3/#4), and anything
+    # parse_request_datetime accepts beyond a bare date -- "2026-10-08T05:00Z", a padded
+    # " 2026-10-08" -- named a CSV that does not exist and marked the day imported
+    # without reading the one that does.
+    ensure_day_loaded_from_csv(day_start.strftime("%Y-%m-%d"))
+    return start_dt, end_dt
+
+
+def _undated_history_window(from_raw, to_raw):
+    """A free from/to window, which can span days: (start_dt, end_dt), in order. Imports
+    the CSV archive of every day it covers, bounded by MAX_HISTORY_IMPORT_DAYS."""
+    end_dt = parse_request_datetime(to_raw) or datetime.now()
+    start_dt = parse_request_datetime(from_raw)
+    if start_dt is None:
+        # A caller that names no start gets the configured default window, not the whole
+        # archive. The oldest reading is a FLOOR, not the start: it stops us asking for
+        # time that predates the data, but on a hub with months of history it used to
+        # make "no from=" mean "everything", which is unbounded and nothing wants.
+        window = settings.get_int(DB_PATH, "hub.live_default_window_seconds")
+        start_dt = end_dt - timedelta(seconds=window)
+        oldest = get_oldest_reading_datetime()
+        if oldest is not None and oldest > start_dt:
+            start_dt = oldest
+    if start_dt > end_dt:
+        start_dt, end_dt = end_dt, start_dt
+    # Such a window can span days (the machine page's 7 d and 30 d ranges), and each may
+    # still be sitting in its CSV archive -- the dated path has always imported its one day
+    # first, and a range that skipped it showed a gap exactly where the archive was.
+    _import_days_for_window(start_dt, end_dt)
+    return start_dt, end_dt
+
+
 def _resolve_history_window(args):
     """Parse the date/from/to/resolution/limit query params into
     (start_epoch, end_epoch, resolution, limit). Raises ValueError with a user-facing
-    message on a bad date."""
+    message on a bad date.
+
+    The two kinds of window are separate functions since hub 1.189.0, when the undated one
+    gained its per-day archive import and this one passed SonarCloud's complexity limit."""
     date = args.get("date")
-    from_raw = args.get("from")
-    to_raw = args.get("to")
     limit = parse_history_limit(args.get("limit"))
     requested_resolution = (args.get("resolution") or "auto").strip().lower()
-
     if date:
-        day_start = parse_request_datetime(date)
-        if day_start is None:
-            raise ValueError("Invalid date format; use YYYY-MM-DD.")
-        day_start = day_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
-        start_dt = parse_request_datetime(from_raw) or day_start
-        end_dt = parse_request_datetime(to_raw) or day_end
-        start_dt = max(start_dt, day_start)
-        end_dt = min(end_dt, day_end)
-        # The day as the hub formats it, never the raw query string. That string becomes a
-        # file name in LOG_DIR (CodeQL py/path-injection, alerts #3/#4), and anything
-        # parse_request_datetime accepts beyond a bare date -- "2026-10-08T05:00Z", a padded
-        # " 2026-10-08" -- named a CSV that does not exist and marked the day imported
-        # without reading the one that does.
-        ensure_day_loaded_from_csv(day_start.strftime("%Y-%m-%d"))
+        start_dt, end_dt = _dated_history_window(date, args.get("from"), args.get("to"))
     else:
-        end_dt = parse_request_datetime(to_raw) or datetime.now()
-        start_dt = parse_request_datetime(from_raw)
-        if start_dt is None:
-            # A caller that names no start gets the configured default window, not the whole
-            # archive. The oldest reading is a FLOOR, not the start: it stops us asking for
-            # time that predates the data, but on a hub with months of history it used to
-            # make "no from=" mean "everything", which is unbounded and nothing wants.
-            window = settings.get_int(DB_PATH, "hub.live_default_window_seconds")
-            start_dt = end_dt - timedelta(seconds=window)
-            oldest = get_oldest_reading_datetime()
-            if oldest is not None and oldest > start_dt:
-                start_dt = oldest
-
+        start_dt, end_dt = _undated_history_window(args.get("from"), args.get("to"))
     if start_dt > end_dt:
         start_dt, end_dt = end_dt, start_dt
 
@@ -7578,6 +7734,31 @@ def _mark_changes(response):
     return response
 
 
+# The blueprints whose successful console writes can make a target due NOW: a new deployment,
+# a retry or redeploy, Retry now, Abort (packages, deploy_progress).
+_DEPLOY_WAKE_BLUEPRINTS = frozenset({"packages", "deploy_progress"})
+
+
+@app.after_request
+def _wake_deploys(response):
+    """Run the deploy scheduler's next pass now after an operator acts on a deployment, so
+    Deploy, Retry or Abort shows its effect in a second rather than up to half a minute
+    later. One hook here rather than a callback threaded into each route, for the reason
+    _mark_changes is one hook. Agent traffic (`/api/agent/...`: payload downloads, step
+    keepalives) is excluded -- a deploy RESULT wakes the scheduler from _on_command_result,
+    and a keepalive every ten seconds per running machine must not drive extra passes.
+    """
+    try:
+        if (request.blueprint in _DEPLOY_WAKE_BLUEPRINTS
+                and request.method == "POST"
+                and not request.path.startswith("/api/agent/")
+                and 200 <= response.status_code < 300):
+            wake_deploy_scheduler()
+    except Exception as e:
+        print(f"[deploy] after-request wake failed: {e}")
+    return response
+
+
 def _fleet_agent_release():
     """The newest Windows agent on the fleet's default channel, for the sidebar notice.
 
@@ -7604,7 +7785,7 @@ def _fleet_agent_release():
 
 def _hub_release_notes_url():
     try:
-        return channels.hub_release_notes_url(get_latest_hub_version(), hub_update_channel())
+        return channels.hub_release_notes_url(get_latest_hub_version())
     except Exception:
         return None
 
@@ -7836,6 +8017,7 @@ def machine_page(machine):
 # the order of definitions in this file irrelevant to them, which a sleep before the first
 # pass would not -- it would only move the race.
 start_agent_version_watcher()
+start_release_mirror_watcher()
 start_hub_update_watcher()
 start_retention_pruner()
 start_deploy_scheduler()

@@ -171,8 +171,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
     /// last_seen, and the console calls a machine offline after 90 seconds without one.
     /// </summary>
     public async Task<bool> HeartbeatAsync(CancellationToken ct, JsonObject? patches = null,
-                                           JsonObject? processes = null)
+                                           JsonObject? processes = null, JsonObject? software = null)
     {
+        SoftwareRejected = false;
         if (!_identity.IsEnrolled) return false;
         try
         {
@@ -208,6 +209,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
             // The Processes card's list (roadmap #22), only ever present while the hub has
             // said somebody is looking -- see ProcessReporter.
             if (processes is not null) body["processes"] = processes;
+            // Installed packages (roadmap #25 B), change-only and cloned for the patches
+            // block's reason. See SoftwareInventoryReporter.
+            if (software is not null) body["software"] = software.DeepClone();
             req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
 
             using var resp = await _http.SendAsync(req, ct);
@@ -223,7 +227,9 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
             // ApplyProcessesWanted for why a bad reply changes nothing.
             var reply = await resp.Content.ReadAsStringAsync(ct);
             ApplyProcessesWanted(reply);
+            ApplyUpdateChannel(reply);
             ApplyUpdatePolicy(reply);
+            if (software is not null) SoftwareRejected = ReadSoftwareRejected(reply);
             return true;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -237,6 +243,71 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
     /// one has answered. Read by the process loop.</summary>
     public bool? ProcessesWanted { get; private set; }
 
+    /// <summary>Whether the last heartbeat's hub could not store the software block it carried
+    /// (`software_rejected`). The caller keeps the payload pending when it is true, so the next
+    /// heartbeat carries it again -- hub/fleet_web.py answers this instead of a 500 so a failed
+    /// write does not also read the machine offline.</summary>
+    public bool SoftwareRejected { get; private set; }
+
+    /// <summary>A reply that cannot be read counts as rejected: re-sending a list costs one
+    /// heartbeat body, and wrongly believing it stored costs a stale Software section until
+    /// the packages next change.</summary>
+    internal static bool ReadSoftwareRejected(string reply)
+    {
+        try
+        {
+            return JsonNode.Parse(reply)?["software_rejected"] is JsonValue v
+                   && v.TryGetValue<bool>(out var rejected) && rejected;
+        }
+        catch { return true; }
+    }
+
+    /// <summary>The last parse failure each heartbeat handler logged at Warning.
+    ///
+    /// A reply that is not JSON at all -- a proxy's HTML error page answering 200 -- fails
+    /// both handlers on every heartbeat, and until 0.4.1 the policy handler said so every
+    /// ten seconds. Warned once per distinct error, at Debug while it repeats, and cleared
+    /// by the next reply that parses: SelfUpdater's NoteFailure rule, for the same reason.</summary>
+    private string? _lastChannelError, _lastPolicyError;
+
+    private void WarnOnce(ref string? last, Exception e, string what)
+    {
+        if (e.Message == last)
+        {
+            _log.LogDebug("Ignoring malformed {What} from the hub (unchanged): {Msg}", what, e.Message);
+            return;
+        }
+        last = e.Message;
+        _log.LogWarning(e, "Ignoring malformed {What} from the hub: {Msg}", what, e.Message);
+    }
+
+    /// <summary>Which release channel the hub says this machine follows (roadmap #21).
+    ///
+    /// **Absent means stable**, unlike the pin below, where absent changes nothing. That is the
+    /// Windows agent's asymmetry and its reason: a hub too old to send the field never had a
+    /// beta for this machine to be on, while a pin exists to STOP an install and one heartbeat
+    /// that failed to resolve it must not release the hold. The hub sends the DELIVERED
+    /// channel, so a beta box is told stable while stable is strictly newer -- nothing here
+    /// needs to know that. Persisted only when it changed. Internal so a test can feed it a
+    /// heartbeat reply and read the channel back from disk.</summary>
+    internal void ApplyUpdateChannel(string reply)
+    {
+        try
+        {
+            var sent = JsonNode.Parse(reply)?["update_channel"]?.GetValue<string>();
+            var channel = Channels.Normalize(sent);
+            _lastChannelError = null;
+            if (channel == AgentState.LoadUpdateChannel()) return;
+            _state.SaveUpdateChannel(channel);
+            _log.LogInformation("Release channel is now {Channel}; updates will come from {Url}",
+                                channel, AgentConfig.ManifestUrlFor(channel));
+        }
+        catch (Exception e)
+        {
+            WarnOnce(ref _lastChannelError, e, "channel");
+        }
+    }
+
     /// <summary>The hub's update policy (roadmap #21): automatic, or pinned to one exact
     /// version. **An absent block changes nothing** -- the Windows agent's rule, for the
     /// Windows agent's reason: a pin exists to stop an install, and one heartbeat whose hub
@@ -246,9 +317,14 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
         try
         {
             var block = JsonNode.Parse(reply)?["update_policy"];
-            if (block is null) return;
+            if (block is null)
+            {
+                _lastPolicyError = null;
+                return;
+            }
             var pin = UpdatePins.PinFromPolicy(
                 block["mode"]?.GetValue<string>(), block["version"]?.GetValue<string>());
+            _lastPolicyError = null;
             if (pin == AgentState.LoadUpdatePin()) return;
             _state.SaveUpdatePin(pin);
             if (pin is null) _log.LogInformation("Agent updates are automatic again");
@@ -256,7 +332,7 @@ public sealed class FleetClient : IDisposable, IOutputSink, IPtyChannel
         }
         catch (Exception e)
         {
-            _log.LogWarning(e, "Ignoring malformed update policy from the hub: {Msg}", e.Message);
+            WarnOnce(ref _lastPolicyError, e, "update policy");
         }
     }
 

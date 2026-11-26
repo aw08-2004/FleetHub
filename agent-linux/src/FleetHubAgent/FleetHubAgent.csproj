@@ -24,7 +24,7 @@
          will get the same treatment: a release script that moves both, never a hand edit.
          0.x is deliberate and load-bearing; the reasoning is on AgentConfig.Version, and
          VersionGateTests is what enforces it. -->
-    <Version>0.4.0</Version>
+    <Version>0.5.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -54,6 +54,9 @@
        cannot mean something different on one platform. See agent-shared/UpdatePins.cs. -->
   <ItemGroup>
     <Compile Include="..\..\..\agent-shared\UpdatePins.cs" Link="Update\UpdatePins.cs" />
+    <!-- The hub's release mirror as the second update source (roadmap #33), shared with the
+         Windows agent for the same reason. See agent-shared/UpdateMirror.cs. -->
+    <Compile Include="..\..\..\agent-shared\UpdateMirror.cs" Link="Update\UpdateMirror.cs" />
   </ItemGroup>
 
   <!-- The interactive terminal's hub side (runner, registry, hub calls, timings), shared with

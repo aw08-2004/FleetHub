@@ -2,59 +2,198 @@
    The .machine-grid / .machine-card rules that used to live here went with the per-machine
    cards; the Asset Inventory is the page that lists machines now. */
 
-/* ---------------- Tiles: one number, one label ---------------- */
-/* Six, three or two columns -- never five or four. Every tile group on this page has six
-   tiles, and `auto-fit, minmax(150px, 1fr)` laid them out five-and-one at common laptop
-   widths, leaving "Agents behind" alone on a row as if it were a different kind of number.
-   Divisors of six can't orphan one.
+/* ---------------- The bento (hub 1.189.0) ---------------- */
+/* One hero tile (fleet health, two columns by two rows) and five tiles round it. Three
+   columns, two, or one -- the hero spans the full width at two, so it never shares a row
+   with half a tile.
 
-   A container query, not a media query: the width that matters is the card's, and that
+   A container query, not a media query: the width that matters is the page's, and that
    moves with the sidebar (240px, the 64px rail, or none on a phone) independently of the
-   viewport. The host is a wrapper because a container can't size its own grid columns. */
-.tile-grid-host {
+   viewport. The host is a wrapper because a container can't size its own grid columns.
+
+   This replaced .tile-grid (six, three or two columns of equal tiles). Its rule against
+   five-and-one layouts does not carry over: tiles here are different sizes on purpose. */
+.dash-bento-host {
     container-type: inline-size;
+    margin-bottom: var(--space-5);
 }
 
-.tile-grid {
+.dash-bento {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
-    margin-top: var(--space-4);
 }
 
-@container (min-width: 520px) {
-    .tile-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@container (min-width: 560px) {
+    .dash-bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .dash-hero { grid-column: 1 / -1; }
 }
 
-@container (min-width: 1000px) {
-    .tile-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@container (min-width: 960px) {
+    .dash-bento { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .dash-hero { grid-column: span 2; grid-row: span 2; }
 }
 
-.tile {
-    padding: var(--space-3) var(--space-4);
-    border: 1px solid var(--card-border);
-    border-radius: var(--radius-md);
-    background: var(--control-bg);
+.dash-bento .stat-card {
+    padding: var(--space-4) var(--space-5);
 }
 
-a.tile--link {
-    display: block;
-    color: inherit;
-    text-decoration: none;
+.dash-hero__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-3);
 }
 
-a.tile--link:hover,
-a.tile--link:focus-visible {
-    border-color: var(--accent);
+/* Ring and its list side by side; the list drops under the ring on a narrow hero. The
+   centre label is positioned over the ring rather than drawn in the SVG so it is real,
+   translatable, selectable text. */
+.dash-hero__body {
+    position: relative;
+    display: grid;
+    grid-template-columns: 168px minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-6);
+    margin-top: var(--space-2);
 }
 
-/* --text-stat (32px), one step above the page title's 28px. The two were the same size, so
-   the h1 and twenty numbers competed and nothing on the page read as first. */
-.tile__value {
-    font-size: var(--text-stat);
+@container (max-width: 420px) {
+    .dash-hero__body { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+    .dash-hero__list { width: 100%; }
+    .donut__center { top: 84px; }
+}
+
+.donut {
+    width: 168px;
+    height: 168px;
+    transform: rotate(-90deg);
+}
+
+.donut circle {
+    fill: none;
+    stroke-width: 14;
+}
+
+.donut__track { stroke: var(--control-bg); }
+
+.donut__seg {
+    stroke-dasharray: 0 300;
+    transition: stroke-dasharray 0.4s ease, stroke-dashoffset 0.4s ease;
+}
+
+.donut__seg--online { stroke: var(--success); }
+.donut__seg--offline { stroke: var(--muted); }
+
+.donut__center {
+    position: absolute;
+    left: 84px;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+}
+
+.donut__total {
+    font-size: var(--text-xl);
     font-weight: 600;
     line-height: 1.1;
     font-variant-numeric: tabular-nums;
+}
+
+.dash-tile__value {
+    font-size: var(--text-xl);
+    font-weight: 600;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Label/value rows inside a tile. Rows, not more tiles: a number that qualifies the
+   headline above it belongs under it, not beside it at the same size. */
+.dash-kv {
+    margin: var(--space-2) 0 0;
+}
+
+.dash-kv__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: 5px 0;
+    border-bottom: 1px solid var(--card-border);
+    font-size: var(--text-sm);
+}
+
+.dash-kv__row:last-child {
+    border-bottom: none;
+}
+
+.dash-kv__row dt {
+    min-width: 0;
+    color: var(--muted);
+}
+
+.dash-kv__row dd {
+    margin: 0;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.dash-hero__list .dash-kv__row {
+    font-size: var(--text-base);
+    padding: var(--space-2) 0;
+}
+
+.dash-hero__list .dash-kv__value {
+    font-size: var(--text-lg);
+    font-weight: 600;
+}
+
+.dash-kv__hint {
+    display: block;
+    font-size: var(--text-xs);
+}
+
+a.dash-kv__value {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.meter__fill--ok { background: var(--success); }
+.meter__fill--warn { background: var(--warning); }
+
+/* The OS bar: one segment per bucket, then a legend row with the same colour. Colours are
+   per BUCKET, not per position, so Windows 11 is the same blue on every hub whatever else
+   the fleet runs. Mixed from the theme tokens, so both themes get them. */
+.os-bar {
+    display: flex;
+    height: 12px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--control-bg);
+    margin: var(--space-3) 0 var(--space-1);
+}
+
+.os-seg { display: block; height: 100%; }
+
+.os-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    margin-right: var(--space-2);
+}
+
+.os-seg--windows_11 { background: var(--accent); }
+.os-seg--windows_10 { background: color-mix(in srgb, var(--accent) 50%, var(--card)); }
+.os-seg--windows_legacy { background: var(--warning); }
+.os-seg--windows_server { background: var(--success); }
+.os-seg--linux { background: color-mix(in srgb, var(--success) 45%, var(--card)); }
+.os-seg--android { background: color-mix(in srgb, var(--warning) 45%, var(--card)); }
+.os-seg--unknown { background: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+    .donut__seg { transition: none; }
 }
 
 /* Colour is applied by the caller and only when the VALUE is the news -- zero failures must
@@ -70,61 +209,6 @@ a.tile--link:focus-visible {
 
 /* Nothing to report: a zero or a dash with no tone (dashboard.js tile()). */
 .tile__value--quiet { color: var(--muted); }
-
-.tile__label {
-    font-size: var(--text-sm);
-    color: var(--muted);
-    margin-top: var(--space-1);
-}
-
-/* No opacity on top of --muted: at 0.8 the hint fell under 4.5:1 on both themes. */
-.tile__hint {
-    font-size: var(--text-xs);
-    color: var(--muted);
-    margin-top: var(--space-1);
-}
-
-.dashboard__coverage {
-    margin-top: var(--space-1);
-}
-
-/* ---------------- OS breakdown: a label, a bar, a count ---------------- */
-/* A bar rather than a pie: the question is "how much of the fleet is still on X", which is
-   one length compared against another, and lengths are the comparison people read
-   accurately. */
-.breakdown__row {
-    display: grid;
-    grid-template-columns: minmax(120px, 1fr) 3fr minmax(90px, auto);
-    align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-2) 0;
-}
-
-.breakdown__label {
-    font-size: var(--text-sm);
-}
-
-.breakdown__bar {
-    display: block;
-    height: 10px;
-    border-radius: 999px;
-    background: var(--control-bg);
-    overflow: hidden;
-}
-
-.breakdown__fill {
-    display: block;
-    height: 100%;
-    border-radius: 999px;
-    background: var(--accent);
-}
-
-.breakdown__count {
-    font-size: var(--text-sm);
-    color: var(--muted);
-    text-align: right;
-    white-space: nowrap;
-}
 
 /* ---------------- Attention lists ---------------- */
 .attention-grid {

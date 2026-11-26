@@ -100,6 +100,43 @@ public sealed class AgentState
         public string? Version { get; set; }
     }
 
+    /// <summary>The channel the hub last named, normalised; stable when there is no file. A
+    /// missing file is every box that predates channels, and those were on stable.</summary>
+    public static string LoadUpdateChannel()
+    {
+        try
+        {
+            if (File.Exists(AgentConfig.UpdateChannelPath))
+            {
+                var stored = JsonSerializer.Deserialize<UpdateChannel>(
+                    File.ReadAllText(AgentConfig.UpdateChannelPath));
+                return Channels.Normalize(stored?.Channel);
+            }
+        }
+        catch { /* unreadable reads as stable, the safe train */ }
+        return Channels.Stable;
+    }
+
+    /// <summary>Store the channel. Stable deletes the file rather than writing "stable", so
+    /// the on-disk state of a box that never left stable is the same as one that predates
+    /// channels.</summary>
+    public void SaveUpdateChannel(string channel)
+    {
+        if (Channels.Normalize(channel) == Channels.Stable)
+        {
+            try { File.Delete(AgentConfig.UpdateChannelPath); } catch { /* retried next change */ }
+            return;
+        }
+        EnsureStateDir();
+        AtomicWrite(AgentConfig.UpdateChannelPath,
+                    JsonSerializer.Serialize(new UpdateChannel { Channel = Channels.Beta }, JsonOpts));
+    }
+
+    private sealed class UpdateChannel
+    {
+        public string? Channel { get; set; }
+    }
+
     /// <summary>Forget the update in flight. Called once the new build has done real work, not
     /// merely started -- see SelfUpdater.ConfirmRunningBuild.</summary>
     public void ClearRestartState()

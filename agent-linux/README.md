@@ -74,10 +74,12 @@ works against an unmodified hub.
 | **Identity** | DMI (`/sys/class/dmi/id`) for serial, model, manufacturer, asset tag; `/etc/os-release` for the OS caption; kernel release as `os_build` |
 | **Enrollment** | The hub's shared `AGENT_ENROLLMENT_SECRET`, from `/etc/fleethub/agent.secret` (0600, permissions *checked*, not assumed) or the env var of the same name |
 | **Offline buffer** | Bounded at 1000 sensor-stripped reports, flushed oldest-first on reconnect |
-| **Commands** | `restart`, `shutdown`, `rename`, `run_script`, with a running command's output streamed to the console as it is produced |
+| **Commands** | `restart`, `shutdown`, `rename`, `run_script`, `kill_process`, `restart_process` and `install_patches`, with a running command's output streamed to the console as it is produced |
 | **Terminal** (0.4.0) | `shell_open`: a login shell as root on a Unix pty (`Fleet/Shell/`), streamed over the hub's `/api/agent/pty/*` endpoints like the Windows agent's ConPTY terminal. Started with `posix_spawn` + `setsid` and the slave opened by path, so the shell has a controlling terminal (job control, Ctrl-C, SIGWINCH) without forking the runtime. Exempt from the command concurrency cap, capped at eight per machine. The console offers it because the capability report lists `shell_open` |
-| **Patch inventory** | What `apt` or `dnf` says is available, change-only on the heartbeat, six-hourly on its own loop. Reporting only — nothing here installs a package, and the capability report is what stops the hub queueing one |
-| **Process list** | The machine page's Processes card: a `/proc` walk (CPU as a share of the whole machine, resident memory, owner, executable path, systemd unit from the cgroup), sampled every five seconds **only while somebody has the card open** and idle otherwise. Listing only -- ending or restarting a process is not implemented, and the card offers no menu for it. Claimed as the `processes` feature, which is what lets the console show the card to a 0.x agent |
+| **Patch inventory** | What `apt` or `dnf` says is available, change-only on the heartbeat, six-hourly on its own loop |
+| **Patch install** (0.5.0) | `install_patches`: the approved updates a patch run names, with `apt-get install --only-upgrade` or `dnf upgrade`, only those the machine still offers, never prompting (`DEBIAN_FRONTEND=noninteractive`, `--force-confold`, a five-minute wait for the dpkg lock). Restarts per the window's policy, reading `/run/reboot-required` or `needs-restarting -r`, and re-scans at once so the hub can close the run |
+| **Process list** | The machine page's Processes card: a `/proc` walk (CPU as a share of the whole machine, resident memory, owner, executable path, systemd unit from the cgroup), sampled every five seconds **only while somebody has the card open** and idle otherwise. **End task** (0.5.0) sends SIGTERM and SIGKILLs only what is still there five seconds later; **Restart** restarts the systemd *system* service the process runs in and refuses anything else. pid 1, kernel threads, the journal, logind, udev, the bus and the agent are refused. Claimed as the `processes` feature, which is what lets the console show the card to a 0.x agent |
+| **Software inventory** (0.5.0) | Every installed package from `dpkg-query` or `rpm`, for the Software section and the report sheet, change-only and hourly. Libraries included, capped at the hub's 2000 |
 | **Capabilities** | The heartbeat states the platform and the command types this agent implements, so the hub stops measuring it against the Windows train and stops queueing work it can never perform. Derived from the dispatcher, not written out |
 | **Self-update** | Ed25519-signed manifest, its own train, verified fail-closed before anything is written. systemd restarts the unit onto the new binary |
 
@@ -91,12 +93,14 @@ work and the hub calls a machine offline after ninety.
 Everything else, and none of it is reachable from the console anyway (see the version table
 above). In rough order of what would be worth doing next:
 
-1. **Installing patches.** The inventory half reports; nothing applies an update. The
-   executor and a call to `PatchInventoryReporter.Invalidate()` are what it needs.
-2. **Ending and restarting processes** from the Processes card -- `kill_process` and
-   `restart_process` executors (a `kill(2)` and a `systemctl restart` of the unit). The list
-   itself is done.
-3. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
+1. **Wake-on-LAN**: reporting this box's network adapters so the hub can wake it, and
+   `wake_machine` so it can wake its neighbours (`ethtool` for the NIC setting).
+2. **The Files tab** and folder copies between machines, which need a Linux `PathRules`.
+3. **Packages** (`deploy_package`) with live step progress -- gated on the capability report,
+   not `MIN_PROGRESS_AGENT`.
+4. journald events (#16), network sweep (#18), disk usage, and a systemd watchdog (#20).
+5. Snap and Flatpak in the software inventory.
+6. GPU and fan sensors; remote view/control (`#2`) is a long way off and may never be worth it.
 
 The two **hub**-side gaps this agent used to work around are closed in hub 1.123.0: the
 `shell` enum names `bash` and `sh` (the substitution stays, because an old rule still arrives
@@ -111,11 +115,12 @@ report rather than onto a version number.
 ```
 src/FleetHubAgent/        the agent
   AgentConfig.cs          version, endpoints, cadence, state paths
-  Worker.cs               the five loops
+  Worker.cs               the six loops
   Fleet/                  hub client, dispatcher, executors, capability report, output streaming
   Fleet/Shell/            the interactive terminal's pty: UnixPty and PtySession (the runner,
                           registry and hub calls are ../agent-shared/Pty, shared with Windows)
-  Patch/                  what apt/dnf says is available, and the heartbeat payload for it
+  Patch/                  what apt/dnf says is available, the heartbeat payload, and the installer
+  Software/               what dpkg/rpm says is installed, and the heartbeat payload for it
   Update/                 the signed self-update: manifest verification and the swap
   Telemetry/              /proc and /sys readers, the report builder
   State/                  agent.json, and keeping it root-only
@@ -150,8 +155,8 @@ The Linux counterpart of `irm .../install.ps1 | iex`:
 curl -fsSL https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'
 ```
 
-`curl` or `wget`, whichever the box has — Debian's minimal images and appliance distros built
-on them (OpenMediaVault, for one) ship `wget` and no `curl`:
+`curl` or `wget`, whichever the box has — Debian's minimal images and the NAS and appliance
+distros built on them ship `wget` and no `curl`:
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh | sudo bash -s -- --secret 'THE-SECRET'

@@ -18,7 +18,7 @@ The page has the tree on the left:
 
 | Kind | What it does | Needs |
 |---|---|---|
-| **Agent settings** | Overrides hub settings marked as agent settings (report interval, sensor interval, network collection, the ticket tray and its submitters, the sensor preference) on the PCs the policy applies to | any agent version |
+| **Settings** | Overrides hub settings marked as agent settings (report interval, sensor interval, network collection, the ticket tray and its submitters, the sensor preference) on the PCs the policy applies to. Two are *enforced by the hub* instead and never reach the agent: the remote view **consent mode** (attended / unattended) and **allow remote view/control** -- see [remote control](remote-control.md) | any agent version |
 | **Administrative Templates** | The settings `gpedit.msc` shows -- Enabled, Disabled or Not configured, with their options -- saved as the registry values they write | an agent that supports Group Policy; the templates come from your PCs (see below) |
 | **Registry values** | Writes DWORD, string, expandable-string and multi-string values under `SOFTWARE\Policies`, in HKLM (Computer Configuration) or HKCU (User Configuration) | an agent that supports Group Policy; HKCU needs agent 3.49 (see below) |
 | **Scripts** | Runs a library script once on each PC the policy applies to, and again only when the script itself changes | the *Issue commands* capability as well |

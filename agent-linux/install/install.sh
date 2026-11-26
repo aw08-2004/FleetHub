@@ -49,6 +49,12 @@ UPDATE_PUBLIC_KEY_HEX="9a4f433e0eb82fae121fdeede7d2ce881d50bc80021236f24fdfa4494
 BINARY=""
 AGENT_URL=""
 MANIFEST_URL_OVERRIDE=""
+# The hub's release mirror, e.g. https://hub.example.com/api/agent/dist (roadmap #33): the
+# second source for the manifest, the binary and the unit, tried when GitHub cannot be reached.
+# From the environment only, never a flag, for the FLEETHUB_ONBOARDING reason below: the
+# onboarding script fetches this file from main, and an older copy dies on an unknown flag.
+MIRROR_URL="${FLEETHUB_MIRROR_URL:-}"
+MIRROR_URL="${MIRROR_URL%/}"
 UNIT_SRC=""
 SECRET=""
 SECRET_FILE=""
@@ -67,7 +73,7 @@ FleetHub Linux agent installer
   curl -fsSL https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh \
     | sudo bash -s -- --secret 'THE-SECRET'
 
-  # Debian minimal, OpenMediaVault and other images without curl:
+  # Debian minimal, NAS/appliance distros and other images without curl:
   wget -qO- https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh \
     | sudo bash -s -- --secret 'THE-SECRET'
 
@@ -93,6 +99,12 @@ Options:
   --binary PATH      Install a binary already on this machine; skips downloading entirely,
                      and like --agent-url is not checked against the fleet key.
   --unit PATH        Use a local copy of the systemd unit rather than fetching it.
+
+Environment:
+  FLEETHUB_MIRROR_URL  The hub's release mirror (https://<hub>/api/agent/dist). Tried after
+                     GitHub for the manifest, the binary and the unit, for a machine that
+                     reaches the hub but not GitHub. The manifest and binary from it are
+                     checked exactly as from GitHub.
   --uninstall        Stop, disable and remove the agent. Keeps /etc/fleethub so a reinstall
                      does not need the secret again; delete it by hand to remove that too.
   -h, --help         This text.
@@ -107,8 +119,8 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # curl OR wget, whichever the machine has.
 #
 # **Do not collapse this back to curl.** Requiring curl was the first thing this installer got
-# wrong in the field: Debian's own minimal images -- and appliance distros built on them, like
-# OpenMediaVault -- ship wget and not curl. The failure is `curl: not found` from the FIRST half
+# wrong in the field: Debian's own minimal images -- and the NAS and appliance distros built
+# on them -- ship wget and not curl. The failure is `curl: not found` from the FIRST half
 # of the pipeline, before a single line of this script has run, so the installer cannot even
 # report it. The person then sees a sudo password prompt from the second half of the pipe (both
 # sides of a pipeline start regardless) and reasonably concludes the install ran.
@@ -147,7 +159,7 @@ http_get_file() {
 
 need_http() {
     have curl || have wget || die "neither curl nor wget is installed. Install one first:
-    apt-get update && apt-get install -y curl        # Debian / Ubuntu / OpenMediaVault
+    apt-get update && apt-get install -y curl        # Debian / Ubuntu and derivatives
     dnf install -y curl                              # Fedora / RHEL
   ...or build the agent yourself and install it with --binary, which needs neither."
 }
@@ -156,8 +168,8 @@ need_http() {
 
 check_platform() {
     # `sudo` is named first because that is what most people will reach for, but an account
-    # that is not in sudoers is common on appliance distros (OpenMediaVault manages its users
-    # and does not make them admins), so `su -` is spelled out rather than assumed.
+    # that is not in sudoers is common on NAS and appliance distros (they manage their own users
+    # and do not make them admins), so `su -` is spelled out rather than assumed.
     [ "$(id -u)" -eq 0 ] || die "run this as root: it writes to /opt, /etc and systemd.
   Either pipe to \`sudo bash\`, or become root first with \`su -\` and drop the sudo."
     need systemctl
@@ -257,35 +269,72 @@ manifest_field() {
     grep -o "\"$2\" *: *\"[^\"]*\"" "$1" | head -1 | sed 's/.*: *"\(.*\)"/\1/'
 }
 
+# Two sources since roadmap #33: GitHub, then the hub's release mirror. Each step falls back on
+# its own -- a site may allow raw.githubusercontent.com and block the release download host --
+# and on ANY failure to get a verified file, because what the mirror serves is checked exactly
+# as strictly (agent-install.ps1's Get-VerifiedAgent says the same). The manifest and its .sig
+# always come from the SAME source. The mirror is used only for the manifest this installer
+# would read anyway: --manifest-url is its own mirror. From the mirror the binary is fetched by
+# its SIGNED sha256, never from a url the hub chose.
 fetch_verified_binary() {
-    local dest="$1" work="$2" url version want got
+    local dest="$1" work="$2" url version want got src from="" reasons=""
     local manifest_url="${MANIFEST_URL_OVERRIDE:-$MANIFEST_URL}"
+    local sources="$manifest_url"
+    if [[ -n "$MIRROR_URL" && -z "$MANIFEST_URL_OVERRIDE" ]]; then
+        sources="$sources $MIRROR_URL/repo/agent-linux/agent-linux.manifest.json"
+    fi
     need_openssl3
-    http_get_file "$manifest_url" "$work/manifest.json" 2>/dev/null \
-        && http_get_file "$manifest_url.sig" "$work/manifest.json.sig" 2>/dev/null \
-        || die "could not fetch the signed Linux agent manifest from $manifest_url (or its .sig).
+    for src in $sources; do
+        if ! { http_get_file "$src" "$work/manifest.json" 2>/dev/null \
+                && http_get_file "$src.sig" "$work/manifest.json.sig" 2>/dev/null; }; then
+            reasons="$reasons
+  could not fetch the signed Linux agent manifest from $src (or its .sig)"
+            continue
+        fi
+        if ! verify_manifest "$work/manifest.json" "$work/manifest.json.sig" "$work"; then
+            reasons="$reasons
+  the Linux agent manifest at $src is NOT signed by the fleet's key"
+            continue
+        fi
+        from="$src"
+        break
+    done
+    [[ -n "$from" ]] || die "no verifiable Linux agent manifest:$reasons
+  Refusing to install. Nothing on this machine was changed.
   If no Linux release has been cut since signed manifests were introduced, there is nothing
   verifiable to install yet: use --binary with a locally built agent, or --agent-url for an
   unverified download."
-    verify_manifest "$work/manifest.json" "$work/manifest.json.sig" "$work" \
-        || die "the Linux agent manifest at $manifest_url is NOT signed by the fleet's key. \
-Refusing to install. Nothing on this machine was changed."
     version="$(manifest_field "$work/manifest.json" version)"
     want="$(manifest_field "$work/manifest.json" sha256 | tr 'A-F' 'a-f')"
     url="$(manifest_field "$work/manifest.json" url)"
     [ -n "$version" ] && [ -n "$url" ] && printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$' \
         || die "the signed manifest is missing its version, url or sha256 -- a release-signing bug."
-    say "manifest verified: version $version, signed by the fleet key"
-    say "binary  <- $url"
-    http_get_file "$url" "$dest" || die "download failed: $url"
-    # Hashed from stdin, never by name: GNU sha256sum prefixes its output with a backslash
-    # when the FILE NAME contains a backslash or a newline, and that prefix lands in $got --
-    # so a genuine binary under such a path was refused as tampered. Found on Windows, where
-    # every path has one; a Linux install directory can have one too.
-    got="$(sha256sum < "$dest" | cut -d' ' -f1)"
-    [ "$got" = "$want" ] || die "the downloaded binary does not match the signed manifest \
-(sha256 $got, expected $want). Refusing to install."
-    say "binary  sha256 matches the signed manifest"
+    say "manifest verified: version $version, signed by the fleet key ($from)"
+    sources="$url"
+    [[ -n "$MIRROR_URL" ]] && sources="$sources $MIRROR_URL/bin/$want"
+    reasons=""
+    for src in $sources; do
+        say "binary  <- $src"
+        if ! http_get_file "$src" "$dest"; then
+            reasons="$reasons
+  download failed: $src"
+            continue
+        fi
+        # Hashed from stdin, never by name: GNU sha256sum prefixes its output with a backslash
+        # when the FILE NAME contains a backslash or a newline, and that prefix lands in $got --
+        # so a genuine binary under such a path was refused as tampered. Found on Windows, where
+        # every path has one; a Linux install directory can have one too.
+        got="$(sha256sum < "$dest" | cut -d' ' -f1)"
+        if [[ "$got" == "$want" ]]; then
+            say "binary  sha256 matches the signed manifest"
+            return 0
+        fi
+        reasons="$reasons
+  the binary from $src does not match the signed manifest (sha256 $got, expected $want)"
+    done
+    rm -f "$dest"
+    die "no binary matching the signed manifest:$reasons
+  Refusing to install."
 }
 
 fetch_binary() {
@@ -319,9 +368,19 @@ fetch_unit() {
         say "unit    <- $UNIT_SRC (local)"
         return
     fi
-    http_get_file "$UNIT_URL" "$dest" || die "could not fetch the unit file: $UNIT_URL"
-    grep -q '^\[Service\]' "$dest" || die "fetched unit file looks wrong: $UNIT_URL"
-    say "unit    <- $UNIT_URL"
+    # The mirror's copy second (roadmap #33). The unit is unsigned either way: from GitHub it is
+    # trusted for TLS and push access to main, from the mirror for being the hub this machine
+    # was pointed at -- which already serves the onboarding script that runs this as root.
+    local src
+    for src in "$UNIT_URL" ${MIRROR_URL:+"$MIRROR_URL/repo/agent-linux/packaging/fleethub-agent.service"}; do
+        if http_get_file "$src" "$dest" && grep -q '^\[Service\]' "$dest"; then
+            say "unit    <- $src"
+            return 0
+        fi
+    done
+    # No apostrophe inside the ${...:+} below: bash reads one there as a quote even within
+    # double quotes, and the whole file stops parsing.
+    die "could not fetch the unit file: $UNIT_URL${MIRROR_URL:+ or $MIRROR_URL}"
 }
 
 # ---------------------------------------------------------------- uninstall

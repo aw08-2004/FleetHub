@@ -71,6 +71,11 @@ public static class ProcessRunner
         catch (OperationCanceledException)
         {
             try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
+            // Kill only ASKS. Wait (bounded) for the process to actually go: a caller that
+            // deletes the process's working directory next -- a package deploy's attempt
+            // folder, holding scripts that ran as SYSTEM -- cannot remove a directory that is
+            // still some process's current directory, and the files would stay on disk.
+            try { proc.WaitForExit(5000); } catch { /* ignore */ }
             return new ProcessOutcome(-1, Snapshot(), TimedOut: true);
         }
 

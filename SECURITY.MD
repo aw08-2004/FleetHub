@@ -23,6 +23,9 @@ system administration use cases:
   "Device tokens" below)
 - **Signed Releases:** Authenticode-signed executables
 - **HTTPS-only:** All hub-to-agent communication over TLS
+- **Console off the internet (optional):** The hub can serve agents on a listener of their own
+  that answers no console route (see "The agent listener" below), so only that port is
+  published
 
 ## RMM Legitimate Use
 
@@ -231,6 +234,37 @@ authenticated. What is worth knowing about it:
   prefix so a reverse proxy can throttle or block it in one rule, and "Stop hosting" on the
   provisioning page takes it offline entirely.
 
+## The agent listener (hub 1.188.0)
+
+**The perimeter can be the network, not only the sign-in.** With `FLEETHUB_AGENT_PORT` set,
+the hub serves a second listener in the same process. That listener answers only:
+
+- `/api/agent/*` and `/api/report`, the agent's own routes;
+- `/onboarding`, `/onboarding/run/*`, `/api/onboarding/{check,redeem,status}` and the few
+  static files that page loads;
+- `/provisioning/apk/*`, the Android device-owner APK;
+- `/api/peer/*`, cross-hub sharing.
+
+Everything else gets a bare 404 before the Flask app sees the request. That covers the
+console, `/login` and the OAuth callbacks, the operator API, Socket.IO and the console's
+scripts. The reverse proxy publishes this listener as `HUB_URL` and the console's listener
+only on an internal hostname (`CONSOLE_URL`).
+
+- **It is a second fence, not a replacement gate.** Every route it lets through keeps its own
+  agent bearer, onboarding code, APK token or peer token. Nothing is trusted because it
+  arrived on that port.
+- **Paths are matched exactly, by whole segments.** `..`, `.`, empty segments, backslashes,
+  NULs and leftover percent-escapes are refused before matching. The filter checks the same
+  `PATH_INFO` werkzeug routes on, so the filter and the router cannot disagree about a path.
+  `tests/test_agent_listener.py` fails if a route outside `/api/agent/` and `/api/peer/` becomes
+  public without someone deciding it.
+- **Turn on `security.require_enrolled_telemetry` once every PC is enrolled.** `/api/report`
+  still accepts an unsigned report while it is off, and on a split hub that route is one of the
+  few the internet can reach.
+- **The proxy must overwrite `X-Forwarded-For`, not append to it.** The hub trusts one hop of
+  `X-Forwarded-*`, and the per-IP limit on `/api/report` and `/api/agent/enroll` keys on that
+  header (see the onboarding note below). Keep both hub ports reachable from the proxy only.
+
 ## Onboarding codes and signed telemetry (roadmap #29)
 
 **An onboarding code is a one-time right to put one machine into this fleet.** It is six
@@ -287,6 +321,44 @@ switch is off.
 Until a hub has this on, `/api/report` input is still untrusted. That is why the
 defence-in-depth around it stays: machine-name validation, the write-once BIOS serial, and the
 enrollment check before a duplicate-serial merge.
+
+## Agent downloads through the hub (roadmap #33)
+
+The hub keeps a copy of the agent release files (the signed channel manifests, the binaries
+they name, the pinned PawnIO driver installer, and the installers) and serves them under
+`/api/agent/dist/`. The installers try GitHub first and the hub second, so a PC that reaches
+the hub but not GitHub can still be onboarded. From Windows agent 3.54.0 and Linux agent 0.6.0,
+the agents' own self-update does the same (`agent-shared/UpdateMirror.cs`), with the mirror's
+address built from the agent's configured hub address and a compiled-in path. The setting is **Agent downloads through this
+hub** (`fleet.release_mirror`), on by default.
+
+**The hub is a mirror, not a trust root.** A PC installs a manifest only if its Ed25519
+signature verifies against the key compiled into the agent and both installers, and a binary
+only if its SHA-256 equals the signed value. The bytes are checked the same way whichever
+source served them, so a compromised hub that serves altered files gets them refused. The hub
+never chooses a download location: a binary is fetched from the mirror by its signed hash, and
+the mirror's address comes from the installer's own configuration, never from a hub response.
+The hub applies the same checks before it keeps a file, so it never serves anything a PC would
+refuse.
+
+What a compromised hub **can** do with the mirror:
+- **Withhold an update** by serving an older, validly signed manifest. It cannot downgrade a PC,
+  because every updater installs only a strictly newer version. A hub can already hold PCs back
+  with a version pin (roadmap #21), so this adds no power.
+- **Serve a different installer script or Linux unit file.** These are not signed. During
+  onboarding this adds no trust: the hub already serves the onboarding script that runs them
+  with administrator rights. Someone who runs an installer by hand with `FLEETHUB_MIRROR_URL`
+  set trusts that hub for these two files when GitHub cannot be reached.
+
+**PawnIO is pinned by hash.** `agent-install.ps1` used to download and run PawnIO's installer
+from another project's `master` branch without any check. It now accepts only the pinned
+SHA-256, from GitHub or the mirror, and installs without PawnIO (no sensor readings) when the
+bytes do not match.
+
+The download routes are **unauthenticated on purpose**: the files are public on GitHub, and a PC
+being onboarded has no credential yet. They are served on the agent listener. They are not rate
+limited per client, because every PC behind one office NAT shares an address. Limit bandwidth
+at the reverse proxy if the hub is internet-facing.
 
 ## Uninstalling an agent by deleting its device (roadmap #30)
 

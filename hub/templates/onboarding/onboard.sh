@@ -20,7 +20,12 @@ set -euo pipefail
 main() {
     local hub_url={{ hub_url }}
     local code={{ code }}
+    # The hub's release mirror first when it holds the installer, then GitHub (roadmap #33) --
+    # the reason is in onboard.ps1. An empty fallback is a source the hub does not have.
     local installer_url={{ installer_url }}
+    local installer_fallback_url={{ installer_fallback_url }}
+    # Handed to install.sh, so the signed manifest, the binary and the unit fall back the same way.
+    local mirror_url={{ mirror_url }}
     local service=fleethub-agent
     local state_dir=/var/lib/fleethub/agent
     local identity="$state_dir/agent.json"
@@ -39,8 +44,8 @@ main() {
         https://*|http://localhost|http://localhost:*|http://localhost/*|http://127.0.0.1|http://127.0.0.1:*|http://127.0.0.1/*) ;;
         *) fail "the hub address is not https ($hub_url). Ask your administrator to set HUB_URL to the hub's https address." ;;
     esac
-    # curl or wget, whichever the machine has -- Debian minimal and OpenMediaVault ship only
-    # wget. The command that fetched THIS script needed one of them already.
+    # curl or wget, whichever the machine has -- Debian minimal and the appliance distros built
+    # on it ship only wget. The command that fetched THIS script needed one of them already.
     have curl || have wget || fail "neither curl nor wget is installed."
 
     # A private working folder: mktemp -d is 0700 and root's, so nothing else on the machine
@@ -51,13 +56,19 @@ main() {
     trap "rm -rf '$work'" EXIT
 
     step "Installing the FleetHub agent"
-    if have curl; then curl -fsSL -o "$work/install.sh" "$installer_url"
-    else wget -q -O "$work/install.sh" "$installer_url"
-    fi || fail "could not download the agent installer from $installer_url. The onboarding code was NOT used."
+    fetch_installer() {
+        local url="$1"
+        [[ -n "$url" ]] || return 1
+        if have curl; then curl -fsSL -o "$work/install.sh" "$url"
+        else wget -q -O "$work/install.sh" "$url"
+        fi
+    }
+    fetch_installer "$installer_url" || fetch_installer "$installer_fallback_url" \
+        || fail "could not download the agent installer from $installer_url${installer_fallback_url:+ or $installer_fallback_url}. The onboarding code was NOT used. If this machine has no internet access, ask your administrator to turn on 'Agent downloads through this hub' in Settings."
     # FLEETHUB_ONBOARDING tells install.sh that no secret is expected, so it does not end on its
     # TELEMETRY ONLY warning. An install.sh too old to know the variable ignores it, which is
     # why the line after the install says the same thing in case that warning did appear.
-    FLEETHUB_ONBOARDING=1 bash "$work/install.sh" --hub "$hub_url" \
+    FLEETHUB_ONBOARDING=1 FLEETHUB_MIRROR_URL="$mirror_url" bash "$work/install.sh" --hub "$hub_url" \
         || fail "the agent installer failed. The onboarding code was NOT used; fix the problem above and run this again."
     echo "  (A 'no secret' or 'telemetry only' notice above is expected: the code replaces the secret.)"
 

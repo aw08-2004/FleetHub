@@ -199,15 +199,20 @@ def main():
               channels.agent_manifest_url(channels.STABLE)
               == channels.agent_manifest_url(channels.STABLE, "windows"))
 
-        # The HUB is the one that switches branch, because it has no manifest to switch.
-        check("a stable hub tracks main", channels.hub_ref(channels.STABLE) == "main")
-        check("a beta hub tracks beta", channels.hub_ref(channels.BETA) == "beta")
-        check("the hub source url follows the ref",
-              "/beta/hub/app.py" in channels.hub_source_url(channels.BETA))
-        check("the archive url follows the ref",
-              channels.hub_archive_url(channels.BETA).endswith("/refs/heads/beta"))
-        check("an unknown hub channel still tracks main",
-              channels.hub_ref("nightly") == "main")
+        # The HUB has no channel since the beta branch was retired: every URL it reads its
+        # version, archive or release notes from names main. A beta ref surviving in any of
+        # them is a hub reading a branch that no longer exists, and never updating again.
+        check("the hub tracks main", channels.HUB_REF == "main")
+        check("the hub source url reads main",
+              "/main/hub/app.py" in channels.hub_source_url())
+        check("the archive url reads main",
+              channels.hub_archive_url().endswith("/refs/heads/main"))
+        check("the release notes url reads main",
+              "/blob/main/" in channels.hub_release_notes_url("1.2.3"))
+        check("no hub url names the retired beta branch",
+              not any("beta" in u for u in (channels.hub_source_url(),
+                                            channels.hub_archive_url(),
+                                            channels.hub_release_notes_url("1.2.3"))))
 
         check("every channel has a place in the vocabulary",
               set(channels.CHANNELS) == {channels.STABLE, channels.BETA}

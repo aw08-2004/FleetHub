@@ -19,7 +19,14 @@
     $ErrorActionPreference = 'Stop'
     $HubUrl       = {{ hub_url }}
     $Code         = {{ code }}
-    $InstallerUrl = {{ installer_url }}
+    # The installer's sources, in order (roadmap #33): the hub's release mirror first when it
+    # holds the installer, then GitHub. This PC has just reached the hub, and may be on a network
+    # that reaches nothing else -- a site that blocks the internet by default is the case this
+    # exists for. An empty entry is a source the hub does not have.
+    $InstallerUrls = @({{ installer_url }}, {{ installer_fallback_url }}) | Where-Object { $_ }
+    # Handed to the installer, so the signed manifest and the binary fall back to the hub the same
+    # way. Still checked against the fleet key there, wherever they came from.
+    $MirrorUrl    = {{ mirror_url }}
     # FleetHubAgent since 2026-10-12, and agent-install.ps1 migrates a TempMonitorAgent
     # registration, so after step 1 it should always be the new name. Looked up after the
     # install rather than assumed anyway: the installer comes from main and this script from
@@ -70,10 +77,26 @@
         $installerDir = New-PrivateDirectory
         try {
             $installer = Join-Path $installerDir 'agent-install.ps1'
-            Invoke-WebRequest -UseBasicParsing -Uri $InstallerUrl -OutFile $installer
+            $fetched = $false
+            $reasons = @()
+            foreach ($url in $InstallerUrls) {
+                try {
+                    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer
+                    $fetched = $true
+                    break
+                } catch {
+                    $reasons += "$url ($($_.Exception.Message))"
+                }
+            }
+            if (-not $fetched) {
+                Fail ("Could not download the agent installer from " + ($reasons -join '; ') + ". The onboarding code was NOT used. If this PC has no internet access, ask your administrator to turn on 'Agent downloads through this hub' in Settings.")
+            }
             # Run below under RemoteSigned, which refuses a file marked as downloaded from the
             # web. Invoke-WebRequest does not mark it today; this keeps that true if one does.
             Unblock-File -LiteralPath $installer -ErrorAction SilentlyContinue
+            # An environment variable, not a parameter, for the reason onboard.sh gives: an older
+            # agent-install.ps1 dies on a parameter it does not know, and ignores a variable.
+            if ($MirrorUrl) { $env:FLEETHUB_MIRROR_URL = $MirrorUrl }
             & powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File $installer -HubUrl $HubUrl
             if ($LASTEXITCODE -ne 0) { Fail "The agent installer failed (exit code $LASTEXITCODE). The onboarding code was NOT used; fix the problem above and run this again." }
         } finally {

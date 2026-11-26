@@ -118,16 +118,186 @@ Status: ✅ done · 🚧 partially done · 📋 planned (spec below)
 
 ---
 
-## 🧪 On beta, waiting for confirmation   ·   updated 2026-11-03
+## 🧪 Waiting for confirmation   ·   updated 2026-11-24
 
-**How releases work since 2026-10-21.** Everything ships to the `beta` branch first (PRs into
-`beta`, hub `beta-X.Y.Z` images, agent betas cut with `-Channel beta`), and each change adds
-below what an operator has to confirm on a beta hub or a beta PC. Nothing goes to `main` until
-every box here is ticked; then `beta` reaches `main` as **one** `beta` → `main` PR, which
-empties this list. A box that fails stays open with what went wrong written next to it, and
-the fix goes to `beta` like anything else.
+**How releases work since 2026-11-24.** Every change is a PR into `main`. Each one adds below
+what an operator has to confirm, on the **test hub** (a hub pinned to the newest `X.Y.Z` image)
+or on the **beta PCs** (agents on the beta channel, which read `agent.manifest.beta.json` from
+`main`). A release moves on when its own boxes are ticked: production hosts move their
+`HUB_TAG` pin to that hub version, and an agent beta is promoted by copying its beta manifest
+over the stable one. A box that fails stays open with what went wrong written next to it, and
+the fix is a PR into `main` like anything else. The boxes below from before 2026-11-24 are owed
+on the production hub (or the named agent), as each send note says.
 
-`main` is at hub **1.179.0**; `beta` is at **1.181.0** (agent 3.51.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
+### Beta branch retired (2026-11-24)
+
+**Decision.** The `beta` branch is retired. Hubs are staged by pinning an exact image tag,
+agents by the beta channel manifest, and both already live on `main`.
+
+**Why.** The branch was meant as a gate and did not work as one:
+- `beta` reached `main` unconfirmed on the owner's call three times in a row (2026-11-03,
+  2026-11-15, 2026-11-24), and the list below had grown to 77 open boxes by the last of them.
+- **It held back the very beta PCs it was for.** Agents read both manifests from `main`
+  (`AgentConfig.cs`, `channels.agent_manifest_url`), so an agent beta committed to `beta`
+  reached no PC until the batch merge: agent 3.53.0 was cut as a beta and reached beta PCs
+  only on 2026-11-24.
+- It cost a second numbering line (bump against `beta`, not `main`), workflow changes that had
+  to land on both branches (#164), the `HUB_TAG=latest` trap (*Move the Docker hosts first*),
+  and a release PR of 56 commits that nobody could review as a whole.
+
+**Rejected alternatives.**
+- *Keep the branch and enforce the gate.* That would have kept the delay on agent betas, which
+  no amount of discipline fixes, and the gate had been overridden at every release since
+  2026-11-03.
+- *Tags alone, with no agent beta channel either.* An exact-version pin (#21) is a rollback,
+  not a stage: the agent's own updater installs it, so a release that breaks the updater, the
+  heartbeat or the service start leaves the pin unable to reach the PCs it broke. The beta
+  manifest costs one extra signed file and keeps a few PCs between a release and the fleet.
+- *Keep a hub beta channel built from `main`.* A hub needs no moving beta pointer when every
+  build already has an immutable `X.Y.Z` tag to pin.
+
+**One gap stays open:** a hub installed with the Windows installer cannot be pinned to a tag.
+With auto-update on, it takes every push to `main`. A production installer hub keeps
+auto-update off and is updated by hand once the test hub has checked out.
+
+**Retiring it, in this order** -- nothing warns after step 6, so steps 1 to 4 come first:
+- [x] **1. Workflows off `beta`** (a workflow-only PR into `main`). `claude-fix.yml` cuts its
+  branches from `origin/beta` and fails once the branch is gone; cut them from `main`.
+  `claude-review.yml` and `codeql.yml` drop their `beta` trigger. **Done 2026-11-24 in #224.**
+  `hub-image.yml` keeps its `beta` path: it goes inert with the branch,
+  and the `latest` step still reads the frozen `beta-latest`, so removing it is cleanup.
+- [x] **2. Open PRs into `beta`** are merged into it or retargeted to `main`. **Done
+  2026-11-24:** #214 (Authenticode signing) retargeted to `main`, and no PR into `beta` is
+  left. `git log origin/main..origin/beta` then held only #221's roadmap note, whose content is
+  the 2026-11-24 send paragraph below, so nothing is lost with the branch.
+- [ ] **3. Installer hubs.** Every hub whose *This hub's release channel* reads *Beta* is set to
+  *Stable*. A beta hub left behind reads `HUB_VERSION` from a branch that no longer exists and
+  silently stops updating. **Step 7 does not do this for you:** a beta hub reads `beta`, which
+  stays at 1.185.0, so it never sees the 1.186.0 that removes the setting.
+- [ ] **4. Docker hosts.** Every host on `HUB_TAG=beta-latest`, `beta` or `latest` is set to an
+  exact `X.Y.Z` (or `stable-latest`). `beta-latest` never moves again.
+- [x] **5. Docs.** CLAUDE.md, VERSIONING.md, docs/installation.md and the Docker template
+  describe the one-branch flow. **Done 2026-11-24 in #223**, the PR that wrote this entry,
+  merged after #224.
+- [ ] **6. Delete the `beta` branch** on GitHub.
+- [x] **7. Hub cleanup** (a hub change, so a `HUB_VERSION` bump and release notes): no
+  operator can pick a channel that reads a missing branch. **Done 2026-11-24 in #226, hub 1.186.0.**
+  It removes the `hub.update_channel` setting outright rather than leaving it with one
+  choice, and replaces `channels._REFS` with a single `HUB_REF = "main"`. A hub's stored row
+  for the key is skipped like any key that left the registry, so no migration is needed. The
+  agent and client *Beta* choices stay: those manifests live on `main` (the client's is
+  served from `hub/`).
+
+**Hub 1.192.0: agent downloads through the hub, for PCs that cannot reach GitHub** (#33,
+phase 1). Confirm on the test hub, then on a PC behind the blocking firewall (FSUP1109 was the
+one that failed on 2026-11-26):
+- [ ] **The copy fills.** A minute or two after the hub starts, **Administration → Onboarding**
+  shows the Windows and Linux stable (and beta) versions, the installers, PawnIO, no errors, and
+  about 450 MB. `logs/release_mirror/index.json` exists.
+- [ ] **Blocked PC onboards.** The same `Invoke-Command` one-liner that failed on FSUP1109 now
+  installs: the installer comes from `<hub>/api/agent/dist/repo/...`, the manifest and binary
+  from the hub after GitHub fails, PawnIO from the hub, and the PC enrols.
+- [ ] **Unblocked PC unchanged.** A PC with internet access onboards with every file from GitHub
+  (its output names the GitHub URLs).
+- [ ] **Agent port.** On a hub with `FLEETHUB_AGENT_PORT`, `/api/agent/dist/repo/agent/agent.manifest.json`
+  answers on the agent port, and `/api/release-mirror/status` does not.
+- [ ] **Switch off.** Turning **Settings → Fleet → Agent downloads through this hub** off makes
+  the dist routes 404 at once, the card says *Off*, and the next round deletes the copy.
+
+**Windows agent 3.54.0 and Linux agent 0.6.0: updates through the hub** (#33, phases 2 and 3).
+Cut on beta after hub 1.192.0 is confirmed. Confirm on beta PCs:
+- [ ] **Blocked PC updates.** On a beta PC that cannot reach GitHub (FSUP1109's network), run the
+  catch-up script once; the agent comes back on 3.54.0 with its enrollment. Then publish the next
+  beta: the PC updates by itself, and its log says *reading the manifest through the hub* and
+  *downloaded ... through the hub*.
+- [ ] **Unblocked PC unchanged.** A beta PC with internet access updates from GitHub, and its log
+  has no *through the hub* line.
+- [ ] **Linux.** The same two on a Linux beta box (0.6.0), with the Linux catch-up script.
+
+**Hub 1.191.0: the S3 destination test checks the PCs' pre-signed upload links** (#1b).
+Confirm on the test hub, against the MinIO AIStor destination:
+- [ ] **Wrong case caught.** With the access key entered in mixed case, *Test connection* fails
+  with the message naming the key's case, instead of passing. The probe object is gone from
+  `<prefix>/hub-db/` afterwards.
+- [ ] **Right case passes.** With the key re-entered in lowercase, the test passes and a PC's
+  *Back up now* uploads instead of failing with *Error while copying content to a stream*.
+- [ ] **WebDAV unchanged.** A WebDAV destination still tests green.
+
+**Hub 1.190.0: remote view attended / unattended / off per OU or folder** (#2 through #32).
+Confirm on the test hub:
+- [ ] **Attended by policy.** A policy with *Consent mode = Attended* linked to an OU (or folder)
+  holding a test PC: starting remote on it shows the consent prompt on the PC and *waiting for
+  the person at the PC to approve* in the viewer; a PC outside that OU still connects unattended.
+- [ ] **Off by policy.** *Allow remote view/control = off* in a policy on that OU: Start is refused
+  with the Group Policy message; the PC's Resultant Set of Policy names the policy.
+- [ ] **Kill switch.** Fleet-wide *Allow remote view/control* off, a policy setting it on: still
+  refused.
+- [ ] **No config churn.** Linking either remote setting does not push a new agent config to the
+  PCs under the OU (their config version is unchanged).
+
+**Hub 1.188.0: the console off the internet, agents still on it** (*Console and agent channel
+on separate listeners* below). Confirm on the test hub, behind nginx:
+- [ ] **Unsplit hub unchanged.** The test hub updates to 1.188.0 with neither new key set: one
+  `[serve]` listener line, sign-in, live updates and agents exactly as on 1.187.0.
+- [ ] **Console address.** With `CONSOLE_URL` set and its redirect URI registered, Google or
+  OIDC sign-in through the internal name returns to the internal name, and a console tab's
+  live updates work (Socket.IO origin).
+- [ ] **Agent listener.** With `FLEETHUB_AGENT_PORT=29444`, `/login` on 29444 is `404`, and
+  `/api/agent/commands` is `401`. A typo in the port stops the hub with *Refusing to start*.
+- [ ] **Agents through the public block.** After repointing nginx, an internet PC (phone
+  hotspot) keeps its heartbeat, runs a queued script within the long-poll, pulls a file over
+  100 MB, opens a terminal and a Remote View session, and finishes a backup.
+- [ ] **Onboarding from outside.** A new PC on a phone hotspot opens the `/onboarding` link
+  with its styling and enrols with a code.
+- [ ] **From outside, nothing of the console.** `/`, `/login`, `/socket.io/` and
+  `/static/js/app.js` on the public name are `404`, and the internal name does not resolve.
+- [ ] **Invite link** copied after the split carries `CONSOLE_URL` and opens on the LAN.
+
+**Hub 1.189.0: bento Dashboard and machine Overview.** Chosen from a layout review
+(2026-11-24): variant B for the Overview (ring gauges, one tall *Device profile* tile) and D2
+for the Dashboard (a fleet-health ring as the hero). Rejected: a CPU sparkline in the Overview,
+because it repeated the history charts lower on the same page, and a one-line metadata strip,
+because it truncated the model and OU at laptop width. On the Dashboard, a row of gauges was
+rejected because "open alerts" has no 100%, and a three-column layout because it squeezed the
+OS names. Confirm on the test hub:
+- [ ] **No row jumping.** A desktop that reports CPU clock and power and a laptop that does not
+  show the profile tile in the same place, and only the missing *line* is gone from the CPU tile.
+- [ ] **Gauges move live.** CPU load and temperature rings follow the readings without a
+  refresh; a CPU at or over the hot threshold turns its tile red as before.
+- [ ] **OU and copy.** A long OU reads as `domain / OU / OU` with the DN on hover; the copy
+  buttons put the serial, the tags and the full DN on the clipboard (and select the text on an
+  `http://` hub, where the clipboard API is refused).
+- [ ] **Lower Overview tiles (G1).** Storage, Cooling, Posture and Drive encryption are tiles
+  with no fold; on a PC without posture, BitLocker or fans the grid closes up rather than
+  leaving holes. The posture checklist lists failed checks first and the CIS safeguard shows
+  on hover; Reveal on a BitLocker row still shows and audits the key. Rejected for this part:
+  rings for every panel (F), which made a disk, a checklist and a fan look alike, and themed
+  headings (E2), which were the old sections again. An always-visible "top processes" tile
+  was dropped from G1 as drawn: it would keep the agent sampling for every open page.
+- [ ] **Drawers.** History opens by default as before; Processes and Sensors still start
+  sampling only when opened and stop when closed; Lock and wipe is last and starts closed.
+- [ ] **History cards (M1).** Every metric the PC reports has a card; the badge, minimum and
+  peak follow a zoom; the peak dot matches the peak caption; Expand shows the axes; Live, 1 h,
+  6 h and 24 h follow new readings without dropping points older than two hours; a past day
+  lights 24 h. Rejected: sparkline rows (H1, too flat at 26 px), one chart with tabs (M2, one
+  metric at a time) and stacked strips (M3, a charting rewrite).
+- [ ] **7 d and 30 d.** On a PC with a month of readings, 30 d draws the whole month at 1h
+  (about 720 points per card) and 7 d at 15m; neither request carries `date`; the peak
+  caption names the day; zoom and pan stay inside the 30 days. A day that only exists in a
+  CSV archive appears in the range rather than as a gap. Server side: `15m` and `1h` buckets,
+  auto picks 1h past eight days (unchanged below), and a multi-day window imports at most 31
+  days of archive per request (`MAX_HISTORY_IMPORT_DAYS`). Live readings are not appended
+  to a 7 d or 30 d chart -- a raw point per second on an hourly series drew a fringe -- so
+  those cards refresh on the next range change or Reset. Time the FIRST 30 d request after a
+  hub restart on a hub with archives: it imports up to 31 CSV days inside the request (each
+  is then marked imported), so it may be slow once. If it is too slow, the import belongs in
+  the background, not in the request.
+- [ ] **Dashboard numbers agree** with the 1.188.0 Dashboard: online + offline is the ring's
+  total, and every count the old folds showed appears once in a tile.
+- [ ] **Both themes and narrow widths.** Light and dark, the sidebar collapsed and expanded, and
+  a phone width: no tile overflows and the hero's list drops under its ring.
+
+`main` and `beta` were both at hub **1.185.0** on 2026-11-24 (agent 3.53.0 beta, stable 3.50.0). The `beta` → `main` PR of 2026-10-22 carried
 hub 1.159.0 through 1.165.0. Everything for 1.159.0 through 1.164.0 was confirmed on the beta
 hub that day, except the two items still open below.
 
@@ -148,6 +318,13 @@ version pair, 3.50.0 on `main` against 3.51.0 on `beta`, kept at 3.51.0 because 
 goes backwards. *Move the Docker hosts first* is still open but did not block this one: with
 `main` and `beta` on the same hub version, a host on `HUB_TAG=latest` gets 1.179.0 whichever
 channel it follows. It blocks the next release in which `beta` runs ahead of `main` again.
+
+**2026-11-24: `beta` (hub 1.185.0, agent 3.53.0 beta, Linux agent 0.4.1 beta) sent to `main`
+unconfirmed, on the owner's call** (PR #222). The 77 open boxes below were open at the time and
+stay here until ticked, on the same footing as the 2026-11-03 and 2026-11-15 releases. This one
+went ahead of *Move the Docker hosts first*, which was still open while `beta` ran ahead of
+`main`. The stable agent manifests did not move (Windows 3.50.0, Linux 0.3.0); only the beta
+manifests did. It was the last `beta` → `main` PR -- see *Beta branch retired* above.
 
 **Hub 1.159.0 — Group Policy, waiting on agent 3.48.0** (#163)
 - [x] **Group Policy** -- agent 3.48.0 beta first, then the on-PC checks in *Owed locally*
@@ -834,6 +1011,118 @@ every read, and `sharing_web.peer_command_status` no longer hands them to a borr
   *issue_command* lines for `start_remote_session` in the Audit Log show relay URLs with no
   `username` or `credential`, and a Remote session still connects.
 
+**Hub 1.183.0 + agent 3.53.0 (beta) -- live deployment steps, Abort, Redeploy, Retry now** (#5, #217)
+The deployment view shows what each machine is doing and which step it is on, PDQ-style, with
+each step's result, exit code and own log, plus Abort, Redeploy selected and Retry now. The
+step list comes from the agent's structured events, not from reading the log -- see *Live step
+progress* under #5. Deploy the hub first; then cut agent 3.53.0 with `-Channel beta`.
+- [ ] **Stages on any agent.** Deploy a package to a beta PC and to an offline PC. The offline
+  one reads *Sent, waiting for the machine*; the online one goes *Running* and ends
+  *Succeeded* within a second or two of finishing, not on the next half-minute pass.
+- [ ] **Steps on agent 3.53.0.** Deploy a multi-step package (a driver pack) to a beta PC on
+  3.53.0: the row reads *Step n of m · ...* while it runs, expanding it shows every download,
+  step and the detection check going green in order, and *Log* under the running step follows
+  its output live.
+- [ ] **A failed step says why.** Deploy a package whose second step exits non-zero: the row
+  reads *Failed at Step 2 · ...*, the step shows the exit code, and step 3 and detection read
+  *Not run*.
+- [ ] **Abort stops a running install.** Deploy a package with a long step (a PowerShell
+  `Start-Sleep 300`), select the PC, **Abort**: the row reads *Aborting...* and then
+  *Cancelled* within about ten seconds, the step reads *Aborted*, Task Manager shows no
+  `powershell.exe` left from it, and the target is not retried.
+- [ ] **An older agent is not pretended to.** On a PC still on 3.52.0, the step list shows the
+  plan with the update hint, and **Abort** on it while it runs answers that it cannot be
+  stopped, and the row keeps running to its real result.
+- [ ] **Redeploy and Retry now.** **Redeploy** a succeeded PC: it runs again in the same
+  deployment. After a failed attempt (*Waiting to retry*), **Retry now** sends it at once.
+  A scoped operator's *Retry failures* only requeues machines in their scope.
+
+**Hub 1.184.0 + Linux agent 0.4.1 (beta) -- Linux follows its release channel** (#21, #22)
+Found 2026-11-24: a Linux box set to beta sat on 0.3.0 with 0.4.0 in the beta manifest. The Linux
+agent never read the heartbeat's `update_channel`; it read the stable manifest only, and logged a
+failed check at Debug. 0.4.1 compiles in both manifests and picks by the hub's channel name (the
+Windows design), warns once per distinct update failure, gives the download its own 15-minute
+timeout, and retries a given-up target after 24 h instead of never. The hub only rewords the
+Linux install hint, which named one NAS product. Cut 0.4.1 with `-Channel beta`.
+**Rejected:** a hub-sent "update now" command. It would not reach 0.3.0 any more than the
+channel does, and it would give the hub a say in when code runs that the channel design keeps
+out of its hands.
+- [ ] **Bootstrap a 0.3.0 beta box.** Add the beta `FLEETHUB_UPDATE_MANIFEST_URL` line from the
+  0.4.1 notes to `/etc/fleethub/agent.env`, restart, and check the box reaches the newest beta
+  within about 15 minutes. Then remove the line and restart.
+- [ ] **The channel is followed.** On 0.4.1, `journalctl -u fleethub-agent | grep channel`
+  shows *Release channel is now beta*. Moving the box to stable in the console logs the change
+  back on the next heartbeat, and the box does not downgrade.
+- [ ] **A failure is visible.** Temporarily point the override at a missing manifest: the
+  journal shows one `[update] check failed: ... 404` warning, not one every 15 minutes.
+- [ ] **The install hint is generic.** The Linux tab of the onboarding wizard says *NAS and
+  appliance systems*, in English, German and Spanish.
+
+**Linux agent 0.5.0 (beta) -- End task, Restart, patch install, installed software** (#14, #22, #25)
+Agent only: the console and the patch scheduler read the capability report, so nothing on the
+hub changes. Cut with `agent-linux/release.ps1 -Version 0.5.0 -Channel beta`, which writes
+the beta manifest on `main`. It follows `linux-agent-v0.4.1-beta`, cut on 2026-11-24, so a box
+on 0.4.1 and the beta channel takes it within about fifteen minutes.
+**Rejected:** relaunching a non-service process on Restart, as Windows does. argv, environment,
+cwd, terminal and the user's session cannot be read back faithfully from /proc, so the
+relaunch would be a different program sharing a path. Also rejected: `apt-get upgrade` of
+everything in a run (a run installs what was approved), and filtering the software list to
+`apt-mark showmanual` (it hides the libraries a vulnerability question is about).
+- [ ] **End task.** On a 0.5.0 box, open Processes, right-click a `sleep 600` started from the
+  Terminal tab, **End task**: it is gone within a second. Then a process that ignores SIGTERM
+  (`bash -c 'trap "" TERM; sleep 600'`): the result says it was force-killed after 5 s.
+- [ ] **Refusals.** End task on `systemd` (pid 1) and on `fleethub-agent` both fail with the
+  reason, and the box stays up.
+- [ ] **Restart.** Restart on an nginx or cron process restarts the unit (`systemctl status`
+  shows a fresh start time). On a desktop app it refuses with *not part of a system service*;
+  on a process started from the Terminal tab it refuses because it runs inside the agent's own
+  service, and the agent keeps running.
+- [ ] **Patch run.** Approve one apt update for a Debian/Ubuntu box, run it with *If required*:
+  the target reads Applied within a minute of the command finishing, without a restart unless
+  it was a kernel. Repeat with a kernel update and check the box restarts after five minutes.
+- [ ] **Software.** The box's Software section lists its packages with versions, and the
+  report sheet's Software CSV includes it.
+**Hub 1.185.0 -- a CA certificate for Active Directory sync** (#4)
+Sync trusted only the image's public CA list, so a DC with an AD CS certificate failed every
+pass with `CERTIFICATE_VERIFY_FAILED`, and the CA field on the sign-in page did not apply to
+sync. `directory.ca_file` names a PEM file on the hub, the same shape as `LDAP_CA_FILE`.
+Rejected: telling operators to set `SSL_CERT_FILE` to a hand-built bundle -- it works (it was
+the interim fix on the first real domain) but changes trust for every TLS call the hub makes
+and goes stale with the image.
+- [ ] **Sync trusts the enterprise CA.** On a hub whose DC has an AD CS certificate, set
+  *CA certificate* under Settings -> Active Directory to the root CA's PEM file, press
+  **Sync now**: the status card reads OK and counts the OUs. Empty the field again: the same
+  `CERTIFICATE_VERIFY_FAILED` comes back, so the setting is what fixed it.
+- [ ] **A wrong path says so.** Set it to a file that does not exist: the card names
+  `directory.ca_file` and says to put the file under /state, rather than a bare error.
+
+**Hub 1.187.0 + agent 3.54.0 (beta) -- If / Else and Stop steps, download conditions** (#5)
+A package can branch on what the machine is (model, Lenovo model name, manufacturer, SKU,
+chassis, memory, Windows version / build / release, architecture, BIOS, domain, AD, custom
+fields), what is on it (file, registry value, installed program), a PowerShell check, or the
+previous step's exit code -- and a payload can be downloaded only where a condition holds. See
+*Package conditions* under #5. Check it on the test hub pinned to 1.187.0 first; then cut agent
+3.54.0 with `-Channel beta` and run the boxes below on the beta PCs.
+- [ ] **The right branch on real hardware.** Build *Drivers by model*: If manufacturer starts
+  with Dell → If model contains your Dell model → unpack + pnputil, Else If manufacturer is
+  LENOVO and model name contains your ThinkPad's name → its pack, Else → Stop (failure,
+  "Unsupported model"). Deploy to one PC of each and one other: each takes its branch, the
+  other lanes read *Not run* (struck through), and the third ends *Failed* with the message.
+- [ ] **Only the matching pack downloads.** Give each pack *Only download on some machines*
+  with its manufacturer: on the Dell the Lenovo download reads *Not run · not needed on this
+  machine*, and no Lenovo zip appears under `%ProgramData%\...\packages` while it runs.
+- [ ] **Lenovo's model name.** On a ThinkPad, *Test on a machine* says the hub cannot tell
+  (it has no model name), and the deploy itself matches `hw.model_name` contains "ThinkPad".
+- [ ] **Step n of m counts only what runs.** While the pnputil after a skipped branch runs, the
+  row reads *Step 3 of 3*, not a number past the total.
+- [ ] **An older agent is refused, not sent.** Deploy the same package to a PC still on 3.53.0:
+  it fails at once with "needs agent 3.54.0 or newer -- this machine runs 3.53.0", and after
+  the agent updates, *Retry failures* sends it.
+- [ ] **A Stop that succeeds skips detection.** An If whose Then is Stop (success) on a machine
+  that matches: the deploy reads *Succeeded* and detection reads *Not run*.
+- [ ] **German and Spanish.** The If card, the condition builder and the preview read in the
+  chosen language with no `packages.cond...` keys showing.
+
 ## 📋 Owed locally — what a cloud session could not do   ·   updated 2026-10-23
 
 **Read this first when working on the machine that holds the signing key.** Everything below
@@ -1260,15 +1549,20 @@ run and tested on the development PC, but the installer's service path was only 
 run: a fresh install on a clean VM, a re-install over a waitress hub, and `-MigrateHubServer`
 with the tunnel switched. Then the *Hub 1.170.0* boxes in the beta list above.
 
-**21. Sign the installers, owed on the machine with the signing key and the Artifact Signing
+**21. Updates through the hub (#33) ride Windows 3.54.0 and Linux 0.6.0, owed on the machine
+with the signing key.** Hub 1.192.0 first, confirmed on the test hub. Then cut both on beta with
+`release.ps1 -Channel beta` (3.54.0 also carries the package conditions already in its notes),
+run the catch-up script from docs/installation.md once on a blocked beta PC, and tick the
+*Windows agent 3.54.0 and Linux agent 0.6.0* boxes in the list above.
+
+**22. Sign the installers, owed on the machine with the signing key and the Artifact Signing
 account (PR #214).** `tests/test_script_signatures.py` reports NOT SIGNED for `install.ps1`,
-`agent/install/agent-install.ps1` and `agent-linux/install/install.sh.sig` until this is done,
-so the suite is red on `beta` meanwhile -- by design, since a skip would also pass a deleted
-signature. Set up `tools/codesign.ps1 -Check`, then
-`tools\codesign.ps1 -Path install.ps1,agent\install\agent-install.ps1` and
-`python tools/sign_script.py agent-linux/install/install.sh`, and commit the three to `beta`.
-**Must land before the next `beta` → `main` PR**, and stage 2 (the downloaders checking these
-signatures) only after that has reached `main`.
+`agent/install/agent-install.ps1` and `agent-linux/install/install.sh.sig` until this is done --
+by design, since a skip would also pass a deleted signature. Set up
+`tools/codesign.ps1 -Check`, then `tools\codesign.ps1 -Path install.ps1,agent\install\agent-install.ps1`
+and `python tools/sign_script.py agent-linux/install/install.sh`, and commit the three to PR
+#214's branch. **Sign before #214 merges**, so `main` never carries the red suite; stage 2 (the
+downloaders checking these signatures) only after the signed files are on `main`.
 
 ---
 
@@ -1373,6 +1667,52 @@ but not the operator's `.env`; `example.env` opts new deployments in.
 
 ---
 
+## 🚧 Console and agent channel on separate listeners   ·   hub 1.188.0 (opt-in)   ·   `agent_listener.py`, `serve.py`
+
+**Why.** One listener served everything, so the public hostname that agents on internet PCs
+need also published the console's sign-in page, the operator API and Socket.IO. The
+operator wanted the console off the internet without cutting off PCs outside the network.
+
+**How.** `FLEETHUB_AGENT_PORT` makes `serve.py` start a second cheroot server **in the same
+process**, over the same WSGI application wrapped in `agent_listener.AgentSurfaceFilter`.
+That filter serves only the agent surface (`/api/agent/*`, `/api/report`, the onboarding
+wizard with its scripts and nine static files, `/provisioning/apk/*`, `/api/peer/*`) and
+answers everything else with a `404` before Flask sees it. Paths are matched by whole segments,
+and traversal shapes are refused outright. nginx publishes the agent port under the unchanged
+`HUB_URL`, so **no agent changes**. The new `CONSOLE_URL` (default `HUB_URL`) takes over every
+browser-facing use of the old single URL: the cookie's `Secure` flag, the Socket.IO CORS
+origin, the OAuth/OIDC `redirect_uri`, invite links and the assistant's links. Everything
+handed to an agent, an enrolling PC, a device or a peer keeps `HUB_URL`, because the agent
+attaches its bearer only to its own `FLEETHUB_HUB` origin (`IsHubUrl`). Each listener has its
+own 128-thread pool, so held agent long-polls no longer compete with console tabs.
+`tests/test_agent_listener.py` walks the live url_map and the agents' own path literals, and
+fails if a new route outside `/api/agent/` and `/api/peer/` becomes public without a decision.
+
+**Decisions.** Agents keep today's public address, because the hub cannot repoint an agent
+(#15, `RuntimeConfig.cs`). The agent port also serves onboarding, APK provisioning and the peer
+API, so remote enrolment and cross-hub sharing keep working from outside. Unset means no split,
+so no existing hub moves on update. A malformed agent port stops the hub rather than falling
+back to one listener.
+
+**Rejected.**
+- *A second OS process for agents.* The remote relay, PTY, folder copy, command wakeups, the
+  Socket.IO emits from `after_request` and the schedulers all live in process memory. The
+  hub runs as one process for that reason.
+- *A second Flask app holding the agent blueprints.* `fleet`, `files`, `backups`, `bios`,
+  `remote`, `tickets` and others mix agent and operator routes on one blueprint. The clean
+  boundary is the path, not the blueprint.
+- *nginx `location` rules alone.* One mistyped block re-exposes the console with no symptom.
+  They stay documented as an optional second layer.
+- *Moving agents to a new hostname.* There is no remote way to change `FLEETHUB_HUB`, so every
+  PC would need a reinstall.
+- *VPN for agents.* PCs outside the network without a tunnel are the case this is for.
+- *mTLS or certificate pinning for agents.* They are separate decisions. Neither is needed to
+  take the console off the internet, and pinning would tie the fleet to one certificate.
+
+**Still open:** the test-hub boxes in *Waiting for confirmation*.
+
+---
+
 ## ✅ Agent service renamed to `FleetHubAgent`   ·   hub 1.145.0 + agent 3.44.0
 
 The Windows service was still `TempMonitorAgent` after the FleetHub rename, because the
@@ -1452,6 +1792,225 @@ the wire.
   service runs the new one.
 - **Next agent release:** `release.ps1` now publishes `FleetHubAgent.exe`; check the asset name
   on the release and that a PC still on `TempMonitorAgent.exe` self-updates and keeps that name.
+
+---
+
+## 🚧 33. Agent downloads through the hub -- installs and updates on PCs without internet   ·   phase 1 **hub 1.192.0** · phases 2-3 built, unreleased: Windows agent 3.54.0 + Linux agent 0.6.0   ·   `release_mirror.py` / `release_mirror_web.py`
+
+**The problem, found in the field on 2026-11-26.** An onboarding run against FSUP1109 through
+`Invoke-Command` reached the hub, downloaded `onboard.ps1`, and then failed at "Installing the
+FleetHub agent" with *Unable to connect to the remote server*. The site blocks internet by
+default and allows it per user. The PC could reach `agents.ccmf.com.py` but not
+`raw.githubusercontent.com`, where `AGENT_INSTALLER_URL` points. A remoting session cannot
+carry the operator's internet allowance (a network logon, the Kerberos double hop, and a
+firewall that maps users to IPs all see FSUP1109, not the operator), so `-Credential` does not
+help.
+
+**The bigger half of the same problem: a PC can't update without GitHub.** Even an onboarding
+that succeeds (run at the console instead) leaves an agent that runs as LocalSystem and reads its
+manifest from `raw.githubusercontent.com` and its binary from GitHub releases
+(`AgentConfig.StableManifestUrl`; the Linux agent the same). Per-user internet does not cover
+SYSTEM. A failed update check is silent by design, so such a PC simply stays on the version it was
+installed with, forever, with no alert. Today the only fix is a per-machine firewall exception
+for four GitHub hosts on every managed PC.
+
+### The design in one sentence
+
+**The hub keeps a copy of the signed release files and serves them, and every agent and installer
+tries GitHub first and falls back to its own hub.** The hub is a dumb mirror, not a new trust
+root.
+
+### Why this keeps the release trust root intact
+
+The agent already trusts no download source. It verifies the manifest's Ed25519 signature
+against `UpdatePublicKeyHex`, compiled in, over the exact bytes, and then accepts the binary only
+if its SHA-256 equals the **signed** value (`Update/SelfUpdater.cs` steps 1-6;
+`agent-install.ps1` does the same in PowerShell). Where the bytes come from is therefore not a
+security property, and a compromised hub that serves altered files gets them refused exactly as
+a compromised GitHub would.
+
+Two rules keep the #21 argument ("the hub sends a NAME, never a URL") true:
+- **The fallback address is not supplied by the hub at runtime.** The agent builds it as
+  `HubBase` + a compiled-in path + the compiled-in file name. `HubBase` is the agent's own local
+  configuration and already decides where telemetry and commands go. Nothing in a hub response
+  can name a download location, and `RuntimeConfig`'s allow-list is unchanged.
+- **From the mirror, the agent ignores the manifest's `url` field** and fetches the binary from
+  the mirror's path for that version. The SHA-256 check is what makes the binary trustworthy, not
+  its address, so substituting the address loses nothing.
+
+**What a malicious hub can still do: withhold updates.** It can keep serving an older, validly
+signed manifest. It cannot downgrade anything, because every updater installs only a strictly
+newer version, and it can already hold a machine back with a pin (#21). So this adds no power,
+but SECURITY.MD must say it in the same change.
+
+### Phase 1 · hub only -- the mirror, and onboarding that uses it
+
+- **`release_mirror.py` / `release_mirror_web.py`** (a new pair, per the hub convention). The
+  sync rides on the existing version watcher, which already GETs every channel's agent manifest
+  every 15 minutes (`AGENT_MANIFEST_URLS`). When a manifest changes, the hub fetches its `.sig`,
+  **verifies the signature itself before keeping anything**, then downloads the binary and keeps
+  it only if the signed SHA-256 matches. A mirror that holds a file the agents would refuse is a
+  fleet that fails at the second source too, so the hub uses the same checks as the agents and
+  doesn't defer them to the agents alone.
+- **What it keeps:** Windows and Linux, stable and beta, plus the per-version manifest of every
+  version a pin currently names (`agent/manifests/`, `agent-linux/manifests/`), plus
+  `agent-install.ps1` and `install.sh` from `main`. Anything no channel or pin names is deleted
+  after the next sync. That is two platforms times (two channels + pins), each a self-contained
+  binary -- **measure it before shipping**, but expect a few hundred MB at most. It lives in the
+  hub's data directory, which the container already keeps on a volume.
+- **Bytes on disk and on the wire are exactly the bytes GitHub served.** Written and served in
+  binary mode, never through a text path. A signature covers exact bytes, and a rewritten line
+  ending is indistinguishable from tampering (the `.gitattributes` rule, again).
+- **Routes under `/api/agent/dist/<platform>/...`**, so the agent listener (hub 1.188.0) serves
+  them through its existing `/api/agent/` prefix and an internet-facing hub can mirror for
+  internet agents without exposing the console. **They are unauthenticated on purpose:** the files
+  are public on GitHub, the signature protects them, and an installer has no credential yet. The
+  route docstring must say so, because `agent_listener.py` warns that its filter is never a gate.
+- **Onboarding stops fetching the installer from GitHub.** `onboard.ps1` and `onboard.sh` fetch it
+  from `<hub>/api/agent/dist/...`. This adds no trust: the hub already serves the onboarding
+  script that runs elevated, so a hub that could forge the installer could already forge the
+  script that runs it. The installer gets `-MirrorUrl` (`FLEETHUB_MIRROR_URL` for `install.sh`,
+  an environment variable for the #29 reason: an older `install.sh` dies on an unknown flag). It
+  tries GitHub, then the mirror, for the manifest and the binary.
+- **Settings → a mirror status line:** the last sync, what it holds and its size, and the last
+  error. Without it, a hub that can't reach GitHub itself would mirror nothing and nobody would
+  know until an onboarding failed.
+- **This phase alone fixes onboarding on a blocked PC**, but not its updates. That is phase 2.
+
+### Built · hub 1.192.0 -- phase 1: the mirror, and onboarding that uses it
+
+Built as planned above, with these differences, each decided while building it:
+- **Its own thread, not a step in the version watcher.** The first sync downloads two or three
+  self-contained agents, and the version hints must not wait behind that. Same 15-minute cadence.
+- **Two route shapes instead of `/<platform>/...`:** `/api/agent/dist/repo/<repository path>`
+  for manifests, signatures and installers, and `/api/agent/dist/bin/<sha256>` for binaries. A
+  client swaps `https://raw.githubusercontent.com/<repo>/main/` for `<hub>/api/agent/dist/repo/`
+  and changes nothing else, and a binary is fetched by the hash the signed manifest already
+  gave it, so the hub never names a location. Storage is content-addressed under
+  `logs/release_mirror/blobs/`, with an atomically replaced `index.json`; only paths in the
+  index resolve, so a request path never touches the filesystem.
+- **PawnIO moved from phase 2 into this phase.** Building it showed `agent-install.ps1` dies when
+  the PawnIO download fails, so a blocked PC could not be onboarded without it. It is now pinned
+  by SHA-256 in the installer and in `release_mirror.PAWNIO_SHA256` (a test fails if they
+  differ), fetched from GitHub then the hub, and a missing or mismatched PawnIO installs the
+  agent without sensors instead of failing. It runs from a SYSTEM/Administrators-only folder,
+  no longer `%TEMP%`.
+- **The Linux unit file is mirrored too.** `install.sh` fetches it from `main`, which would have
+  been the same dead end as PawnIO.
+- **The status is a card on Administration → Onboarding, not a line in Settings.** That page is
+  where an onboarding that failed on *Unable to connect* sends an operator. The setting itself
+  (`fleet.release_mirror`, **on by default**) is in Settings → Fleet; turning it off makes the
+  routes 404 at once and deletes the copy on the next round.
+- **The installer address travels as `FLEETHUB_MIRROR_URL` on Windows too.** `agent-install.ps1`
+  also takes `-MirrorUrl` (defaulting to the variable) for a technician, but the onboarding
+  script uses the variable, because an older installer dies on a parameter it does not know.
+- **Measured: 437 MB** on 2026-11-26 (Windows 3.50.0 and beta 3.53.0, Linux 0.5.0 and beta 0.4.1,
+  three installers, PawnIO), synced in 85 s with every real signature verified. The docs say
+  about 450 MB.
+- Not rate limited per client: every PC behind an office NAT shares an address. SECURITY.MD
+  says to limit bandwidth at the proxy.
+
+Tests: `tests/test_release_mirror.py` (new; sync against a fake GitHub, refusals, carry-over,
+pins, PawnIO, the routes, the agent listener), plus mirror cases in `test_windows_installer.py`
+(PowerShell 5.1 and 7), `test_linux_installer.py` and `test_onboarding_web.py`.
+
+### Phase 2 · Windows agent MINOR -- updates fall back to the hub
+
+- **The source is decided per file, not per attempt.** GitHub first for each file (manifest,
+  `.sig`, binary), then the mirror. A site that allows `raw.githubusercontent.com` but blocks the
+  release download host still updates. Each file is verified exactly as today whichever source
+  served it, and a file that fails verification from both is refused.
+- **Fall back on any failure to get a verified file**: DNS, connect, TLS (an inspecting proxy),
+  timeout, an HTTP error (a block page), a bad signature. Narrowing this to "connection refused"
+  was considered and rejected: firewalls fail in all of these ways, and nothing is gained by
+  being picky, since the mirror's copy is checked just as strictly.
+- **A short connect timeout on the GitHub attempt** (about 10 s). A firewall that drops packets
+  instead of refusing would otherwise stall every 15-minute check for the default 100 s.
+- **The update check reports which source served it** in the heartbeat, so the console can show
+  "updating through the hub" and a blocked site becomes visible instead of silent.
+- **This one is not gated by the hub**, so no `MIN_*` constant is needed, but it gets a MINOR
+  release anyway: it changes where the fleet gets its code from.
+- **The bootstrap problem.** Agents already on blocked PCs don't have this code and can't
+  update to it. They need one push through the command channel: a fleet script that downloads
+  `agent-install.ps1` from the hub mirror and runs it with `FLEETHUB_MIRROR_URL` set (hub 1.192.0
+  already lets the installer take every file from the hub). Write it as a script in
+  the Scripts library and document it, and don't depend on operators finding it. After that one
+  run, those PCs update normally.
+- ~~**PawnIO.**~~ Done in phase 1 (hub 1.192.0), see above.
+
+### Phase 3 · Linux agent MINOR -- the same fallback
+
+Same rules as phase 2, in `agent-linux/src/FleetHubAgent/Update/SelfUpdater.cs`, which already
+splits manifest and binary downloads (`_http` / `_download`). The Android agent is out of scope:
+it does not self-update from these manifests.
+
+### Built (unreleased) · Windows agent 3.54.0 + Linux agent 0.6.0 -- phases 2 and 3
+
+Built as planned above, with these differences:
+- **One linked file, `agent-shared/UpdateMirror.cs`,** holds where to look, in which order, and
+  what counts as a verified file, for both agents -- the UpdatePins.cs reasoning: a fallback
+  that behaved differently on one train would be a fleet that updates through the hub on one and
+  silently not on the other. Each agent keeps its own clients, logging and swap.
+- **The hub address is the agent's own `HubBase`**, the path under it compiled in
+  (`/api/agent/dist/repo/<the compiled-in url's path under raw.githubusercontent.com/<repo>/main/>`),
+  and the binary is fetched by the signed sha256. An env override pointing at a test server gets
+  no fallback, which is what a test wants.
+- **The Windows agent's binary download got its own client and a 15-minute budget**, as the
+  Linux agent's already had. The 30-second manifest timeout capped an 80 MB download, which a
+  mirror reached over a WAN link would hit. Both agents' clients have a 10-second connect timeout.
+- **"Which source served it" goes to the agent's log, not the heartbeat.** The log line is
+  written once per change of source. A heartbeat field would need a column, a console surface
+  and a hub release of its own for something the Onboarding page's mirror card and the agent
+  log already answer between them; it stays open below if blocked sites turn out to be common.
+- **The catch-up is a documented script, not a seeded Scripts-library entry** (docs/installation.md,
+  *PCs already stuck on an older agent*). Seeding would write into every hub's database a
+  SYSTEM-privileged script with that hub's address baked in, and an operator still has to choose
+  the PCs. The script hands the install to a one-shot SYSTEM scheduled task (`systemd-run` on
+  Linux), because the installer stops the agent service, which would otherwise end the script
+  the agent is running. It keeps the PC's enrollment and hub address.
+- No hub change: the agents use the hub 1.192.0 routes as they are, and against an older hub the
+  second source answers 404 and nothing else changes.
+
+Tests: `UpdateMirrorTests` in both agents' test projects (the compiled-in urls all have a hub
+copy at the hub's path; fallback on a network error, a timeout and a bad signature; a manifest and
+its signature never from two sources; a binary only under the signed hash; a stopping host does
+not fall through to the hub).
+
+### Release order
+
+Hub first (phase 1, its own `HUB_VERSION` and release notes), confirmed on the test hub. Then the
+Windows agent on beta, confirmed on a beta PC **behind the same firewall as FSUP1109**, then
+stable. Then Linux. The reverse order would leave agents falling back to a hub that answers 404.
+
+### Rejected
+
+- **A per-machine firewall exception for GitHub as the only answer.** It is the right fix where
+  the network team agrees, and the docs will say so, but it needs four hostnames on every PC at
+  every site. GitHub's download hosts have changed before (`release-assets.githubusercontent.com`
+  arrived in 2025), so the exception breaks silently when GitHub moves.
+- **Hub only, never GitHub.** Simpler, and it removes the 15-minute GitHub attempt from blocked
+  PCs. But it makes every agent update depend on the hub's own GitHub access and its disk, and a
+  hub restored from an old backup would hold the fleet back. A per-hub setting "hub first" may
+  come later if the GitHub attempt on blocked PCs proves to be noise.
+- **The hub sending a download URL in a heartbeat.** This is exactly what #21 refuses: it would
+  make the hub the trust root. The fallback path is compiled in and the base is local config.
+- **Re-signing on the hub.** The offline key must stay offline. A mirror that only copies signed
+  files needs no key.
+- **Proxy support in the agent** (a configured HTTP proxy for SYSTEM). It solves the sites that
+  have a proxy, not the ones that simply block, and it puts proxy credentials on every PC.
+- **CredSSP for `Invoke-Command`.** It leaves the operator's credentials on the remote PC to get
+  around the double hop. It fixes onboarding only, and never updates.
+
+### Not done
+
+- **Cutting the releases** -- Windows 3.54.0 and Linux 0.6.0 -- with `release.ps1 -Channel beta`,
+  after hub 1.192.0 is on the test hub. That needs the signing key, so it is owed locally. Until
+  then, a PC that cannot reach GitHub onboards but stays on the version it was installed with.
+- **The update source in the heartbeat**, shown on the machine page, if blocked sites turn out
+  to be common enough that the agent log is not where an operator would look.
+- **Moving the PawnIO pin** when LibreHardwareMonitor ships a new PawnIO: check the file, then
+  change `$PawnIoSha256` and `release_mirror.PAWNIO_SHA256` together. Until then, the mirror keeps
+  serving the pinned copy, and an install from GitHub alone installs without sensors.
 
 ---
 
@@ -2038,7 +2597,7 @@ too. Budget for that explicitly when this becomes an implementation plan.
 
 ---
 
-## ✅ 5. Deploy packages (PDQ-style)   ·   hub 1.27.0; multi-step hub 1.64.0 + agent 3.22.0
+## ✅ 5. Deploy packages (PDQ-style)   ·   hub 1.27.0; multi-step hub 1.64.0 + agent 3.22.0; live steps + Abort hub 1.183.0 + agent 3.53.0
 
 Built (hub 1.27.0). `packages.py` (model + blob store + scheduler, flask-free) +
 `packages_web.py` (console API, agent payload download), a Packages page with a
@@ -2122,6 +2681,111 @@ in the field, and a package WITH steps deliberately offers no command to run
 (`install_command: ""`, `source.kind: "multi"`). Such an agent fails the deploy with "no
 install command" and the target retries until the update reaches it. The alternative —
 running step one and reporting success — is the one outcome that would lie.
+
+### Live step progress, Abort, Redeploy, Retry now · hub 1.183.0 + agent 3.53.0
+
+What PDQ Deploy's status window does, mapped onto this queue. Per target the console shows a
+derived **stage** -- scheduled, queued, *sent, waiting for the machine*, running, aborting,
+waiting to retry, finishing, then the result -- and while it runs, **which step** it is on
+(*Step 2 of 3 · Install drivers*). Expanded, every download, step and the detection check with
+its state, exit code, duration and reason, and **one step's own log**, readable while it runs.
+
+- **The agent reports steps; the hub never parses them out of the log.** The log already says
+  `[deploy] step 2/5`, and reading it was the obvious shortcut -- rejected, because the stream
+  is capped at 256k characters, pruned after a day, and worded by whichever agent build wrote
+  it: the long, noisy, failing deploy an operator most needs to follow is the one whose markers
+  fall off the end. Agent 3.53.0 posts one small event per phase transition to
+  `POST /api/agent/commands/<id>/progress` (`packages.record_step_progress`).
+- **The hub draws the step list from the recipe it sent** (`progress_skeleton`, read off the
+  command's own params snapshot); the agent only says "ordinal n of this phase is now ok".
+  Rejected: the agent sending its plan, a second copy of a document the hub already holds.
+  The two must count downloads the same way -- file payloads only, in list order -- which is
+  pinned by tests on both sides.
+- **Keyed by command, not target** (`deployment_target_steps`), so a retry starts a clean list
+  and the evidence of why attempt 1 failed survives attempt 2. Writes are idempotent and
+  monotonic: a late or repeated event never reopens a finished phase.
+- **Abort rides back on the progress answer.** The agent repeats its running event every ten
+  seconds as a keepalive, and the answer carries `cancel` once an operator aborts; the agent
+  cancels the step's token and ProcessRunner kills the tree, exactly as a timeout would.
+  Rejected: an `abort` command (it queues behind, or races, the command it should stop, and
+  needs a second executor slot) and a hub-to-agent socket (agents never accept connections).
+  An in-flight target is FLAGGED, not cancelled, until the command really ends -- a row
+  reading *cancelled* over a running installer is the lie `cancel_deployment` avoids -- and an
+  abort that lands after the last step records *succeeded*, because that is what happened.
+  An agent older than `MIN_PROGRESS_AGENT` (3.53.0) cannot hear an abort, so it is refused for
+  a running target there rather than offered.
+- **Keepalives do not wake consoles.** The route is in `changes.UNMARKED_RULES` and marks
+  `deployments` itself only when a phase moved.
+- **One step's log is a slice of the existing output stream**, between the chunk numbers the
+  agent stamps on each event (`OutputStreamer.Mark()` numbers the buffered text at the
+  boundary without a second POST racing the pump). No second copy of the text.
+- **Redeploy stays on the same deployment** (`retry_deployment_failures` with a selection),
+  for the reason the retry button always did: the history shows one deploy that reached 100%.
+  Rejected: PDQ's new-deployment-per-redeploy. *Retry failures* is now limited to the
+  caller's scope -- before, a scoped operator requeued every machine's failure.
+- **PDQ's "Prioritize" became Retry now.** This scheduler has no concurrency queue to jump --
+  every due target goes on the pass that finds it -- so the wait worth cutting short is the
+  retry backoff. A deployment window is never overridden.
+- **The scheduler is woken** by a new deployment, a retry, an abort and a deploy result
+  (`wake_deploy_scheduler`), instead of waiting out its interval.
+
+**Not done, deliberately (PDQ features left for later):** a *Waking* stage (the Wake-on-LAN
+pass, #10, does not record which targets it woke), the Heartbeat trigger (deploy when a machine
+comes online), nested packages, and step progress on the Android agent (it installs as before
+and shows as plain *Running*). Package conditions followed in hub 1.187.0, below.
+
+### Package conditions -- If / Else, Stop, download conditions · hub 1.187.0 + agent 3.54.0
+
+The driver rollout that started it: *on a Latitude install this pack, on a ThinkPad that one,
+on anything else stop*. Operators were writing that as one PowerShell step, and every machine
+downloaded every model's pack to use one of them.
+
+- **An `if` step holds a condition and two nested lanes, `then` and `else`;** an *Else if* is an
+  If inside an Else. A **`stop`** step ends the deploy as a success ("nothing to do here", which
+  also skips detection -- the package has just said the software is not meant to be there) or a
+  failure with a message. A payload's **`only_if`** downloads it only where its condition
+  holds. Ifs nest four deep; `MAX_STEPS` (now 60) counts every step in the tree.
+- **The condition language is the rules engine's AST**, unchanged -- `rules.py`'s operators,
+  case-insensitive text equality, wildcard `matches`, Kleene and/or/not -- so "is" means the
+  same thing on the Rules page and in a package. `package_conditions.py` adds only a `version`
+  kind (10.0.9200 below 10.0.22631, which text comparison gets backwards) and **probe** leaves
+  (file / registry / installed program, shaped exactly like detection rules, plus a PowerShell
+  check: exit 0 true, 1 false, anything else unknown). `rules.py` itself is untouched, so no
+  alert rule's behaviour moved. Rejected: a new expression language (two meanings of `==` in one
+  console), and per-step "only when" flags (no Else, no nesting, and the user asked for real
+  If / Else).
+- **Evaluated on the machine, live.** The hub's `machine_info` is read once at agent start and
+  goes stale across a motherboard swap or a re-image; a driver pack has to match the hardware
+  in the chassis now. The agent reads its own facts lazily (`WindowsMachineFacts`), and the hub
+  ships only what it alone knows -- AD and custom fields -- in `params.facts`. Rejected:
+  hub-side evaluation with a pre-pruned step list. It would have run on every agent already in
+  the field, but on stale data, and it cannot answer the file / registry / PowerShell
+  questions at all.
+- **Unknown never quietly becomes Else.** An If whose condition the machine cannot answer
+  fails the step ("could not decide"), because the generic pack landing on every machine whose
+  WMI had a bad day is the failure this feature most must not have. `on_unknown: "else"` is the
+  operator saying otherwise, per If; `continue_on_error` on the If skips both lanes.
+- **`hw.model_name` is for Lenovo.** Its `Win32_ComputerSystem.Model` is the machine-type code
+  (`21HD0012US`); the name an operator thinks in is `Win32_ComputerSystemProduct.Version`. The
+  hub does not store it, so the console's preview says so rather than guessing.
+- **Depth-first numbering is the progress ordinal.** An If, then its Then steps, then its Else
+  steps, then what follows -- `packages.iter_steps` on the hub, `PackageStepRunner` on the agent,
+  pinned on both sides. The lane not taken is still counted and reported `not_run` (a new
+  state, distinct from `skipped`, which already meant "failed and carried on"), or every later
+  step would land on the wrong row. *Step n of m* counts only what will run.
+- **Variables follow the branches.** A name bound in only one lane is not bound after the If,
+  unless the other lane ends in Stop. `{model}`, `{model_name}`, `{manufacturer}`, `{sku}`,
+  `{os_build}`, `{arch}` and `{hostname}` are the machine's own values for any step; an
+  unreadable one fails the step rather than reaching a path as a literal brace pair.
+- **An agent older than 3.54.0 is refused at dispatch** (`MIN_CONDITIONS_AGENT`), with both
+  versions in the reason, instead of being sent a job it would download every payload for and
+  then fail on.
+- **Preview.** *Test on a machine* in an If card evaluates the condition against the hub's copy
+  of that machine's facts, each clause with its actual value; machine checks read "checked on
+  the machine". Gated on `deploy_packages` plus the machine's scope.
+
+**Not done:** conditions on the Android agent (Android packages refuse If, Stop and download
+conditions), and `hw.model_name` in the hub's inventory (only the agent reads it).
 
 ---
 
@@ -3303,10 +3967,24 @@ released under Cmd, so the viewer releases those keys itself when Cmd comes up.
   only lets a page read the clipboard on a gesture, so a keystroke or a click is the trigger).
   **Owed:** see *Owed locally*, item 14.
 
+**Consent per OU or folder · hub 1.190.0.** A Group Policy may set `remote.consent_mode` and
+`remote.enabled` for an OU or hub folder. They are the first *hub-side* policy settings
+(`settings.Setting.policy`): the hub resolves them in both start routes
+(`remote_web._remote_policy`), they never ride the heartbeat config, and so no agent change or
+gate was needed -- every agent already obeyed `consent_mode` in the start command. The fleet-wide
+`remote.enabled` stays a hard kill switch that no policy can override. **Rejected:** a separate
+remote-rules table over device groups (a second precedence model beside #32, which #32 already
+rejected); linking policies to device groups (filters have no order to inherit by); a separate
+`hub_settings` bucket in the stored policy (doubles validation, merge, editor and RSoP code for
+two keys); shipping the keys as agent settings (moves the config version of every PC under the
+OU for a value the agent ignores); a policy that can override the fleet-wide off (a kill switch
+that silently does not kill).
+
 **Open, on-hardware follow-ups** (validate/tune together, as agreed): the **secure desktop**
 (capturing/injecting on Winlogon during UAC — the SYSTEM-in-session enabler is in place, the
 DXGI re-duplication + SendInput-to-Winlogon is the piece to confirm); **hardware H.264** encode
-(async MFT + shared D3D11); **per-machine consent override** (global setting works today);
+(async MFT + shared D3D11); ~~per-machine consent override~~ **done in hub 1.190.0 through
+Group Policy (#32)** -- see *Consent per OU or folder* above;
 multi-monitor UX; and the software-encode fallback threshold.
 
 <details>
@@ -5811,7 +6489,26 @@ access", and deleting the invite would take the answer with it.
 **Open parameters.** Whether a redemption should notify the admin who created the invite —
 today the audit trail is the only signal. Whether an invite should be able to name a
 directory group instead of an email, for the tenant that would rather not maintain either.
-## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0
+## 🚧 22. Linux agent   ·   `agent-linux/`, released 0.3.0 · signed self-update live from 0.3.0 · PTY terminal built for 0.4.0 · channels in 0.4.1 · process control, patch install, software in 0.5.0
+
+> **Update (2026-11-24, agent 0.5.0) -- the first parity batch is built.** `kill_process` (SIGTERM,
+> then SIGKILL after 5 s), `restart_process` (system services only, via `systemctl restart`;
+> the unit must sit directly under `system.slice`, because the innermost `.service` of a desktop
+> app is `user@<uid>.service`), `install_patches` (apt/dnf, only what is still offered, re-scan
+> at once) and the installed-software report (dpkg/rpm). No hub change: every gate reads the
+> capability report. Still open, in order: Wake-on-LAN, Files tab, `deploy_package`, journald,
+> network sweep, disk usage, watchdog, Snap/Flatpak.
+
+> **Update (2026-11-24, hub 1.184.0) -- channels reach Linux in 0.4.1.** The agent ignored
+> `update_channel` until now, so a box set to beta in the console stayed on the stable manifest
+> (0.3.0) while 0.4.0 waited in the beta one. 0.4.1 reads the channel by name, as the Windows
+> agent does. A 0.3.0 box still needs a one-time bootstrap: the 0.4.1 notes give the line for
+> `/etc/fleethub/agent.env`. **Parity backlog, in order:** patch install (apt/dnf, #14), process end/restart,
+> software inventory (dpkg/rpm), wake + `ethtool` prepare, journald events (#16), network sweep
+> and NICs from `/sys/class/net` (#18), Files tab and folder streaming, `deploy_package` with live
+> steps (gate on the capability report, not `MIN_PROGRESS_AGENT`), disk usage, systemd watchdog
+> (#20). **Not planned for Linux, Windows by nature:** BIOS/firmware, BitLocker, GPO, Windows
+> Update control, ticket tray, remote desktop and virtual display, and the message dialog.
 
 > **Update (2026-10-27, hub 1.169.0) -- the PTY terminal is built**, unreleased until Linux
 > 0.4.0 (*Owed locally* item 19). `Fleet/Shell/UnixPty.cs` opens a Unix pty and starts a login

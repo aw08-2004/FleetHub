@@ -55,9 +55,83 @@ if command -v curl >/dev/null; then curl -fsSL '<hub>/onboarding/run/<CODE>.sh';
 It installs the agent with `agent-linux/install/install.sh`, which checks the build against the
 fleet's signed Linux manifest. Only when that succeeds does it spend the code, and it writes
 the machine's credential to `/var/lib/fleethub/agent/agent.json` (0600, root). An account that
-is not in sudoers (usual on OpenMediaVault) runs `su -` first and drops the `sudo`. The machine
+is not in sudoers (usual on NAS and appliance distros) runs `su -` first and drops the `sudo`. The machine
 is enrolled under its hostname up to the first dot, which is the name the agent reports. The
 same requirements as a technician's install apply: x86-64, glibc, systemd and OpenSSL 3.
+
+### PCs that cannot reach GitHub
+
+The agent installers normally download from GitHub: the signed manifest from
+`raw.githubusercontent.com`, the agent from a GitHub release, and on Windows the PawnIO driver.
+On a network that blocks the internet by default, the onboarding script reaches the hub and then
+fails with *Unable to connect to the remote server*. Running the command through
+`Invoke-Command` makes this worse: even when your own account may use the internet, the remote
+session's traffic comes from the PC, not from you.
+
+Since hub 1.192.0 the hub keeps its own copy of these files (roadmap #33). The setting is
+**Settings → Fleet → Agent downloads through this hub**, and it is on by default. The hub
+copies the files from GitHub shortly after it starts and every 15 minutes after that. It
+needs the hub itself to reach GitHub, and about 450 MB of disk under `logs/release_mirror`.
+
+With the copy in place, the onboarding scripts download the installer from the hub, and the
+installers try GitHub first and the hub second for every file. Everything from the hub is
+checked on the PC against the fleet's signing key, exactly as it is from GitHub.
+**Administration → Onboarding** shows what the hub holds, when it last copied, and any errors.
+
+To use the copy for an install by hand, set `FLEETHUB_MIRROR_URL` to
+`https://<your hub>/api/agent/dist` before running `agent-install.ps1` (or pass `-MirrorUrl`)
+or `install.sh`.
+
+**Agent updates use the hub's copy too, from the next Windows and Linux agent releases.** An
+agent from those releases on looks for its signed manifest and its new build on GitHub first
+and on its own hub second, and checks both exactly as before. Its log says *reading the
+manifest through the hub* when it switches over.
+
+**PCs already stuck on an older agent need one push.** An older agent cannot update itself to
+the release that adds the fallback, because it cannot reach GitHub to get it. Run the script
+below on those PCs once (**Terminal**, or a saved script under **Rules → Scripts**), with your
+hub's address in the first line. It reinstalls the agent from the hub's copy and keeps the PC's
+enrollment and hub address. After that run, the PC updates by itself.
+
+The install runs from a one-shot scheduled task (`systemd-run` on Linux) rather than from the
+script itself. The installer stops and restarts the agent service, and that would end a script
+the agent is still running.
+
+Windows (PowerShell):
+
+```powershell
+$hub = 'https://your.hub.example'
+$mirror = "$hub/api/agent/dist"
+$dir = Join-Path $env:ProgramData ('FleetHub-CatchUp-' + [guid]::NewGuid().ToString('N'))
+$sec = New-Object Security.AccessControl.DirectorySecurity
+$sec.SetAccessRuleProtection($true, $false)
+foreach ($sid in 'S-1-5-18', 'S-1-5-32-544') {
+    $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier $sid), 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+}
+[void][IO.Directory]::CreateDirectory($dir, $sec)
+Invoke-WebRequest -UseBasicParsing "$mirror/repo/agent/install/agent-install.ps1" -OutFile "$dir\agent-install.ps1"
+$cmd = "`$env:FLEETHUB_MIRROR_URL = '$mirror'; & '$dir\agent-install.ps1' *> '$dir\install.log'; Unregister-ScheduledTask -TaskName FleetHubCatchUp -Confirm:`$false"
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -Command $cmd"
+Register-ScheduledTask -TaskName FleetHubCatchUp -Action $action -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+Start-ScheduledTask -TaskName FleetHubCatchUp
+"Reinstall started; the agent restarts in about a minute. Log: $dir\install.log"
+```
+
+Linux (bash):
+
+```bash
+hub='https://your.hub.example'
+mirror="$hub/api/agent/dist"
+work="$(mktemp -d)"
+if command -v curl >/dev/null; then curl -fsSL -o "$work/install.sh" "$mirror/repo/agent-linux/install/install.sh"
+else wget -qO "$work/install.sh" "$mirror/repo/agent-linux/install/install.sh"; fi
+systemd-run --unit fleethub-catchup --setenv=FLEETHUB_MIRROR_URL="$mirror" \
+    --setenv=FLEETHUB_ONBOARDING=1 bash "$work/install.sh"
+echo "Reinstall started; follow it with: journalctl -u fleethub-catchup"
+```
+
+`FLEETHUB_ONBOARDING=1` only stops `install.sh` ending on its *telemetry only* warning: the box
+is already enrolled, and its credential is kept.
 
 ### Telemetry only from enrolled agents
 
@@ -356,17 +430,19 @@ docker compose -f deploy/docker/compose.yaml up -d
 | Tag | Follows |
 |---|---|
 | `X.Y.Z` | exactly that `HUB_VERSION` from `main`, never rebuilt |
-| `beta-X.Y.Z` | exactly that `HUB_VERSION` from `beta`, never rebuilt |
 | `stable-latest` | the newest `main` release (the default) |
-| `beta-latest` | the newest `beta` release |
-| `latest` | whichever of the two has the higher `HUB_VERSION` (usually beta; on a tie, the `main` build) |
+| `beta-X.Y.Z`, `beta-latest` | **retired** with the `beta` branch on 2026-11-24; they never move again |
+| `latest` | the higher of `stable-latest` and the frozen `beta-latest` -- so `main`, once `main` passes 1.185.0 |
 
-Set `HUB_TAG` (for example `HUB_TAG=1.143.0`) to choose when a release goes in.
+**Pin `HUB_TAG` to a version** (for example `HUB_TAG=1.185.0`) to choose when a release goes
+in. Since the `beta` branch was retired, a pin is how a release is staged: point a test hub at
+the newest `X.Y.Z`, check it, then move the production hosts' pin to the same number. A host on
+`stable-latest` takes every release at its next pull, untested.
 
-**`latest` changed meaning on 2026-10-30.** It used to follow `main`; it now follows whichever
-channel is newer, which is usually `beta`. A host whose `.env` still says `HUB_TAG=latest`
-from the old template starts pulling beta builds, so set it to `stable-latest`. The old `beta`
-tag no longer moves; a host on it stays on its last image until it is set to `beta-latest`.
+**A host on `beta-latest` or `beta` must be moved.** It stays on its last image with no
+warning. Set it to a pinned `X.Y.Z` or to `stable-latest`. A host on `latest` needs no urgent
+change, but should be pinned as well: `latest` has changed meaning twice already (on
+2026-10-30 and on 2026-11-24).
 
 **Updating is pull and recreate.** The image sets `HUB_UPDATE_MODE=image`, which switches off
 every in-place update path: the watcher, **Update now**, and the boot-time self-heal. They
@@ -530,6 +606,131 @@ changed is that the proxy's own connection to the hub is encrypted too.
   Agents and the desktop client need no change — they use the public `HUB_URL`.
 - **Keep 29443 reachable from the proxy only.** TLS encrypts the hop, it does not
   authenticate the caller, and the hub trusts one hop of `X-Forwarded-*` headers.
+
+## Keeping the console off the internet
+
+Since hub 1.188.0 the hub can answer agents on a port of its own. Agents on PCs outside the
+LAN then keep reporting, and the console, its sign-in page, the operator API and Socket.IO
+are no longer published at all. Operators and the desktop client reach the console on the
+LAN or over a VPN.
+
+**How it works.** `FLEETHUB_AGENT_PORT` starts a second listener inside the same hub process.
+It serves only what a PC, a device or a peer hub calls:
+
+- the agent routes (`/api/agent/*`, `/api/report`);
+- the onboarding wizard and its install scripts;
+- the hub's copy of the agent releases (`/api/agent/dist/*`, hub 1.192.0);
+- the Android APK download;
+- the cross-hub sharing API (`/api/peer/*`).
+
+Everything else answers `404`. The original port keeps serving everything, as before. The
+proxy publishes the agent port under the existing public `HUB_URL`, so **agents need no
+change**: they never learn that the console moved. `hub/agent_listener.py` explains why this
+is one process with two listeners and not two processes. `SECURITY.MD`, *The agent listener*,
+lists exactly what the agent port serves.
+
+**Two addresses after the split.**
+
+| Setting | Means | Example |
+|---|---|---|
+| `HUB_URL` | The public address agents use. **Leave it as it is.** The hub builds every URL it hands an agent from it. | `https://fleethub.example.com` |
+| `CONSOLE_URL` | The internal address operators use. Sign-in callbacks, invite links and the assistant's links use it. Unset means `HUB_URL`. | `https://fleethub.corp.example.com` |
+
+**Cutover, in this order.** Each step can be undone on its own, and nothing changes for
+agents at any step.
+
+1. **Update the hub to 1.188.0 or later.** Nothing changes until step 3.
+2. **Give the console its internal address.** Create the internal DNS name and the console's
+   nginx server block (below), set `CONSOLE_URL` in the hub's `.env`, and register
+   `<CONSOLE_URL>/auth/callback` (Google) or `<CONSOLE_URL>/auth/oidc/callback` (OIDC) as an
+   allowed redirect URI at the identity provider. Restart the hub and sign in through
+   `CONSOLE_URL`. **Do this before step 4**, or no operator can sign in once the public name
+   stops serving the console.
+3. **Start the agent listener.** Set `FLEETHUB_AGENT_PORT=29444` in the hub's `.env` and
+   restart. The log shows two `[serve]` lines, one per listener. From the hub machine,
+   `curl -k https://127.0.0.1:29444/login` answers `404`, and
+   `curl -k https://127.0.0.1:29444/api/agent/commands` answers `401`. A `401` here is the
+   right answer: the route is reachable and wants an agent token.
+4. **Repoint the public server block** from port 29443 to 29444 and reload nginx. **To roll
+   back**, point it back at 29443.
+5. **Check from outside the LAN** (a phone off Wi-Fi is enough): the public name shows `404`
+   for `/` and `/login`, and the console's internal name does not resolve or connect. On the
+   console, every PC that is online keeps its live heartbeat.
+
+**nginx.** Two server blocks. The first is published to the internet. The second is
+internal only and is never port-forwarded.
+
+```nginx
+# Public: the agent channel only. HUB_URL's host.
+server {
+    listen 443 ssl;
+    server_name fleethub.example.com;
+    # ssl_certificate / ssl_certificate_key: a publicly trusted certificate. Agents use the
+    # Windows machine trust store and pin nothing.
+
+    location / {
+        proxy_pass https://127.0.0.1:29444;
+        proxy_ssl_verify off;               # or proxy_ssl_trusted_certificate .../hub.crt
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        # OVERWRITE, never append ($proxy_add_x_forwarded_for): the hub trusts one hop, and its
+        # per-IP limits on /api/report and enrollment key on this header.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        # Agents long-poll for commands (25 s) and stream file and backup transfers.
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 300s;
+        client_max_body_size 1g;            # the hub's own per-request cap
+    }
+}
+
+# Internal: the console. Resolvable only on the LAN or VPN.
+server {
+    listen 443 ssl;
+    server_name fleethub.corp.example.com;
+
+    location / {
+        proxy_pass https://127.0.0.1:29443;
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;                # Socket.IO long-polls too
+        proxy_read_timeout 300s;
+        client_max_body_size 600m;          # >= deploy.max_upload_mb, see packages.md
+    }
+}
+```
+
+The hub's filter makes the console unreachable on 29444 whatever the proxy does, so a
+`location` allow-list in the public block is optional. If you add one as a second layer,
+copy the path list from `SECURITY.MD` exactly. A missing entry fails silently: agents retry
+and fall quiet, and no error tells you why.
+
+**Notes.**
+
+- **Windows service.** The hub reads `FLEETHUB_AGENT_PORT` and `CONSOLE_URL` from its `.env`
+  (`C:\Program Files\FleetHub\Hub\.env`). Restart the `FleetHub - Hub` service after editing
+  it. A hub that still runs waitress on 3001 does not run `serve.py`, so move it first with
+  `install.ps1 -MigrateHubServer` (*The hub's HTTPS listener* above). If nginx runs on another
+  machine, allow 29443 and 29444 inbound in Windows Firewall **from that machine only**.
+- **Docker.** `compose.yaml` publishes 29444 on loopback next to the console port. Set the two
+  keys in `deploy/docker/.env` and run `docker compose up -d`.
+- **The hub refuses to start** when `FLEETHUB_AGENT_PORT` is not a port number or equals
+  `FLEETHUB_PORT`. That is deliberate: a hub that fell back to one listener would look healthy
+  from the console while every agent behind the proxy got *connection refused*.
+- **What moves behind the LAN** is everything an operator uses: the console, the desktop and
+  mobile client (point it at `CONSOLE_URL`), and invite links, which now carry `CONSOLE_URL`.
+  An invited colleague therefore has to be on the LAN or VPN to accept one. Onboarding links
+  keep `HUB_URL`, because the PC being onboarded may be anywhere.
+- **TURN** for Remote View is a separate service on its own ports and is not affected.
+- **Bind addresses.** `FLEETHUB_HOST` and `FLEETHUB_AGENT_HOST` (both default `0.0.0.0`)
+  choose where each listener binds, for example `127.0.0.1` when nginx runs on the same
+  machine.
 
 ## Signing releases
 

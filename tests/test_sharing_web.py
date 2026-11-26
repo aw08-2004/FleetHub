@@ -41,6 +41,7 @@ os.chdir(_TMPDIR)
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hub"))
 import fleet             # noqa: E402
+import gpo               # noqa: E402
 import permissions       # noqa: E402
 import remote            # noqa: E402
 import settings          # noqa: E402
@@ -498,6 +499,19 @@ def test_remote_across_hubs(a_client, b_client, a_db, b_db, link_id, share_id):
     check("...and hub A records it ended",
           remote.get_session(a_db, session_id)["status"] == remote.STATUS_ENDED)
     remote.end_session(a_db, local_session, "test cleanup", actor="test")
+
+    print("\n== The owning hub's Group Policy decides the mode for a borrower too ==")
+    error, clean = gpo.validate({"name": "Ward attended", "settings": {
+        "agent_settings": {"remote.consent_mode": "attended"}}})
+    _, ward = gpo.save_gpo(a_db, clean, actor="test")
+    ward_link = gpo.create_link(a_db, ward["id"], gpo.NODE_OU, "OU=Ward,DC=x")
+    r = a_client.post(f"/api/peer/shares/{share_id}/remote", headers=head, json={})
+    check("a policy on the machine's OU makes the borrowed session attended",
+          r.status_code == 201 and r.get_json()["consent_mode"] == "attended")
+    if r.status_code == 201:
+        remote.end_session(a_db, r.get_json()["session_id"], "test cleanup", actor="test")
+    gpo.delete_link(a_db, ward_link["id"])
+    gpo.delete_gpo(a_db, ward["id"])
 
     print("\n== Narrowing the share ends what it was carrying ==")
     live_session = remote.create_session(a_db, MACHINE, f"peer:{PEER_IDS['peer']}",

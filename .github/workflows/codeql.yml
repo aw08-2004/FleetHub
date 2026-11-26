@@ -1,12 +1,12 @@
 name: "CodeQL"
 
-# Beta as well as main, because beta is where changes land first and where beta hubs pull
-# from -- a finding on main alone would arrive after the code had been running on beta.
+# Main only, since the beta branch was retired on 2026-11-24 (ROADMAP.MD, *Beta branch
+# retired*). It ran on beta too while changes landed there first and beta hubs pulled from it.
 on:
   push:
-    branches: [main, beta]
+    branches: [main]
   pull_request:
-    branches: [main, beta]
+    branches: [main]
   schedule:
     # Weekly, so newly published queries reach the default branch without a push.
     - cron: "23 4 * * 1"

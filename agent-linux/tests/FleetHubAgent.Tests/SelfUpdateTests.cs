@@ -28,6 +28,7 @@ namespace FleetHubAgent.Tests;
 /// accident. A comparator that read "0.10.0" as older than "0.9.0" would strand a fleet on an
 /// old build with nothing anywhere saying so.
 /// </summary>
+[Collection(TestStateDir.Collection)]   // reads UpdateManifestUrl, which reads the channel file
 public class SelfUpdateTests
 {
     private static (string PublicHex, Ed25519PrivateKeyParameters Private) NewKey()

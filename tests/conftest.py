@@ -47,6 +47,10 @@ os.environ.setdefault("FLASK_SECRET_KEY", "test-secret-key")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-secret")
 os.environ.setdefault("ALLOWED_EMAILS", "root@example.com")
+# The pytest half of run_all.py's HUB_SKIP_REMOTE_CHECKS. It mattered less while the only
+# remote work at import was a few manifest GETs; since the release mirror (roadmap #33) the
+# first background round downloads ~450 MB of agent builds into the session's temp folder.
+os.environ.setdefault("HUB_SKIP_REMOTE_CHECKS", "1")
 
 
 @pytest.fixture(autouse=True)

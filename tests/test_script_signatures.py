@@ -18,8 +18,9 @@ What is pinned:
 
 Every failure names which of two different problems it is, because the fix differs:
   * NOT SIGNED -- no signature at all. Expected exactly once, before the first signing on the
-    release PC (stage 1 of the code-signing work, ROADMAP *On beta*). Still a failure rather
-    than a skip: a skip would also pass a file whose signature block somebody deleted.
+    release PC (stage 1 of the code-signing work, ROADMAP *Waiting for confirmation*).
+    Still a failure rather than a skip: a skip would also pass a file whose signature block
+    somebody deleted.
   * STALE -- a signature that no longer matches the bytes. The file was edited after it was
     signed; that is the regression this module exists for.
 

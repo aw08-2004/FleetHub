@@ -292,8 +292,9 @@
       "name": "Name",
       "description": "Description",
       "enabled": "Enabled",
-      "agent_settings": "Agent settings",
+      "agent_settings": "Settings",
       "agent_help": "Overrides the hub-wide value of these settings on the PCs this policy applies to. Works with every agent version.",
+      "hub_side": "Enforced by the hub",
       "add_setting": "Add a setting…",
       "registry": "Registry values",
       "hive": "Hive",
@@ -495,7 +496,9 @@
       "10s": "10s",
       "1m": "1m",
       "5m": "5m",
-      "unknown": "--"
+      "unknown": "--",
+      "15m": "15m",
+      "1h": "1h"
     },
     "in_use": "In use: {value}",
     "dynamic_on_zoom": "Dynamic on zoom",
@@ -1380,11 +1383,11 @@
       },
       "remote.enabled": {
         "label": "Allow remote view/control",
-        "help": "Master switch for starting remote sessions from a machine's Remote tab. Off means the Start button is refused fleet-wide, regardless of who holds the remote_control capability."
+        "help": "Master switch for starting remote sessions from a machine's Remote tab. Off means the Start button is refused fleet-wide, regardless of who holds the remote_control capability. A Group Policy can also turn remote off for an OU or folder, but never back on while this is off."
       },
       "remote.consent_mode": {
         "label": "Consent mode",
-        "help": "Unattended connects immediately (standard RMM). Attended prompts the logged-in user to approve first, and does nothing if no one is signed in. A per-machine override lives on the machine's Remote tab."
+        "help": "Unattended connects immediately (standard RMM). Attended prompts the logged-in user to approve first, and does nothing if no one is signed in. A Group Policy linked to an OU or folder can set a different mode for the PCs under it."
       },
       "remote.session_ttl_seconds": {
         "label": "End a session automatically after",
@@ -1447,6 +1450,10 @@
       "directory.tls_verify": {
         "label": "Verify the DC's certificate",
         "help": "Validate the domain controller's LDAPS certificate. Turn off only for a lab with a self-signed cert — with it off, anything that can intercept the connection can capture the service account's password."
+      },
+      "directory.ca_file": {
+        "label": "CA certificate (optional)",
+        "help": "A PEM file on the hub with the CA that signed the domain controller's certificate, if that is your own CA (AD Certificate Services). Leave it empty if the certificate is from a public CA. In Docker, put it under /state, e.g. /state/ad-ca.pem — the sign-in page's CA certificate can be the same file."
       },
       "directory.allow_insecure": {
         "label": "Allow plain (unencrypted) LDAP",
@@ -1570,10 +1577,6 @@
         "label": "Forget a machine's update list after",
         "help": "How long a machine's reported available updates survive without being re-reported. A machine that stops reporting would otherwise keep its last answer forever and hold up a compliance figure that has not been true for months."
       },
-      "hub.update_channel": {
-        "label": "This hub's release channel",
-        "help": "Which branch this hub reads its own version from, and updates to when automatic hub updates are on. The update notice follows this either way, so you are told a newer hub exists even when this one will not install it itself."
-      },
       "hub.client_update_channel": {
         "label": "Client release channel",
         "help": "Which desktop and mobile client build the Download page offers, and which one an installed client updates itself to."
@@ -1605,6 +1608,10 @@
       "fleet.agent_pin.android": {
         "label": "Pinned Android agent version",
         "help": "The exact Android agent version to install while updates are pinned, as MAJOR.MINOR.PATCH."
+      },
+      "fleet.release_mirror": {
+        "label": "Agent downloads through this hub",
+        "help": "Keep a copy of the agent releases and installers on this hub, so PCs that cannot reach GitHub can still be installed and updated. Everything served is still checked against the fleet's signing key on the PC. Uses a few hundred MB of disk; turning it off frees that space."
       },
       "sharing.enabled": {
         "label": "Share machines with other hubs",
@@ -1859,10 +1866,6 @@
       "patches.auto_approve_classifications": {
         "security": "Security",
         "critical": "Critical"
-      },
-      "hub.update_channel": {
-        "stable": "Stable",
-        "beta": "Beta"
       },
       "hub.client_update_channel": {
         "stable": "Stable",
@@ -2259,7 +2262,26 @@
       "choose_file": "Choose a file to upload.",
       "save": "Save package",
       "apk_payload": "APK to install",
-      "apk_hint": "the payload that holds the .apk, named in braces"
+      "apk_hint": "the payload that holds the .apk, named in braces",
+      "needs_agent": "If and Stop steps and download conditions need agent {version} or newer. A machine on an older agent is not sent this package; its row says why, and Retry failures sends it once the agent has updated.",
+      "if_condition": "Condition",
+      "on_unknown": "If the machine cannot tell",
+      "on_unknown_fail": "Fail this step (recommended)",
+      "on_unknown_else": "Run Else",
+      "if_continue_on_error": "If the condition cannot be decided, skip Then and Else and carry on",
+      "if_then": "Then",
+      "if_else": "Else",
+      "lane_empty": "No steps — nothing happens here.",
+      "lane_add": "Add step",
+      "add_else_if": "Add Else if",
+      "stop_outcome": "End the deploy as",
+      "stop_success": "Succeeded — nothing to do here",
+      "stop_failure": "Failed",
+      "stop_message": "Message",
+      "stop_message_placeholder": "Unsupported model",
+      "stop_help": "Nothing after this step runs, and neither does the detection check: a Stop is the package saying how this machine ends.",
+      "payload_only_if": "Only download on some machines",
+      "payload_only_if_help": "The file is downloaded only where this is true — a per-model driver pack reaches only that model. A step that uses it on any other machine fails, so put those steps inside an If with the same condition."
     },
     "deploy_editor": {
       "add_group": "Add a group",
@@ -2325,6 +2347,71 @@
         "load_failed": "Could not load the machines that are waiting or running. Reload the page to try again."
       }
     },
+    "_progress": [
+      "The live deployment view (roadmap #5): what each machine is doing, which step it",
+      "is on, each step's result and log, and Abort / Redeploy / Retry now."
+    ],
+    "progress": {
+      "stage": {
+        "scheduled": "Scheduled",
+        "queued": "Queued",
+        "retry_wait": "Waiting to retry",
+        "waiting": "Sent, waiting for the machine",
+        "running": "Running",
+        "aborting": "Aborting…",
+        "finishing": "Finishing",
+        "succeeded": "Succeeded",
+        "failed": "Failed",
+        "expired": "Expired",
+        "cancelled": "Cancelled"
+      },
+      "state": {
+        "running": "Running",
+        "ok": "Done",
+        "failed": "Failed",
+        "skipped": "Failed, carried on",
+        "aborted": "Aborted",
+        "not_run": "Not run"
+      },
+      "col_step": "Progress",
+      "step_of": "Step {current} of {total} · {what}",
+      "phase_step": "Step {n} · {what}",
+      "phase_download": "Download · {what}",
+      "phase_detect": "Detection · {what}",
+      "kind_command": "Install command",
+      "exit_code": "exit code {code}",
+      "seconds": "{seconds}s",
+      "minutes": "{minutes}m {seconds}s",
+      "elapsed": "running for {duration}",
+      "took": "took {duration}",
+      "all_done": "All {total} steps done",
+      "failed_at": "Failed at {step}",
+      "show_steps": "Show steps",
+      "hide_steps": "Hide steps",
+      "no_steps_yet": "The step list appears once the machine has been sent this deployment.",
+      "old_agent": "This machine's agent ({version}) does not report steps. Update it to {min} for the live step view and Abort.",
+      "old_agent_unknown": "This machine's agent does not report steps. Agent {min} or newer shows the live step view and can be aborted.",
+      "show_log": "Log",
+      "hide_log": "Hide log",
+      "log_empty": "This step printed nothing.",
+      "log_expired": "This step's log has been cleaned up. The whole run's output is still in the machine's command history.",
+      "select_all": "Select all",
+      "select_machine": "Select {machine}",
+      "abort": "Abort",
+      "confirm_abort_title": "Abort the selected machines?",
+      "confirm_abort": "{count} machine(s) selected. Machines that have not started are cancelled. Machines installing right now are stopped at the step they are on — that step's program is ended, which can leave the software half-installed.",
+      "confirm_abort_ok": "Abort",
+      "abort_unsupported": "Not aborted — these machines run an agent older than {min}, which cannot be told to stop: {machines}",
+      "abort_none": "Nothing to abort: the selected machines had already finished.",
+      "redeploy_selected": "Redeploy",
+      "confirm_redeploy_title": "Redeploy to the selected machines?",
+      "confirm_redeploy": "{count} machine(s) selected. Each gets a fresh set of attempts with the package as it is defined now, including machines where it already succeeded.",
+      "confirm_redeploy_ok": "Redeploy",
+      "retry_now": "Retry now",
+      "retry_now_none": "None of the selected machines is waiting to retry.",
+      "branch_then": "Then",
+      "branch_else": "Else"
+    },
     "_status": [
       "Deployment and per-machine statuses. These are shown in tables and in the tally",
       "under the progress bar, so keep them short."
@@ -2369,6 +2456,14 @@
       "apk": {
         "label": "Install an Android app",
         "description": "Installs an APK on a fully managed Android device, silently. A package with this step is for Android devices only, and every payload must be pinned by sha256."
+      },
+      "if": {
+        "label": "If / Else",
+        "description": "Checks a condition on the machine — its model, manufacturer, Windows version, a file, a registry value or a PowerShell check — and runs the Then steps or the Else steps."
+      },
+      "stop": {
+        "label": "Stop",
+        "description": "Ends the deploy here, as a success (nothing to do on this machine) or a failure (for example, an unsupported model)."
       }
     },
     "_detection": [
@@ -2392,6 +2487,138 @@
       "installed_version": {
         "label": "Installed version",
         "description": "Look the product up in Windows' installed-programs registry and require at least a given version."
+      }
+    },
+    "cond": {
+      "var": {
+        "hw": {
+          "manufacturer": {
+            "label": "Manufacturer"
+          },
+          "model": {
+            "label": "Model"
+          },
+          "model_name": {
+            "label": "Model name (Lenovo: ThinkPad X1 …)"
+          },
+          "sku": {
+            "label": "System SKU"
+          },
+          "serial_number": {
+            "label": "Serial number"
+          },
+          "chassis": {
+            "label": "Chassis type"
+          },
+          "memory_gb": {
+            "label": "Memory (GB)"
+          },
+          "cpu": {
+            "label": "Processor"
+          }
+        },
+        "os": {
+          "name": {
+            "label": "Windows edition"
+          },
+          "version": {
+            "label": "Windows version"
+          },
+          "build": {
+            "label": "Windows build"
+          },
+          "display_version": {
+            "label": "Windows release (e.g. 23H2)"
+          },
+          "arch": {
+            "label": "Architecture"
+          }
+        },
+        "bios": {
+          "version": {
+            "label": "BIOS version"
+          }
+        },
+        "sys": {
+          "hostname": {
+            "label": "Computer name"
+          },
+          "domain": {
+            "label": "Domain or workgroup"
+          },
+          "domain_joined": {
+            "label": "Joined to a domain"
+          },
+          "agent_version": {
+            "label": "Agent version"
+          }
+        },
+        "ad": {
+          "ou": {
+            "label": "AD organizational unit"
+          },
+          "dn": {
+            "label": "AD distinguished name"
+          },
+          "owner": {
+            "label": "AD owner"
+          }
+        },
+        "step": {
+          "last_exit_code": {
+            "label": "Exit code of the previous step"
+          }
+        }
+      },
+      "probe": {
+        "file_exists": {
+          "label": "File or folder exists",
+          "description": "True when the path exists on the machine."
+        },
+        "registry_value": {
+          "label": "Registry value",
+          "description": "True when the value exists — or, if you ask for an exact match, has exactly that data."
+        },
+        "installed_version": {
+          "label": "Program is installed",
+          "description": "True when a program whose name contains this text is in Windows' installed programs, at or above the version if you give one."
+        },
+        "powershell": {
+          "label": "PowerShell check",
+          "description": "Runs a short script as SYSTEM: exit 0 means true, exit 1 means false, anything else means the machine could not tell."
+        }
+      },
+      "mode_all": "All of these are true",
+      "mode_any": "Any of these is true",
+      "mode_none": "None of these is true",
+      "group": {
+        "hw": "Hardware",
+        "os": "Windows",
+        "bios": "BIOS",
+        "sys": "System",
+        "ad": "Active Directory",
+        "step": "Previous step",
+        "field": "Custom fields",
+        "checks": "Checks on the machine"
+      },
+      "add_clause": "Add condition",
+      "add_group": "Add group",
+      "empty_group": "Add at least one condition to this group.",
+      "yes": "Yes",
+      "no": "No",
+      "list_placeholder": "Separate values with commas",
+      "powershell_hint": "Exit 0 for true, exit 1 for false. Keep it quick: it runs before the step and holds the deploy until it answers.",
+      "probe_timeout": "Timeout (seconds)",
+      "preview_machine": "Test on a machine",
+      "preview_placeholder": "Computer name",
+      "preview_button": "Test",
+      "preview": {
+        "true": "On {machine}, Then would run.",
+        "false": "On {machine}, Else would run.",
+        "unknown": "On {machine}, the hub cannot tell — the machine decides when the deploy runs.",
+        "on_machine": "checked on the machine",
+        "no_value": "not known to the hub",
+        "caveat": "From what the hub last heard. The deploy itself reads the machine live, so a changed model or a re-image can answer differently."
       }
     }
   },
@@ -2583,6 +2810,7 @@
         "new_credentials": "Stored encrypted on this server with the backup master key. Never shown again.",
         "test": "Test connection",
         "testing": "Testing…",
+        "presign_rejected": "The destination accepts the hub's own requests but rejects the pre-signed upload links the PCs use (SignatureDoesNotMatch), so every PC file backup would fail. The most common cause is an access key entered in the wrong case: MinIO AIStor stores keys in lowercase and matches the hub's header-signed requests case-insensitively, but a pre-signed link carries the key inside its signed query, so a mixed-case key fails only there. Re-enter the access key exactly as the storage server shows it.",
         "save": "Save destination"
       }
     },
@@ -2838,7 +3066,19 @@
       "title": "Historical",
       "day": "Day:",
       "zoom_hint": "Wheel or drag to zoom a panel; the time range stays in sync across every chart.",
-      "no_readings": "No readings found for this day."
+      "no_readings": "No readings found for this day.",
+      "range": "Time range",
+      "range_live": "Live",
+      "range_1h": "1 h",
+      "range_6h": "6 h",
+      "range_24h": "24 h",
+      "expand": "Expand chart",
+      "shrink": "Shrink chart",
+      "steady": "steady",
+      "vs_avg": "{delta} vs avg",
+      "min_peak": "min {min} · peak {peak} at {time}",
+      "range_7d": "7 d",
+      "range_30d": "30 d"
     },
     "terminal": {
       "title": "Terminal",
@@ -2933,6 +3173,7 @@
       "vdd_remove": "Remove virtual display",
       "starting": "Starting…",
       "waiting_helper": "Waiting for the agent to bring up its capture helper…",
+      "waiting_consent": "Attended mode: waiting for the person signed in on the PC to approve…",
       "start_failed": "Could not start: {error}",
       "connecting": "Connecting…",
       "reconnecting": "Reconnecting…",
@@ -3268,9 +3509,7 @@
       },
       "no_answer_note": "The magic packet was sent and the PC has not checked in since."
     },
-    "fold": {
-      "stats": "At a glance"
-    },
+    "fold": {},
     "open": {
       "label": "Open in Tools:",
       "terminal": "Terminal",
@@ -3360,7 +3599,27 @@
       }
     },
     "breadcrumb_label": "Breadcrumb",
-    "settings_title": "Machine settings"
+    "settings_title": "Machine settings",
+    "bento": {
+      "clock": "Clock",
+      "power": "Power",
+      "hot_at": "Hot at {value} °C",
+      "memory": "Memory",
+      "memory_used": "{used} of {total} GB",
+      "profile": "Device profile",
+      "copy": "Copy",
+      "copied": "Copied",
+      "f": {
+        "manufacturer": "Manufacturer",
+        "model": "Model",
+        "serial": "Serial",
+        "service_tag": "Service tag",
+        "asset_tag": "Asset tag",
+        "os": "OS",
+        "ou": "OU",
+        "owner": "Managed by"
+      }
+    }
   },
   "remote": {
     "title": "Remote",
@@ -5174,12 +5433,6 @@
     "read_failed": "This machine's encryption state could not be read: {error}",
     "load_error": "Encryption data could not be loaded.",
     "retry": "Retry",
-    "column": {
-      "volume": "Volume",
-      "protection": "Protection",
-      "method": "Method",
-      "key": "Recovery key"
-    },
     "protection": {
       "on": "Protected",
       "off": "Not protected",
@@ -5476,6 +5729,23 @@
       "unsigned_heading": "Machines reporting without enrollment",
       "unsigned_intro": "These machines sent telemetry without an agent credential in the last day. While enrolled-only telemetry is on, it is being refused. Update their agent, or onboard them with a code.",
       "unsigned_last": "last report {when}",
+      "mirror": {
+        "heading": "Agent downloads through this hub",
+        "intro": "PCs that cannot reach GitHub install and update from this hub's copy of the agent releases. Everything is still checked on the PC against the fleet's signing key.",
+        "off": "Off. A PC that cannot reach GitHub cannot be onboarded or updated. Turn on 'Agent downloads through this hub' in Settings, on the Fleet tab.",
+        "never": "Not copied yet. The hub copies the releases from GitHub shortly after it starts, and every 15 minutes after that.",
+        "never_complete": "No complete copy yet ({size} on disk). Some files could not be copied; see below.",
+        "synced": "Last complete copy {when}, {size} on disk.",
+        "windows_stable": "Windows agent {version}",
+        "windows_beta": "Windows agent {version} (beta)",
+        "windows_pinned": "Windows agent {version} (pinned)",
+        "linux_stable": "Linux agent {version}",
+        "linux_beta": "Linux agent {version} (beta)",
+        "linux_pinned": "Linux agent {version} (pinned)",
+        "no_installers": "The installers are not copied yet, so onboarding still downloads them from GitHub.",
+        "no_pawnio": "The PawnIO driver is not copied, so a PC without internet access installs without temperature and fan readings.",
+        "errors": "The last attempt, {when}, had problems. The previous copy of each file is still served:"
+      },
       "editor_title": "New onboarding code",
       "label": "Label",
       "label_placeholder": "e.g. Reception PC for Maria",
@@ -5528,7 +5798,7 @@
       "os_windows": "Windows",
       "os_linux": "Linux",
       "linux_intro": "On the Linux machine, paste this command into a terminal. It asks for your password, then installs the agent and enrols the machine:",
-      "linux_hint": "If your account cannot use sudo, which is usual on OpenMediaVault, run su - first, then paste the command without the word sudo at the end. The installer needs systemd and a 64-bit Intel or AMD machine.",
+      "linux_hint": "If your account cannot use sudo, as is common on NAS and appliance systems, run su - first, then paste the command without the word sudo at the end. The installer needs systemd and a 64-bit Intel or AMD machine.",
       "install_intro": "Download the installer and open it. Windows asks for administrator rights; allow it. The window shows each step and ends with a success line.",
       "download": "Download installer",
       "download_hint": "If Windows warns that the file is unrecognised, choose More info, then Run anyway.",
