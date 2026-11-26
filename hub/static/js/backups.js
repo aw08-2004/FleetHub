@@ -54,9 +54,9 @@ async function api(path, options) {
     let body = null;
     try { body = await resp.json(); } catch (e) { /* empty body is fine */ }
     if (!resp.ok) {
-        const err = new Error((body && body.error) || `HTTP ${resp.status}`);
+        const err = new Error(body?.error || `HTTP ${resp.status}`);
         // A refusal the console translates carries a code; the rest render verbatim.
-        err.code = body && body.code;
+        err.code = body?.code;
         throw err;
     }
     return body;
