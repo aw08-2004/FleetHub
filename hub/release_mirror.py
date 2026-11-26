@@ -253,7 +253,7 @@ def status(mirror_dir, enabled=True):
         "errors": list(index["errors"]),
         "manifests": dict(sorted(versions.items())),
         "installers": sorted(p for p in index["files"] if p in INSTALLER_FILES),
-        "pawnio": PAWNIO_SHA256 in index["binaries"].values(),
+        "pawnio": "pawnio" in index["binaries"],
         "bytes": size,
     }
 
@@ -417,16 +417,15 @@ class _Round:
             if path in self.old["files"]:
                 self.files[path] = self.old["files"][path]
 
-    def pawnio(self):
+    def pawnio(self, sha256):
         try:
-            _store_download(self.mirror_dir, self.fetch, PAWNIO_URL, PAWNIO_SHA256,
-                            MAX_BINARY_BYTES)
-            self.binaries["pawnio"] = PAWNIO_SHA256
+            _store_download(self.mirror_dir, self.fetch, PAWNIO_URL, sha256, MAX_BINARY_BYTES)
+            self.binaries["pawnio"] = sha256
         except (FetchError, NotFound) as e:
             self.errors.append(f"PawnIO: {e}")
 
 
-def sync(mirror_dir, pins, verify_signature, fetch=http_fetch, now=None):
+def sync(mirror_dir, pins, verify_signature, fetch=http_fetch, now=None, pawnio_sha256=None):
     """Bring the mirror up to date with GitHub. Returns the new status.
 
     `verify_signature(manifest_bytes, sig_hex) -> bool` is the release-key check -- passed in
@@ -434,6 +433,9 @@ def sync(mirror_dir, pins, verify_signature, fetch=http_fetch, now=None):
     fetch problem: each one is recorded in the index's `errors` and that file's previous copy
     is kept. Errors are reported, not hidden, because a mirror that quietly stopped syncing
     is the failure the Onboarding page's status card exists to show.
+
+    `pawnio_sha256` defaults to PAWNIO_SHA256 and exists for tests, which cannot fetch the
+    real PawnIO. Resolved here, at call time, rather than as a default argument.
     """
     os.makedirs(blob_dir(mirror_dir), exist_ok=True)
     stamp = now if now is not None else int(time.time())
@@ -442,7 +444,7 @@ def sync(mirror_dir, pins, verify_signature, fetch=http_fetch, now=None):
         r.manifest(path)
     for path in INSTALLER_FILES:
         r.installer(path)
-    r.pawnio()
+    r.pawnio(pawnio_sha256 or PAWNIO_SHA256)
     index = {"files": r.files, "binaries": r.binaries, "attempted_at": stamp,
              "errors": r.errors,
              # "Synced" means every file was checked this round; a partial round keeps the

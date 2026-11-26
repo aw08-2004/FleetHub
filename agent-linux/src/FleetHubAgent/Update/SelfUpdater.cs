@@ -196,23 +196,21 @@ public sealed class SelfUpdater
             // after this point trusts the contents; nothing before it does. From GitHub, then
             // from the hub's mirror (roadmap #33), through the same check either way -- see
             // agent-shared/UpdateMirror.cs.
-            var failures = new List<string>();
-            var fetched = await UpdateMirror.FetchVerifiedManifestAsync(
+            var got = await UpdateMirror.FetchVerifiedManifestAsync(
                 UpdateMirror.Sources(manifestUrl, UpdateMirror.ManifestOnHub(manifestUrl, AgentConfig.HubBase)),
                 _http.GetByteArrayAsync,
                 (bytes, sig) => SignatureVerifier.VerifyRaw(AgentConfig.UpdatePublicKeyHex, bytes, sig),
-                failures, ct);
-            if (fetched is not { } got)
+                ct);
+            if (got.Bytes is null)
             {
-                NoteFailure($"no verifiable manifest: {string.Join("; ", failures)}");
+                NoteFailure($"no verifiable manifest: {got.Why}");
                 return false;
             }
-            var manifestBytes = got.Manifest;
+            var manifestBytes = got.Bytes;
             if (got.Source != _lastManifestSource)
             {
                 if (got.Source != manifestUrl)
-                    _log.LogInformation("[update] reading the manifest through the hub ({Why})",
-                        string.Join("; ", failures));
+                    _log.LogInformation("[update] reading the manifest through the hub ({Why})", got.Why);
                 else if (_lastManifestSource is not null)
                     _log.LogInformation("[update] reading the manifest from GitHub again");
                 _lastManifestSource = got.Source;
@@ -269,19 +267,18 @@ public sealed class SelfUpdater
                 $"fleethub-agent-{manifest.Version}");
             // From the release url the signed manifest names, then from the hub's mirror by the
             // SIGNED sha256 (roadmap #33) -- never from a location the hub chose.
-            failures.Clear();
-            var binary = await UpdateMirror.FetchVerifiedBinaryAsync(
+            var bin = await UpdateMirror.FetchVerifiedBinaryAsync(
                 UpdateMirror.Sources(manifest.Url, UpdateMirror.BinaryOnHub(AgentConfig.HubBase, manifest.Sha256)),
-                _download.GetByteArrayAsync, manifest.Sha256, failures, ct);
-            if (binary is not { } bin)
+                _download.GetByteArrayAsync, manifest.Sha256, ct);
+            if (bin.Bytes is null)
             {
                 NoteFailure($"no binary matching the signed sha256 for {manifest.Version}: "
-                            + $"{string.Join("; ", failures)} -- aborting");
+                            + $"{bin.Why} -- aborting");
                 return false;
             }
             if (bin.Source != manifest.Url)
                 _log.LogInformation("[update] downloaded {New} through the hub ({Why})",
-                    manifest.Version, string.Join("; ", failures));
+                    manifest.Version, bin.Why);
             var bytes = bin.Bytes;
             var actualSha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             await File.WriteAllBytesAsync(stagedPath, bytes, ct);

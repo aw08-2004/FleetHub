@@ -146,140 +146,136 @@ def test_sync(work):
     win_bin = b"MZ" + os.urandom(2048)
     lin_bin = b"\x7fELF" + os.urandom(2048)
     pawnio = b"PAWNIO" + os.urandom(512)
-    real_pin = release_mirror.PAWNIO_SHA256
-    release_mirror.PAWNIO_SHA256 = hashlib.sha256(pawnio).hexdigest()
-    try:
-        stable_win = channels.agent_manifest_path(channels.STABLE, WIN)
-        beta_win = channels.agent_manifest_path(channels.BETA, WIN)
-        stable_lin = channels.agent_manifest_path(channels.STABLE, LINUX)
-        win_body = rel.publish(stable_win, "3.50.0", win_bin)
-        rel.publish(stable_lin, "0.5.0", lin_bin)
-        for path in release_mirror.INSTALLER_FILES:
-            gh.files[release_mirror.RAW_BASE + path] = f"# {path}\r\nline two\r\n".encode()
-        gh.files[release_mirror.PAWNIO_URL] = pawnio
+    pin = hashlib.sha256(pawnio).hexdigest()
+    stable_win = channels.agent_manifest_path(channels.STABLE, WIN)
+    beta_win = channels.agent_manifest_path(channels.BETA, WIN)
+    stable_lin = channels.agent_manifest_path(channels.STABLE, LINUX)
+    win_body = rel.publish(stable_win, "3.50.0", win_bin)
+    rel.publish(stable_lin, "0.5.0", lin_bin)
+    for path in release_mirror.INSTALLER_FILES:
+        gh.files[release_mirror.RAW_BASE + path] = f"# {path}\r\nline two\r\n".encode()
+    gh.files[release_mirror.PAWNIO_URL] = pawnio
 
-        result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T1")
-        check("a clean sync records no errors", result["errors"] == [])
-        check("...and says when", result["synced_at"] == "T1" and result["attempted_at"] == "T1")
-        check("...holding both stable manifests, by version",
-              result["manifests"].get(stable_win) == "3.50.0"
-              and result["manifests"].get(stable_lin) == "0.5.0")
-        check("...no beta, because none is published (a 404 is not an error)",
-              beta_win not in result["manifests"])
-        check("...every installer, and PawnIO",
-              result["installers"] == sorted(release_mirror.INSTALLER_FILES) and result["pawnio"])
-        served = release_mirror.file_for_path(mirror, stable_win)
-        check("the manifest is stored as the EXACT bytes GitHub sent",
-              served and open(served, "rb").read() == win_body)
-        inst = release_mirror.file_for_path(mirror, release_mirror.INSTALLER_FILES[0])
-        check("...and so is an installer, CRLF and all",
-              inst and open(inst, "rb").read().count(b"\r\n") == 2)
-        bin_path = release_mirror.file_for_sha(mirror, hashlib.sha256(win_bin).hexdigest())
-        check("the binary is served by its signed sha256",
-              bin_path and open(bin_path, "rb").read() == win_bin)
-        check("...PawnIO by its pinned one",
-              release_mirror.file_for_sha(mirror, release_mirror.PAWNIO_SHA256) is not None)
-        check("a manifest is not reachable as a binary by its own hash",
-              release_mirror.file_for_sha(mirror, hashlib.sha256(win_body).hexdigest()) is None)
-        check("a path the index does not name resolves to nothing",
-              release_mirror.file_for_path(mirror, "agent/../index.json") is None
-              and release_mirror.file_for_path(mirror, "../index.json") is None
-              and release_mirror.file_for_path(mirror, "hub/app.py") is None)
-        check("a malformed hash resolves to nothing", release_mirror.file_for_sha(mirror, "../x") is None)
-        # `$` matches before a trailing newline; the pattern is anchored with \Z so this fails.
-        check("...including a real hash with a newline on the end",
-              release_mirror.file_for_sha(mirror, hashlib.sha256(win_bin).hexdigest() + "\n") is None)
+    result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T1", pawnio_sha256=pin)
+    check("a clean sync records no errors", result["errors"] == [])
+    check("...and says when", result["synced_at"] == "T1" and result["attempted_at"] == "T1")
+    check("...holding both stable manifests, by version",
+          result["manifests"].get(stable_win) == "3.50.0"
+          and result["manifests"].get(stable_lin) == "0.5.0")
+    check("...no beta, because none is published (a 404 is not an error)",
+          beta_win not in result["manifests"])
+    check("...every installer, and PawnIO",
+          result["installers"] == sorted(release_mirror.INSTALLER_FILES) and result["pawnio"])
+    served = release_mirror.file_for_path(mirror, stable_win)
+    check("the manifest is stored as the EXACT bytes GitHub sent",
+          served and open(served, "rb").read() == win_body)
+    inst = release_mirror.file_for_path(mirror, release_mirror.INSTALLER_FILES[0])
+    check("...and so is an installer, CRLF and all",
+          inst and open(inst, "rb").read().count(b"\r\n") == 2)
+    bin_path = release_mirror.file_for_sha(mirror, hashlib.sha256(win_bin).hexdigest())
+    check("the binary is served by its signed sha256",
+          bin_path and open(bin_path, "rb").read() == win_bin)
+    check("...PawnIO by its pinned one",
+          release_mirror.file_for_sha(mirror, pin) is not None)
+    check("a manifest is not reachable as a binary by its own hash",
+          release_mirror.file_for_sha(mirror, hashlib.sha256(win_body).hexdigest()) is None)
+    check("a path the index does not name resolves to nothing",
+          release_mirror.file_for_path(mirror, "agent/../index.json") is None
+          and release_mirror.file_for_path(mirror, "../index.json") is None
+          and release_mirror.file_for_path(mirror, "hub/app.py") is None)
+    check("a malformed hash resolves to nothing", release_mirror.file_for_sha(mirror, "../x") is None)
+    # `$` matches before a trailing newline; the pattern is anchored with \Z so this fails.
+    check("...including a real hash with a newline on the end",
+          release_mirror.file_for_sha(mirror, hashlib.sha256(win_bin).hexdigest() + "\n") is None)
 
-        print("\n== The second sync downloads nothing it already has ==")
-        bin_url = json.loads(win_body)["url"]
-        before = gh.hits[bin_url]
-        release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T2")
-        check("the unchanged binary is not fetched again", gh.hits[bin_url] == before)
-        check("...nor PawnIO", gh.hits[release_mirror.PAWNIO_URL] == 1)
+    print("\n== The second sync downloads nothing it already has ==")
+    bin_url = json.loads(win_body)["url"]
+    before = gh.hits[bin_url]
+    release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T2", pawnio_sha256=pin)
+    check("the unchanged binary is not fetched again", gh.hits[bin_url] == before)
+    check("...nor PawnIO", gh.hits[release_mirror.PAWNIO_URL] == 1)
 
-        print("\n== Refusals keep the last good copy ==")
-        rel.publish(stable_win, "3.51.0", win_bin, signer=Ed25519PrivateKey.generate())
-        result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T3")
-        check("a manifest signed by another key is not kept",
-              result["manifests"].get(stable_win) == "3.50.0")
-        check("...and says so", any("NOT signed" in e for e in result["errors"]))
-        check("...and a partial round keeps the last full sync time", result["synced_at"] == "T2"
-              and result["attempted_at"] == "T3")
+    print("\n== Refusals keep the last good copy ==")
+    rel.publish(stable_win, "3.51.0", win_bin, signer=Ed25519PrivateKey.generate())
+    result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T3", pawnio_sha256=pin)
+    check("a manifest signed by another key is not kept",
+          result["manifests"].get(stable_win) == "3.50.0")
+    check("...and says so", any("NOT signed" in e for e in result["errors"]))
+    check("...and a partial round keeps the last full sync time", result["synced_at"] == "T2"
+          and result["attempted_at"] == "T3")
 
-        new_bin = b"MZ" + os.urandom(2048)
-        rel.publish(stable_win, "3.52.0", new_bin, sha=hashlib.sha256(b"something else").hexdigest())
-        result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T4")
-        check("a binary that does not match its signed sha256 is not kept, nor its manifest",
-              result["manifests"].get(stable_win) == "3.50.0"
-              and any("not kept" in e for e in result["errors"]))
-        check("...and no partial download is left behind",
-              not any(n.startswith(".in-") for n in blob_names(mirror)))
+    new_bin = b"MZ" + os.urandom(2048)
+    rel.publish(stable_win, "3.52.0", new_bin, sha=hashlib.sha256(b"something else").hexdigest())
+    result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T4", pawnio_sha256=pin)
+    check("a binary that does not match its signed sha256 is not kept, nor its manifest",
+          result["manifests"].get(stable_win) == "3.50.0"
+          and any("not kept" in e for e in result["errors"]))
+    check("...and no partial download is left behind",
+          not any(n.startswith(".in-") for n in blob_names(mirror)))
 
-        rel.publish(stable_win, "3.53.0", new_bin)
-        gh.fail[release_mirror.RAW_BASE + stable_win] = release_mirror.FetchError
-        result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T5")
-        check("a transient GitHub error keeps the previous manifest AND its binary",
-              result["manifests"].get(stable_win) == "3.50.0"
-              and release_mirror.file_for_sha(mirror, hashlib.sha256(win_bin).hexdigest()))
-        del gh.fail[release_mirror.RAW_BASE + stable_win]
+    rel.publish(stable_win, "3.53.0", new_bin)
+    gh.fail[release_mirror.RAW_BASE + stable_win] = release_mirror.FetchError
+    result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T5", pawnio_sha256=pin)
+    check("a transient GitHub error keeps the previous manifest AND its binary",
+          result["manifests"].get(stable_win) == "3.50.0"
+          and release_mirror.file_for_sha(mirror, hashlib.sha256(win_bin).hexdigest()))
+    del gh.fail[release_mirror.RAW_BASE + stable_win]
 
-        gh.fail[release_mirror.RAW_BASE + release_mirror.INSTALLER_FILES[0]] = \
-            release_mirror.FetchError
-        result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T6")
-        check("...the same for an installer", release_mirror.INSTALLER_FILES[0] in result["installers"])
-        gh.fail.clear()
+    gh.fail[release_mirror.RAW_BASE + release_mirror.INSTALLER_FILES[0]] = \
+        release_mirror.FetchError
+    result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T6", pawnio_sha256=pin)
+    check("...the same for an installer", release_mirror.INSTALLER_FILES[0] in result["installers"])
+    gh.fail.clear()
 
-        print("\n== A new release replaces the old, and the old binary goes ==")
-        result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T7")
-        check("the new manifest is served", result["manifests"].get(stable_win) == "3.53.0"
-              and result["errors"] == [] and result["synced_at"] == "T7")
-        check("the old binary is deleted from disk",
-              hashlib.sha256(win_bin).hexdigest() not in blob_names(mirror))
-        check("the new one is served",
-              release_mirror.file_for_sha(mirror, hashlib.sha256(new_bin).hexdigest()) is not None)
+    print("\n== A new release replaces the old, and the old binary goes ==")
+    result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T7", pawnio_sha256=pin)
+    check("the new manifest is served", result["manifests"].get(stable_win) == "3.53.0"
+          and result["errors"] == [] and result["synced_at"] == "T7")
+    check("the old binary is deleted from disk",
+          hashlib.sha256(win_bin).hexdigest() not in blob_names(mirror))
+    check("the new one is served",
+          release_mirror.file_for_sha(mirror, hashlib.sha256(new_bin).hexdigest()) is not None)
 
-        print("\n== Beta, pins and revocations ==")
-        beta_bin = b"MZ" + os.urandom(1024)
-        rel.publish(beta_win, "3.54.0", beta_bin)
-        pinned = channels.pinned_manifest_path(WIN, "3.50.0")
-        rel.publish(pinned, "3.50.0", win_bin)
-        result = release_mirror.sync(mirror, {WIN: "3.50.0"}, rel.verify, fetch=gh, now="T8")
-        check("a published beta is mirrored", result["manifests"].get(beta_win) == "3.54.0")
-        check("a pinned version's manifest and binary are mirrored",
-              result["manifests"].get(pinned) == "3.50.0"
-              and release_mirror.file_for_sha(mirror, hashlib.sha256(win_bin).hexdigest()))
-        result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T9")
-        check("an unpinned platform drops the pin's files",
-              pinned not in result["manifests"]
-              and hashlib.sha256(win_bin).hexdigest() not in blob_names(mirror))
-        del gh.files[release_mirror.RAW_BASE + beta_win]
-        result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T10")
-        check("a manifest deleted on GitHub (a 404) is dropped -- that is how a release is revoked",
-              beta_win not in result["manifests"] and result["errors"] == [])
+    print("\n== Beta, pins and revocations ==")
+    beta_bin = b"MZ" + os.urandom(1024)
+    rel.publish(beta_win, "3.54.0", beta_bin)
+    pinned = channels.pinned_manifest_path(WIN, "3.50.0")
+    rel.publish(pinned, "3.50.0", win_bin)
+    result = release_mirror.sync(mirror, {WIN: "3.50.0"}, rel.verify, fetch=gh, now="T8", pawnio_sha256=pin)
+    check("a published beta is mirrored", result["manifests"].get(beta_win) == "3.54.0")
+    check("a pinned version's manifest and binary are mirrored",
+          result["manifests"].get(pinned) == "3.50.0"
+          and release_mirror.file_for_sha(mirror, hashlib.sha256(win_bin).hexdigest()))
+    result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T9", pawnio_sha256=pin)
+    check("an unpinned platform drops the pin's files",
+          pinned not in result["manifests"]
+          and hashlib.sha256(win_bin).hexdigest() not in blob_names(mirror))
+    del gh.files[release_mirror.RAW_BASE + beta_win]
+    result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T10", pawnio_sha256=pin)
+    check("a manifest deleted on GitHub (a 404) is dropped -- that is how a release is revoked",
+          beta_win not in result["manifests"] and result["errors"] == [])
 
-        print("\n== PawnIO is kept only under its pin ==")
-        gh.files[release_mirror.PAWNIO_URL] = b"a different driver"
-        other = os.path.join(work, "mirror-2")
-        result = release_mirror.sync(other, {}, rel.verify, fetch=gh, now="T1")
-        check("upstream bytes that do not match the pin are not kept",
-              not result["pawnio"] and any("PawnIO" in e for e in result["errors"]))
-        result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T11")
-        check("...while a mirror that already holds the pinned copy keeps serving it",
-              result["pawnio"])
+    print("\n== PawnIO is kept only under its pin ==")
+    gh.files[release_mirror.PAWNIO_URL] = b"a different driver"
+    other = os.path.join(work, "mirror-2")
+    result = release_mirror.sync(other, {}, rel.verify, fetch=gh, now="T1", pawnio_sha256=pin)
+    check("upstream bytes that do not match the pin are not kept",
+          not result["pawnio"] and any("PawnIO" in e for e in result["errors"]))
+    result = release_mirror.sync(mirror, {}, rel.verify, fetch=gh, now="T11", pawnio_sha256=pin)
+    check("...while a mirror that already holds the pinned copy keeps serving it",
+          result["pawnio"])
 
-        print("\n== Switching it off ==")
-        release_mirror.clear(mirror)
-        result = release_mirror.status(mirror, enabled=False)
-        check("clear() empties the index and the disk",
-              result["manifests"] == {} and not result["pawnio"] and blob_names(mirror) == set())
-        check("...and reports itself off", result["enabled"] is False)
+    print("\n== Switching it off ==")
+    release_mirror.clear(mirror)
+    result = release_mirror.status(mirror, enabled=False)
+    check("clear() empties the index and the disk",
+          result["manifests"] == {} and not result["pawnio"] and blob_names(mirror) == set())
+    check("...and reports itself off", result["enabled"] is False)
 
-        with open(os.path.join(mirror, release_mirror.INDEX_NAME), "w") as fh:
-            fh.write("{not json")
-        check("a corrupt index reads as an empty mirror, not a crash",
-              release_mirror.load_index(mirror)["files"] == {})
-    finally:
-        release_mirror.PAWNIO_SHA256 = real_pin
+    with open(os.path.join(mirror, release_mirror.INDEX_NAME), "w") as fh:
+        fh.write("{not json")
+    check("a corrupt index reads as an empty mirror, not a crash",
+          release_mirror.load_index(mirror)["files"] == {})
     return gh, rel
 
 

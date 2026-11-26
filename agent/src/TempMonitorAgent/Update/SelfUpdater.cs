@@ -128,31 +128,28 @@ public sealed class SelfUpdater
             // 1 + 2. Manifest + detached signature, verified over the EXACT manifest bytes
             // (fail-closed) -- from GitHub, then from the hub's mirror (roadmap #33). Both
             // sources go through the same verification; see agent-shared/UpdateMirror.cs.
-            var failures = new List<string>();
             var manifestUrl = AgentConfig.UpdateManifestUrl;
-            var fetched = await UpdateMirror.FetchVerifiedManifestAsync(
+            var got = await UpdateMirror.FetchVerifiedManifestAsync(
                 UpdateMirror.Sources(manifestUrl, UpdateMirror.ManifestOnHub(manifestUrl, AgentConfig.HubBase)),
                 _http.GetByteArrayAsync,
                 (bytes, sig) => SignatureVerifier.VerifyRaw(AgentConfig.UpdatePublicKeyHex, bytes, sig),
-                failures, ct);
-            if (fetched is not { } got)
+                ct);
+            if (got.Bytes is null)
             {
                 // A bad signature is a Warning, as it was before the mirror: it is the one failure
                 // here that may mean someone tampered with a source. Anything else stays at Debug,
                 // because a PC that cannot look is usually just offline.
-                if (failures.Exists(f => f.Contains("NOT signed", StringComparison.Ordinal)))
-                    _log.LogWarning("[update] manifest signature invalid -- refusing: {Failures}",
-                        string.Join("; ", failures));
+                if (got.SignatureRefused)
+                    _log.LogWarning("[update] manifest signature invalid -- refusing: {Failures}", got.Why);
                 else
-                    _log.LogDebug("[update] no verifiable manifest: {Failures}", string.Join("; ", failures));
+                    _log.LogDebug("[update] no verifiable manifest: {Failures}", got.Why);
                 return false;
             }
-            var manifestBytes = got.Manifest;
+            var manifestBytes = got.Bytes;
             if (got.Source != _lastManifestSource)
             {
                 if (got.Source != manifestUrl)
-                    _log.LogInformation("[update] reading the manifest through the hub ({Why})",
-                        string.Join("; ", failures));
+                    _log.LogInformation("[update] reading the manifest through the hub ({Why})", got.Why);
                 else if (_lastManifestSource is not null)
                     _log.LogInformation("[update] reading the manifest from GitHub again");
                 _lastManifestSource = got.Source;
@@ -200,19 +197,18 @@ public sealed class SelfUpdater
                 $"FleetHubAgent-{manifest.Version}.exe");
             // From the release url the signed manifest names, then from the hub's mirror by the
             // SIGNED sha256 (roadmap #33) -- never from a location the hub chose.
-            failures.Clear();
-            var binary = await UpdateMirror.FetchVerifiedBinaryAsync(
+            var bin = await UpdateMirror.FetchVerifiedBinaryAsync(
                 UpdateMirror.Sources(manifest.Url, UpdateMirror.BinaryOnHub(AgentConfig.HubBase, manifest.Sha256)),
-                _download.GetByteArrayAsync, manifest.Sha256, failures, ct);
-            if (binary is not { } bin)
+                _download.GetByteArrayAsync, manifest.Sha256, ct);
+            if (bin.Bytes is null)
             {
                 _log.LogWarning("[update] no binary matching the signed sha256 for {New}: {Failures} -- aborting",
-                    manifest.Version, string.Join("; ", failures));
+                    manifest.Version, bin.Why);
                 return false;
             }
             if (bin.Source != manifest.Url)
                 _log.LogInformation("[update] downloaded {New} through the hub ({Why})",
-                    manifest.Version, string.Join("; ", failures));
+                    manifest.Version, bin.Why);
             var exeBytes = bin.Bytes;
             var actualSha = Convert.ToHexString(SHA256.HashData(exeBytes)).ToLowerInvariant();
             await File.WriteAllBytesAsync(stagedPath, exeBytes, ct);

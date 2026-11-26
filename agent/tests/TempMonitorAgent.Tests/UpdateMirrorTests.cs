@@ -96,13 +96,12 @@ public class UpdateMirrorTests
         {
             ["h/m"] = m, ["h/m.sig"] = Encoding.ASCII.GetBytes("good:" + m.Length + "\n"),
         };
-        var failures = new List<string>();
         var got = await UpdateMirror.FetchVerifiedManifestAsync(
-            new[] { "g/m", "h/m" }, Server(files), SignedBy, failures, CancellationToken.None);
-        Assert.NotNull(got);
-        Assert.Equal("h/m", got!.Value.Source);
-        Assert.Equal(m, got.Value.Manifest);
-        Assert.Single(failures);
+            new[] { "g/m", "h/m" }, Server(files), SignedBy, CancellationToken.None);
+        Assert.Equal("h/m", got.Source);
+        Assert.Equal(m, got.Bytes);
+        Assert.Single(got.Failures);
+        Assert.False(got.SignatureRefused);
     }
 
     [Fact]
@@ -110,12 +109,13 @@ public class UpdateMirrorTests
     {
         var m = Encoding.UTF8.GetBytes("{}");
         var files = new Dictionary<string, byte[]> { ["h/m"] = m, ["h/m.sig"] = Encoding.ASCII.GetBytes("forged") };
-        var failures = new List<string>();
         var got = await UpdateMirror.FetchVerifiedManifestAsync(
-            new[] { "g/m", "h/m" }, Server(files), SignedBy, failures, CancellationToken.None);
-        Assert.Null(got);
-        Assert.Equal(2, failures.Count);
-        Assert.Contains("NOT signed", failures[1]);
+            new[] { "g/m", "h/m" }, Server(files), SignedBy, CancellationToken.None);
+        Assert.Null(got.Bytes);
+        Assert.Equal(2, got.Failures.Count);
+        Assert.Contains("NOT signed", got.Failures[1]);
+        // The one failure the Windows agent raises to a Warning.
+        Assert.True(got.SignatureRefused);
     }
 
     [Fact]
@@ -128,8 +128,9 @@ public class UpdateMirrorTests
             ["h/m"] = m, ["h/m.sig"] = Encoding.ASCII.GetBytes("good:" + m.Length),
         };
         var got = await UpdateMirror.FetchVerifiedManifestAsync(
-            new[] { "g/m", "h/m" }, Server(files), SignedBy, new List<string>(), CancellationToken.None);
-        Assert.Equal("h/m", got!.Value.Source);
+            new[] { "g/m", "h/m" }, Server(files), SignedBy, CancellationToken.None);
+        Assert.Equal("h/m", got.Source);
+        Assert.True(got.SignatureRefused);
     }
 
     [Fact]
@@ -149,8 +150,8 @@ public class UpdateMirrorTests
         var got = await UpdateMirror.FetchVerifiedManifestAsync(
             new[] { "g/m", "h/m" }, Server(files),
             (b, s) => { seen.Add((b, s)); return SignedBy(b, s); },
-            new List<string>(), CancellationToken.None);
-        Assert.Equal(hm, got!.Value.Manifest);
+            CancellationToken.None);
+        Assert.Equal(hm, got.Bytes);
         Assert.Single(seen);
         Assert.Equal(hm, seen[0].Item1);
     }
@@ -161,16 +162,17 @@ public class UpdateMirrorTests
         var real = Encoding.UTF8.GetBytes("MZ the real build");
         var sha = Convert.ToHexString(SHA256.HashData(real)).ToLowerInvariant();
         var files = new Dictionary<string, byte[]> { ["g/b"] = Encoding.UTF8.GetBytes("<html>blocked</html>"), ["h/b"] = real };
-        var failures = new List<string>();
         var got = await UpdateMirror.FetchVerifiedBinaryAsync(
-            new[] { "g/b", "h/b" }, Server(files), sha.ToUpperInvariant(), failures, CancellationToken.None);
-        Assert.Equal("h/b", got!.Value.Source);
-        Assert.Equal(real, got.Value.Bytes);
-        Assert.Contains("sha256", failures.Single());
+            new[] { "g/b", "h/b" }, Server(files), sha.ToUpperInvariant(), CancellationToken.None);
+        Assert.Equal("h/b", got.Source);
+        Assert.Equal(real, got.Bytes);
+        Assert.Contains("sha256", got.Failures.Single());
 
         files["h/b"] = Encoding.UTF8.GetBytes("MZ something else");
-        Assert.Null(await UpdateMirror.FetchVerifiedBinaryAsync(
-            new[] { "g/b", "h/b" }, Server(files), sha, new List<string>(), CancellationToken.None));
+        var none = await UpdateMirror.FetchVerifiedBinaryAsync(
+            new[] { "g/b", "h/b" }, Server(files), sha, CancellationToken.None);
+        Assert.Null(none.Bytes);
+        Assert.Equal(2, none.Failures.Count);
     }
 
     [Fact]
@@ -182,8 +184,8 @@ public class UpdateMirrorTests
             ? Task.FromException<byte[]>(new TaskCanceledException("timed out"))
             : Task.FromResult(real);
         var got = await UpdateMirror.FetchVerifiedBinaryAsync(
-            new[] { "g/b", "h/b" }, get, sha, new List<string>(), CancellationToken.None);
-        Assert.Equal("h/b", got!.Value.Source);
+            new[] { "g/b", "h/b" }, get, sha, CancellationToken.None);
+        Assert.Equal("h/b", got.Source);
     }
 
     [Fact]
@@ -198,8 +200,7 @@ public class UpdateMirrorTests
             return Task.FromException<byte[]>(new TaskCanceledException("cancelled", null, ct));
         };
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            UpdateMirror.FetchVerifiedBinaryAsync(new[] { "g/b", "h/b" }, get, new string('a', 64),
-                new List<string>(), cts.Token));
+            UpdateMirror.FetchVerifiedBinaryAsync(new[] { "g/b", "h/b" }, get, new string('a', 64), cts.Token));
         Assert.Equal(new[] { "g/b" }, asked);
     }
 }

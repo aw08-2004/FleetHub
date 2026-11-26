@@ -391,15 +391,15 @@ function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl, [stri
         if (-not $m.version -or -not $m.url -or $want -notmatch '^[0-9a-f]{64}$') {
             throw "the signed manifest is missing its version, url or sha256 -- a release-signing bug."
         }
-        Write-Host "  manifest verified: version $($m.version), signed by the fleet key ($($signed.From))"
         $binSources = @("$($m.url)")
         if ($MirrorBase) { $binSources += "$MirrorBase/bin/$want" }
         $bPath = Join-Path $work "agent.exe"
         $binFrom = Get-MatchingBinary $binSources $bPath $want
-        Write-Host "  binary  <- $binFrom"
-        Write-Host "  binary  sha256 matches the signed manifest"
         Move-Item -Path $bPath -Destination $Destination -Force
-        return [pscustomobject]@{ Version = "$($m.version)"; Sha256 = $want }
+        # Where each file came from goes back to the caller, which prints it: this function
+        # returns an object, so anything it wrote to the pipeline would become part of that.
+        return [pscustomobject]@{ Version = "$($m.version)"; Sha256 = $want
+                                  ManifestFrom = $signed.From; BinaryFrom = $binFrom }
     } finally {
         Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -692,6 +692,8 @@ if ($AgentExe) {
         try {
             $verified = Get-VerifiedAgent -Destination $staged -FromManifestUrl $ManifestUrl -MirrorBase $MirrorUrl
             $signedSha256 = $verified.Sha256
+            Say "manifest <- $($verified.ManifestFrom) (signed by the fleet key)"
+            Say "binary   <- $($verified.BinaryFrom) (sha256 matches the signed manifest)"
             Ok "Agent $($verified.Version) verified against the fleet key"
         } catch {
             Remove-Item $staged -Force -ErrorAction SilentlyContinue

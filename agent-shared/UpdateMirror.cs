@@ -96,17 +96,28 @@ public static class UpdateMirror
             ? u.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped)
             : "(unparseable url)";
 
+    /// <summary>What a fetch found: the verified bytes and the source that served them, or no
+    /// bytes -- and either way one line per source that failed before it. The failures travel
+    /// with the result rather than in a list the caller passes in, so "did a source fail, and
+    /// how" is answered by the value in hand. <see cref="SignatureRefused"/> is the one failure
+    /// worth more than Debug: a source served a manifest the release key did not sign.</summary>
+    public sealed record Fetched(byte[]? Bytes, string? Source, IReadOnlyList<string> Failures,
+                                 bool SignatureRefused)
+    {
+        public string Why => string.Join("; ", Failures);
+    }
+
     /// <summary>The first manifest, from <paramref name="sources"/> in order, whose signature
-    /// <paramref name="verify"/> accepts -- with the source it came from -- or null when none
-    /// did, with one line per failed source added to <paramref name="failures"/>. Never throws
-    /// for a fetch failure; a cancelled <paramref name="ct"/> still throws.</summary>
-    public static async Task<(byte[] Manifest, string Source)?> FetchVerifiedManifestAsync(
+    /// <paramref name="verify"/> accepts, with the source it came from; no bytes when none did.
+    /// Never throws for a fetch failure; a cancelled <paramref name="ct"/> still throws.</summary>
+    public static async Task<Fetched> FetchVerifiedManifestAsync(
         IReadOnlyList<string> sources,
         Func<string, CancellationToken, Task<byte[]>> getBytes,
         Func<byte[], string, bool> verify,
-        List<string> failures,
         CancellationToken ct)
     {
+        var failures = new List<string>();
+        var refused = false;
         foreach (var src in sources)
         {
             byte[] manifest;
@@ -124,23 +135,23 @@ public static class UpdateMirror
             if (!verify(manifest, sig))
             {
                 failures.Add($"{ForLog(src)}: NOT signed by the fleet's release key");
+                refused = true;
                 continue;
             }
-            return (manifest, src);
+            return new Fetched(manifest, src, failures, refused);
         }
-        return null;
+        return new Fetched(null, null, failures, refused);
     }
 
     /// <summary>The first binary, from <paramref name="sources"/> in order, whose sha256 equals
-    /// <paramref name="signedSha256"/> -- with the source and the hash -- or null when none did,
-    /// with one line per failed source added to <paramref name="failures"/>.</summary>
-    public static async Task<(byte[] Bytes, string Source)?> FetchVerifiedBinaryAsync(
+    /// <paramref name="signedSha256"/>, with the source it came from; no bytes when none did.</summary>
+    public static async Task<Fetched> FetchVerifiedBinaryAsync(
         IReadOnlyList<string> sources,
         Func<string, CancellationToken, Task<byte[]>> getBytes,
         string signedSha256,
-        List<string> failures,
         CancellationToken ct)
     {
+        var failures = new List<string>();
         var want = signedSha256.Trim().ToLowerInvariant();
         foreach (var src in sources)
         {
@@ -160,9 +171,9 @@ public static class UpdateMirror
                 failures.Add($"{ForLog(src)}: sha256 {got}, signed {want}");
                 continue;
             }
-            return (bytes, src);
+            return new Fetched(bytes, src, failures, false);
         }
-        return null;
+        return new Fetched(null, null, failures, false);
     }
 
     /// <summary>A failure that means "try the next source": the network, a timeout, an HTTP

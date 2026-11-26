@@ -227,7 +227,8 @@ def battery(shell, work):
         dest = os.path.join(work, f"out-{tag}.exe")
         r = run_ps(shell, work,
                    f"try {{ $v = Get-VerifiedAgent '{dest}' '{manifest_url}'; "
-                   "'version=' + $v.Version; 'sha256=' + $v.Sha256 }\n"
+                   "'version=' + $v.Version; 'sha256=' + $v.Sha256; "
+                   "'manifest=' + $v.ManifestFrom; 'binary=' + $v.BinaryFrom }\n"
                    "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 3 }\n",
                    key=pub_hex)
         return r, dest
@@ -236,8 +237,9 @@ def battery(shell, work):
         r, dest = install(publish("good.json", hashlib.sha256(binary).hexdigest()), "good")
         check("a signed manifest whose sha256 matches installs", r.returncode == 0
               and os.path.exists(dest) and open(dest, "rb").read() == binary)
-        check("...and says it verified, and which version", "manifest verified" in r.stdout
-              and "sha256 matches" in r.stdout and "version=3.99.0" in r.stdout)
+        check("...and hands back the version and where each file came from",
+              "version=3.99.0" in r.stdout and f"manifest={base}/good.json" in r.stdout
+              and f"binary={base}/FleetHubAgent.exe" in r.stdout)
         check("...and hands back the SIGNED sha256 for the re-check after the copy",
               f"sha256={hashlib.sha256(binary).hexdigest()}" in r.stdout)
 
@@ -282,7 +284,8 @@ def battery(shell, work):
             r = run_ps(shell, work,
                        f"$StableManifestUrl = '{stable_url}'\n"
                        f"try {{ $v = Get-VerifiedAgent '{dest}' $null '{mirror_base}'; "
-                       "'version=' + $v.Version }\n"
+                       "'version=' + $v.Version; 'manifest=' + $v.ManifestFrom; "
+                       "'binary=' + $v.BinaryFrom }\n"
                        "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 3 }\n",
                        key=pub_hex)
             return r, dest
@@ -319,7 +322,7 @@ def battery(shell, work):
         r, dest = install_via_mirror(gh, mirror("m-binonly", good_sha), "mirror-binonly")
         check("manifest from GitHub, release host blocked: the binary comes from the mirror",
               r.returncode == 0 and open(dest, "rb").read() == binary
-              and f"({gh})" in r.stdout and f"/m-binonly/bin/{good_sha}" in r.stdout)
+              and f"manifest={gh}" in r.stdout and f"/m-binonly/bin/{good_sha}" in r.stdout)
     finally:
         server.shutdown()
 
