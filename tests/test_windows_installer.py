@@ -323,6 +323,25 @@ def battery(shell, work):
         check("manifest from GitHub, release host blocked: the binary comes from the mirror",
               r.returncode == 0 and open(dest, "rb").read() == binary
               and f"manifest={gh}" in r.stdout and f"/m-binonly/bin/{good_sha}" in r.stdout)
+
+        # A hand-run install finds the mirror from the hub address alone: no FLEETHUB_MIRROR_URL
+        # to know about. Silent failure: a PC behind the firewall that has a hub configured
+        # still installs from GitHub only, and fails exactly as it did before #33.
+        r = run_ps(shell, work,
+                   "'a=' + (Resolve-MirrorUrl 'https://m.example/api/agent/dist/' @('https://hub'))\n"
+                   "'b=' + (Resolve-MirrorUrl '' @('https://hub.example.com/ ', 'https://other'))\n"
+                   "'c=' + (Resolve-MirrorUrl $null @($null, '', 'hub.example.com', "
+                   "'https://bad host', 'https://hub2:8443'))\n"
+                   "'d=' + (Resolve-MirrorUrl '' @($null, ''))\n")
+        lines = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+        check("an explicit mirror wins over any hub address",
+              lines.get("a") == "https://m.example/api/agent/dist")
+        check("no mirror given: the first hub address's /api/agent/dist",
+              lines.get("b") == "https://hub.example.com/api/agent/dist")
+        check("a hub address without a scheme, or with a space, is skipped, not used",
+              lines.get("c") == "https://hub2:8443/api/agent/dist")
+        check("no hub address and no mirror: no mirror, rather than a guessed one",
+              r.returncode == 0 and lines.get("d") == "")
     finally:
         server.shutdown()
 
@@ -346,6 +365,13 @@ def main():
                        read("agent", "src", "TempMonitorAgent", "AgentConfig.cs"))
     check("the manifest it reads is the agent's stable manifest",
           stable and f'$StableManifestUrl = "{stable.group(1)}"' in script)
+    wiring = re.search(r"^\$MirrorUrl = Resolve-MirrorUrl \$MirrorUrl @\((.*?)\)\)\s*$",
+                       script.replace("\r\n", "\n"), re.M | re.S)
+    check("the mirror is worked out from -HubUrl, then the machine's FLEETHUB_HUB",
+          wiring and wiring.group(1).lstrip().startswith("$HubUrl,")
+          and '"FLEETHUB_HUB", "Machine"' in wiring.group(1))
+    check("...before the first download that can use it",
+          wiring and wiring.start() < script.replace("\r\n", "\n").index('Step "Installing PawnIO driver"'))
 
     print("\n== install.ps1 hands the choice to the verified path ==")
     top = read("install.ps1")

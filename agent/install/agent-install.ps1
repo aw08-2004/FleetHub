@@ -42,7 +42,8 @@ param(
     # second source for every download, tried when GitHub cannot be reached. Everything from it
     # is checked exactly as from GitHub. Defaults to FLEETHUB_MIRROR_URL, which is how the
     # onboarding script passes it -- a variable, because an older copy of this file dies on a
-    # parameter it does not know and ignores a variable.
+    # parameter it does not know and ignores a variable. Left empty, it is worked out from the
+    # hub address (Resolve-MirrorUrl), so a hand-run install needs neither.
     [string]$MirrorUrl = $env:FLEETHUB_MIRROR_URL
 )
 
@@ -404,6 +405,29 @@ function Get-VerifiedAgent([string]$Destination, [string]$FromManifestUrl, [stri
         Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+# The hub's release mirror for this install: $Mirror when one was given, otherwise
+# <hub>/api/agent/dist for the first usable hub address in $Hubs, otherwise none.
+#
+# **The mirror follows the hub address on its own.** The first cut of #33 used a mirror only
+# when one was handed over in FLEETHUB_MIRROR_URL. Onboarding does that, but anyone running this
+# file by hand on a PC that cannot reach GitHub had to know a URL nobody had ever seen, and the
+# install failed exactly as it did before #33 when they did not. Every hub serves its mirror at
+# the same path, and this installer already knows the hub: -HubUrl, or the FLEETHUB_HUB a
+# previous install left in the machine environment. That is the hub the agent will report to,
+# so it is also the one its own updates fall back to (agent-shared/UpdateMirror.cs).
+# Rejected: the agent's compiled-in default hub. It is a placeholder in this repo, and a PC
+# with no FLEETHUB_HUB has no hub this script can name with any confidence. Asking an address
+# nobody configured costs one failed request, and nothing from it is trusted anyway.
+function Resolve-MirrorUrl([string]$Mirror, [string[]]$Hubs) {
+    $Mirror = "$Mirror".Trim().TrimEnd('/')
+    if ($Mirror) { return $Mirror }
+    foreach ($h in $Hubs) {
+        $h = "$h".Trim().TrimEnd('/')
+        if ($h -match '^https?://[^\s/]+(/\S*)?$') { return "$h/api/agent/dist" }
+    }
+    return ""
+}
 #endregion signed-manifest
 
 # ----------------------------------------------------------------------
@@ -619,6 +643,14 @@ Write-Host @"
   Target : $InstallDir
 
 "@ -ForegroundColor Cyan
+
+# -HubUrl first: it is about to become the machine's FLEETHUB_HUB ("Writing configuration").
+# TEMP_MONITOR_HUB is the pre-rename name the agent still honours (AgentConfig.Env).
+$MirrorUrl = Resolve-MirrorUrl $MirrorUrl @(
+    $HubUrl,
+    [Environment]::GetEnvironmentVariable("FLEETHUB_HUB", "Machine"),
+    [Environment]::GetEnvironmentVariable("TEMP_MONITOR_HUB", "Machine"))
+if ($MirrorUrl) { Say "Fallback when GitHub is unreachable: $MirrorUrl" }
 
 # ----------------------------------------------------------------------
 # 1. PawnIO driver (sensor access for the in-process LibreHardwareMonitorLib)

@@ -1852,6 +1852,12 @@ Built as planned above, with these differences, each decided while building it:
 - **The installer address travels as `FLEETHUB_MIRROR_URL` on Windows too.** `agent-install.ps1`
   also takes `-MirrorUrl` (defaulting to the variable) for a technician, but the onboarding
   script uses the variable, because an older installer dies on a parameter it does not know.
+- **Neither is needed by hand: the mirror follows the hub address.** With no
+  `FLEETHUB_MIRROR_URL`, both installers use `<hub>/api/agent/dist` for the hub they already
+  know -- `-HubUrl` / `--hub`, else the `FLEETHUB_HUB` a previous install left (the machine
+  environment on Windows, `/etc/fleethub/agent.env` on Linux, read and never sourced). The first
+  cut asked a technician for a URL nobody had seen, so a hand-run install behind the firewall
+  failed as before. Rejected: the agent's compiled-in default hub, a placeholder in this repo.
 - **Measured: 437 MB** on 2026-11-26 (Windows 3.50.0 and beta 3.53.0, Linux 0.5.0 and beta 0.4.1,
   three installers, PawnIO), synced in 85 s with every real signature verified. The docs say
   about 450 MB.
