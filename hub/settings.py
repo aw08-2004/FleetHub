@@ -429,6 +429,12 @@ REGISTRY = (
        choices=list(channels.UPDATE_MODES)),
     _s("fleet.agent_pin.android", "fleet", "str", ""),
 
+    # The agent release mirror (roadmap #33): the hub keeps a copy of the signed release files
+    # and serves them to PCs that cannot reach GitHub. On by default, because the PCs that need
+    # it are exactly the ones whose operators do not yet know they do -- a failed update check is
+    # silent. Off gives the disk back and leaves every client on GitHub alone, as before.
+    _s("fleet.release_mirror", "fleet", "bool", True),
+
     # Command PUSH: how long the hub may hold an agent's command request open so a command
     # issued in the meantime goes down it immediately, and how many it will hold at once.
     # See fleet.py's COMMAND PUSH block -- claiming is unchanged and is the fallback.

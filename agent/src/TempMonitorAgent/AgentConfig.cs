@@ -311,6 +311,12 @@ public static class AgentConfig
 
     public static string UpdateManifestSigUrl => UpdateManifestUrl + ".sig";
 
+    /// <summary>The binary download's own budget (roadmap #33). The self-contained agent is about
+    /// 80 MB, which the manifest client's 30 seconds only fits on a fast link -- and once the
+    /// hub's mirror is a source, the binary may come over the same WAN link as telemetry.
+    /// The Linux agent learned this first (its own DownloadTimeout); the same value here.</summary>
+    public static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(15);
+
     /// <summary>Honours FLEETHUB_NO_UPDATE, falling back to TEMP_MONITOR_NO_UPDATE.</summary>
     public static bool UpdatesDisabled => Env("NO_UPDATE", "NO_UPDATE") == "1";
 

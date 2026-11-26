@@ -193,8 +193,15 @@ def agent_manifest_url(channel=DEFAULT, platform=capabilities.PLATFORM_WINDOWS):
     filed under another agent's directory is one that gets updated by the wrong release
     script exactly once.
     """
+    return f"https://raw.githubusercontent.com/{REPO}/main/{agent_manifest_path(channel, platform)}"
+
+
+def agent_manifest_path(channel=DEFAULT, platform=capabilities.PLATFORM_WINDOWS):
+    """The same manifest as a path inside the repository. The hub's release mirror (roadmap
+    #33) serves files under their repository paths, so a client that cannot reach GitHub
+    swaps one base for another and changes nothing else."""
     directory, filename = _AGENT_MANIFEST[normalize_platform(platform)][normalize(channel)]
-    return f"https://raw.githubusercontent.com/{REPO}/main/{directory}/{filename}"
+    return f"{directory}/{filename}"
 
 
 def agent_release_notes_url(version, channel=DEFAULT):

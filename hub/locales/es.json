@@ -1532,6 +1532,10 @@
         "label": "Versión fijada del agente de Android",
         "help": "La versión exacta del agente de Android que se instala mientras las actualizaciones están fijadas, como MAJOR.MINOR.PATCH."
       },
+      "fleet.release_mirror": {
+        "label": "Descargas del agente a través de este hub",
+        "help": "Mantener una copia de las versiones y los instaladores del agente en este hub, para que los PC que no llegan a GitHub puedan instalarse y actualizarse igualmente. Todo lo que se sirve se sigue comprobando en el PC contra la clave de firma de la flota. Ocupa unos cientos de MB; al desactivarlo se libera ese espacio."
+      },
       "sharing.enabled": {
         "label": "Compartir equipos con otros concentradores",
         "help": "Permite que este concentrador responda a las peticiones de los concentradores emparejados y que haga peticiones a los que le han compartido un equipo. Desactivado significa que ninguna dirección funciona, aunque ya haya emparejamientos — lo emparejado sigue visible para que pueda revocarlo."
@@ -5602,6 +5606,23 @@
       "unsigned_heading": "Equipos que informan sin registro",
       "unsigned_intro": "Estos equipos enviaron telemetría sin credencial de agente en el último día. Mientras solo se acepte telemetría registrada, se está rechazando. Actualice su agente o incorpórelos con un código.",
       "unsigned_last": "último informe {when}",
+      "mirror": {
+        "heading": "Descargas del agente a través de este hub",
+        "intro": "Los PC que no llegan a GitHub se instalan y actualizan desde la copia de las versiones del agente en este hub. Todo se sigue comprobando en el PC contra la clave de firma de la flota.",
+        "off": "Desactivado. Un PC que no llega a GitHub no se puede incorporar ni actualizar. Active 'Descargas del agente a través de este hub' en Configuración, en la pestaña Flota.",
+        "never": "Aún no copiado. El hub copia las versiones desde GitHub poco después de arrancar y luego cada 15 minutos.",
+        "never_complete": "Aún no hay una copia completa ({size} en disco). Algunos archivos no se pudieron copiar; vea abajo.",
+        "synced": "Última copia completa {when}, {size} en disco.",
+        "windows_stable": "Agente de Windows {version}",
+        "windows_beta": "Agente de Windows {version} (beta)",
+        "windows_pinned": "Agente de Windows {version} (fijado)",
+        "linux_stable": "Agente de Linux {version}",
+        "linux_beta": "Agente de Linux {version} (beta)",
+        "linux_pinned": "Agente de Linux {version} (fijado)",
+        "no_installers": "Los instaladores aún no están copiados, así que la incorporación todavía los descarga de GitHub.",
+        "no_pawnio": "El controlador PawnIO no está copiado, así que un PC sin acceso a internet se instala sin lecturas de temperatura ni de ventiladores.",
+        "errors": "El último intento, {when}, tuvo problemas. Se sigue sirviendo la copia anterior de cada archivo:"
+      },
       "editor_title": "Nuevo código de incorporación",
       "label": "Etiqueta",
       "label_placeholder": "p. ej. PC de recepción para María",

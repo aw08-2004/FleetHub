@@ -322,6 +322,44 @@ Until a hub has this on, `/api/report` input is still untrusted. That is why the
 defence-in-depth around it stays: machine-name validation, the write-once BIOS serial, and the
 enrollment check before a duplicate-serial merge.
 
+## Agent downloads through the hub (roadmap #33)
+
+The hub keeps a copy of the agent release files (the signed channel manifests, the binaries
+they name, the pinned PawnIO driver installer, and the installers) and serves them under
+`/api/agent/dist/`. The installers try GitHub first and the hub second, so a PC that reaches
+the hub but not GitHub can still be onboarded. From Windows agent 3.54.0 and Linux agent 0.6.0,
+the agents' own self-update does the same (`agent-shared/UpdateMirror.cs`), with the mirror's
+address built from the agent's configured hub address and a compiled-in path. The setting is **Agent downloads through this
+hub** (`fleet.release_mirror`), on by default.
+
+**The hub is a mirror, not a trust root.** A PC installs a manifest only if its Ed25519
+signature verifies against the key compiled into the agent and both installers, and a binary
+only if its SHA-256 equals the signed value. The bytes are checked the same way whichever
+source served them, so a compromised hub that serves altered files gets them refused. The hub
+never chooses a download location: a binary is fetched from the mirror by its signed hash, and
+the mirror's address comes from the installer's own configuration, never from a hub response.
+The hub applies the same checks before it keeps a file, so it never serves anything a PC would
+refuse.
+
+What a compromised hub **can** do with the mirror:
+- **Withhold an update** by serving an older, validly signed manifest. It cannot downgrade a PC,
+  because every updater installs only a strictly newer version. A hub can already hold PCs back
+  with a version pin (roadmap #21), so this adds no power.
+- **Serve a different installer script or Linux unit file.** These are not signed. During
+  onboarding this adds no trust: the hub already serves the onboarding script that runs them
+  with administrator rights. Someone who runs an installer by hand with `FLEETHUB_MIRROR_URL`
+  set trusts that hub for these two files when GitHub cannot be reached.
+
+**PawnIO is pinned by hash.** `agent-install.ps1` used to download and run PawnIO's installer
+from another project's `master` branch without any check. It now accepts only the pinned
+SHA-256, from GitHub or the mirror, and installs without PawnIO (no sensor readings) when the
+bytes do not match.
+
+The download routes are **unauthenticated on purpose**: the files are public on GitHub, and a PC
+being onboarded has no credential yet. They are served on the agent listener. They are not rate
+limited per client, because every PC behind one office NAT shares an address. Limit bandwidth
+at the reverse proxy if the hub is internet-facing.
+
 ## Uninstalling an agent by deleting its device (roadmap #30)
 
 Deleting a device with "uninstall the agent" ticked keeps the deleted agent's token hash. When
