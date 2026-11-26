@@ -59,6 +59,30 @@ and checked against AWS's published test vectors in the suite. WebDAV covers Nex
 ownCloud and IIS, with Basic auth over TLS. Plain `http://` is refused for anything but a
 loopback host, so a typo cannot ship your credentials in clear.
 
+**Test connection** writes a small probe object under `<prefix>/hub-db/`, reads it back and
+deletes it. On S3 it also reads the probe through a **pre-signed URL**, because that is how
+every PC uploads its files: the hub's own requests are signed in headers, the PCs' upload
+links carry the signature in the URL, and a destination can accept one and refuse the
+other.
+
+> #### Test fails with "rejects the pre-signed upload links the PCs use"
+>
+> Symptom before hub 1.191.0: the test passed and the hub's database backup worked, but
+> every PC file backup failed within seconds with *Upload failed: Error while copying
+> content to a stream*. The destination answers the PCs' links with 403
+> `SignatureDoesNotMatch`.
+>
+> **Most common cause: the access key was entered in the wrong case.** MinIO AIStor
+> stores an LDAP user's access key in lowercase and matches header-signed requests
+> case-insensitively, so the hub's own requests succeed with a mixed-case key. A
+> pre-signed link carries the key inside the query it signs, so there the case must match
+> exactly. Edit the destination, re-enter the access key exactly as the storage server
+> shows it (in MinIO AIStor, as its console lists it), and test
+> again.
+>
+> The hub deliberately does **not** lowercase keys for you: AWS access keys are uppercase
+> and case-significant, so normalising them would break every AWS destination.
+
 **Credentials never touch the `settings` table.** Settings get rendered into a form,
 returned wholesale by `as_dict()`, and partly shipped to agents in `agent_config()` — an
 S3 secret key belongs in none of those. They live encrypted with the master key in

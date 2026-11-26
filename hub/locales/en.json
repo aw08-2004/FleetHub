@@ -2806,6 +2806,7 @@
         "new_credentials": "Stored encrypted on this server with the backup master key. Never shown again.",
         "test": "Test connection",
         "testing": "Testing…",
+        "presign_rejected": "The destination accepts the hub's own requests but rejects the pre-signed upload links the PCs use (SignatureDoesNotMatch), so every PC file backup would fail. The most common cause is an access key entered in the wrong case: MinIO AIStor stores keys in lowercase and matches the hub's header-signed requests case-insensitively, but a pre-signed link carries the key inside its signed query, so a mixed-case key fails only there. Re-enter the access key exactly as the storage server shows it.",
         "save": "Save destination"
       }
     },

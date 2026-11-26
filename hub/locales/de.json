@@ -2701,6 +2701,7 @@
         "new_credentials": "Werden auf diesem Server mit dem Sicherungs-Hauptschlüssel verschlüsselt gespeichert. Sie werden nie wieder angezeigt.",
         "test": "Verbindung testen",
         "testing": "Wird getestet…",
+        "presign_rejected": "Das Ziel akzeptiert die eigenen Anfragen des Hubs, lehnt aber die vorsignierten Upload-Links ab, die die PCs verwenden (SignatureDoesNotMatch). Damit würde jede Dateisicherung eines PCs fehlschlagen. Die häufigste Ursache ist ein Zugriffsschlüssel mit falscher Groß-/Kleinschreibung: MinIO AIStor speichert Schlüssel in Kleinbuchstaben und vergleicht die per Header signierten Anfragen des Hubs ohne Rücksicht auf Groß-/Kleinschreibung, ein vorsignierter Link trägt den Schlüssel aber in seiner signierten Abfrage, sodass ein Schlüssel mit gemischter Schreibung nur dort scheitert. Geben Sie den Zugriffsschlüssel genau so ein, wie der Speicherserver ihn anzeigt.",
         "save": "Ziel speichern"
       }
     },

@@ -586,6 +586,10 @@ def create_backups_blueprint(db_path, log_dir, env_path, login_required, access,
         try:
             summary = backups.probe_destination(db_path, log_dir, destination_id,
                                                 actor=_current_email())
+        except backups.PresignRejected as e:
+            # The one probe failure the console translates -- see PresignRejected. The
+            # English sentence still rides along for API callers and the log.
+            return jsonify({"error": refusals.message(e), "code": e.code}), 400
         except (backups.BackupError, ValueError) as e:
             return refusals.refuse(e)
         return jsonify({"status": "ok", "detail": summary}), 200
