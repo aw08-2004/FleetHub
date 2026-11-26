@@ -188,6 +188,15 @@ auto-update off and is updated by hand once the test hub has checked out.
   agent and client *Beta* choices stay: those manifests live on `main` (the client's is
   served from `hub/`).
 
+**Hub 1.191.0: the S3 destination test checks the PCs' pre-signed upload links** (#1b).
+Confirm on the test hub, against the MinIO AIStor destination:
+- [ ] **Wrong case caught.** With the access key entered in mixed case, *Test connection* fails
+  with the message naming the key's case, instead of passing. The probe object is gone from
+  `<prefix>/hub-db/` afterwards.
+- [ ] **Right case passes.** With the key re-entered in lowercase, the test passes and a PC's
+  *Back up now* uploads instead of failing with *Error while copying content to a stream*.
+- [ ] **WebDAV unchanged.** A WebDAV destination still tests green.
+
 **Hub 1.190.0: remote view attended / unattended / off per OU or folder** (#2 through #32).
 Confirm on the test hub:
 - [ ] **Attended by policy.** A policy with *Consent mode = Attended* linked to an OU (or folder)

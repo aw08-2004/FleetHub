@@ -53,7 +53,12 @@ async function api(path, options) {
     const resp = await fetch(path, options);
     let body = null;
     try { body = await resp.json(); } catch (e) { /* empty body is fine */ }
-    if (!resp.ok) throw new Error((body && body.error) || `HTTP ${resp.status}`);
+    if (!resp.ok) {
+        const err = new Error(body?.error || `HTTP ${resp.status}`);
+        // A refusal the console translates carries a code; the rest render verbatim.
+        err.code = body?.code;
+        throw err;
+    }
     return body;
 }
 
@@ -1367,7 +1372,12 @@ document.getElementById('destination-test').addEventListener('click', async () =
         destinationStatus.textContent = result.detail;
     } catch (e) {
         destinationStatus.textContent = '';
-        destinationError.textContent = e.message;
+        // The pre-signed probe's refusal is the one with its own catalog entry: it names a
+        // fix (re-enter the key in the right case) the operator would otherwise not guess
+        // from "SignatureDoesNotMatch". See backups.PresignRejected.
+        destinationError.textContent = e.code === 'presign_signature_mismatch'
+            ? t('backups.destinations.editor.presign_rejected')
+            : e.message;
     }
 });
 

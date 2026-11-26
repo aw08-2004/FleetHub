@@ -2701,6 +2701,7 @@
         "new_credentials": "Se guardan cifradas en este servidor con la clave maestra de copias. No se vuelven a mostrar.",
         "test": "Probar la conexión",
         "testing": "Probando…",
+        "presign_rejected": "El destino acepta las solicitudes propias del hub, pero rechaza los enlaces de subida prefirmados que usan los PC (SignatureDoesNotMatch), así que fallaría toda copia de archivos de los PC. La causa más común es una clave de acceso escrita con mayúsculas y minúsculas incorrectas: MinIO AIStor guarda las claves en minúsculas y compara sin distinguirlas las solicitudes del hub firmadas por cabecera, pero un enlace prefirmado lleva la clave dentro de su consulta firmada, así que una clave con mayúsculas y minúsculas mezcladas falla solo ahí. Vuelve a escribir la clave de acceso exactamente como la muestra el servidor de almacenamiento.",
         "save": "Guardar el destino"
       }
     },

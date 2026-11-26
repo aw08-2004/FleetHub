@@ -1213,6 +1213,28 @@ class BackupError(Exception):
     written for an operator, because it is rendered verbatim on the run row."""
 
 
+class PresignRejected(BackupError):
+    """The destination took the hub's header-signed requests but refused a pre-signed URL
+    for the same object with `SignatureDoesNotMatch`.
+
+    Its own class, with a `code` the web layer passes through, because this is the one
+    destination-test failure whose sentence the console translates: the English text below
+    is what the API and the log carry, and backups.js swaps in the catalog entry
+    `backups.destinations.editor.presign_rejected` when it sees the code.
+    """
+
+    code = "presign_signature_mismatch"
+
+
+PRESIGN_REJECTED_MESSAGE = (
+    "The destination accepts the hub's own requests but rejects the pre-signed upload "
+    "links the PCs use (SignatureDoesNotMatch), so every PC file backup would fail. The "
+    "most common cause is an access key entered in the wrong case: MinIO AIStor stores "
+    "keys in lowercase and matches the hub's header-signed requests case-insensitively, "
+    "but a pre-signed link carries the key inside its signed query, so a mixed-case key "
+    "fails only there. Re-enter the access key exactly as the storage server shows it.")
+
+
 def _http_error(action, response):
     body = (response.text or "")[:300].replace("\n", " ").strip()
     return BackupError(f"{action} failed: HTTP {response.status_code}"
@@ -1694,6 +1716,11 @@ def open_client(db_path, log_dir, destination_id):
     return build_client(record, load_secret(log_dir, master_key, destination_id)), record
 
 
+# Lifetime of the probe's pre-signed GET. It is requested the moment it is minted, so this
+# only has to outlast clock skew between the hub and the destination, not a slow upload.
+PROBE_PRESIGN_SECONDS = 300
+
+
 def probe_destination(db_path, log_dir, destination_id, actor="system"):
     """Write, read back, and delete a small object. Returns a human-readable summary.
 
@@ -1701,6 +1728,22 @@ def probe_destination(db_path, log_dir, destination_id, actor="system"):
     matters is "the credential can list but not write", and only a write finds it. The
     probe object is named with a random suffix so two operators testing at once cannot
     collide, and is deleted in a finally so a failed read still cleans up.
+
+    **On S3 the probe also fetches the object through a pre-signed URL**, because that is
+    how every PC uploads (roadmap #1b) and the header-signed round trip above cannot stand
+    in for it. A SigV4 *header* signature never puts the access key into the string it
+    signs; a pre-signed URL carries it in `X-Amz-Credential`, inside the canonical query.
+    So a server that matches the key case-insensitively -- MinIO AIStor, which stores an
+    LDAP user's key in lowercase -- accepts a mixed-case key on every header-signed request
+    and rejects it on every pre-signed one. Before this check that meant a green "Test
+    connection" followed by every PC file backup failing within seconds with "Error while
+    copying content to a stream", while the hub's own database backup kept working. See
+    _probe_presigned for the request itself.
+
+    **Rejected: lowercasing the access key for the operator.** AWS keys are uppercase and
+    case-significant, so a silent lowercase would break every AWS destination to repair a
+    MinIO typo. The probe says what is wrong; the operator re-enters the key as the server
+    shows it.
     """
     client, record = open_client(db_path, log_dir, destination_id)
     prefix = _normalize_prefix(record["config"].get("prefix"))
@@ -1718,6 +1761,8 @@ def probe_destination(db_path, log_dir, destination_id, actor="system"):
         if echoed != payload:
             raise BackupError("The destination accepted the upload but returned "
                               "different bytes on read-back.")
+        if hasattr(client, "presigned_url"):
+            _probe_presigned(client, key, payload)
     finally:
         try:
             client.delete(key)
@@ -1727,6 +1772,29 @@ def probe_destination(db_path, log_dir, destination_id, actor="system"):
                 level=fleet.LEVEL_NOTICE,
                 target=record["name"], detail={"id": destination_id})
     return f"Wrote, read back and deleted {key} successfully."
+
+
+def _probe_presigned(client, key, payload):
+    """GET the probe object through a URL the hub pre-signed, as a PC PUTs through one.
+
+    GET rather than HEAD: a HEAD answer has no body, and the body is the only place the
+    server says `SignatureDoesNotMatch` rather than some other 403 (a bucket policy, a
+    skewed clock). GET rather than a second PUT: the signature is computed the same way for
+    both methods, and the header-signed PUT above has already shown the credential may
+    write -- what is left to prove is that the server accepts the key as it appears in a
+    signed query.
+    """
+    url = client.presigned_url(key, method="GET", expires_seconds=PROBE_PRESIGN_SECONDS)
+    try:
+        response = requests.get(url, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+    except requests.RequestException as e:
+        raise BackupError(f"Could not reach {urlsplit(url).netloc}: {e}")
+    if response.status_code == 200 and response.content == payload:
+        return
+    if response.status_code == 403 and "SignatureDoesNotMatch" in (response.text or ""):
+        raise PresignRejected(PRESIGN_REJECTED_MESSAGE)
+    raise _http_error("Reading the probe through a pre-signed link (as PCs upload)",
+                      response)
 
 
 # ================================
