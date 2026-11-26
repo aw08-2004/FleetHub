@@ -115,6 +115,9 @@
        cannot mean something different on one platform. See agent-shared/UpdatePins.cs. -->
   <ItemGroup>
     <Compile Include="..\..\..\agent-shared\UpdatePins.cs" Link="Update\UpdatePins.cs" />
+    <!-- The hub's release mirror as the second update source (roadmap #33), shared with the
+         Linux agent for the same reason. See agent-shared/UpdateMirror.cs. -->
+    <Compile Include="..\..\..\agent-shared\UpdateMirror.cs" Link="Update\UpdateMirror.cs" />
   </ItemGroup>
 
   <!-- The interactive terminal's hub side (runner, registry, hub calls, timings), shared with

@@ -204,6 +204,16 @@ one that failed on 2026-11-26):
 - [ ] **Switch off.** Turning **Settings → Fleet → Agent downloads through this hub** off makes
   the dist routes 404 at once, the card says *Off*, and the next round deletes the copy.
 
+**Windows agent 3.54.0 and Linux agent 0.6.0: updates through the hub** (#33, phases 2 and 3).
+Cut on beta after hub 1.192.0 is confirmed. Confirm on beta PCs:
+- [ ] **Blocked PC updates.** On a beta PC that cannot reach GitHub (FSUP1109's network), run the
+  catch-up script once; the agent comes back on 3.54.0 with its enrollment. Then publish the next
+  beta: the PC updates by itself, and its log says *reading the manifest through the hub* and
+  *downloaded ... through the hub*.
+- [ ] **Unblocked PC unchanged.** A beta PC with internet access updates from GitHub, and its log
+  has no *through the hub* line.
+- [ ] **Linux.** The same two on a Linux beta box (0.6.0), with the Linux catch-up script.
+
 **Hub 1.191.0: the S3 destination test checks the PCs' pre-signed upload links** (#1b).
 Confirm on the test hub, against the MinIO AIStor destination:
 - [ ] **Wrong case caught.** With the access key entered in mixed case, *Test connection* fails
@@ -1496,6 +1506,12 @@ run and tested on the development PC, but the installer's service path was only 
 run: a fresh install on a clean VM, a re-install over a waitress hub, and `-MigrateHubServer`
 with the tunnel switched. Then the *Hub 1.170.0* boxes in the beta list above.
 
+**21. Updates through the hub (#33) ride Windows 3.54.0 and Linux 0.6.0, owed on the machine
+with the signing key.** Hub 1.192.0 first, confirmed on the test hub. Then cut both on beta with
+`release.ps1 -Channel beta` (3.54.0 also carries the package conditions already in its notes),
+run the catch-up script from docs/installation.md once on a blocked beta PC, and tick the
+*Windows agent 3.54.0 and Linux agent 0.6.0* boxes in the list above.
+
 ---
 
 ## 🚧 Schedules -- backups, rules, scripts, reports and discovery at set times   ·   phase 1 (backups) hub 1.171.0   ·   `schedule_spec.py`, `schedules_web.py`, `static/js/schedule-picker.js`
@@ -1727,7 +1743,7 @@ the wire.
 
 ---
 
-## 🚧 33. Agent downloads through the hub -- installs and updates on PCs without internet   ·   phase 1 **hub 1.192.0** · Windows agent (next MINOR) + Linux agent (next MINOR) to come   ·   `release_mirror.py` / `release_mirror_web.py`
+## 🚧 33. Agent downloads through the hub -- installs and updates on PCs without internet   ·   phase 1 **hub 1.192.0** · phases 2-3 built, unreleased: Windows agent 3.54.0 + Linux agent 0.6.0   ·   `release_mirror.py` / `release_mirror_web.py`
 
 **The problem, found in the field on 2026-11-26.** An onboarding run against FSUP1109 through
 `Invoke-Command` reached the hub, downloaded `onboard.ps1`, and then failed at "Installing the
@@ -1876,6 +1892,38 @@ Same rules as phase 2, in `agent-linux/src/FleetHubAgent/Update/SelfUpdater.cs`,
 splits manifest and binary downloads (`_http` / `_download`). The Android agent is out of scope:
 it does not self-update from these manifests.
 
+### Built (unreleased) · Windows agent 3.54.0 + Linux agent 0.6.0 -- phases 2 and 3
+
+Built as planned above, with these differences:
+- **One linked file, `agent-shared/UpdateMirror.cs`,** holds where to look, in which order, and
+  what counts as a verified file, for both agents -- the UpdatePins.cs reasoning: a fallback
+  that behaved differently on one train would be a fleet that updates through the hub on one and
+  silently not on the other. Each agent keeps its own clients, logging and swap.
+- **The hub address is the agent's own `HubBase`**, the path under it compiled in
+  (`/api/agent/dist/repo/<the compiled-in url's path under raw.githubusercontent.com/<repo>/main/>`),
+  and the binary is fetched by the signed sha256. An env override pointing at a test server gets
+  no fallback, which is what a test wants.
+- **The Windows agent's binary download got its own client and a 15-minute budget**, as the
+  Linux agent's already had. The 30-second manifest timeout capped an 80 MB download, which a
+  mirror reached over a WAN link would hit. Both agents' clients have a 10-second connect timeout.
+- **"Which source served it" goes to the agent's log, not the heartbeat.** The log line is
+  written once per change of source. A heartbeat field would need a column, a console surface
+  and a hub release of its own for something the Onboarding page's mirror card and the agent
+  log already answer between them; it stays open below if blocked sites turn out to be common.
+- **The catch-up is a documented script, not a seeded Scripts-library entry** (docs/installation.md,
+  *PCs already stuck on an older agent*). Seeding would write into every hub's database a
+  SYSTEM-privileged script with that hub's address baked in, and an operator still has to choose
+  the PCs. The script hands the install to a one-shot SYSTEM scheduled task (`systemd-run` on
+  Linux), because the installer stops the agent service, which would otherwise end the script
+  the agent is running. It keeps the PC's enrollment and hub address.
+- No hub change: the agents use the hub 1.192.0 routes as they are, and against an older hub the
+  second source answers 404 and nothing else changes.
+
+Tests: `UpdateMirrorTests` in both agents' test projects (the compiled-in urls all have a hub
+copy at the hub's path; fallback on a network error, a timeout and a bad signature; a manifest and
+its signature never from two sources; a binary only under the signed hash; a stopping host does
+not fall through to the hub).
+
 ### Release order
 
 Hub first (phase 1, its own `HUB_VERSION` and release notes), confirmed on the test hub. Then the
@@ -1903,10 +1951,11 @@ stable. Then Linux. The reverse order would leave agents falling back to a hub t
 
 ### Not done
 
-- **Phase 2**, the Windows agent's own updates through the hub, and the catch-up script for PCs
-  already stuck. Until it ships, a PC that cannot reach GitHub onboards but stays on the version
-  it was installed with.
-- **Phase 3**, the same for the Linux agent.
+- **Cutting the releases** -- Windows 3.54.0 and Linux 0.6.0 -- with `release.ps1 -Channel beta`,
+  after hub 1.192.0 is on the test hub. That needs the signing key, so it is owed locally. Until
+  then, a PC that cannot reach GitHub onboards but stays on the version it was installed with.
+- **The update source in the heartbeat**, shown on the machine page, if blocked sites turn out
+  to be common enough that the agent log is not where an operator would look.
 - **Moving the PawnIO pin** when LibreHardwareMonitor ships a new PawnIO: check the file, then
   change `$PawnIoSha256` and `release_mirror.PAWNIO_SHA256` together. Until then, the mirror keeps
   serving the pinned copy, and an install from GitHub alone installs without sensors.

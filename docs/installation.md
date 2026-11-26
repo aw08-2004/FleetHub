@@ -82,9 +82,56 @@ To use the copy for an install by hand, set `FLEETHUB_MIRROR_URL` to
 `https://<your hub>/api/agent/dist` before running `agent-install.ps1` (or pass `-MirrorUrl`)
 or `install.sh`.
 
-**Agents that are already installed still update from GitHub only.** The fallback for the
-agents' own updates comes with the next Windows and Linux agent releases. Until then, a PC that
-cannot reach GitHub stays on the version it was installed with.
+**Agent updates use the hub's copy too, from the next Windows and Linux agent releases.** An
+agent from those releases on looks for its signed manifest and its new build on GitHub first
+and on its own hub second, and checks both exactly as before. Its log says *reading the
+manifest through the hub* when it switches over.
+
+**PCs already stuck on an older agent need one push.** An older agent cannot update itself to
+the release that adds the fallback, because it cannot reach GitHub to get it. Run the script
+below on those PCs once (**Terminal**, or a saved script under **Rules → Scripts**), with your
+hub's address in the first line. It reinstalls the agent from the hub's copy and keeps the PC's
+enrollment and hub address. After that run, the PC updates by itself.
+
+The install runs from a one-shot scheduled task (`systemd-run` on Linux) rather than from the
+script itself. The installer stops and restarts the agent service, and that would end a script
+the agent is still running.
+
+Windows (PowerShell):
+
+```powershell
+$hub = 'https://your.hub.example'
+$mirror = "$hub/api/agent/dist"
+$dir = Join-Path $env:ProgramData ('FleetHub-CatchUp-' + [guid]::NewGuid().ToString('N'))
+$sec = New-Object Security.AccessControl.DirectorySecurity
+$sec.SetAccessRuleProtection($true, $false)
+foreach ($sid in 'S-1-5-18', 'S-1-5-32-544') {
+    $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier $sid), 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+}
+[void][IO.Directory]::CreateDirectory($dir, $sec)
+Invoke-WebRequest -UseBasicParsing "$mirror/repo/agent/install/agent-install.ps1" -OutFile "$dir\agent-install.ps1"
+$cmd = "`$env:FLEETHUB_MIRROR_URL = '$mirror'; & '$dir\agent-install.ps1' *> '$dir\install.log'; Unregister-ScheduledTask -TaskName FleetHubCatchUp -Confirm:`$false"
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -Command $cmd"
+Register-ScheduledTask -TaskName FleetHubCatchUp -Action $action -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+Start-ScheduledTask -TaskName FleetHubCatchUp
+"Reinstall started; the agent restarts in about a minute. Log: $dir\install.log"
+```
+
+Linux (bash):
+
+```bash
+hub='https://your.hub.example'
+mirror="$hub/api/agent/dist"
+work="$(mktemp -d)"
+if command -v curl >/dev/null; then curl -fsSL -o "$work/install.sh" "$mirror/repo/agent-linux/install/install.sh"
+else wget -qO "$work/install.sh" "$mirror/repo/agent-linux/install/install.sh"; fi
+systemd-run --unit fleethub-catchup --setenv=FLEETHUB_MIRROR_URL="$mirror" \
+    --setenv=FLEETHUB_ONBOARDING=1 bash "$work/install.sh"
+echo "Reinstall started; follow it with: journalctl -u fleethub-catchup"
+```
+
+`FLEETHUB_ONBOARDING=1` only stops `install.sh` ending on its *telemetry only* warning: the box
+is already enrolled, and its credential is kept.
 
 ### Telemetry only from enrolled agents
 

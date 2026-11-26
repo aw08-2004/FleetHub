@@ -327,7 +327,9 @@ enrollment check before a duplicate-serial merge.
 The hub keeps a copy of the agent release files (the signed channel manifests, the binaries
 they name, the pinned PawnIO driver installer, and the installers) and serves them under
 `/api/agent/dist/`. The installers try GitHub first and the hub second, so a PC that reaches
-the hub but not GitHub can still be onboarded. The setting is **Agent downloads through this
+the hub but not GitHub can still be onboarded. From Windows agent 3.54.0 and Linux agent 0.6.0,
+the agents' own self-update does the same (`agent-shared/UpdateMirror.cs`), with the mirror's
+address built from the agent's configured hub address and a compiled-in path. The setting is **Agent downloads through this
 hub** (`fleet.release_mirror`), on by default.
 
 **The hub is a mirror, not a trust root.** A PC installs a manifest only if its Ed25519
