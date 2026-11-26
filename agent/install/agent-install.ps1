@@ -954,3 +954,10 @@ Write-Host @"
   Uninstall: powershell -ExecutionPolicy Bypass -File agent-install.ps1 -Uninstall
 
 "@ -ForegroundColor Green
+
+# **Explicit, and load-bearing.** The hub's onboarding script runs this file in its own process
+# (hub/templates/onboarding/onboard.ps1 says why) and reads success from LASTEXITCODE. Without
+# this line a finished install leaves LASTEXITCODE at whatever the last native command set --
+# `sc.exe start` above returns non-zero on a service that starts slowly, which this script only
+# warns about -- and a good install would be reported as failed with the code unspent.
+exit 0

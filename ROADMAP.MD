@@ -204,6 +204,16 @@ one that failed on 2026-11-26):
 - [ ] **Switch off.** Turning **Settings → Fleet → Agent downloads through this hub** off makes
   the dist routes 404 at once, the card says *Off*, and the next round deletes the copy.
 
+**Hub 1.193.0: onboarding runs the installer in its own process** (#33, Kaspersky). On 1.192.0
+the *Blocked PC onboards* box above failed on FIND1136: Kaspersky killed `onboard.ps1` when it
+started a second PowerShell for the installer (KES event 4662). Confirm on that PC:
+- [ ] **Kaspersky PC onboards.** The same one-liner through `Invoke-Command` now prints the
+  installer's banner and steps and ends with *Done*, and Kaspersky logs no 4662 against
+  `onboard.ps1`. Delete the `C:\ProgramData\FleetHub-Onboard-*` folders the failed runs left.
+- [ ] **A failing install says so.** Run it with the hub's copy switched off on a PC that cannot
+  reach GitHub: the output ends with *FleetHub onboarding failed: The agent installer failed
+  (exit code 1)*, and the code is still unused on the Onboarding page.
+
 **Windows agent 3.54.0 and Linux agent 0.6.0: updates through the hub** (#33, phases 2 and 3).
 Cut on beta after hub 1.192.0 is confirmed. Confirm on beta PCs:
 - [ ] **Blocked PC updates.** On a beta PC that cannot reach GitHub (FSUP1109's network), run the
@@ -1867,6 +1877,36 @@ Built as planned above, with these differences, each decided while building it:
 Tests: `tests/test_release_mirror.py` (new; sync against a fake GitHub, refusals, carry-over,
 pins, PawnIO, the routes, the agent listener), plus mirror cases in `test_windows_installer.py`
 (PowerShell 5.1 and 7), `test_linux_installer.py` and `test_onboarding_web.py`.
+
+### Built · hub 1.193.0 -- the installer runs in the onboarding process
+
+Found on FIND1136, 2026-11-26, with hub 1.192.0 serving everything correctly: through
+`Invoke-Command`, onboarding printed *Installing the FleetHub agent* and nothing more. No agent,
+no red line, and a `FleetHub-Onboard-*` folder holding an intact `agent-install.ps1` left
+behind each time -- the script always deletes that folder, so its process had been killed.
+Kaspersky Endpoint Security logged event 4662 against `onboard.ps1` at both times. The step it
+stopped was `powershell.exe -ExecutionPolicy RemoteSigned -File <installer>` straight after
+downloading that installer: to a behaviour engine, a script that fetches a script and starts a
+new PowerShell on it is a dropper.
+
+- **`onboard.ps1` calls the installer with `&`, in its own process.** `exit 1` from the
+  installer's `Die` ends only the installer and sets `LASTEXITCODE`; a thrown error reaches the
+  script's catch; the output reaches a remote session directly. The `Unblock-File` went too:
+  `Invoke-WebRequest` leaves no download mark, and stripping one from a fresh download is
+  another pattern these engines watch.
+- **`agent-install.ps1` ends with `exit 0`.** In-process, a finished install would otherwise
+  leave `LASTEXITCODE` at the last native command's -- `sc.exe start` is non-zero on a slow
+  service, which the installer only warns about -- and a good install would read as failed.
+  Old hubs, which still start a second PowerShell, see the same exit code as before.
+- Rejected: a Kaspersky exclusion for the hub and `C:\ProgramData\FleetHub-Onboard-*`. It
+  works, but every site with a behaviour engine would need its own, and the next engine would
+  fail the same silent way. Rejected: running the installer text from memory, which is what
+  Kaspersky blocked on the first launcher (#29).
+
+Tests: `tests/test_onboard_inprocess.py` (new) lifts the invocation block out of the template
+and runs it under PowerShell 5.1 and 7 against stub installers that `Die`, finish after a failed
+native command, and throw; `test_agent_service_name.py` now checks the call it orders against
+actually exists.
 
 ### Phase 2 · Windows agent MINOR -- updates fall back to the hub
 

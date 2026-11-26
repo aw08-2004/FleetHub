@@ -180,7 +180,7 @@ if _env_acl_note:
 # the beta branch, which this once counted from, was retired on 2026-11-24).
 # Restart the hub service after; it is shown in the dashboard header so a stale/un-restarted
 # deployment is obvious at a glance.
-HUB_VERSION = "1.192.0"
+HUB_VERSION = "1.193.0"
 CHECK_INTERVAL = 5
 SPIKE_THRESHOLD = 10
 LHM_URL = "http://localhost:8085/data.json"

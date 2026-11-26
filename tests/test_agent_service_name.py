@@ -115,8 +115,10 @@ def test_agent_and_hub():
           "$ServiceNames = @('FleetHubAgent', 'TempMonitorAgent')" in onboard
           and "$ServiceName = 'TempMonitorAgent'" not in onboard)
     lookup = onboard.find("$ServiceName = $ServiceNames")
-    check("...after the installer ran, not before",
-          lookup > onboard.find("-File $installer"))
+    ran = onboard.find("& $installer -HubUrl")
+    # Both found, not just ordered: find() returns -1 for a call that was renamed, and
+    # "lookup > -1" would then pass for any script at all.
+    check("...after the installer ran, not before", ran > 0 and lookup > ran)
 
 
 def test_exe_rename():
