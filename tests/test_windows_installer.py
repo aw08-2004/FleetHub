@@ -382,8 +382,13 @@ def main():
     check("the installer names the first agent that installs PawnIO", gate is not None)
     check("...and decides only after the agent binary is fetched",
           flat.index('Step "Fetching agent binary"') < flat.index('Step "Installing PawnIO driver"'))
+    # The gate's else branch must be the ONE place the step is called; a call moved outside it
+    # would start the setup from this script again for every agent.
+    branch = re.search(r"if \(\$agentVersion -and \$agentVersion -ge \$MinPawnIoAgent\) \{.*?\n\} else \{\s*"
+                       r"Install-PawnIo\s*\}", flat, re.S)
+    calls = re.findall(r"^\s*Install-PawnIo\s*$", flat, re.M)
     check("...running its own PawnIO step only for an older or unreadable version",
-          "$agentVersion -ge $MinPawnIoAgent" in flat and "Install-PawnIo\n" in flat)
+          branch is not None and len(calls) == 1)
 
     print("\n== install.ps1 hands the choice to the verified path ==")
     top = read("install.ps1")

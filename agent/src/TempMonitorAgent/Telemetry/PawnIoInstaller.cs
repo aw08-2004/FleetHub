@@ -50,7 +50,10 @@ public sealed class PawnIoInstaller(ILogger<PawnIoInstaller> log)
 
     /// <summary>How long after a failed attempt the next one runs. Six hours: a pin that no
     /// longer matches upstream fails the same way every time, and a PC behind a firewall
-    /// should not fetch a 1 MB file from GitHub every inventory tick to learn that again.</summary>
+    /// should not fetch a 1 MB file from GitHub every inventory tick to learn that again.
+    /// **Kept in memory only**, so each service start -- a reboot or a self-update -- also
+    /// tries once. Persisting it was rejected: those starts are days apart, and a restart is
+    /// exactly when a fixed network or a new pin should be tried without waiting.</summary>
     public static readonly TimeSpan RetryInterval = TimeSpan.FromHours(6);
 
     /// <summary>The setup normally finishes in seconds. A hang is killed rather than holding

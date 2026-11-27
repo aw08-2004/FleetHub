@@ -478,7 +478,7 @@ public sealed class Worker : BackgroundService
 
     /// <summary>A missing PawnIO driver (roadmap #33). On the inventory loop because it is the
     /// same shape of work as the scans there: local, slow when it runs, and almost never due --
-    /// a PC with the driver pays one service lookup, one without retries every six hours. Its
+    /// a PC with the driver pays one service lookup, one without retries at each start and every six hours. Its
     /// own method, with its own catch, so a failure here never skips the uploads after it; a
     /// cancellation is swallowed too, and the loop's next DelayAsync ends it.</summary>
     private async Task PawnIoPassAsync(CancellationToken ct)
