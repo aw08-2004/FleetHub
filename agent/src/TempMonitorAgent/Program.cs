@@ -92,6 +92,8 @@ try
     // Core state + telemetry
     builder.Services.AddSingleton<AgentState>();
     builder.Services.AddSingleton<ISensorSource, SensorReader>();
+    // Installs a missing PawnIO driver from the service, not the installer (roadmap #33).
+    builder.Services.AddSingleton<PawnIoInstaller>();
     builder.Services.AddSingleton(sp =>
         SystemInfo.Read(sp.GetRequiredService<ILoggerFactory>().CreateLogger("SystemInfo")));
     builder.Services.AddSingleton<TelemetryReporter>();

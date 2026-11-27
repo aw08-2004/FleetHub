@@ -370,8 +370,20 @@ def main():
     check("the mirror is worked out from -HubUrl, then the machine's FLEETHUB_HUB",
           wiring and wiring.group(1).lstrip().startswith("$HubUrl,")
           and '"FLEETHUB_HUB", "Machine"' in wiring.group(1))
+    flat = script.replace("\r\n", "\n")
     check("...before the first download that can use it",
-          wiring and wiring.start() < script.replace("\r\n", "\n").index('Step "Installing PawnIO driver"'))
+          wiring and wiring.start() < flat.index('Step "Fetching agent binary"'))
+
+    print("\n== PawnIO is left to an agent that installs it itself ==")
+    # Starting PawnIO_setup.exe from this script is what a behaviour engine killed during
+    # onboarding (roadmap #33). From $MinPawnIoAgent the agent does it, so the script must
+    # know the agent's version first -- a PawnIO step before the fetch could not be gated.
+    gate = re.search(r'^\$MinPawnIoAgent = \[version\]"(\d+\.\d+\.\d+)"', flat, re.M)
+    check("the installer names the first agent that installs PawnIO", gate is not None)
+    check("...and decides only after the agent binary is fetched",
+          flat.index('Step "Fetching agent binary"') < flat.index('Step "Installing PawnIO driver"'))
+    check("...running its own PawnIO step only for an older or unreadable version",
+          "$agentVersion -ge $MinPawnIoAgent" in flat and "Install-PawnIo\n" in flat)
 
     print("\n== install.ps1 hands the choice to the verified path ==")
     top = read("install.ps1")

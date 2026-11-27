@@ -58,6 +58,7 @@ public sealed class Worker : BackgroundService
     private readonly WatchdogRunner _watchdogs;
     private readonly TempMonitorAgent.GroupPolicy.GroupPolicyRunner _groupPolicy;
     private readonly TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader _policyDefinitions;
+    private readonly PawnIoInstaller _pawnIo;
 
     /// <summary>In-flight commands, keyed by id. Bounds concurrency and keeps the poll
     /// loop from re-dispatching something already running.</summary>
@@ -93,7 +94,8 @@ public sealed class Worker : BackgroundService
         TelemetryReporter reporter, FleetClient fleet, CommandDispatcher dispatcher,
         SelfUpdater updater, ShellSessionManager shells, PtySessionManager ptys,
         WatchdogRunner watchdogs, TempMonitorAgent.GroupPolicy.GroupPolicyRunner groupPolicy,
-        TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader policyDefinitions)
+        TempMonitorAgent.GroupPolicy.PolicyDefinitionsReader policyDefinitions,
+        PawnIoInstaller pawnIo)
     {
         _log = log;
         _state = state;
@@ -107,6 +109,7 @@ public sealed class Worker : BackgroundService
         _watchdogs = watchdogs;
         _groupPolicy = groupPolicy;
         _policyDefinitions = policyDefinitions;
+        _pawnIo = pawnIo;
         _enrollmentSecret = ReadEnrollmentSecret();
     }
 
@@ -445,6 +448,13 @@ public sealed class Worker : BackgroundService
                 TempMonitorAgent.DiskUsage.DiskUsageReporter.RefreshIfDue(_log);
             }
             catch (Exception e) { _log.LogWarning(e, "Inventory scan failed"); }
+
+            // A missing PawnIO driver (roadmap #33). Here because it is the same shape of work
+            // as the scans above: local, slow when it runs, and almost never due -- a PC with
+            // the driver pays one service lookup, one without retries every six hours.
+            try { await _pawnIo.EnsureAsync(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception e) { _log.LogWarning(e, "PawnIO check failed"); }
 
             // The disk-usage report goes by its own POST, not the heartbeat: a few hundred KB
             // of tracked folders does not belong in the call that decides whether this

@@ -224,6 +224,22 @@ Cut on beta after hub 1.192.0 is confirmed. Confirm on beta PCs:
   has no *through the hub* line.
 - [ ] **Linux.** The same two on a Linux beta box (0.6.0), with the Linux catch-up script.
 
+**Windows agent 3.55.0: the agent installs PawnIO itself** (#33). Not cut yet: release it with
+`agent/release.ps1 -Version 3.55.0 -Channel beta -NotesFile .\release-notes\3.55.0.md`. Confirm
+on beta PCs:
+- [ ] **A PC without the driver heals.** On a beta PC with no PawnIO service, the agent log says
+  *driver missing; running PawnIO setup*, then *driver installed; reopening the sensors*, and
+  the PC's temperatures appear in the console without a service restart.
+- [ ] **Behind a behaviour engine.** On a PC whose endpoint security killed the onboarding
+  script at *Installing PawnIO driver*, the agent's own install is not blocked, and the
+  security product logs nothing against `FleetHubAgent.exe`.
+- [ ] **No internet.** On a PC that cannot reach GitHub, the log says *downloaded through the
+  hub* and the driver installs.
+- [ ] **Onboarding, once 3.55.0 is stable.** `agent-install.ps1` prints *Left to the agent:
+  3.55.0 installs PawnIO itself* at *Installing PawnIO driver*, starts no PawnIO setup of its
+  own, and the PC has the driver a minute after its agent starts. Until then the installer
+  keeps running PawnIO itself, because a first install always takes the stable agent.
+
 **Hub 1.191.0: the S3 destination test checks the PCs' pre-signed upload links** (#1b).
 Confirm on the test hub, against the MinIO AIStor destination:
 - [ ] **Wrong case caught.** With the access key entered in mixed case, *Test connection* fails
@@ -1907,6 +1923,38 @@ Tests: `tests/test_onboard_inprocess.py` (new) lifts the invocation block out of
 and runs it under PowerShell 5.1 and 7 against stub installers that `Die`, finish after a failed
 native command, and throw; `test_agent_service_name.py` now checks the call it orders against
 actually exists.
+
+### Built (unreleased) · Windows agent 3.55.0 -- the agent installs PawnIO
+
+With the installer running in-process, onboarding on a PC with an endpoint-security behaviour
+engine got one step further and was killed at *Installing PawnIO driver* instead -- silently
+again, with the `FleetHub-PawnIO-*` folder left behind that the installer's own `finally`
+always deletes. The pattern is the same one: a freshly downloaded script fetching an exe and
+starting it. Run by hand from a remote session, the same file installed fine.
+
+- **`Telemetry/PawnIoInstaller.cs`: the service installs a missing driver.** GitHub first, then
+  the hub's mirror by the pinned hash (`UpdateMirror`, exactly as a self-update), re-hashed from
+  disk while a handle that refuses writers is held, run with `-install -silent`, killed after
+  three minutes. Retried every six hours on the inventory loop, so a PC that never got the
+  driver -- a failed download, a moved pin, an AV kill -- now heals without a visit. On success
+  `SensorReader` reopens LibreHardwareMonitor, which only looks for the driver when it opens.
+- **`agent-install.ps1` decides after the agent is fetched.** Its PawnIO step moved behind
+  *Fetching agent binary* and runs only when the agent is older than `$MinPawnIoAgent`
+  (3.55.0) or its version cannot be read. A first install always takes the stable agent, so the
+  installer keeps launching PawnIO until 3.55.0 is stable and stops on its own after that -- no
+  second installer change, and no window in which a fresh PC gets neither.
+- **The pin now has three copies**: `$PawnIoSha256`, `release_mirror.PAWNIO_SHA256` and
+  `PawnIoInstaller.Sha256`. `tests/test_release_mirror.py` fails if any differ.
+- Rejected: dropping the installer's step outright (every fresh PC would go without sensors
+  until 3.55.0 is stable); a scheduled task or temporary service to start the setup (persistence
+  patterns, watched harder than a download); an antivirus exclusion per site (see above).
+
+**Found while building it:** the same engine's signature update of 2026-11-27 began flagging
+`agent-install.ps1` and `onboard.ps1` themselves, on disk, as a PowerShell downloader -- a
+static detection that removes the files before anything runs. This change does not address
+that. It needs a false-positive report to the vendor with the files' hashes; reshaping the
+scripts to slip past a signature was rejected, because the next update catches it and it is
+the wrong thing for an open-source installer to do.
 
 ### Phase 2 · Windows agent MINOR -- updates fall back to the hub
 
