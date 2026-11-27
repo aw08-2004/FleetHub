@@ -80,6 +80,12 @@ public sealed class PawnIoInstaller(ILogger<PawnIoInstaller> log)
     internal Func<DateTime> UtcNow { get; init; } = () => DateTime.UtcNow;
     internal string? HubBase { get; init; }
     internal string StagingDir { get; init; } = Path.Combine(AgentConfig.ProgramDataDir, "pawnio");
+    /// <summary>Creates the staging folder writable by SYSTEM and Administrators only. The state
+    /// directory's own ACL is inheritable and would give it that anyway, but Harden never
+    /// throws, so a state directory it could not fix would pass its looser ACL down unnoticed.
+    /// Hardened here as well, and the re-hash under a write-refusing handle covers the rest --
+    /// the same two layers the installer's private folder and SelfUpdater's step 6b use.</summary>
+    internal Func<string, string?> PrepareStaging { get; init; } = TempMonitorAgent.State.StateDirectory.Harden;
 
     /// <summary>Install the driver if it is missing and an attempt is due. Never throws for a
     /// download or setup failure; returns whether the driver is installed afterwards.</summary>
@@ -102,7 +108,7 @@ public sealed class PawnIoInstaller(ILogger<PawnIoInstaller> log)
         if (got.Source != Url)
             log.LogInformation("[pawnio] downloaded through the hub ({Why})", got.Why);
 
-        Directory.CreateDirectory(StagingDir);
+        if (PrepareStaging(StagingDir) is { } note) log.LogInformation("[pawnio] {Note}", note);
         var path = Path.Combine(StagingDir, "PawnIO_setup.exe");
         try
         {

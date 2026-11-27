@@ -37,6 +37,8 @@ public sealed class PawnIoInstallerTests : IDisposable
             UtcNow = now ?? (() => DateTime.UtcNow),
             HubBase = Hub,
             StagingDir = _dir,
+            // The real hardening would lock an unelevated test run out of its own temp folder.
+            PrepareStaging = p => { Directory.CreateDirectory(p); return null; },
         };
 
     private static byte[] Mismatch(string _) => [1, 2, 3];
