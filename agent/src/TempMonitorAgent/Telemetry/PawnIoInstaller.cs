@@ -147,7 +147,8 @@ public sealed class PawnIoInstaller(ILogger<PawnIoInstaller> log)
         }
         finally
         {
-            try { File.Delete(path); } catch (IOException) { /* the next attempt overwrites it */ }
+            try { File.Delete(path); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* the next attempt overwrites it */ }
         }
     }
 
