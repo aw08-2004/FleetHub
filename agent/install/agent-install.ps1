@@ -666,49 +666,54 @@ if ($MirrorUrl) { Say "Fallback when GitHub is unreachable: $MirrorUrl" }
 # until $MinPawnIoAgent is stable every fresh PC would end up without sensors.
 $MinPawnIoAgent = [version]"3.55.0"
 
+# Download PawnIO into $Path from GitHub, then the hub's mirror by the pinned hash. True only
+# when the file there matches the pin; anything else is warned about and never run.
+function Save-PawnIoSetup([string]$Path) {
+    $sources = @($PawnIoUrl)
+    if ($MirrorUrl) { $sources += "$MirrorUrl/bin/$PawnIoSha256" }
+    foreach ($src in $sources) {
+        Say "Downloading $src"
+        try {
+            Invoke-WebRequest -Uri $src -OutFile $Path -UseBasicParsing
+        } catch {
+            Warn "could not download PawnIO from ${src}: $($_.Exception.Message)"
+            continue
+        }
+        $got = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($got -eq $PawnIoSha256) { return $true }
+        Warn "PawnIO from $src does not match the pinned sha256 (got $got) -- not run."
+    }
+    return $false
+}
+
 function Install-PawnIo {
     if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) {
         Ok "Already installed, skipping"
-    } else {
-        # A private folder, not %TEMP%: the file is hashed and then run elevated, and a non-elevated
-        # process of this user could swap it in between in a folder it can write to.
-        $pawnioDir = Join-Path $env:ProgramData ("FleetHub-PawnIO-" + [guid]::NewGuid().ToString('N'))
-        $pawnioSec = New-Object System.Security.AccessControl.DirectorySecurity
-        $pawnioSec.SetAccessRuleProtection($true, $false)
-        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {   # SYSTEM, BUILTIN\Administrators
-            $pawnioSec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-                (New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl',
-                'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+        return
+    }
+    # A private folder, not %TEMP%: the file is hashed and then run elevated, and a non-elevated
+    # process of this user could swap it in between in a folder it can write to.
+    $pawnioDir = Join-Path $env:ProgramData ("FleetHub-PawnIO-" + [guid]::NewGuid().ToString('N'))
+    $pawnioSec = New-Object System.Security.AccessControl.DirectorySecurity
+    $pawnioSec.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {   # SYSTEM, BUILTIN\Administrators
+        $pawnioSec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl',
+            'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    }
+    [void][IO.Directory]::CreateDirectory($pawnioDir, $pawnioSec)
+    $pawnioPath = Join-Path $pawnioDir "PawnIO_setup.exe"
+    try {
+        if (-not (Save-PawnIoSetup $pawnioPath)) {
+            Warn "PawnIO was not installed. The agent will run, but sensors may be unreadable."
+            return
         }
-        [void][IO.Directory]::CreateDirectory($pawnioDir, $pawnioSec)
-        $pawnioPath = Join-Path $pawnioDir "PawnIO_setup.exe"
-        try {
-            $pawnioSources = @($PawnIoUrl)
-            if ($MirrorUrl) { $pawnioSources += "$MirrorUrl/bin/$PawnIoSha256" }
-            $pawnioOk = $false
-            foreach ($src in $pawnioSources) {
-                Say "Downloading $src"
-                try {
-                    Invoke-WebRequest -Uri $src -OutFile $pawnioPath -UseBasicParsing
-                } catch {
-                    Warn "could not download PawnIO from ${src}: $($_.Exception.Message)"
-                    continue
-                }
-                $got = (Get-FileHash -Path $pawnioPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                if ($got -eq $PawnIoSha256) { $pawnioOk = $true; break }
-                Warn "PawnIO from $src does not match the pinned sha256 (got $got) -- not run."
-            }
-            if (-not $pawnioOk) {
-                Warn "PawnIO was not installed. The agent will run, but sensors may be unreadable."
-            } else {
-                Unblock-File -Path $pawnioPath -ErrorAction SilentlyContinue
-                $proc = Start-Process -FilePath $pawnioPath -ArgumentList "-install","-silent" -Wait -PassThru -NoNewWindow
-                if ($proc.ExitCode -ne 0) { Warn "PawnIO installer exited $($proc.ExitCode). Sensors may be unreadable." }
-                else { Ok "PawnIO installed" }
-            }
-        } finally {
-            Remove-Item -LiteralPath $pawnioDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        Unblock-File -Path $pawnioPath -ErrorAction SilentlyContinue
+        $proc = Start-Process -FilePath $pawnioPath -ArgumentList "-install","-silent" -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -ne 0) { Warn "PawnIO installer exited $($proc.ExitCode). Sensors may be unreadable." }
+        else { Ok "PawnIO installed" }
+    } finally {
+        Remove-Item -LiteralPath $pawnioDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
