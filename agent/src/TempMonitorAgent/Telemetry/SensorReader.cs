@@ -47,7 +47,9 @@ public sealed class SensorReader : ISensorSource
     {
         // LibreHardwareMonitor looks for the driver once, when it opens. A driver the agent
         // installed after that (PawnIoInstaller) is invisible to it until it opens again.
-        if (_opened && PawnIoInstaller.TakeSensorReopen())
+        // Taken on every call, not only once open: a driver installed before the first open
+        // needs no reopen, and a flag left standing would force one later for nothing.
+        if (PawnIoInstaller.TakeSensorReopen() && _opened)
         {
             try { _computer.Close(); } catch (Exception e) { _log.LogDebug(e, "Sensor close before reopen failed"); }
             _opened = false;
