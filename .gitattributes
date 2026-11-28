@@ -61,3 +61,14 @@ hub/static/vendor/fonts/** -text
 # onboarding_web also strips CRs when it serves it; pinned anyway so the file reads the same
 # in the repo as on the wire.
 hub/templates/onboarding/*.sh text eol=lf
+
+# Authenticode-signed installer scripts (tools/codesign.ps1). The signature block at the end
+# of each covers the script's exact bytes, so a line-ending rewrite between signing and
+# raw.githubusercontent.com serving it turns a signed installer into a HashMismatch -- and
+# once the downloaders check that signature, into a refused install on every PC. The same
+# lesson as the manifests above. Edit, then re-sign: never commit an edit over a stale block.
+install.ps1 -text
+agent/install/agent-install.ps1 -text
+# install.sh's detached Ed25519 signature (tools/sign_script.py). install.sh itself is already
+# pinned LF above, which is the byte-stability its signature needs.
+agent-linux/install/install.sh.sig -text

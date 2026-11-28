@@ -3,7 +3,8 @@
 
     Runs the whole release flow in one command:
       1. Bumps the version in AgentConfig.cs + TempMonitorAgent.csproj
-      2. dotnet publish (self-contained single-file win-x64)
+      2. dotnet publish (self-contained single-file win-x64), then Authenticode-signs the exe
+         with tools/codesign.ps1 (Azure Trusted Signing) -- BEFORE step 4 hashes it
       3. Creates (or reuses) a GitHub release tagged agent-v<version>
       4. Signs the release: python sign_release.py --sign-agent
          (writes + signs agent/agent.manifest.json against the exact asset URL)
@@ -33,6 +34,10 @@ param(
     [switch]$Push,
     [switch]$DryRun,
     [string]$SigningKey,           # default: ~/.temp_monitor_signing_key (sign_release.py's own default)
+    # Ship the exe WITHOUT an Authenticode signature. Only for a machine that has no Trusted
+    # Signing setup yet; it is said loudly at the start and again at the end, because an
+    # unsigned release is indistinguishable from a signed one until someone opens Properties.
+    [switch]$NoCodeSign,
     [string]$Repo = "aw08-2004/FleetHub",
     # Release channel (roadmap #21). "beta" writes agent.manifest.beta.json instead, tags the
     # release agent-v<version>-beta, and marks it a prerelease. Only machines pinned to beta
@@ -66,6 +71,7 @@ $ManifestPath = Join-Path $AgentDir $(if ($IsBeta) { "agent.manifest.beta.json" 
 # Ed25519 would produce the same bytes anyway, and a copy cannot drift from the channel file.
 $PinnedManifestPath = Join-Path (Join-Path $AgentDir "manifests") "$Version.json"
 $SignScript = Join-Path $RepoRoot "sign_release.py"
+$CodeSign   = Join-Path $RepoRoot "tools\codesign.ps1"
 # The tag differs so the two channels' releases and their assets never collide.
 $Tag        = $(if ($IsBeta) { "agent-v$Version-beta" } else { "agent-v$Version" })
 # FleetHubAgent.exe since 2026-10-13. The asset name is only a URL: a self-updating agent
@@ -115,6 +121,15 @@ Ok "Tools present (dotnet, python via '$py'$(if(-not $DryRun){", gh"}))"
 $keyPath = if ($SigningKey) { $SigningKey } else { Join-Path $env:USERPROFILE ".temp_monitor_signing_key" }
 if (-not (Test-Path $keyPath)) { Die "No signing key at $keyPath. Run: python sign_release.py --genkey" }
 Ok "Signing key: $keyPath"
+
+# Authenticode set-up, checked HERE for the same reason as the git check below: finding out
+# after the GitHub release exists means unpicking a public release.
+if ($NoCodeSign) {
+    Warn "-NoCodeSign: this release's exe will carry NO Authenticode signature."
+} elseif (-not $DryRun) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $CodeSign -Check
+    if ($LASTEXITCODE -ne 0) { Die "Code signing is not set up (above). Fix it, or pass -NoCodeSign deliberately." }
+}
 
 # Can git actually make the manifest commit? Asked HERE, before anything is published.
 #
@@ -235,6 +250,19 @@ if ($DryRun) {
     if ($LASTEXITCODE -ne 0) { Die "dotnet publish failed." }
     if (-not (Test-Path $ExePath)) { Die "Publish did not produce $ExePath." }
     Ok "Published: $ExePath ($([math]::Round((Get-Item $ExePath).Length / 1MB, 1)) MB)"
+}
+
+# Authenticode, BEFORE step 4 hashes the exe: the manifest's sha256 has to be of the bytes
+# the fleet downloads, and signing appends to the file. Signing after the manifest would
+# publish a release every machine refuses as tampered.
+Step "Authenticode-signing the exe"
+if ($NoCodeSign) {
+    Warn "Skipped (-NoCodeSign)."
+} elseif ($DryRun) {
+    Say "[dry-run] powershell -File `"$CodeSign`" -Path `"$ExePath`""
+} else {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $CodeSign -Path $ExePath
+    if ($LASTEXITCODE -ne 0) { Die "Authenticode signing failed; nothing has been published yet." }
 }
 
 # ----------------------------------------------------------------------
@@ -428,3 +456,4 @@ Write-Host @"
   sooner if the hub echoes a newer version in its /api/report reply).
 
 "@ -ForegroundColor Green
+if ($NoCodeSign) { Warn "Reminder: this release was published WITHOUT an Authenticode signature (-NoCodeSign)." }

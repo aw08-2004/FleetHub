@@ -744,7 +744,7 @@ and fall quiet, and no error tells you why.
 
 ## Signing releases
 
-One artifact in this repo is Ed25519-signed so a compromised hub or repo commit
+The release manifests in this repo are Ed25519-signed so a compromised hub or repo commit
 can't push code that runs as admin fleet-wide unverified:
 
 - **The C# agent** (`agent/`) — the self-update manifest `agent/agent.manifest.json`
@@ -763,3 +763,40 @@ and it is fully enforced. It is unrelated to fleet *commands*, which are no long
 (see [Fleet command channel](managing-machines.md#fleet-command-channel-rmm)). Don't conflate the two — a
 compromised hub still must not be able to push a malicious binary, which is exactly what
 these signatures prevent.
+
+### Authenticode -- the publisher Windows shows
+
+On top of the Ed25519 manifests, every Windows file is Authenticode-signed with **Azure Trusted
+Signing**: the agent exe, the client's exe and DLLs, `install.ps1` and
+`agent/install/agent-install.ps1`. This is what Explorer's *Digital Signatures* tab,
+SmartScreen and Defender look at. It does **not** decide what the fleet runs. The Ed25519 key
+still does that, and a binary is Authenticode-signed *before* it is hashed into its manifest.
+
+- **Signer:** `tools/codesign.ps1`, the only place anything is Authenticode-signed.
+  `agent/release.ps1` and `release_client.py` call it on their own and refuse to run when it
+  is not set up. `-NoCodeSign` / `--no-codesign` ship unsigned on purpose, and say so loudly.
+- **Setup, once per release PC:** the Windows SDK (signtool 10.0.22621+), then
+  `nuget install Microsoft.ArtifactSigning.Client -OutputDirectory $HOME\.fleethub_codesign`.
+  Next, write `$HOME\.fleethub_codesign\metadata.json` with `Endpoint`,
+  `CodeSigningAccountName` and `CertificateProfileName`. Finally run `az login` as an identity
+  holding *Trusted Signing Certificate Profile Signer*. `tools\codesign.ps1 -Check` confirms
+  all of it.
+- **The installer scripts are signed in the repo.** An edit to either `.ps1` breaks its
+  signature, so re-sign in the same commit:
+  `powershell -File tools\codesign.ps1 -Path install.ps1,agent\install\agent-install.ps1` (one argument: commas, no spaces).
+  Both are pinned `-text` in `.gitattributes` because the signature covers exact bytes.
+
+`agent-linux/install/install.sh` cannot carry Authenticode, so it has a detached Ed25519
+signature by the fleet key, `install.sh.sig`, in the same format as a manifest's. Re-sign it
+after every edit with `python tools/sign_script.py agent-linux/install/install.sh`. To check
+it by hand before piping it into a root shell (OpenSSL 3):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh
+curl -fsSLO https://raw.githubusercontent.com/aw08-2004/FleetHub/main/agent-linux/install/install.sh.sig
+printf '302a300506032b6570032100%s' 9a4f433e0eb82fae121fdeede7d2ce881d50bc80021236f24fdfa4494fc0537c | xxd -r -p > fleet.der
+xxd -r -p install.sh.sig > install.sh.bin
+openssl pkeyutl -verify -pubin -keyform DER -inkey fleet.der -rawin -in install.sh -sigfile install.sh.bin
+```
+
+`tests/test_script_signatures.py` fails on a missing or stale signature on any of the three.

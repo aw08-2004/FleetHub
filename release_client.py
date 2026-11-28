@@ -40,10 +40,19 @@ Usage
       Sign an already-built package. For re-signing after a manifest edit, or on a machine
       that cannot build.
 
+  python release_client.py --no-codesign
+      Ship the exe and DLLs WITHOUT an Authenticode signature. For a machine with no Trusted
+      Signing setup (tools/codesign.ps1); said loudly, because unsigned looks like signed
+      until somebody opens Properties.
+
 Prerequisites for a Windows build (`flutter doctor` will confirm both):
   * Visual Studio with the "Desktop development with C++" workload.
   * Windows Developer Mode, for the symlink support Flutter plugins need.
 Neither is needed for --set-version or --skip-build.
+
+Code signing (tools/codesign.ps1: signtool, the Artifact Signing dlib, metadata.json, az login)
+is needed for every release INCLUDING --skip-build, because packaging is where the exe and
+DLLs are signed. Only --set-version and --no-codesign do without it.
 """
 import argparse
 import hashlib
@@ -384,12 +393,73 @@ def build(flutter, skip_tests):
         die("flutter build windows failed")
 
 
-def package(version):
-    """Zip the release directory. A zip rather than an installer because there is no
-    code-signing certificate yet -- an unsigned installer is a SmartScreen warning, and an
-    unsigned zip is a folder. Swap this for MSIX when a certificate exists."""
+#: Characters of file paths per codesign.ps1 call. Well under Windows' ~32K command-line cap,
+#: leaving room for signtool's own arguments, which codesign.ps1 appends to the same line.
+CODESIGN_ARG_BUDGET = 8000
+
+
+def codesign(paths, check=False):
+    """Authenticode-sign through tools/codesign.ps1, the one signer for every release
+    (see its description). Files that already carry a valid signature -- the Visual C++
+    runtime, signed by Microsoft -- are left as they are."""
+    base = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", os.path.join(ROOT, "tools", "codesign.ps1")]
+    if check:
+        if subprocess.call(base + ["-Check"]) != 0:
+            die("code signing is not set up (see above); fix it or pass --no-codesign deliberately")
+        return
+    # -SkipSigned is also what makes repackaging safe: files are signed in place in BUILD_DIR,
+    # so a --skip-build run finds them already signed and leaves them alone.
+    # ONE comma-joined argument per call: under `powershell -File` a [string[]] parameter takes
+    # a single value, and a second path would bind to -ConfigDir (see codesign.ps1). In batches,
+    # because that one argument is also one Windows command line, capped near 32K characters --
+    # a build folder that grew past it would fail inside signtool with nothing saying why.
+    # The comma is the separator, so a path that holds one would be cut in two and fail as
+    # "No such file" with neither half recognisable. Said plainly instead, before signing.
+    with_comma = [path for path in paths if "," in path]
+    if with_comma:
+        die(f"cannot sign a path containing a comma (codesign.ps1 splits on commas): "
+            f"{with_comma[0]} -- build from a folder whose path has none")
+    batch, length = [], 0
+    for path in list(paths) + [None]:
+        if path is None or (batch and length + len(path) + 1 > CODESIGN_ARG_BUDGET):
+            if batch and subprocess.call(base + ["-SkipSigned", "-Path", ",".join(batch)]) != 0:
+                die("Authenticode signing failed; nothing was packaged")
+            batch, length = [], 0
+        if path is not None:
+            batch.append(path)
+            length += len(path) + 1
+
+
+def preflight_codesign(skip):
+    """Everything signing needs, checked before the build -- which takes minutes -- rather
+    than discovered after it. Its own function so main() stays a list of steps."""
+    if skip:
+        print("!! --no-codesign: this release's exe and DLLs will carry NO Authenticode signature.")
+        return
+    codesign([], check=True)
+    # The same refusal codesign() makes per file, asked of the folder before the build
+    # rather than after it. A comma further down (a file the build names) still meets
+    # codesign()'s own check.
+    if "," in BUILD_DIR:
+        die(f"cannot sign from {BUILD_DIR}: the path contains a comma, which codesign.ps1 "
+            f"uses as its separator -- check the repo out to a folder whose path has none")
+
+
+def package(version, sign_binaries=True):
+    """Sign the build's executables, then zip the release directory.
+
+    **Signed before zipping, never after**: the manifest's sha256 is of the zip, so the zip
+    has to hold the signed bytes. Still a zip rather than an installer -- MSIX became
+    possible with the Trusted Signing certificate, and is its own piece of work."""
     if not os.path.isdir(BUILD_DIR):
         die(f"no build output at {BUILD_DIR}. Run without --skip-build first.")
+
+    if sign_binaries:
+        binaries = [os.path.join(dirpath, f)
+                    for dirpath, _dirs, files in os.walk(BUILD_DIR)
+                    for f in files if f.lower().endswith((".exe", ".dll"))]
+        codesign(binaries)
 
     os.makedirs(DIST_DIR, exist_ok=True)
     name = f"FleetHubClient-{version}-windows-x64.zip"
@@ -487,6 +557,8 @@ def main():
                     help="emergency escape hatch; the release is untested")
     ap.add_argument("--upload", action="store_true",
                     help="create the GitHub release and upload the asset with gh")
+    ap.add_argument("--no-codesign", action="store_true",
+                    help="ship WITHOUT an Authenticode signature (no Trusted Signing here)")
     ap.add_argument("--notes", default="", help="release note shown on the download page")
     ap.add_argument("--released-at", default="", help="release date, e.g. 2026-08-04")
     # Release channel (roadmap #21). `beta` writes hub/client.manifest.beta.json instead, so
@@ -506,6 +578,10 @@ def main():
     # Before the version prompt, not inside build(): --skip-build packages an exe that
     # was built from these same files, so it needs the check just as much.
     check_runner_customizations()
+    # Before the version too: set_version() rewrites two tracked files, so a PC without
+    # signing set up would otherwise die here with a dirty tree, and a retry that chose a
+    # different number would leave the first one behind in version.dart and pubspec.yaml.
+    preflight_codesign(args.no_codesign)
 
     # Which version is being published is a decision, so it is ASKED rather than inferred
     # from whatever was left in the tree. --version and --keep-version are the
@@ -536,7 +612,7 @@ def main():
     if not args.skip_build:
         build(find_flutter(), args.skip_tests)
 
-    package_path = package(version)
+    package_path = package(version, sign_binaries=not args.no_codesign)
     tag, url = sign(version, package_path, args.notes, args.released_at, args.channel)
     # Named rather than hardcoded: a beta writes a different file, and telling an operator to
     # commit the stable one is how a beta gets signed and then never published.

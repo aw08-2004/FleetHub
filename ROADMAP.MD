@@ -961,6 +961,51 @@ AD, with no ADFS or Entra. None of this has met a real DC: the ldap3 adapter in
 - [ ] **Settings -> Sign-in.** The Active Directory fields save, the password shows as saved
   and never reads back, and clearing every provider is refused.
 
+**No hub version -- Authenticode on every Windows file, Ed25519 on install.sh** (stage 1 of 2)
+
+Until now only the *manifests* were signed. The agent exe, the client's exe and DLLs and the two
+`.ps1` installers had no Authenticode signature. Explorer showed no publisher, SmartScreen
+warned, and Defender was more suspicious of an unsigned LocalSystem service. Worse, `install.ps1`
+and the hub's `onboard.ps1` download `agent-install.ps1` from `main` and run it unchecked, and
+`onboard.sh` does the same with `install.sh`. **Stage 1 (this change) signs; stage 2 makes
+those downloaders check, and must wait until stage 1's signed scripts are on `main`.** The
+downloaders read `main`, so a check that shipped first would refuse every install. "No hub
+version" holds for stage 1 only: stage 2 changes the hub's onboarding templates, so it carries
+a `HUB_VERSION` bump and its release notes, and gets its own entry here.
+
+- One signer, `tools/codesign.ps1`, using **Azure Trusted Signing** (account in East US,
+  endpoint `https://eus.codesigning.azure.net/`). It fails closed on missing setup and re-reads
+  every file with `Get-AuthenticodeSignature` afterwards. `agent/release.ps1` and
+  `release_client.py` sign **before** hashing, so the Ed25519 manifest covers the signed bytes.
+  Each script has a loud `-NoCodeSign` / `--no-codesign` escape hatch.
+- `install.ps1` and `agent-install.ps1` are signed in place and pinned `-text`. `install.sh`
+  gets a detached Ed25519 `install.sh.sig` from `tools/sign_script.py`, using the fleet key,
+  in the same format as the manifests. `tests/test_script_signatures.py` fails on a missing
+  or stale signature. **Edit an installer, then re-sign it, in the same commit.**
+- *Rejected:* SelfUpdater also requiring Authenticode, because a `-NoCodeSign` release would
+  then brick updates. Ed25519 stays the trust root and Authenticode is on top. Pinning the
+  certificate thumbprint: Trusted Signing issues a new certificate every few days, so stage 2
+  pins the publisher subject instead. `-ExecutionPolicy AllSigned` in `onboard.ps1`: it asks
+  "run software from this untrusted publisher?" interactively on first use. Signing the
+  hub-rendered onboarding scripts: they are rendered per code, so there are no fixed bytes to
+  sign. The `irm | iex` bootstrap of `install.ps1`: nothing can verify the first script you
+  fetch, so it is documented rather than "fixed".
+
+- [ ] **Signing is set up on the release PC.** `powershell -File tools\codesign.ps1 -Check`
+  prints *Code signing ready*.
+- [ ] **The installers are signed.** `tools\codesign.ps1 -Path install.ps1,agent\install\agent-install.ps1`
+  (one argument: commas, no spaces) and `python tools/sign_script.py
+  agent-linux/install/install.sh` were run, and `python tests/test_script_signatures.py` passes
+  on Windows. Then **write the publisher it prints into this entry**, because stage 2 pins it.
+- [ ] **The next agent beta is signed.** After `.\release.ps1 -Version x.y.z -Channel beta`,
+  the downloaded exe's Properties → Digital Signatures shows the publisher with a timestamp,
+  and a beta PC still self-updates to it (proof that the manifest hashed the signed bytes).
+- [ ] **The next client release is signed.** `FleetHubClient.exe` in the zip shows the
+  publisher, and the Visual C++ runtime DLLs still show Microsoft.
+- [ ] **SmartScreen.** Download the signed `install.ps1` and the agent exe on a clean PC
+  through a browser, and note whether SmartScreen still warns. A brand-new publisher can
+  need some reputation before the warning stops.
+
 **Hub 1.182.0 (+ next Windows agent) -- reports on a Docker hub, sign-in over the relay, old
 audit lines** (#215, #170, #199)
 Three issue fixes in one release. **#215:** `deploy/docker/example.env` listed
@@ -1537,6 +1582,15 @@ with the signing key.** Hub 1.192.0 first, confirmed on the test hub. Then cut b
 `release.ps1 -Channel beta` (3.54.0 also carries the package conditions already in its notes),
 run the catch-up script from docs/installation.md once on a blocked beta PC, and tick the
 *Windows agent 3.54.0 and Linux agent 0.6.0* boxes in the list above.
+
+**22. Sign the installers, owed on the machine with the signing key and the Artifact Signing
+account (PR #214).** `tests/test_script_signatures.py` reports NOT SIGNED for `install.ps1`,
+`agent/install/agent-install.ps1` and `agent-linux/install/install.sh.sig` until this is done --
+by design, since a skip would also pass a deleted signature. Set up
+`tools/codesign.ps1 -Check`, then `tools\codesign.ps1 -Path install.ps1,agent\install\agent-install.ps1`
+and `python tools/sign_script.py agent-linux/install/install.sh`, and commit the three to PR
+#214's branch. **Sign before #214 merges**, so `main` never carries the red suite; stage 2 (the
+downloaders checking these signatures) only after the signed files are on `main`.
 
 ---
 
