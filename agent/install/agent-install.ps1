@@ -655,10 +655,42 @@ if ($MirrorUrl) { Say "Fallback when GitHub is unreachable: $MirrorUrl" }
 # ----------------------------------------------------------------------
 # 1. PawnIO driver (sensor access for the in-process LibreHardwareMonitorLib)
 # ----------------------------------------------------------------------
-Step "Installing PawnIO driver"
-if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) {
-    Ok "Already installed, skipping"
-} else {
+# **Only for an agent older than $MinPawnIoAgent; a newer one installs PawnIO itself**
+# (Telemetry/PawnIoInstaller.cs, roadmap #33). Downloading PawnIO_setup.exe and starting it from
+# this script is what an endpoint-security behaviour engine killed during onboarding: a script
+# that was itself just downloaded, fetching an exe and running it, reads as a dropper, and the
+# kill is silent -- the output just stops, and the PC is left with no agent and an unused code.
+# The agent service doing the same is the updater it already is. Defined here and called after
+# step 2, because only then is the version of the agent being installed known.
+# Rejected: dropping this step outright. A first install always takes the STABLE agent, so
+# until $MinPawnIoAgent is stable every fresh PC would end up without sensors.
+$MinPawnIoAgent = [version]"3.55.0"
+
+# Download PawnIO into $Path from GitHub, then the hub's mirror by the pinned hash. True only
+# when the file there matches the pin; anything else is warned about and never run.
+function Save-PawnIoSetup([string]$Path) {
+    $sources = @($PawnIoUrl)
+    if ($MirrorUrl) { $sources += "$MirrorUrl/bin/$PawnIoSha256" }
+    foreach ($src in $sources) {
+        Say "Downloading $src"
+        try {
+            Invoke-WebRequest -Uri $src -OutFile $Path -UseBasicParsing
+        } catch {
+            Warn "could not download PawnIO from ${src}: $($_.Exception.Message)"
+            continue
+        }
+        $got = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($got -eq $PawnIoSha256) { return $true }
+        Warn "PawnIO from $src does not match the pinned sha256 (got $got) -- not run."
+    }
+    return $false
+}
+
+function Install-PawnIo {
+    if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) {
+        Ok "Already installed, skipping"
+        return
+    }
     # A private folder, not %TEMP%: the file is hashed and then run elevated, and a non-elevated
     # process of this user could swap it in between in a folder it can write to.
     $pawnioDir = Join-Path $env:ProgramData ("FleetHub-PawnIO-" + [guid]::NewGuid().ToString('N'))
@@ -672,29 +704,14 @@ if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) {
     [void][IO.Directory]::CreateDirectory($pawnioDir, $pawnioSec)
     $pawnioPath = Join-Path $pawnioDir "PawnIO_setup.exe"
     try {
-        $pawnioSources = @($PawnIoUrl)
-        if ($MirrorUrl) { $pawnioSources += "$MirrorUrl/bin/$PawnIoSha256" }
-        $pawnioOk = $false
-        foreach ($src in $pawnioSources) {
-            Say "Downloading $src"
-            try {
-                Invoke-WebRequest -Uri $src -OutFile $pawnioPath -UseBasicParsing
-            } catch {
-                Warn "could not download PawnIO from ${src}: $($_.Exception.Message)"
-                continue
-            }
-            $got = (Get-FileHash -Path $pawnioPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($got -eq $PawnIoSha256) { $pawnioOk = $true; break }
-            Warn "PawnIO from $src does not match the pinned sha256 (got $got) -- not run."
-        }
-        if (-not $pawnioOk) {
+        if (-not (Save-PawnIoSetup $pawnioPath)) {
             Warn "PawnIO was not installed. The agent will run, but sensors may be unreadable."
-        } else {
-            Unblock-File -Path $pawnioPath -ErrorAction SilentlyContinue
-            $proc = Start-Process -FilePath $pawnioPath -ArgumentList "-install","-silent" -Wait -PassThru -NoNewWindow
-            if ($proc.ExitCode -ne 0) { Warn "PawnIO installer exited $($proc.ExitCode). Sensors may be unreadable." }
-            else { Ok "PawnIO installed" }
+            return
         }
+        Unblock-File -Path $pawnioPath -ErrorAction SilentlyContinue
+        $proc = Start-Process -FilePath $pawnioPath -ArgumentList "-install","-silent" -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -ne 0) { Warn "PawnIO installer exited $($proc.ExitCode). Sensors may be unreadable." }
+        else { Ok "PawnIO installed" }
     } finally {
         Remove-Item -LiteralPath $pawnioDir -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -709,6 +726,7 @@ if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) {
 Step "Fetching agent binary"
 $staged = $null
 $signedSha256 = $null
+$verified = $null
 if ($AgentExe) {
     if (-not (Test-Path $AgentExe)) { Die "AgentExe not found: $AgentExe" }
     $source = $AgentExe
@@ -732,6 +750,22 @@ if ($AgentExe) {
             Die $_.Exception.Message
         }
     }
+}
+
+# Step 1, now that the agent's version is known: the signed manifest's for a normal install, the
+# file's own version for -AgentExe / -AgentUrl. A version that cannot be read counts as old, so
+# the worst case is the install this script always did.
+Step "Installing PawnIO driver"
+$agentVersion = $null
+$versionText = if ($verified) { $verified.Version } else {
+    try { [Diagnostics.FileVersionInfo]::GetVersionInfo($source).FileVersion } catch { $null }
+}
+if ("$versionText" -match '^\s*(\d+\.\d+\.\d+)') { $agentVersion = [version]$Matches[1] }
+if ($agentVersion -and $agentVersion -ge $MinPawnIoAgent) {
+    if (Get-Service -Name "PawnIO" -ErrorAction SilentlyContinue) { Ok "Already installed" }
+    else { Ok "Left to the agent: $agentVersion installs PawnIO itself once it is running" }
+} else {
+    Install-PawnIo
 }
 
 Step "Installing agent binary"

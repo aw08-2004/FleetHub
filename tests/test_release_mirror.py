@@ -110,6 +110,15 @@ def test_pin_and_layout():
           m is not None and m.group(1) == release_mirror.PAWNIO_SHA256)
     url = re.search(r'^\$PawnIoUrl\s*=\s*"([^"]+)"', ps1, re.MULTILINE)
     check("...and the same PawnIO url", url is not None and url.group(1) == release_mirror.PAWNIO_URL)
+    # The third copy: the agent installs PawnIO itself since 3.55.0, and a pin that drifted from
+    # the mirror's would make every such agent refuse the hub's copy without anyone noticing.
+    cs = open(os.path.join(ROOT, "agent", "src", "TempMonitorAgent", "Telemetry", "PawnIoInstaller.cs"),
+              encoding="utf-8").read()
+    cs_sha = re.search(r'const string Sha256 = "([0-9a-f]{64})"', cs)
+    cs_url = re.search(r'const string Url = "([^"]+)"', cs)
+    check("the agent's PawnIoInstaller pins the same hash",
+          cs_sha is not None and cs_sha.group(1) == release_mirror.PAWNIO_SHA256)
+    check("...and the same url", cs_url is not None and cs_url.group(1) == release_mirror.PAWNIO_URL)
     check("the mirrored repo paths are where GitHub has them",
           all(os.path.isfile(os.path.join(ROOT, *p.split("/")))
               for p in release_mirror.INSTALLER_FILES))

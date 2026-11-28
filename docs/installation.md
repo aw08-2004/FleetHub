@@ -6,6 +6,14 @@ See [agent/README.md](../agent/README.md) for the full C#/.NET agent: build/publ
 signing/release process, and `agent/install/agent-install.ps1` (installs the Windows
 Service, the PawnIO sensor driver, and SCM failure-recovery for self-updates).
 
+**PawnIO from agent 3.55.0 on.** The agent installs the PawnIO driver itself when it is
+missing, and retries every six hours if it cannot, so a PC installed without the driver gets
+its temperatures back on its own. The installer then leaves PawnIO to the agent: it prints
+*Left to the agent* at *Installing PawnIO driver* and starts no setup of its own. Some
+endpoint-security products stop a script that downloads an exe and starts it, and the installer
+used to do exactly that. Older agents still get PawnIO from the installer. The file is the same
+pinned one either way, from GitHub or from the hub's copy.
+
 ### Onboarding a PC with a code (no enrollment secret)
 
 A Windows PC or a Linux machine can enrol itself without the fleet-wide

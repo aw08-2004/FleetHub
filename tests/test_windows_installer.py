@@ -370,8 +370,25 @@ def main():
     check("the mirror is worked out from -HubUrl, then the machine's FLEETHUB_HUB",
           wiring and wiring.group(1).lstrip().startswith("$HubUrl,")
           and '"FLEETHUB_HUB", "Machine"' in wiring.group(1))
+    flat = script.replace("\r\n", "\n")
     check("...before the first download that can use it",
-          wiring and wiring.start() < script.replace("\r\n", "\n").index('Step "Installing PawnIO driver"'))
+          wiring and wiring.start() < flat.index('Step "Fetching agent binary"'))
+
+    print("\n== PawnIO is left to an agent that installs it itself ==")
+    # Starting PawnIO_setup.exe from this script is what a behaviour engine killed during
+    # onboarding (roadmap #33). From $MinPawnIoAgent the agent does it, so the script must
+    # know the agent's version first -- a PawnIO step before the fetch could not be gated.
+    gate = re.search(r'^\$MinPawnIoAgent = \[version\]"(\d+\.\d+\.\d+)"', flat, re.M)
+    check("the installer names the first agent that installs PawnIO", gate is not None)
+    check("...and decides only after the agent binary is fetched",
+          flat.index('Step "Fetching agent binary"') < flat.index('Step "Installing PawnIO driver"'))
+    # The gate's else branch must be the ONE place the step is called; a call moved outside it
+    # would start the setup from this script again for every agent.
+    branch = re.search(r"if \(\$agentVersion -and \$agentVersion -ge \$MinPawnIoAgent\) \{.*?\n\} else \{\s*"
+                       r"Install-PawnIo\s*\}", flat, re.S)
+    calls = re.findall(r"^\s*Install-PawnIo\s*$", flat, re.M)
+    check("...running its own PawnIO step only for an older or unreadable version",
+          branch is not None and len(calls) == 1)
 
     print("\n== install.ps1 hands the choice to the verified path ==")
     top = read("install.ps1")
